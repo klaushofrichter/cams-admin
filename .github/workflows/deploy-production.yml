@@ -103,7 +103,12 @@ jobs:
           set -euo pipefail
           rm -rf /tmp/kube-setup-deploy
           trap 'rm -rf /tmp/kube-setup-deploy' EXIT
-          git clone "https://x-access-token:${KUBE_SETUP_DEPLOY_TOKEN}@github.com/klaushofrichter/kube-setup.git" /tmp/kube-setup-deploy
+          # The token never goes into a URL, argv or .git/config: git reads
+          # an Authorization header from GIT_CONFIG_* (printf is a builtin).
+          B64=$(printf 'x-access-token:%s' "$KUBE_SETUP_DEPLOY_TOKEN" | base64 | tr -d '\n')
+          echo "::add-mask::$B64"
+          export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.https://github.com/.extraheader GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $B64"
+          git clone -q https://github.com/klaushofrichter/kube-setup.git /tmp/kube-setup-deploy
           cd /tmp/kube-setup-deploy
           M=manifests/cams-admin/cams-admin-deployment.yaml
           sed -i "s|image: ghcr.io/klaushofrichter/cams-admin[@:].*|image: ${IMAGE}|" "$M"
@@ -215,7 +220,10 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf /tmp/main
-          git clone --depth 1 --branch main "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" /tmp/main
+          B64=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')
+          echo "::add-mask::$B64"
+          export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.https://github.com/.extraheader GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $B64"
+          git clone -q --depth 1 --branch main "https://github.com/${GITHUB_REPOSITORY}.git" /tmp/main
           cd /tmp/main
           awk '
             /^## \[Unreleased\]/ { print; print ""; skip = 1; next }
