@@ -11,11 +11,11 @@ export const SESSION_MS = 12 * 3600_000;
 export interface Session { idHash: string; email: string; createdAt: number; expiresAt: number }
 const hash = (v: string) => createHash('sha256').update(v).digest('hex');
 
-// SYSADMIN_EMAILS, re-read on every call: removing an email ends access at
+// ALLOWED_EMAILS, re-read on every call: removing an email ends access at
 // that person's next request.
 export function sysadminEmails(): Set<string> {
   const out = new Set<string>();
-  for (const e of (process.env.SYSADMIN_EMAILS ?? '').split(',')) {
+  for (const e of (process.env.ALLOWED_EMAILS ?? '').split(',')) {
     try {
       if (e.trim()) out.add(normaliseEmail(e));
     } catch {

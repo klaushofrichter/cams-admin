@@ -423,7 +423,7 @@ nothing would use it and an unused authenticated endpoint is attack surface.
 - **Account `viewer`:** in cams (P4), it may watch live video, recordings and
   the archive, and change nothing.
 - **System administrator:** not a role in any account. It is whoever is in
-  `SYSADMIN_EMAILS`. A system administrator who also uses cams needs a row in
+  `ALLOWED_EMAILS`. A system administrator who also uses cams needs a row in
   each account, like anyone else.
 - An account with no `admin` user is allowed; the UI warns about it.
 
@@ -437,7 +437,7 @@ nothing would use it and an unused authenticated endpoint is attack surface.
   - the state nonce in an httpOnly cookie, compared in constant time;
   - `prompt=select_account`, so that Logout really logs out;
   - the email from the ID token, with `email_verified` required.
-- **Allowlist:** `SYSADMIN_EMAILS`, comma-separated, normalised like account
+- **Allowlist:** `ALLOWED_EMAILS`, comma-separated, normalised like account
   emails. It is re-read and **re-checked on every request** (cams's
   `getAllowedEmails` pattern), so removing an email ends that person's
   access at the next request. A refused sign-in is audited (`signin-refused`)
@@ -1389,7 +1389,7 @@ request says so, so that kube-setup doesn't add it by habit.
     pings every proxy socket every 25 s and proxies send a heartbeat every
     30 s, so no connection is ever idle for 60 s.
   - **Secrets:**
-    - `cams-admin-oauth`: Google client, `SYSADMIN_EMAILS`;
+    - `cams-admin-oauth`: Google client, `ALLOWED_EMAILS`;
     - `cams-admin-signing`: the Ed25519 key;
     - `cams-admin-backup`: S3.
 
@@ -1426,7 +1426,7 @@ request says so, so that kube-setup doesn't add it by habit.
 | `PROXY_CONNECT_URL` | from `PUBLIC_URL` | override (e.g. the cluster Service URL is given to the cluster proxy by hand) |
 | `DB_FILE` | `/var/lib/cams-admin/cams-admin.db` | |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI` | required | |
-| `SYSADMIN_EMAILS` | required | comma-separated |
+| `ALLOWED_EMAILS` | required | comma-separated |
 | `SERVER_SIGNING_KEY_FILE` | required | PKCS#8 PEM, mode 600; `scripts/gen-signing-key.ts` makes one |
 | `TRUST_PROXY` | 1 | |
 | `HEARTBEAT_S`, `OFFLINE_AFTER_S` | 30, 90 | the tests set 1 and 3 |
@@ -1523,7 +1523,7 @@ request says so, so that kube-setup doesn't add it by habit.
   session. `npm run dev:session -- <email>` inserts a `sessions` row straight
   into the local database file and prints the cookie value. The script
   refuses unless `NODE_ENV=development`, `PUBLIC_URL` is loopback, and the
-  email is in `SYSADMIN_EMAILS`. The server has no such route. It enrolls each proxy with the CLI, piping in the code.
+  email is in `ALLOWED_EMAILS`. The server has no such route. It enrolls each proxy with the CLI, piping in the code.
 - **Afterwards** it prints the URLs. `--down` stops everything; its work
   directory is outside the repo, as in cams's livestack.
 - **Never on the Mac:** the real camera, the Pi or the cluster.

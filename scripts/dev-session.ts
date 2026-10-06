@@ -21,7 +21,7 @@ try {
 }
 if (!['127.0.0.1', 'localhost', '[::1]'].includes(host)) fail('PUBLIC_URL must be loopback');
 const email = normaliseEmail(process.argv[2] ?? '');
-if (!sysadminAllowed(email)) fail('the email is not in SYSADMIN_EMAILS');
+if (!sysadminAllowed(email)) fail('the email is not in ALLOWED_EMAILS');
 const db = openDb(process.env.DB_FILE ?? fail('DB_FILE is required'));
 process.stdout.write(new Sessions(db, systemClock).create(email).value + '\n');
 db.close();

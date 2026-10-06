@@ -10,13 +10,13 @@
 #
 #   check (default): every key present and well-formed; nothing is applied.
 #   oauth:   Secret cams-admin-oauth: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET,
-#            GOOGLE_REDIRECT_URI, SYSADMIN_EMAILS
+#            GOOGLE_REDIRECT_URI (default: the production callback), ALLOWED_EMAILS
 #   signing: Secret cams-admin-signing: signing-key.pem from the file named
 #            by SIGNING_KEY_PEM_FILE (made by scripts/gen-signing-key.ts;
 #            mode 600). Replacing it means re-enrolling every proxy.
 #   backup:  Secret cams-admin-backup: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,
 #            AWS_REGION, BACKUP_S3_BUCKET, BACKUP_S3_PREFIX (app + Litestream)
-#   runner:  Secret runner-pat (key token) in cams-admin-runner: RUNNER_PAT
+#   runner:  Secret runner-pat (key token) in cams-admin-runner: CAMSADMIN_GITHUB_PAT
 #   github:  repo secret KUBE_SETUP_DEPLOY_TOKEN from GITHUB_KUBE_SETUP_PAT
 # KUBE_CONTEXT (required for the Secrets) comes from the env file too.
 set -euo pipefail
@@ -55,15 +55,17 @@ need() { local k; for k in "$@"; do [ -n "$(get "$k")" ] || die "missing $k in $
 say() { if [ "$DRY" = 1 ]; then echo "would $*"; else echo "$*"; fi; }
 want() { [ "$ONLY" = "$1" ] || [ "$ONLY" = all ]; }
 
-OAUTH=(GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_REDIRECT_URI SYSADMIN_EMAILS)
+OAUTH=(GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET ALLOWED_EMAILS)
+DEFAULT_REDIRECT=https://cams-admin.skylar.technology/auth/google/callback
 BACKUP=(AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_REGION BACKUP_S3_BUCKET BACKUP_S3_PREFIX)
 
 # Check first, so a bad line stops the run before anything changes.
-for k in "${OAUTH[@]}" "${BACKUP[@]}" SIGNING_KEY_PEM_FILE RUNNER_PAT GITHUB_KUBE_SETUP_PAT KUBE_CONTEXT; do get "$k" >/dev/null; done
+for k in "${OAUTH[@]}" GOOGLE_REDIRECT_URI "${BACKUP[@]}" SIGNING_KEY_PEM_FILE CAMSADMIN_GITHUB_PAT GITHUB_KUBE_SETUP_PAT KUBE_CONTEXT; do get "$k" >/dev/null; done
 if [ "$ONLY" = check ]; then
-  for k in "${OAUTH[@]}" "${BACKUP[@]}" SIGNING_KEY_PEM_FILE RUNNER_PAT GITHUB_KUBE_SETUP_PAT KUBE_CONTEXT; do
+  for k in "${OAUTH[@]}" "${BACKUP[@]}" SIGNING_KEY_PEM_FILE CAMSADMIN_GITHUB_PAT GITHUB_KUBE_SETUP_PAT KUBE_CONTEXT; do
     if [ -n "$(get "$k")" ]; then echo "ok      $k"; else echo "missing $k"; fi
   done
+  [ -n "$(get GOOGLE_REDIRECT_URI)" ] || echo "default GOOGLE_REDIRECT_URI ($DEFAULT_REDIRECT)"
   [ "$(get AWS_REGION)" = us-east-1 ] || echo "note    AWS_REGION is not us-east-1 (the bucket's region)"
   [ "$(get BACKUP_S3_PREFIX)" = cams-admin/prod/ ] || echo "note    BACKUP_S3_PREFIX is not cams-admin/prod/ (the IAM policy's prefix)"
   exit 0
@@ -75,10 +77,14 @@ apply_env_secret() { # NAMESPACE NAME KEY...
   need "$@"
   [ -n "$CONTEXT" ] || die "set KUBE_CONTEXT in $ENV_FILE (there is no default context)"
   local names; names=$(printf '%s, ' "$@"); names=${names%, }
+  [ "$name" = cams-admin-oauth ] && names="$names, GOOGLE_REDIRECT_URI"
   say "apply secret $name in $ns (context $CONTEXT): $names"
   [ "$DRY" = 1 ] && return 0
   local tmp; tmp=$(mktemp)
   local k; for k in "$@"; do printf '%s=%s\n' "$k" "$(get "$k")" >> "$tmp"; done
+  if [ "$name" = cams-admin-oauth ]; then
+    local ru; ru=$(get GOOGLE_REDIRECT_URI); printf 'GOOGLE_REDIRECT_URI=%s\n' "${ru:-$DEFAULT_REDIRECT}" >> "$tmp"
+  fi
   kubectl --context "$CONTEXT" -n "$ns" create secret generic "$name" --from-env-file="$tmp" --dry-run=client -o yaml | kubectl --context "$CONTEXT" apply -f - >/dev/null
   rm -f "$tmp"
 }
@@ -98,11 +104,11 @@ if want signing; then
   fi
 fi
 if want runner; then
-  need RUNNER_PAT
+  need CAMSADMIN_GITHUB_PAT
   [ -n "$CONTEXT" ] || die "set KUBE_CONTEXT in $ENV_FILE"
   say "apply secret runner-pat in cams-admin-runner (context $CONTEXT): token"
   if [ "$DRY" = 0 ]; then
-    tmp=$(mktemp); printf 'token=%s\n' "$(get RUNNER_PAT)" > "$tmp"
+    tmp=$(mktemp); printf 'token=%s\n' "$(get CAMSADMIN_GITHUB_PAT)" > "$tmp"
     kubectl --context "$CONTEXT" -n cams-admin-runner create secret generic runner-pat --from-env-file="$tmp" --dry-run=client -o yaml | kubectl --context "$CONTEXT" apply -f - >/dev/null
     rm -f "$tmp"
   fi

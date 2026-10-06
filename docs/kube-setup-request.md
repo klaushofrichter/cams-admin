@@ -93,7 +93,7 @@ Order as always: **commit, push, then apply.**
   `.env`, without printing; please don't create them from the kube-setup
   side):
   - `cams-admin-oauth`: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`,
-    `GOOGLE_REDIRECT_URI`, `SYSADMIN_EMAILS`;
+    `GOOGLE_REDIRECT_URI`, `ALLOWED_EMAILS`;
   - `cams-admin-signing`: `signing-key.pem` (Ed25519), mounted as a file;
   - `cams-admin-backup`: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
     `AWS_REGION`, `BACKUP_S3_BUCKET`, `BACKUP_S3_PREFIX` (used by both the app

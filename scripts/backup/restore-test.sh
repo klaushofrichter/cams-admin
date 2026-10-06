@@ -56,7 +56,7 @@ YAML
 }
 app_env() { # app_env DBFILE PORT
   exec env NODE_ENV=development LOG_LEVEL=warn PORT="$2" PUBLIC_URL="http://127.0.0.1:$2" DB_FILE="$1" SERVER_SIGNING_KEY_FILE="$WORK/signing.pem" \
-    SYSADMIN_EMAILS=restore@example.com LITESTREAM_METRICS_URL="http://127.0.0.1:$LS_PORT/metrics" TZ=America/Chicago "${@:3}"
+    ALLOWED_EMAILS=restore@example.com LITESTREAM_METRICS_URL="http://127.0.0.1:$LS_PORT/metrics" TZ=America/Chicago "${@:3}"
 }
 wait_health() { for _ in $(seq 1 60); do curl -fsS -o /dev/null "http://127.0.0.1:$1/health" 2>/dev/null && return 0; sleep 0.5; done; note "app on :$1 did not start"; exit 1; }
 

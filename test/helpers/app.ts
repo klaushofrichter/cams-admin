@@ -7,7 +7,7 @@ import { writeFileSync, chmodSync } from 'fs';
 let n = 0;
 // The whole app (no listening socket) with a signed-in sysadmin.
 export function testApp(dir: string, env: Record<string, string> = {}) {
-  process.env.SYSADMIN_EMAILS = 'admin@example.com';
+  process.env.ALLOWED_EMAILS = 'admin@example.com';
   const keyFile = join(dir, `sk${n}.pem`);
   const { privateKeyPkcs8B64 } = generateKeyPair();
   writeFileSync(keyFile, `-----BEGIN PRIVATE KEY-----\n${privateKeyPkcs8B64}\n-----END PRIVATE KEY-----\n`);

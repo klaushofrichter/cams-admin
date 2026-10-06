@@ -20,7 +20,7 @@ afterAll(async () => { await g.close(); });
 
 let n = 0;
 function setup(dir: string, env: Record<string, string> = {}) {
-  process.env.SYSADMIN_EMAILS = 'Admin@Example.com, other@example.com';
+  process.env.ALLOWED_EMAILS = 'Admin@Example.com, other@example.com';
   const db = openDb(join(dir, `a${n++}.db`));
   const clock = fakeClock(Date.now());
   const audit = new Audit(db, clock);
@@ -114,9 +114,9 @@ describe('sign-in', () => {
     s.clock.advance(1);
     expect((await request(s.app).get('/api/v1/me').set('Cookie', c)).status).toBe(401);
     const c2 = cookieOf(await signIn(s.app)).split(';')[0];
-    process.env.SYSADMIN_EMAILS = 'admin@example.com';
+    process.env.ALLOWED_EMAILS = 'admin@example.com';
     expect((await request(s.app).get('/api/v1/me').set('Cookie', c2)).status).toBe(401);
-    process.env.SYSADMIN_EMAILS = 'admin@example.com,other@example.com';
+    process.env.ALLOWED_EMAILS = 'admin@example.com,other@example.com';
     const c3 = cookieOf(await signIn(s.app)).split(';')[0];
     const out = await request(s.app).post('/auth/logout').set('Cookie', c3).set('X-Cams-Admin', '1').set('Content-Type', 'application/json').send('{}');
     expect(out.status).toBe(200);
@@ -171,7 +171,7 @@ describe('dev-session', () => {
   };
   it('refuses outside development, a non-loopback URL and a stranger; prints a cookie value otherwise', () => {
     const db = join(dir, 'dev.db');
-    const base = { DB_FILE: db, SYSADMIN_EMAILS: 'dev@example.com', PUBLIC_URL: 'http://127.0.0.1:29000', NODE_ENV: 'development' };
+    const base = { DB_FILE: db, ALLOWED_EMAILS: 'dev@example.com', PUBLIC_URL: 'http://127.0.0.1:29000', NODE_ENV: 'development' };
     expect(run({ ...base, NODE_ENV: 'production' }, 'dev@example.com').ok).toBe(false);
     expect(run({ ...base, PUBLIC_URL: 'https://cams-admin.example.net' }, 'dev@example.com').ok).toBe(false);
     expect(run(base, 'stranger@example.com').ok).toBe(false);
