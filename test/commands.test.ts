@@ -137,9 +137,11 @@ describe('commands', () => {
     const { acc, prx, client } = await proxy();
     client.dropAfterReceived = 1;
     client.debugHoldEvents = true;
+    client.holdReconnect = true; // stays away until the restart: the row must stay `received`
     const row = cmds().create(ACTOR, acc, prx, 'tokens.apply', ARGS(3));
-    await until(() => stateOf(acc, prx, row.id) === 'received');
+    await until(() => stateOf(acc, prx, row.id) === 'received' && client.state !== 'connected');
     s = await s.restart();
+    client.release();
     await until(() => s.built.commands.get(acc, prx, row.id).state === 'done', 8000);
     expect(client.executed.filter((x) => x === row.id)).toHaveLength(1);
     expect(s.built.commands.get(acc, prx, row.id).attempts).toBe(2);

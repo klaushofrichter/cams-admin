@@ -184,9 +184,11 @@ describe('tokens', () => {
     const { acc, prx, client } = await proxy();
     client.dropAfterReceived = 1; // applies, then the socket drops before done
     client.debugHoldEvents = true; // and the done never comes as an event
+    client.holdReconnect = true;
     const a = T().issue(ACTOR, acc, prx, { kind: 'client', label: 'a' });
-    await until(() => client.tokensRevision === 1);
+    await until(() => client.tokensRevision === 1 && client.state !== 'connected');
     client.dropCommands = 1000; // the re-send is lost too
+    client.release();
     await until(() => tokenState(acc, prx, a.tokenId) === 'active', 5000, 'confirmed by heartbeat');
     expect(['sent', 'received']).toContain(s.built.commands.get(acc, prx, a.commandId).state);
     const before = readEpoch(s.built.db);

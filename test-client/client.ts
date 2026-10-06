@@ -116,8 +116,22 @@ export class ProxyClient extends EventEmitter {
     this.connect();
   }
 
+  // Tests: no reconnect until release() (a proxy that stays away for a while).
+  holdReconnect = false;
+  private held: (() => void) | null = null;
+  release(): void {
+    this.holdReconnect = false;
+    const h = this.held;
+    this.held = null;
+    h?.();
+  }
+
   private schedule(reason: string, delayMs: number): void {
     if (this.stopping) return;
+    if (this.holdReconnect) {
+      this.held = () => this.schedule(reason, delayMs);
+      return;
+    }
     this.emit('schedule', { reason, delayMs });
     if (this.timer) clearTimeout(this.timer);
     this.timer = setTimeout(() => this.connect(), delayMs);
