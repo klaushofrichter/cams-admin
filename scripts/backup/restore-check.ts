@@ -24,7 +24,7 @@ const opt = (n: string) => {
 };
 const env = (n: string) => process.env[n] ?? (() => { throw new Error(`${n} is required`); })();
 
-const TABLES = ['accounts', 'account_users', 'proxies', 'proxy_keys', 'enrollment_codes', 'cameras', 'sims', 'proxy_status', 'status_events', 'audit_log', 'sessions', 'jobs', 'meta'];
+const TABLES = ['accounts', 'account_users', 'proxies', 'proxy_keys', 'enrollment_codes', 'cameras', 'sims', 'proxy_status', 'status_events', 'audit_log', 'sessions', 'jobs', 'meta', 'commands', 'proxy_tokens', 'proxy_token_state'];
 
 async function api(url: string, cookie: string, method: string, path: string, body?: unknown) {
   const r = await fetch(`${url}/api/v1${path}`, {
