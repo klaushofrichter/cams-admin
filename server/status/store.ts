@@ -64,7 +64,9 @@ export class StatusStore {
       problem_count = excluded.problem_count, reported = excluded.reported, online = excluded.online`)
       .run(r.proxyId, r.connected ? 1 : 0, r.connectedSince, r.lastHelloAt, r.lastHeartbeatAt, r.closedReason, r.stopped ? 1 : 0, r.proxyVersion, r.clockSkewMs,
         r.summary === null ? null : JSON.stringify(r.summary), r.summaryAt, r.ok === null ? null : r.ok ? 1 : 0, r.problemCount, r.reported ? JSON.stringify(r.reported) : null, r.online ? 1 : 0);
-    if (r.lastHelloAt !== null) this.d.db.prepare('UPDATE proxy_keys SET last_seen_at = ? WHERE proxy_id = ? AND revoked_at IS NULL AND (last_seen_at IS NULL OR last_seen_at < ?)').run(r.lastHelloAt, r.proxyId, r.lastHelloAt);
+    // Only the active key said that hello: a pending key (redeemed, never
+    // used) is not seen, whatever the proxy did with its previous key.
+    if (r.lastHelloAt !== null) this.d.db.prepare('UPDATE proxy_keys SET last_seen_at = ? WHERE proxy_id = ? AND revoked_at IS NULL AND confirmed_at IS NOT NULL AND confirmed_at <= ? AND (last_seen_at IS NULL OR last_seen_at < ?)').run(r.lastHelloAt, r.proxyId, r.lastHelloAt, r.lastHelloAt);
     this.dirty.delete(r.proxyId);
   }
 

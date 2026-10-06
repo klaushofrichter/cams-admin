@@ -17,6 +17,7 @@ export interface EnrollDeps {
   cfg: Config;
   serverKeys: string[]; // base64 SPKI DER of cams-admin's signing key(s)
   onKeyRevoked: (keyId: string) => void; // closes that key's live connection (4401)
+  onProxyChanged?: (proxyId: string) => void; // a redemption: the live registry event (the proxy page reloads)
 }
 
 export type EnrollAnswer = { status: number; body: Record<string, unknown> };
@@ -121,6 +122,7 @@ export class Enrollment {
       this.d.db.prepare('UPDATE proxies SET updated_at = ?, version = version + 1 WHERE id = ?').run(now, proxyId);
       this.d.audit.write({ actorType: 'proxy', actor: proxyId, action: 'proxy-enrolled', accountId, targetType: 'proxy', targetId: proxyId, targetLabel: row.proxy_name as string, outcome: 'ok', detail: { keyId, fingerprint: fp, codeId: row.id, retiredPendingKeys: orphans, connectUrl } });
     });
+    this.d.onProxyChanged?.(proxyId);
     return {
       status: 201,
       body: { v: 1, proxyId, keyId, account: row.account_name, connectUrl, serverKeys: this.d.serverKeys, heartbeatS: this.d.cfg.heartbeatS },

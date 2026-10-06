@@ -15,13 +15,14 @@ function setup(dir: string, env: Record<string, string> = {}, trustProxy: number
   const cfg = loadConfig({ PUBLIC_URL: 'https://cams-admin.example.net', ...env });
   const server = generateKeyPair();
   const revoked: string[] = [];
-  const enr = new Enrollment({ db, clock, audit, registry: reg, cfg, serverKeys: [server.publicKeySpkiB64], onKeyRevoked: (k) => revoked.push(k) });
+  const changed: string[] = [];
+  const enr = new Enrollment({ db, clock, audit, registry: reg, cfg, serverKeys: [server.publicKeySpkiB64], onKeyRevoked: (k) => revoked.push(k), onProxyChanged: (p) => changed.push(p) });
   const app = express();
   app.set('trust proxy', trustProxy); // as server.ts (TRUST_PROXY)
   app.use(enrollRouter(enr));
   const acc = reg.createAccount(ACTOR, { name: 'home', displayName: 'Home' });
   const prx = reg.createProxy(ACTOR, acc.id, { name: 'pi', displayName: 'Pi', runsOn: 'local-host' });
-  return { db, clock, audit, reg, enr, app, acc, prx, revoked, server };
+  return { db, clock, audit, reg, enr, app, acc, prx, revoked, changed, server };
 }
 
 // The proof covers the canonical code, whatever spelling is sent.
@@ -48,6 +49,8 @@ describe('enrollment', () => {
     expect(r.status).toBe(201);
     expect(r.body).toMatchObject({ v: 1, proxyId: s.prx.id, account: 'home', connectUrl: 'wss://cams-admin.example.net/proxy/v1/connect', serverKeys: [s.server.publicKeySpkiB64], heartbeatS: 30 });
     expect(r.body.keyId).toMatch(/^key_/);
+    expect(s.changed).toEqual([s.prx.id]); // the proxy page reloads: the code is gone, the key pending
+    expect(s.enr.liveCode(s.prx.id)).toBeNull();
     expect(s.reg.getProxy(s.acc.id, s.prx.id).state).toBe('pending');
     expect(s.enr.confirmKey(s.prx.id, r.body.keyId)).toEqual({ revoked: [] }); // the first hello
     expect(s.reg.getProxy(s.acc.id, s.prx.id).state).toBe('enrolled');
