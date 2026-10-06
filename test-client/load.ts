@@ -103,9 +103,10 @@ async function main() {
   for (const [i, x] of clients.entries()) setTimeout(() => x.c.start(), (i / clients.length) * Math.min(HB * 1000, 5000));
   const t0 = Date.now();
   const changes: { at: number; proxyId: string; ref: string; online: boolean }[] = [];
+  let toggling = true;
   for (const x of clients) {
     x.c.on('ack', () => {
-      if (Math.random() < 0.01) {
+      if (toggling && Math.random() < 0.01) {
         const ref = `cam${1 + Math.floor(Math.random() * CAMERAS)}`;
         const online = x.offline.has(ref);
         if (online) x.offline.delete(ref); else x.offline.add(ref);
@@ -124,6 +125,14 @@ async function main() {
   clearInterval(sampler);
   clearInterval(progress);
   await sample();
+  // No new camera changes; each one reaches the server with the proxy's next
+  // heartbeat (up to one interval + jitter later), then both SSE streams.
+  // Wait until every change is seen, at most 2 intervals + 3 s after the last.
+  toggling = false;
+  const seenBy = (evs: Ev[], c: (typeof changes)[number]) => evs.some((e) => e.at >= c.at && e.proxyId === c.proxyId && e.cameras.some((k) => k.ref === c.ref && k.online === c.online));
+  const missed = () => streams.map((evs) => changes.filter((c) => !seenBy(evs, c)).length);
+  const deadline = Math.max(Date.now(), ...changes.map((c) => c.at)) + 2 * HB * 1000 + 3000;
+  while (missed().some((m) => m > 0) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
   // Let the last heartbeats' acks land, then measure.
   await new Promise((r) => setTimeout(r, 1500));
   const dash = await api('GET', '/dashboard');
@@ -135,8 +144,7 @@ async function main() {
   const reconnects = clients.reduce((n, x) => n + x.c.stats.reconnects, 0);
   const startedAt = Math.min(HB * 1000, 5000) + 3000;
   const offlineSeen = streams[0].filter((e) => e.at - t0 > startedAt && e.state !== 'online').length;
-  const settled = changes.filter((c) => Date.now() - c.at > 2000);
-  const missedSse = streams.map((evs) => settled.filter((c) => !evs.some((e) => e.at >= c.at && e.proxyId === c.proxyId && e.cameras.some((k) => k.ref === c.ref && k.online === c.online))).length);
+  const missedSse = missed();
   // Flat = the mean of the last quarter's samples against the second
   // quarter's (single samples swing with GC: an hour's run ended 71.7 →
   // 72.2 MiB yet two single samples differed by 40 %).
@@ -159,7 +167,7 @@ async function main() {
     ['RSS flat (last quarter vs second quarter, means, < 10 % growth)', rssGrowth < 0.1, `${(rssGrowth * 100).toFixed(1)} %`],
     ['database under 50 MiB', db < 50 * MiB, `${(db / MiB).toFixed(2)} MiB`],
     ['event loop lag p99 under 20 ms', lagP99 < 20, `${lagP99.toFixed(1)} ms`],
-    ['SSE: both dashboards saw every camera change', missedSse.every((m) => m === 0), `${settled.length} changes; missed ${missedSse.join(', ')}`],
+    ['SSE: both dashboards saw every camera change', missedSse.every((m) => m === 0), `${changes.length} changes; missed ${missedSse.join(', ')}`],
   ];
   const report = {
     proxies: PROXIES, cameras: CAMERAS, durationS: DURATION / 1000, heartbeatS: HB, heartbeatsSent: sent, acked, ackLatencyMs: { p50: pct(lat, 50), p99: pct(lat, 99), max: Math.max(...lat) },
