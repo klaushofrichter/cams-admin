@@ -169,4 +169,16 @@ DROP INDEX proxy_keys_one_active;
 CREATE UNIQUE INDEX proxy_keys_one_active ON proxy_keys(proxy_id) WHERE revoked_at IS NULL AND confirmed_at IS NOT NULL;
 CREATE UNIQUE INDEX proxy_keys_one_pending ON proxy_keys(proxy_id) WHERE revoked_at IS NULL AND confirmed_at IS NULL;
 `),
+  // 3: migration 2 keyed on last_seen_at, but the status snapshot stamped the
+  // proxy's last hello onto every unrevoked key of the proxy, also onto a key
+  // redeemed after that hello and never used. Such a stamp predates the key
+  // (last_seen_at < created_at): that key was never seen and is pending again.
+  // If the proxy has a newer pending key, the stale one is retired instead.
+  (db) => db.exec(`
+UPDATE proxy_keys SET revoked_at = unixepoch() * 1000, revoked_reason = 're-enrolled'
+  WHERE revoked_at IS NULL AND confirmed_at IS NOT NULL AND last_seen_at < created_at
+  AND EXISTS (SELECT 1 FROM proxy_keys p WHERE p.proxy_id = proxy_keys.proxy_id AND p.revoked_at IS NULL AND p.confirmed_at IS NULL);
+UPDATE proxy_keys SET confirmed_at = NULL, last_seen_at = NULL
+  WHERE confirmed_at IS NOT NULL AND last_seen_at < created_at;
+`),
 ];

@@ -19,8 +19,8 @@ test('a code is shown once, a proxy enrolls, the dashboard turns green live, the
   await expect(page.getByTestId('code-live')).toBeVisible();
   // The fake proxy enrolls and connects.
   const key = await enroll(BASE, code, { version: 'e2e', cameraIds: ['cam1', 'cam2'] });
-  // Redeemed but not yet connected: the key is pending, the proxy too.
-  await page.reload();
+  // Redeemed but not yet connected (live, without a reload): the code is gone, the key pending.
+  await expect(page.getByTestId('code-live')).toHaveCount(0);
   await expect(page.getByTestId(`key-state-${key.keyId}`)).toHaveText('pending: waiting for its first connection');
   const c = client(key);
   c.start();
@@ -34,6 +34,19 @@ test('a code is shown once, a proxy enrolls, the dashboard turns green live, the
   c.abort();
   await expect(row.getByTestId('proxy-state-p1')).toHaveAttribute('data-state', 'offline', { timeout: 6000 });
   await expect(row.getByTestId('cam-chip-p1-cam1')).toHaveAttribute('data-online', 'null');
+});
+
+test('a shown code disappears live once a proxy redeems it', async ({ page }, info) => {
+  const acc = await api(page, 'POST', '/accounts', { name: uniq(info, 'redeem'), displayName: 'Redeem' });
+  const px = await api(page, 'POST', `/accounts/${acc.id}/proxies`, { name: 'p1', displayName: 'P1', runsOn: 'local-host' });
+  await page.goto(`/#/accounts/${acc.id}/proxies/${px.id}`);
+  await page.getByTestId('code-create').click();
+  const code = (await page.getByTestId('code-value').textContent())!.trim();
+  await expect(page.getByTestId('code-live')).toBeVisible();
+  const key = await enroll(BASE, code);
+  await expect(page.getByTestId('code-box')).toHaveCount(0);
+  await expect(page.getByTestId('code-live')).toHaveCount(0);
+  await expect(page.getByTestId(`key-state-${key.keyId}`)).toHaveText('pending: waiting for its first connection');
 });
 
 test('reconciliation: adopt a reported camera; a pin mismatch shows red; every summary field is on the page', async ({ page }, info) => {

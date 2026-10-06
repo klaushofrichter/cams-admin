@@ -14,7 +14,7 @@
   let events = $state<any[]>([]);
   let error = $state('');
   let gone = $state(false);
-  let shownCode = $state<{ code: string; command: string; expiresAt: number } | null>(null);
+  let shownCode = $state<{ id: string; code: string; command: string; expiresAt: number } | null>(null);
   let lifetimeH = $state(24);
   let confirm = $state<null | { kind: 'revoke' | 'block' | 'delete'; keyId?: string }>(null);
   let showAll = $state(false);
@@ -56,8 +56,16 @@
   // --- enrollment and keys ----------------------------------------------------------------------
   async function createCode() {
     error = '';
-    try { shownCode = await api('POST', `/accounts/${accountId}/proxies/${proxyId}/enrollment-codes`, { lifetimeH: Number(lifetimeH) }); await load(); } catch (e) { error = errorText(e); }
+    try {
+      const c = await api('POST', `/accounts/${accountId}/proxies/${proxyId}/enrollment-codes`, { lifetimeH: Number(lifetimeH) });
+      await load(); // first: the page then knows the code is live
+      shownCode = c;
+    } catch (e) { error = errorText(e); }
   }
+  // The shown code was redeemed (or replaced, cancelled, expired): gone with it.
+  $effect(() => {
+    if (shownCode && d && d.enrollment?.id !== shownCode.id) shownCode = null;
+  });
   async function cancelCode() {
     try { await api('DELETE', `/accounts/${accountId}/proxies/${proxyId}/enrollment-codes/${d.enrollment.id}`); shownCode = null; await load(); } catch (e) { error = errorText(e); }
   }

@@ -5,6 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { openDb, tx, LATEST_VERSION, readEpoch } from '../server/db/open';
 import { checkEpoch, writeEpochFile } from '../server/db/epoch';
 import { MIGRATIONS } from '../server/db/migrations';
+import { toKey } from '../server/registry';
 import { tmpDir } from './helpers/tmp';
 
 const TABLES = ['accounts', 'account_users', 'proxies', 'proxy_keys', 'enrollment_codes', 'cameras', 'sims', 'proxy_status', 'status_events', 'audit_log', 'sessions', 'jobs', 'meta'];
@@ -82,6 +83,65 @@ describe('database', () => {
     raw.close();
     const db = openDb(f);
     expect(db.prepare(`SELECT id, confirmed_at FROM proxy_keys ORDER BY id`).all()).toEqual([{ id: 'key_orphan', confirmed_at: null }, { id: 'key_seen', confirmed_at: 5 }]);
+  });
+
+  // Production, v2026.10.06.3: a key redeemed (old code) by a proxy that had
+  // said hello before with its previous key. The redemption revoked the old
+  // key; the status snapshot then stamped the proxy's last hello onto the new,
+  // never-used key (last_seen_at before its created_at), and migration 2
+  // turned that stamp into confirmed_at: the orphan showed as active.
+  const oldRedeemSequence = (raw: DatabaseSync) => {
+    seed(raw);
+    raw.exec(`UPDATE proxies SET state='enrolled' WHERE id='prx_a';
+      INSERT INTO proxy_keys (id,proxy_id,public_key,fingerprint,created_at,last_seen_at) VALUES ('key_old','prx_a','pk0','f0',500,1000);
+      INSERT INTO proxy_status (proxy_id,last_hello_at) VALUES ('prx_a',1000);`);
+    // redeem at 2000 (old code): the active key revoked, the new key inserted
+    raw.exec(`UPDATE proxy_keys SET revoked_at=2000, revoked_reason='re-enrolled' WHERE proxy_id='prx_a' AND revoked_at IS NULL;
+      INSERT INTO proxy_keys (id,proxy_id,public_key,fingerprint,created_at,enrollment_id) VALUES ('key_new','prx_a','pk1','f1',2000,'enr_1');`);
+    // no hello with key_new; the old status snapshot (StatusStore.persist) runs
+    raw.prepare('UPDATE proxy_keys SET last_seen_at = ? WHERE proxy_id = ? AND revoked_at IS NULL AND (last_seen_at IS NULL OR last_seen_at < ?)').run(1000, 'prx_a', 1000);
+  };
+
+  it('redeem, no hello, snapshot, migrate: the never-used key is pending, never active', () => {
+    const f = join(dir, 'm2-orphan.db');
+    const raw = new DatabaseSync(f);
+    MIGRATIONS[0](raw);
+    raw.exec('PRAGMA user_version = 1');
+    oldRedeemSequence(raw);
+    raw.close();
+    const db = openDb(f);
+    expect(db.prepare(`SELECT id, confirmed_at, last_seen_at, revoked_at FROM proxy_keys ORDER BY id`).all()).toEqual([
+      { id: 'key_new', confirmed_at: null, last_seen_at: null, revoked_at: null },
+      { id: 'key_old', confirmed_at: 1000, last_seen_at: 1000, revoked_at: 2000 },
+    ]);
+    expect(toKey(db.prepare(`SELECT * FROM proxy_keys WHERE id='key_new'`).get() as Record<string, unknown>, 2000 + 25 * 3600_000).pending).toBe('expired');
+  });
+
+  it('migration 3 repairs a database already at version 2 (a stamped key wrongly active)', () => {
+    const f = join(dir, 'm3.db');
+    const raw = new DatabaseSync(f);
+    MIGRATIONS[0](raw);
+    raw.exec('PRAGMA user_version = 1');
+    oldRedeemSequence(raw);
+    // prx_b: a stamped key wrongly confirmed, and a newer pending key; plus a genuinely seen key
+    raw.exec(`INSERT INTO proxy_keys (id,proxy_id,public_key,fingerprint,created_at,last_seen_at) VALUES ('key_b_stamped','prx_b','pk2','f2',3000,2500)`);
+    MIGRATIONS[1](raw);
+    raw.exec('PRAGMA user_version = 2');
+    raw.exec(`INSERT INTO proxy_keys (id,proxy_id,public_key,fingerprint,created_at) VALUES ('key_b_pending','prx_b','pk3','f3',4000);
+      INSERT INTO accounts (id,name,display_name,created_at,updated_at) VALUES ('acc_c','gamma','C',1,1);
+      INSERT INTO proxies (id,account_id,name,display_name,runs_on,state,created_at,updated_at) VALUES ('prx_c','acc_c','pc','PC','cluster','enrolled',1,1);
+      INSERT INTO proxy_keys (id,proxy_id,public_key,fingerprint,created_at,last_seen_at,confirmed_at) VALUES ('key_c','prx_c','pk4','f4',100,200,150);`);
+    expect(raw.prepare(`SELECT confirmed_at FROM proxy_keys WHERE id='key_new'`).get()).toEqual({ confirmed_at: 1000 }); // the production state
+    raw.close();
+    const db = openDb(f);
+    const rows = db.prepare(`SELECT id, confirmed_at, last_seen_at, revoked_at IS NOT NULL revoked, revoked_reason FROM proxy_keys ORDER BY id`).all();
+    expect(rows).toEqual([
+      { id: 'key_b_pending', confirmed_at: null, last_seen_at: null, revoked: 0, revoked_reason: null },
+      { id: 'key_b_stamped', confirmed_at: null, last_seen_at: null, revoked: 1, revoked_reason: 're-enrolled' },
+      { id: 'key_c', confirmed_at: 150, last_seen_at: 200, revoked: 0, revoked_reason: null },
+      { id: 'key_new', confirmed_at: null, last_seen_at: null, revoked: 0, revoked_reason: null },
+      { id: 'key_old', confirmed_at: 1000, last_seen_at: 1000, revoked: 1, revoked_reason: 're-enrolled' },
+    ]);
   });
 
   it('refuses sim details for a camera that is not a sim', () => {

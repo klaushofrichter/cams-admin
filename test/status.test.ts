@@ -47,6 +47,17 @@ describe('status store', () => {
     expect(s.res.events('status').at(-1)).toMatchObject({ proxyId: s.prx.id, state: 'offline' });
   });
 
+  it('the snapshot stamps last seen on the confirmed key only, never on a pending one', () => {
+    const s = setup(dir);
+    s.db.prepare(`INSERT INTO proxy_keys (id, proxy_id, public_key, fingerprint, created_at) VALUES ('key_p', ?, 'pk2', 'fp2', ?)`).run(s.prx.id, s.clock.now());
+    s.clock.advance(1000);
+    s.store.hello(s.prx.id, 'v2026.10.06.1', s.clock.now());
+    s.store.flush(true);
+    const seen = (id: string) => (s.db.prepare('SELECT last_seen_at FROM proxy_keys WHERE id = ?').get(id) as { last_seen_at: number | null }).last_seen_at;
+    expect(seen('key_1')).toBe(s.clock.now());
+    expect(seen('key_p')).toBeNull();
+  });
+
   it('a reconnect inside the window shows no outage', () => {
     const s = setup(dir);
     s.store.hello(s.prx.id, V, s.clock.now());
