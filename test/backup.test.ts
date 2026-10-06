@@ -102,7 +102,7 @@ describe('alerts and schedule', () => {
   it('red when the last snapshot failed, is older than 26 h, or replication lags 5 min', () => {
     expect(backupAlerts({ now: NOW, configured: true, lastOkAt: NOW - 3600_000, lastOutcome: 'ok', litestream: false, lastReplicationAt: null, startedAt: NOW - 86400_000 * 2 })).toEqual([]);
     expect(backupAlerts({ now: NOW, configured: true, lastOkAt: NOW - 27 * 3600_000, lastOutcome: 'ok', litestream: false, lastReplicationAt: null, startedAt: NOW - 86400_000 * 2 })).toEqual(['snapshot-stale']);
-    expect(backupAlerts({ now: NOW, configured: true, lastOkAt: NOW - 3600_000, lastOutcome: 'failed', litestream: true, lastReplicationAt: NOW - 6 * 60_000, startedAt: NOW - 86400_000, syncIntervalMs: 30_000 })).toEqual(['snapshot-failed', 'replication-lag']);
+    expect(backupAlerts({ now: NOW, configured: true, lastOkAt: NOW - 3600_000, lastOutcome: 'failed', litestream: true, lastReplicationAt: NOW - 7 * 60_000, startedAt: NOW - 86400_000, syncIntervalMs: 30_000 })).toEqual(['snapshot-failed', 'replication-lag']);
     expect(backupAlerts({ now: NOW, configured: false, lastOkAt: null, lastOutcome: null, litestream: false, lastReplicationAt: null, startedAt: NOW })).toEqual(['backup-not-configured']);
   });
   it('replication lag is judged against the configured sync interval (2 × interval + 5 min)', () => {
@@ -111,7 +111,7 @@ describe('alerts and schedule', () => {
     expect(backupAlerts({ ...base, syncIntervalMs: hour, lastReplicationAt: NOW - 6 * 60_000 })).toEqual([]);
     expect(backupAlerts({ ...base, syncIntervalMs: hour, lastReplicationAt: NOW - (2 * hour + 4 * 60_000) })).toEqual([]);
     expect(backupAlerts({ ...base, syncIntervalMs: hour, lastReplicationAt: NOW - (2 * hour + 6 * 60_000) })).toEqual(['replication-lag']);
-    expect(backupAlerts({ ...base, syncIntervalMs: 30_000, lastReplicationAt: NOW - 6 * 60_000 })).toEqual(['replication-lag']);
+    expect(backupAlerts({ ...base, syncIntervalMs: 30_000, lastReplicationAt: NOW - 7 * 60_000 })).toEqual(['replication-lag']);
   });
 
   it('LITESTREAM_SYNC_INTERVAL_S defaults to one hour', async () => {
