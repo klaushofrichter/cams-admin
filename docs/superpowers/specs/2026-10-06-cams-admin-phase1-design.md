@@ -202,10 +202,11 @@ same bucket under its own prefix.**
   belong to one process. The Deployment has `replicas: 1` and
   `strategy: Recreate`. Horizontal scale is not a goal: tens of proxies send
   one small message per 30 s each.
-- **In-memory state:** the open connections (`proxyId → connection`) and
-  the per-proxy rate counters. Everything shown on the dashboard is also
-  written to `proxy_status`, so a restart shows the last known state, marked
-  stale until the proxies reconnect.
+- **In-memory state:** the open connections (`proxyId → connection`), the
+  per-proxy rate counters, and the live status of every proxy. Meaningful
+  changes are written at once and the rest every 10 min to `proxy_status`
+  (§13.3, S3 cost), so a restart shows the last known state, marked stale
+  until the proxies reconnect.
 
 ## 4. Data model
 
