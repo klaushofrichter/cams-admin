@@ -23,6 +23,15 @@ describe('config', () => {
     expect(() => loadConfig({ PUBLIC_URL: 'https://a.example.net', GOOGLE_REDIRECT_URI: 'https://b.example.net/auth/callback' })).toThrow(/GOOGLE_REDIRECT_URI.*PUBLIC_URL/);
   });
 
+  it('INTERNAL_URLS: optional origins (http only in-cluster or loopback), PUBLIC_URL always allowed', () => {
+    expect(loadConfig({ PUBLIC_URL: 'https://a.example.net' }).connectOrigins).toEqual(['https://a.example.net']);
+    const c = loadConfig({ PUBLIC_URL: 'https://a.example.net/', INTERNAL_URLS: ' http://cams-admin.cams-admin.svc.cluster.local:8080 , http://127.0.0.1:29000/,https://b.example.net' });
+    expect(c.connectOrigins).toEqual(['https://a.example.net', 'http://cams-admin.cams-admin.svc.cluster.local:8080', 'http://127.0.0.1:29000', 'https://b.example.net']);
+    for (const bad of ['http://b.example.net', 'ftp://x.svc.cluster.local', 'http://x.svc.cluster.local:8080/api', 'http://x.svc.cluster.local?a=1', 'http://u:p@x.svc.cluster.local', 'not a url', 'http://svc.cluster.local.example.net']) {
+      expect(() => loadConfig({ PUBLIC_URL: 'https://a.example.net', INTERNAL_URLS: bad }), bad).toThrow(/INTERNAL_URLS/);
+    }
+  });
+
   it('requires PUBLIC_URL and refuses nonsense numbers', () => {
     expect(() => loadConfig({})).toThrow(/PUBLIC_URL/);
     expect(() => loadConfig({ PUBLIC_URL: 'https://a.example.net', HEARTBEAT_S: 'x' })).toThrow(/HEARTBEAT_S/);

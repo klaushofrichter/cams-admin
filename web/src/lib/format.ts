@@ -26,3 +26,11 @@ export function camClass(online: boolean | null): string {
 }
 
 export const bytes = (n: number | null | undefined): string => (n == null ? '—' : n < 1024 ? `${n} B` : n < 1024 ** 2 ? `${(n / 1024).toFixed(1)} KiB` : `${(n / 1024 ** 2).toFixed(1)} MiB`);
+
+// A proxy key: active, revoked, or pending (redeemed, no hello yet).
+export function keyState(k: { revokedAt: number | null; revokedReason: string | null; pending?: 'waiting' | 'expired' | null }): string {
+  if (k.revokedAt) return `revoked (${k.revokedReason})`;
+  if (k.pending === 'waiting') return 'pending: waiting for its first connection';
+  if (k.pending === 'expired') return 'pending, expired: never connected (unused enroll answer)';
+  return 'active';
+}

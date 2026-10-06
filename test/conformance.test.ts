@@ -113,14 +113,21 @@ describe('enrollment', () => {
     await s.api('DELETE', `/accounts/${acc}/proxies/${p3}/enrollment-codes/${c3.id}`);
     expect((await post(body(c3.code))).status).toBe(401); // cancelled
   });
-  it('two concurrent redemptions: exactly one 201; re-enrollment closes the old key (4401)', async () => {
+  it('two concurrent redemptions: exactly one 201; the old key works until the new key\'s hello, then it is closed', async () => {
     const p = await enrolled(s, 'renroll');
     const c = await live(p);
     const code = (await s.api('POST', `/accounts/${p.accountId}/proxies/${p.proxyId}/enrollment-codes`, {})).code;
-    const b = () => { const k = generateKeyPair(); return { v: 1, code, publicKey: k.publicKeySpkiB64, proof: sign(privateFromB64(k.privateKeyPkcs8B64), signedText.enroll(code, k.publicKeySpkiB64)) }; };
-    const rs = await Promise.all([b(), b()].map((x) => fetch(`${s.url}/proxy/v1/enroll`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(x) })));
+    const keys = [generateKeyPair(), generateKeyPair()];
+    const b = (k: (typeof keys)[number]) => ({ v: 1, code, publicKey: k.publicKeySpkiB64, proof: sign(privateFromB64(k.privateKeyPkcs8B64), signedText.enroll(code, k.publicKeySpkiB64)) });
+    const rs = await Promise.all(keys.map((k) => fetch(`${s.url}/proxy/v1/enroll`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b(k)) })));
     expect(rs.map((r) => r.status).sort()).toEqual([201, 401]);
-    expect(await c.closed).toBe(4401);
+    const i = rs.findIndex((r) => r.status === 201);
+    const won = (await rs[i].json()) as { keyId: string };
+    // Redeemed, no hello yet: the old connection lives on.
+    expect(await Promise.race([c.closed, new Promise((r) => setTimeout(() => r('open'), 300))])).toBe('open');
+    await live({ key: { proxyId: p.proxyId, keyId: won.keyId, privateKey: keys[i].privateKeyPkcs8B64 } });
+    expect([4401, 4409]).toContain(await c.closed);
+    expect(s.built.registry.listKeys(p.accountId, p.proxyId).find((k) => k.id === p.key.keyId)).toMatchObject({ revokedReason: 're-enrolled' });
   });
 });
 

@@ -18,7 +18,7 @@ describe('audit log', () => {
   it('has the closed list of spec §11.4', () => {
     expect(AUDIT_ACTIONS).toContain('proxy-enrolled');
     expect(AUDIT_ACTIONS).toContain('audit-throttled');
-    expect(AUDIT_ACTIONS).toHaveLength(30);
+    expect(AUDIT_ACTIONS).toHaveLength(31);
   });
 
   it('refuses an unknown action', () => {

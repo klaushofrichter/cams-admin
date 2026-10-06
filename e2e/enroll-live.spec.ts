@@ -19,8 +19,13 @@ test('a code is shown once, a proxy enrolls, the dashboard turns green live, the
   await expect(page.getByTestId('code-live')).toBeVisible();
   // The fake proxy enrolls and connects.
   const key = await enroll(BASE, code, { version: 'e2e', cameraIds: ['cam1', 'cam2'] });
+  // Redeemed but not yet connected: the key is pending, the proxy too.
+  await page.reload();
+  await expect(page.getByTestId(`key-state-${key.keyId}`)).toHaveText('pending: waiting for its first connection');
   const c = client(key);
   c.start();
+  // Its first hello makes it the active key (live, without a reload).
+  await expect(page.getByTestId(`key-state-${key.keyId}`)).toHaveText('active');
   await page.goto('/#/');
   const row = page.getByTestId(`dash-account-${name}`);
   await expect(row.getByTestId('proxy-state-p1')).toHaveAttribute('data-state', 'online');
