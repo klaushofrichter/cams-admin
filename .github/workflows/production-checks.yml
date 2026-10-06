@@ -30,7 +30,7 @@ jobs:
         run: scripts/backup/restore-test.sh
       # Spec §15.4: cam-proxy main's real buildHealth() against the strict
       # heartbeat schema. A network failure fails the step.
-      - name: Contract cross-check with cam-proxy main
+      - name: Contract cross-check with cam-proxy main (heartbeat and commands)
         run: scripts/contract/cam-proxy-check.sh
       # Spec §15.4: the short load test (the full hour runs on a Mac).
       - name: Load test (short)
