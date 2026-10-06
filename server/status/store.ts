@@ -229,7 +229,8 @@ export class StatusStore {
 
   // Status events, newest first, paged by id.
   events(proxyId: string, limit = 50, cursor?: number): { items: { id: number; at: number; kind: string; cameraRef: string | null; detail: unknown }[]; nextCursor: number | null } {
-    const lim = Math.min(Math.max(limit, 1), 200);
+    const lim = Number.isFinite(limit) ? Math.min(Math.max(Math.floor(limit), 1), 200) : 50;
+    if (cursor !== undefined && !Number.isFinite(cursor)) cursor = undefined;
     const rows = this.d.db.prepare(`SELECT * FROM status_events WHERE proxy_id = ? ${cursor ? 'AND id < ?' : ''} ORDER BY id DESC LIMIT ?`).all(...(cursor ? [proxyId, cursor, lim + 1] : [proxyId, lim + 1])) as Row[];
     const items = rows.slice(0, lim).map((r) => ({ id: r.id as number, at: r.at as number, kind: r.kind as string, cameraRef: r.camera_ref as string | null, detail: r.detail ? JSON.parse(r.detail as string) : null }));
     return { items, nextCursor: rows.length > lim ? items[items.length - 1].id : null };

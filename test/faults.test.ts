@@ -45,7 +45,12 @@ describe('fault injection', () => {
     const p = await enrolled(s, 'blackhole');
     const tp = await tcpProxy(s.port);
     cleanup.push(() => tp.close());
-    const c = client(makeClient({ ...p.key, connectUrl: `ws://127.0.0.1:${tp.port}/proxy/v1/connect` }, { heartbeatS: 0.2, backoffCapMs: 200 }));
+    const c = client(makeClient({ ...p.key, connectUrl: `ws://127.0.0.1:${tp.port}/proxy/v1/connect` }, {
+      heartbeatS: 0.2, backoffCapMs: 200,
+      // Time-scaled like the rest: an attempt started while the link is still
+      // blackholed waits out this timeout (10 s by default) before retrying.
+      connectTimeoutMs: 1000,
+    }));
     const logs: string[] = [];
     c.on('log', (e) => logs.push(e));
     c.start();

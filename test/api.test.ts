@@ -92,6 +92,17 @@ describe('the API', () => {
     expect((await request(a.app).get('/health')).body.backup).toMatchObject({ lastManualAt: expect.any(Number), lastManualOk: false });
   });
 
+  it('status events: a non-numeric limit or cursor falls back to the defaults', async () => {
+    const a = app();
+    const acc = (await a.api('post', '/accounts', { name: 'ev', displayName: 'Ev' })).body;
+    const p = (await a.api('post', `/accounts/${acc.id}/proxies`, { name: 'p', displayName: 'P', runsOn: 'cloud' })).body;
+    for (const q of ['limit=abc', 'limit=Infinity', 'limit=-5', 'cursor=x', 'limit=1e9']) {
+      const r = await a.api('get', `/accounts/${acc.id}/proxies/${p.id}/status-events?${q}`);
+      expect(r.status, q).toBe(200);
+      expect(r.body.items, q).toEqual([]);
+    }
+  });
+
   it('answers malformed JSON with 400 and a big body with 413', async () => {
     const a = app();
     const bad = await request(a.app).post('/api/v1/accounts').set('Cookie', a.cookie).set('X-Cams-Admin', '1').set('Content-Type', 'application/json').send('{nope');
