@@ -253,6 +253,23 @@ describe('commands', () => {
     raw.ws.terminate();
   });
 
+  it('the proxy\'s own correctly signed result replayed with an old connId on a new connection is dropped', async () => {
+    const a = await proxy();
+    a.client.dropCommands = 1000;
+    const row = cmds().create(ACTOR, a.acc, a.prx, 'tokens.apply', ARGS(1));
+    await until(() => stateOf(a.acc, a.prx, row.id) === 'sent');
+    const oldConn = a.client.connId!;
+    await a.client.stop('shutdown');
+    const raw = await rawLive(a.key);
+    expect(raw.connId).not.toBe(oldConn);
+    raw.sendSigned({ proxyId: a.prx, connId: oldConn, cmdId: row.id, phase: 'done', status: 'ok', result: { revision: 1, applied: true, stale: false, client: 1, admin: 0, blocked: [] } }, a.key.privateKey);
+    await until(() => auditFor('command-result').length >= 1);
+    await new Promise((r) => setTimeout(r, 100));
+    expect(stateOf(a.acc, a.prx, row.id)).toBe('sent');
+    expect(JSON.parse(auditFor('command-result')[0].detail)).toMatchObject({ reason: 'wrong_target' });
+    raw.ws.terminate();
+  });
+
   it('more than 20 dropped results on one connection close it (4400)', async () => {
     const b = await proxy();
     await b.client.stop('shutdown');
