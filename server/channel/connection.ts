@@ -20,6 +20,7 @@ export interface ConnectionHost {
   closed(c: Connection): void;
   failedHandshake(): void;
   helloBudget(proxyId: string): boolean;
+  helloTimeoutMs(): number;
   isClosing(): boolean;
 }
 
@@ -34,6 +35,7 @@ export class Connection {
   private seqOut = 0;
   private seqIn = 0;
   private helloTimer: NodeJS.Timeout;
+  private helloTimeout: number;
   private pingTimer: NodeJS.Timeout | null = null;
   private alive = true;
   private msgs: Buckets;
@@ -49,10 +51,8 @@ export class Connection {
     ws.on('close', (code, reason) => this.onClose(code, String(reason)));
     ws.on('error', () => undefined);
     ws.on('pong', () => (this.alive = true));
-    this.helloTimer = setTimeout(() => {
-      host.failedHandshake();
-      this.close(CLOSE.timeout, 'timeout');
-    }, d.cfg.helloTimeoutMs);
+    this.helloTimeout = host.helloTimeoutMs();
+    this.helloTimer = setTimeout(() => this.close(CLOSE.timeout, 'timeout'), this.helloTimeout);
     const serverTime = this.challengeAt;
     this.send('challenge', { connId: this.connId, nonce: this.nonce, serverTime, serverKeyId: d.serverKeyFingerprint }, {
       sig: sign(d.signingKey, signedText.challenge(this.connId, this.nonce, serverTime)),
@@ -153,18 +153,19 @@ export class Connection {
   private onHello(m: Envelope): void {
     const d = this.host.deps;
     const b = m.body as { proxyId: string; keyId: string; connId: string; nonce: string; ts: number; version?: string };
-    if (!this.host.helloBudget(b.proxyId)) {
-      this.send('error', { code: 'rate_limited', message: 'too many hellos', retryAfterS: 60 });
-      return this.close(CLOSE.rate_limited, 'rate_limited');
-    }
     // The nonce must be this connection's, under helloTimeout old: a recorded
     // hello is useless on any other connection (the replay protection).
-    if (b.connId !== this.connId || b.nonce !== this.nonce || d.clock.now() - this.challengeAt >= d.cfg.helloTimeoutMs) return this.refuse('nonce', b.proxyId);
+    if (b.connId !== this.connId || b.nonce !== this.nonce || d.clock.now() - this.challengeAt >= this.helloTimeout) return this.refuse('nonce', b.proxyId);
     const key = d.db.prepare(`SELECT k.public_key, k.revoked_at, p.state FROM proxy_keys k JOIN proxies p ON p.id = k.proxy_id WHERE k.id = ? AND k.proxy_id = ?`).get(b.keyId, b.proxyId) as { public_key: string; revoked_at: number | null; state: string } | undefined;
     if (!key) return this.refuse('unknown-key', b.proxyId);
     if (key.revoked_at !== null) return this.refuse('revoked-key', b.proxyId);
     if (key.state !== 'enrolled') return this.refuse('proxy-not-enrolled', b.proxyId);
     if (!verify(publicFromB64(key.public_key), signedText.hello(this.connId, this.nonce, b.proxyId, b.keyId, b.ts), m.sig)) return this.refuse('bad-signature', b.proxyId);
+    // Verified: now the proxy's own budget (a flapping proxy, two sharing a key).
+    if (!this.host.helloBudget(b.proxyId)) {
+      this.send('error', { code: 'rate_limited', message: 'too many hellos', retryAfterS: 60 });
+      return this.close(CLOSE.rate_limited, 'rate_limited');
+    }
     clearTimeout(this.helloTimer);
     this.proxyId = b.proxyId;
     this.keyId = b.keyId;

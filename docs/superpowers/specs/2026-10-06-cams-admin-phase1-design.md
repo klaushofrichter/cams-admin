@@ -791,8 +791,8 @@ proxy                                         cams-admin
 | frame size (`maxPayload`) | 256 KiB |
 | inbound bytes per connection | 1 MiB per minute, then 4429 |
 | messages per connection | 20 per minute. Heartbeats arriving faster than one per 10 s are dropped (counted, not stored); 3 drops in a minute close with 4429 |
-| `hello` attempts per proxy id | 6 per minute |
-| failed handshakes | 300 per 10 min **in total** (never per source address, §7), then the upgrade answers 429 for 60 s; a failed `hello` also counts against the claimed `proxyId`'s 6 per minute |
+| `hello`s per proxy id | 6 per minute, counted only after the signature verified (a forged hello naming a victim's id costs it nothing), then 4429 |
+| failed handshakes | bad `hello`s only (key, nonce, signature; never idle timeouts, which the pending cap bounds): 300 per 10 min in total. Past that, upgrades are **still accepted** up to the pending cap and a valid `hello` still gets in, but new sockets get a 2 s `hello` deadline for 10 min. No upgrade is refused for it, so an attacker can't keep real proxies out (security review 2026-10-06) |
 | open sockets without a completed `hello` | 50 in total; each must finish within 10 s |
 | connections | one per proxy (newest wins after authenticating) |
 

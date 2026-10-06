@@ -235,20 +235,56 @@ describe('the proxy channel', () => {
     expect(codes[6]).toBe(4429);
   });
 
-  it('pending sockets are capped (503) and failed handshakes in total too (429)', async () => {
-    const h = await hub(dir, { LIMIT_PENDING_SOCKETS: '3', LIMIT_FAILED_HANDSHAKES: '2' });
+  it('pending sockets are capped (503)', async () => {
+    const h = await hub(dir, { LIMIT_PENDING_SOCKETS: '3' });
     const rs = [rawConnect(h.url), rawConnect(h.url), rawConnect(h.url)];
     for (const r of rs) await r.next();
     expect(await rawConnect(h.url).unexpected).toBe(503);
     for (const r of rs) r.ws.close();
     await Promise.all(rs.map((r) => r.closed));
+  });
+
+  it('DoS: forged hellos naming a victim\'s proxy id do not use up its hello budget', async () => {
+    const h = await hub(dir);
+    const victim = h.enrolled();
+    for (let i = 0; i < 10; i++) {
+      const r = rawConnect(h.url);
+      await handshake(r, { ...victim, key: h.enrolled().key }); // signed with the wrong key
+      expect((await r.closed).code).toBe(4401);
+    }
+    const ok = rawConnect(h.url);
+    await handshake(ok, victim);
+    expect(await ok.next()).toMatchObject({ type: 'welcome' });
+  });
+
+  it('DoS: past the failed-handshake budget, upgrades are still accepted and a valid hello gets in; idle sockets are cut sooner', async () => {
+    const h = await hub(dir, { LIMIT_FAILED_HANDSHAKES: '2', HELLO_TIMEOUT_MS: '6000' });
     const p = h.enrolled();
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 5; i++) {
       const r = rawConnect(h.url);
       await handshake(r, p, { tamper: (b) => { b.ts++; } });
       await r.closed;
     }
-    expect(await rawConnect(h.url).unexpected).toBe(429);
+    // Under attack: an idle socket gets a short hello deadline (not 6 s).
+    const idle = rawConnect(h.url);
+    await idle.next();
+    const t0 = Date.now();
+    expect((await idle.closed).code).toBe(4408);
+    expect(Date.now() - t0).toBeLessThan(3500);
+    // The real proxy still connects.
+    const ok = rawConnect(h.url);
+    await handshake(ok, p);
+    expect(await ok.next()).toMatchObject({ type: 'welcome' });
+  });
+
+  it('DoS: idle sockets timing out never block the real proxy', async () => {
+    const h = await hub(dir, { LIMIT_FAILED_HANDSHAKES: '2', HELLO_TIMEOUT_MS: '150' });
+    const p = h.enrolled();
+    const idle = Array.from({ length: 6 }, () => rawConnect(h.url));
+    await Promise.all(idle.map((r) => r.closed));
+    const ok = rawConnect(h.url);
+    await handshake(ok, p);
+    expect(await ok.next()).toMatchObject({ type: 'welcome' });
   });
 
   it('closeKey closes 4401, closeProxy 4403, shutdown sends bye then 1001', async () => {

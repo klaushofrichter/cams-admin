@@ -42,7 +42,10 @@ export class Hub implements ConnectionHost {
   private all = new Set<Connection>();
   private hellos: Buckets;
   private failures: Buckets;
-  private blockedUntil = 0;
+  // Past the failed-handshake budget: upgrades are still accepted (up to the
+  // pending cap) and a valid hello still gets in, but new sockets get a short
+  // hello deadline. An attacker can't lock real proxies out this way.
+  private attackUntil = 0;
   // Recently refused proxy ids (for the dashboard after a restore, §13.5).
   readonly refusedIds = new Map<string, { at: number; reason: string }>();
 
@@ -74,8 +77,6 @@ export class Hub implements ConnectionHost {
     // Browsers send Origin; Node's client doesn't. Refusing it closes off
     // cross-site WebSocket tricks outright.
     if (req.headers.origin !== undefined) return reject(socket, 403, 'Forbidden');
-    const now = this.deps.clock.now();
-    if (now < this.blockedUntil) return reject(socket, 429, 'Too Many Requests', { error: 'rate_limited', retryAfterS: Math.ceil((this.blockedUntil - now) / 1000) });
     const offered = String(req.headers['sec-websocket-protocol'] ?? '').split(',').map((s) => s.trim());
     if (!offered.includes(SUBPROTOCOL)) return reject(socket, 426, 'Upgrade Required', { error: 'unsupported_protocol', supported: [SUBPROTOCOL] });
     let pending = 0;
@@ -87,13 +88,22 @@ export class Hub implements ConnectionHost {
     });
   }
 
+  // Charged only after the hello's signature verified (a forged hello naming a
+  // victim's id must not use up its budget).
   helloBudget(proxyId: string): boolean {
-    return this.hellos.take(String(proxyId).slice(0, 40), this.deps.clock.now()).ok;
+    return this.hellos.take(proxyId, this.deps.clock.now()).ok;
   }
 
+  // Bad hellos only (signature, key, nonce); idle timeouts are bounded by the
+  // pending-socket cap and don't count.
   failedHandshake(): void {
     const now = this.deps.clock.now();
-    if (!this.failures.take('global', now).ok) this.blockedUntil = now + 60_000;
+    if (!this.failures.take('global', now).ok) this.attackUntil = now + 10 * 60_000;
+  }
+
+  helloTimeoutMs(): number {
+    const t = this.deps.cfg.helloTimeoutMs;
+    return this.deps.clock.now() < this.attackUntil ? Math.min(t, 2000) : t;
   }
 
   authenticated(c: Connection): void {
