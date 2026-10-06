@@ -11,7 +11,7 @@ describe('/health', () => {
   it('answers GET with status, version and the backup times', async () => {
     const r = await request(a.app).get('/health');
     expect(r.status).toBe(200);
-    expect(r.body).toEqual({ status: 'ok', version: 'dev', backup: { lastReplicationAt: null, lastSnapshotAt: null, lastManualAt: null, lastManualOk: null } });
+    expect(r.body).toEqual({ status: 'ok', version: 'dev', backup: { lastReplicationAt: null, lastSnapshotAt: null, lastManualAt: null, lastManualOk: null, replicationCheckError: null, replicationCheckErrors: 0, litestreamSyncErrors: null, litestreamReplicaErrors: null } });
     expect(r.headers['cache-control']).toBe('no-store');
   });
 

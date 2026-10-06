@@ -1,7 +1,10 @@
 // kube-setup's S3 cost requirement (2026-10-06): heartbeats live in memory;
 // the database is written only for meaningful changes and a coarse snapshot
 // every 10 minutes, so Litestream uploads little. The write counter is
-// meta.write_epoch (one per write transaction).
+// meta.write_epoch (one per write transaction). The backup heartbeat adds
+// at most one write per LITESTREAM_SYNC_INTERVAL_S (1 h), and only when
+// nothing else was written in that interval (so Litestream uploads once an
+// interval even when idle: replication freshness is read from S3).
 import { describe, expect, it } from 'vitest';
 import { makeRegistry, ACTOR } from './helpers/registry';
 import { tmpDir } from './helpers/tmp';
@@ -9,6 +12,7 @@ import { StatusStore } from '../server/status/store';
 import { LiveHub } from '../server/live';
 import { readEpoch } from '../server/db/open';
 import { makeProxyInfo, makeSummary } from '../test-client/summaries';
+import { BackupHeartbeat } from '../server/backup/heartbeat';
 
 describe('database write budget', () => {
   const dir = tmpDir();
@@ -31,19 +35,34 @@ describe('database write budget', () => {
       store.heartbeat(id, { summary: makeSummary({ cameras: 4, now: r.clock.now() }), proxy: makeProxyInfo({ now: r.clock.now() }), truncated: false }, r.clock.now());
     }
     store.flush(true);
+    const backupHeartbeat = new BackupHeartbeat(r.db, r.clock, 3600_000);
     const start = readEpoch(r.db);
     // An hour of steady heartbeats every 30 s with ticks every 10 s: nothing meaningful changes.
     for (let t = 0; t < 3600; t += 10) {
       r.clock.advance(10_000);
       if (t % 30 === 0) for (const id of ids) store.heartbeat(id, { summary: makeSummary({ cameras: 4, now: r.clock.now() }), proxy: makeProxyInfo({ now: r.clock.now() }), truncated: false }, r.clock.now());
       store.tick();
+      if (t % 300 === 0) backupHeartbeat.tick(); // its check: 12 per interval
     }
     const writes = readEpoch(r.db) - start;
-    expect(writes).toBeLessThanOrEqual(8); // ~6 coarse snapshots
+    expect(writes).toBeLessThanOrEqual(9); // ~6 coarse snapshots + at most 1 backup heartbeat per hour
+    expect(backupHeartbeat.writes).toBe(0); // the snapshots keep Litestream uploading anyway
     expect(writes).toBeGreaterThanOrEqual(5); // the snapshots do happen
     // The live view stayed exact meanwhile.
     expect(store.view(ids[0])).toMatchObject({ state: 'online', ok: true });
     expect(r.clock.now() - store.row(ids[0])!.lastHeartbeatAt!).toBeLessThan(30_000);
+  });
+
+  it('an idle database: exactly one backup heartbeat write per sync interval', () => {
+    const r = makeRegistry(dir);
+    const hb = new BackupHeartbeat(r.db, r.clock, 3600_000);
+    const start = readEpoch(r.db);
+    for (let t = 0; t < 3 * 3600; t += 300) {
+      r.clock.advance(300_000);
+      hb.tick();
+    }
+    expect(readEpoch(r.db) - start).toBe(3); // 3 hours: 3 writes, ≈720 a month
+    expect(r.db.prepare(`SELECT last_run_at FROM jobs WHERE name='backup-heartbeat'`).get()).toEqual({ last_run_at: r.clock.now() });
   });
 
   it('a meaningful change is written at once (a camera goes offline)', () => {

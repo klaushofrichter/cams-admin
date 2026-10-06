@@ -30,7 +30,24 @@
     <div class="grid two">
       <div><div class="muted">Store</div><div class="mono" data-testid="backup-store">{b.store}</div></div>
       <div><div class="muted">Last daily snapshot</div><div data-testid="backup-last-snapshot">{when(b.lastSnapshotAt)} (<Ago t={b.lastSnapshotAt} />)</div>{#if b.lastSnapshotError}<div class="error">{b.lastSnapshotError}</div>{/if}</div>
-      <div><div class="muted">Last Litestream replication</div><div data-testid="backup-last-replication">{b.litestream ? `${when(b.lastReplicationAt)}` : 'Litestream not configured here'}</div></div>
+      <div>
+        <div class="muted">Last Litestream replication (newest object in S3)</div>
+        {#if b.litestream}
+          <div data-testid="backup-last-replication">{when(b.lastReplicationAt)}{#if b.lastReplicationAt} (<Ago t={b.lastReplicationAt} />){/if}</div>
+          <div class="muted">checked {when(b.lastReplicationCheckAt)}{b.replicationCheckErrors ? `, ${b.replicationCheckErrors} failed check(s) since start` : ''}</div>
+          {#if b.lastReplicationError}<div class="error" data-testid="backup-replication-error">S3 check failed: {b.lastReplicationError}</div>{/if}
+        {:else}
+          <div data-testid="backup-last-replication">Litestream not configured here</div>
+        {/if}
+      </div>
+      {#if b.litestream}
+        <div>
+          <div class="muted">Litestream errors (since the sidecar started)</div>
+          <div data-testid="backup-litestream-errors">sync {b.litestreamSyncErrors ?? '–'}, replica {b.litestreamReplicaErrors ?? '–'}</div>
+          {#if b.litestreamMetricsError}<div class="error">metrics: {b.litestreamMetricsError}</div>{/if}
+          <div class="muted">A failed upload is not counted by Litestream 0.5.17; the S3 time above shows it.</div>
+        </div>
+      {/if}
       <div><div class="muted">Alerts</div><div>{#each b.alerts as a}<span class="badge bad" data-testid="backup-alert">{a}</span> {:else}<span class="chip ok">none</span>{/each}</div></div>
     </div>
   {/if}

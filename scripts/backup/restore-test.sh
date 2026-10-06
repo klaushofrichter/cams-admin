@@ -6,6 +6,7 @@
 #   2. accounts, users, proxies, cameras, sims, an enrollment (test client)
 #   3. "Backup now" through the API: a Litestream sync (control socket) and
 #      a manual snapshot to snapshots/manual-<UTC>.sqlite.gz
+#      and /health's lastReplicationAt read from the replica in S3
 #   4. both processes killed (SIGKILL)
 #   5. restored (a) from Litestream, (b) from the snapshot
 #   6. per-table counts and content hashes compared, integrity checked
@@ -60,7 +61,7 @@ YAML
 }
 app_env() { # app_env DBFILE PORT
   exec env NODE_ENV=development LOG_LEVEL=warn PORT="$2" PUBLIC_URL="http://127.0.0.1:$2" DB_FILE="$1" SERVER_SIGNING_KEY_FILE="$WORK/signing.pem" \
-    ALLOWED_EMAILS=restore@example.com LITESTREAM_METRICS_URL="http://127.0.0.1:$LS_PORT/metrics" LITESTREAM_SOCKET="$WORK/litestream.sock" TZ=America/Chicago "${@:3}"
+    ALLOWED_EMAILS=restore@example.com LITESTREAM_METRICS_URL="http://127.0.0.1:$LS_PORT/metrics" LITESTREAM_SOCKET="$WORK/litestream.sock" REPLICATION_CHECK_S=1 TZ=America/Chicago "${@:3}"
 }
 wait_health() { for _ in $(seq 1 60); do curl -fsS -o /dev/null "http://127.0.0.1:$1/health" 2>/dev/null && return 0; sleep 0.5; done; note "app on :$1 did not start"; exit 1; }
 
@@ -78,6 +79,8 @@ npx tsx scripts/backup/restore-check.ts seed --url "http://127.0.0.1:$APP_PORT" 
 npx tsx scripts/backup/restore-check.ts snapshot --url "http://127.0.0.1:$APP_PORT" --cookie "$COOKIE"
 note "waiting for Litestream to sync"
 sleep 5
+# /health's lastReplicationAt comes from the replica in S3 (spec §13.3).
+curl -fsS "http://127.0.0.1:$APP_PORT/health" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const b=JSON.parse(s).backup;if(!(b.lastReplicationAt>Date.now()-120000)||b.replicationCheckError){console.error("restore-test: /health backup",JSON.stringify(b));process.exit(1)}console.log("restore-test: lastReplicationAt from S3",new Date(b.lastReplicationAt).toISOString())})'
 npx tsx scripts/backup/restore-check.ts dump --db "$DB" > "$WORK/before.json"
 REG=accounts,account_users,proxies,proxy_keys,enrollment_codes,cameras,sims
 npx tsx scripts/backup/restore-check.ts dump --db "$DB" --tables "$REG" > "$WORK/before-registry.json"

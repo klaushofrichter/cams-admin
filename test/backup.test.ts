@@ -69,26 +69,28 @@ describe('snapshot', () => {
 });
 
 describe('litestream watch', () => {
-  const text = (sync: number, err: number) => `# HELP x\nlitestream_sync_count{db="/var/lib/cams-admin/cams-admin.db"} ${sync}\nlitestream_sync_error_count{db="/var/lib/cams-admin/cams-admin.db"} ${err}\nlitestream_txid{db="x"} 9\n`;
+  // The shape of Litestream 0.5.17's /metrics (measured 2026-10-06); the
+  // replica error counter appears only after its first increment.
+  const text = (sync: number, err: number, replicaErr?: number) => `# HELP x\nlitestream_sync_count{db="/var/lib/cams-admin/cams-admin.db"} ${sync}\nlitestream_sync_error_count{db="/var/lib/cams-admin/cams-admin.db"} ${err}\nlitestream_txid{db="x"} 9\nlitestream_replica_operation_total{operation="PUT",replica_type="s3"} 4\n${replicaErr === undefined ? '' : `litestream_replica_operation_errors_total{code="AccessDenied",operation="DELETE",replica_type="s3"} ${replicaErr}\n`}`;
   it('parses the Litestream 0.5.17 metric names', () => {
-    expect(parseMetrics(text(6, 0))).toEqual({ sync: 6, errors: 0 });
+    expect(parseMetrics(text(6, 0))).toEqual({ sync: 6, syncErrors: 0, replicaErrors: 0 });
+    expect(parseMetrics(text(6, 2, 3))).toEqual({ sync: 6, syncErrors: 2, replicaErrors: 3 });
     expect(parseMetrics('garbage')).toBeNull();
   });
-  it('records lastReplicationAt when syncs advance without errors', async () => {
+  it('reports the error counters; a rising sync count is not replication', async () => {
     let body = text(1, 0);
     const srv = createServer((_q, r) => r.end(body));
     await new Promise<void>((r) => srv.listen(0, '127.0.0.1', r));
     const clock = fakeClock(1000);
     const w = new LitestreamWatch(`http://127.0.0.1:${(srv.address() as { port: number }).port}/metrics`, clock);
     await w.poll();
-    expect(w.lastReplicationAt).toBeNull();
-    clock.set(2000); body = text(3, 0); await w.poll();
-    expect(w.lastReplicationAt).toBe(2000);
-    clock.set(3000); body = text(5, 1); await w.poll();
-    expect(w.lastReplicationAt).toBe(2000);
+    expect(w).toMatchObject({ syncErrors: 0, replicaErrors: 0, lastError: null });
+    expect('lastReplicationAt' in w).toBe(false);
+    clock.set(3000); body = text(5, 1, 2); await w.poll();
+    expect(w).toMatchObject({ syncErrors: 1, replicaErrors: 2, lastOkAt: 3000 });
     clock.set(4000); srv.close(); await w.poll();
-    expect(w.lastReplicationAt).toBe(2000);
     expect(w.lastError).toBeTruthy();
+    expect(w.syncErrors).toBe(1);
   });
 });
 
@@ -109,7 +111,15 @@ describe('alerts and schedule', () => {
     expect(backupAlerts({ ...base, syncIntervalMs: 30_000, lastReplicationAt: NOW - 7 * 60_000 })).toEqual(['replication-lag']);
   });
 
-  it('LITESTREAM_SYNC_INTERVAL_S defaults to one hour', () => {
+  it('reports a failing S3 check and Litestream error counters', () => {
+    const base = { now: NOW, configured: true, lastOkAt: NOW - 3600_000, lastOutcome: 'ok', litestream: true, startedAt: NOW - 86400_000, lastReplicationAt: NOW - 60_000 };
+    expect(backupAlerts({ ...base, replicationCheckError: null, litestreamSyncErrors: 0, litestreamReplicaErrors: 0 })).toEqual([]);
+    expect(backupAlerts({ ...base, replicationCheckError: 'AccessDenied' })).toEqual(['replication-check-failed']);
+    expect(backupAlerts({ ...base, litestreamSyncErrors: 1, litestreamReplicaErrors: 2 })).toEqual(['litestream-sync-errors', 'litestream-replica-errors']);
+  });
+
+  it('LITESTREAM_SYNC_INTERVAL_S defaults to one hour, REPLICATION_CHECK_S to 5 min', () => {
+    expect(loadConfig({ PUBLIC_URL: 'https://a.example.net' }).replicationCheckS).toBe(300);
     expect(loadConfig({ PUBLIC_URL: 'https://a.example.net' }).litestreamSyncIntervalS).toBe(3600);
     expect(loadConfig({ PUBLIC_URL: 'https://a.example.net', LITESTREAM_SYNC_INTERVAL_S: '30' }).litestreamSyncIntervalS).toBe(30);
   });
