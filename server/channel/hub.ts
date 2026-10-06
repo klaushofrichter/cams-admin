@@ -103,6 +103,10 @@ export class Hub implements ConnectionHost {
     }
   }
 
+  isClosing(): boolean {
+    return this.closing;
+  }
+
   closed(c: Connection): void {
     this.all.delete(c);
     if (c.proxyId && this.byProxy.get(c.proxyId) === c) this.byProxy.delete(c.proxyId);
@@ -126,12 +130,19 @@ export class Hub implements ConnectionHost {
     return { open: this.all.size, pending, live: this.byProxy.size };
   }
 
+  closing = false;
+
+  // bye + 1001 to everyone; waits (≤ 1 s) for the sockets to close. Close
+  // events after this point no longer touch the status store (its database
+  // is about to close); the proxies show stale after the restart anyway.
   async shutdown(): Promise<void> {
+    this.closing = true;
     for (const c of this.all) {
       if (c.state === 'live') c.send('bye', { reason: 'server-shutdown' });
       c.close(CLOSE.going_away, 'going_away');
     }
-    await new Promise((r) => setTimeout(r, 50));
+    const t0 = Date.now();
+    while (this.all.size > 0 && Date.now() - t0 < 1000) await new Promise((r) => setTimeout(r, 20));
     this.wss.close();
   }
 }

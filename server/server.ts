@@ -102,6 +102,7 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
     }
   };
   let timer: NodeJS.Timeout | null = null;
+  let closed = false;
 
   return {
     cfg, clock, db, audit, registry, live, status, hub, enrollment, sessions, backup, app, http, epochFile, tick,
@@ -121,6 +122,8 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
       return (http.address() as { port: number }).port;
     },
     async close() {
+      if (closed) return;
+      closed = true;
       if (timer) clearInterval(timer);
       backup.stop?.();
       await hub.shutdown();

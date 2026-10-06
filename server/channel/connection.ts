@@ -20,6 +20,7 @@ export interface ConnectionHost {
   closed(c: Connection): void;
   failedHandshake(): void;
   helloBudget(proxyId: string): boolean;
+  isClosing(): boolean;
 }
 
 export class Connection {
@@ -218,6 +219,6 @@ export class Connection {
     clearTimeout(this.helloTimer);
     if (this.pingTimer) clearInterval(this.pingTimer);
     this.host.closed(this);
-    if (this.proxyId && !this.replaced) this.host.deps.status.disconnected(this.proxyId, this.closeReason ?? `${code}${reason ? ' ' + reason : ''}`);
+    if (this.proxyId && !this.replaced && !this.host.isClosing()) this.host.deps.status.disconnected(this.proxyId, this.closeReason ?? `${code}${reason ? ' ' + reason : ''}`);
   }
 }
