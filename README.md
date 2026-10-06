@@ -90,7 +90,7 @@ the Secrets come from `.env` through `scripts/create-secrets.sh`
 | `npm run test:e2e` | Playwright, desktop and phone, against the built server and a fake Google |
 | `scripts/backup/restore-test.sh` | Litestream and the snapshot against a local S3, restored and compared |
 | `scripts/contract/cam-proxy-check.sh` | cam-proxy main's real health summary against the strict contract |
-| `npm run load -- --proxies 50 --cameras 4 --duration 60m` | the load test (CI runs 20 proxies for 2 minutes) |
+| `npm run load -- --proxies 50 --cameras 4 --duration 60m [--sample 60s] [--snapshots DIR]` | the load test (CI runs 20 proxies for 2 minutes); the leak check is the live heap after a forced GC (Theil–Sen trend), `--snapshots` keeps start/end heap snapshots for `npx tsx scripts/load/heap-diff.ts` |
 
 The proxy monitoring is tested the way spec §15.4 lays out: protocol
 conformance, every metric arriving and shown, ageing out, reconnects, clock

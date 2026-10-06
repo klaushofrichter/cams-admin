@@ -19,6 +19,8 @@ import { Buckets } from '../channel/limits';
 import { limiter, sessionKey } from '../rateLimit';
 import { monitorEventLoopDelay } from 'perf_hooks';
 import { existsSync, statSync } from 'fs';
+import { join } from 'path';
+import { writeHeapSnapshot } from 'v8';
 import { readEpoch } from '../db/open';
 import { bodyErrors } from '../bodyErrors';
 
@@ -88,9 +90,16 @@ export function apiRouter(d: ApiDeps): express.Router {
   if (d.cfg.nodeEnv === 'development') {
     const lag = monitorEventLoopDelay({ resolution: 10 });
     lag.enable();
-    r.get('/dev/metrics', h(() => {
+    r.get('/dev/metrics', h((req) => {
+      // ?gc=1 with --expose-gc: the live heap after a full GC (what a leak grows).
+      const gc = (globalThis as { gc?: () => void }).gc;
+      let heapAfterGcBytes: number | null = null;
+      if (req.query.gc === '1' && typeof gc === 'function') {
+        gc();
+        heapAfterGcBytes = process.memoryUsage().heapUsed;
+      }
       const out = {
-        rssBytes: process.memoryUsage().rss, heapUsedBytes: process.memoryUsage().heapUsed,
+        rssBytes: process.memoryUsage().rss, heapUsedBytes: process.memoryUsage().heapUsed, heapAfterGcBytes,
         loopLagP50Ms: lag.percentile(50) / 1e6, loopLagP99Ms: lag.percentile(99) / 1e6, loopLagMaxMs: lag.max / 1e6,
         dbBytes: (() => { try { return statSync(d.cfg.dbFile).size + (existsSync(`${d.cfg.dbFile}-wal`) ? statSync(`${d.cfg.dbFile}-wal`).size : 0); } catch { return 0; } })(),
         writeEpoch: readEpoch(d.db), connections: d.hub.stats(), sseStreams: d.live.count(),
@@ -98,6 +107,8 @@ export function apiRouter(d: ApiDeps): express.Router {
       lag.reset();
       return out;
     }));
+    // A V8 heap snapshot into the data folder (the load test's start/end diff).
+    r.post('/dev/heap-snapshot', h(() => ({ file: writeHeapSnapshot(join(d.cfg.dataDir, `heap-${Date.now()}.heapsnapshot`)) })));
   }
   // "Backup now" (Klaus 2026-10-06): a Litestream sync + a manual snapshot.
   r.get('/backup', h(() => d.backup.state()));
