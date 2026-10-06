@@ -13,6 +13,13 @@ describe('config', () => {
     expect(loadConfig({ PUBLIC_URL: 'https://a.example.net', PROXY_CONNECT_URL: 'http://cams-admin.cams-admin.svc.cluster.local:8080' }).connectUrl)
       .toBe('ws://cams-admin.cams-admin.svc.cluster.local:8080/proxy/v1/connect');
   });
+  it('GOOGLE_REDIRECT_URI must be this app\'s callback: path and origin', () => {
+    expect(loadConfig({ PUBLIC_URL: 'https://a.example.net', GOOGLE_REDIRECT_URI: 'https://a.example.net/auth/google/callback' }).google.redirectUri).toBe('https://a.example.net/auth/google/callback');
+    expect(() => loadConfig({ PUBLIC_URL: 'https://a.example.net', GOOGLE_REDIRECT_URI: 'https://a.example.net/oauth2/callback' })).toThrow(/GOOGLE_REDIRECT_URI.*\/auth\/google\/callback/);
+    expect(() => loadConfig({ PUBLIC_URL: 'https://a.example.net', GOOGLE_REDIRECT_URI: 'https://b.example.net/auth/google/callback' })).toThrow(/GOOGLE_REDIRECT_URI.*PUBLIC_URL/);
+    expect(loadConfig({ PUBLIC_URL: 'https://a.example.net' }).google.redirectUri).toBe('https://a.example.net/auth/google/callback');
+  });
+
   it('requires PUBLIC_URL and refuses nonsense numbers', () => {
     expect(() => loadConfig({})).toThrow(/PUBLIC_URL/);
     expect(() => loadConfig({ PUBLIC_URL: 'https://a.example.net', HEARTBEAT_S: 'x' })).toThrow(/HEARTBEAT_S/);

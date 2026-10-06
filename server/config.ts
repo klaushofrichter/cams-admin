@@ -55,6 +55,8 @@ function num(env: Env, key: string, def: number, min: number, max: number): numb
   return v;
 }
 
+export const CALLBACK_PATH = '/auth/google/callback';
+
 export function wsUrl(base: string): string {
   const u = new URL(base);
   u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -72,6 +74,16 @@ export function loadConfig(env: Env = process.env): Config {
   const snapshotAt = env.BACKUP_SNAPSHOT_AT || '03:15';
   if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(snapshotAt)) throw new Error('config: BACKUP_SNAPSHOT_AT must be HH:MM');
   const bucket = env.BACKUP_S3_BUCKET;
+  // The callback route is fixed; the registered redirect URI must name it.
+  const redirectUri = env.GOOGLE_REDIRECT_URI || `${publicUrl.replace(/\/+$/, '')}${CALLBACK_PATH}`;
+  let ru: URL;
+  try {
+    ru = new URL(redirectUri);
+  } catch {
+    throw new Error('config: GOOGLE_REDIRECT_URI is not a URL');
+  }
+  if (ru.pathname !== CALLBACK_PATH) throw new Error(`config: GOOGLE_REDIRECT_URI must end in ${CALLBACK_PATH} (the app's callback route)`);
+  if (ru.origin !== new URL(publicUrl).origin) throw new Error('config: GOOGLE_REDIRECT_URI must be on the PUBLIC_URL origin (the sign-in cookies are per host)');
   return {
     nodeEnv: env.NODE_ENV || 'production',
     port: num(env, 'PORT', 8080, 1, 65535),
@@ -96,7 +108,7 @@ export function loadConfig(env: Env = process.env): Config {
     backup: bucket ? { bucket, prefix: (env.BACKUP_S3_PREFIX || 'cams-admin/prod/').replace(/\/?$/, '/'), region: env.AWS_REGION || 'us-east-1', endpoint: env.S3_ENDPOINT || null } : null,
     google: {
       clientId: env.GOOGLE_CLIENT_ID || '',
-      redirectUri: env.GOOGLE_REDIRECT_URI || `${publicUrl.replace(/\/+$/, '')}/auth/google/callback`,
+      redirectUri,
       authUrl: env.GOOGLE_AUTH_URL || 'https://accounts.google.com/o/oauth2/v2/auth',
       tokenUrl: env.GOOGLE_TOKEN_URL || 'https://oauth2.googleapis.com/token',
       certsUrl: env.GOOGLE_CERTS_URL || 'https://www.googleapis.com/oauth2/v3/certs',

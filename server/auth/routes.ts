@@ -1,6 +1,6 @@
 import express from 'express';
 import { createHash, randomBytes, timingSafeEqual } from 'crypto';
-import type { Config } from '../config';
+import { CALLBACK_PATH, type Config } from '../config';
 import type { Clock } from '../clock';
 import type { Audit } from '../audit';
 import type { LiveHub } from '../live';
@@ -27,7 +27,7 @@ export function authRoutes(d: { cfg: Config; sessions: Sessions; audit: Audit; c
     res.redirect(302, authUrl(d.cfg, nonce));
   });
 
-  r.get('/auth/google/callback', async (req, res) => {
+  r.get(CALLBACK_PATH, async (req, res) => {
     // In total: before sign-in there is no identity to key on (spec §7).
     const t = signins.take('global', d.clock.now());
     if (!t.ok) return void res.status(429).set('Retry-After', String(t.retryAfterS)).type('html').send(page('Too many sign-ins', '<p>Try again in a few minutes.</p>'));
@@ -58,6 +58,8 @@ export function authRoutes(d: { cfg: Config; sessions: Sessions; audit: Audit; c
     res.cookie(SESSION_COOKIE, s.value, { httpOnly: true, secure, sameSite: 'lax', path: '/', maxAge: SESSION_MS });
     res.redirect(302, '/');
   });
+
+  r.get('/auth/signed-out', (_req, res) => void res.status(200).type('html').send(page('Signed out', '<p><a href="/auth/google/login">Sign in</a></p>')));
 
   // Logout really logs out: it lands on a 200 page with a sign-in link.
   r.post('/auth/logout', requireCsrf(d.cfg), (req, res) => {
