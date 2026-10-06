@@ -276,7 +276,7 @@ phase 1 adds `display_name` and `disabled` and nothing else.
 | `fingerprint` | TEXT NOT NULL | `SHA256:` hex of the DER, shown in both UIs so a person can match them |
 | `created_at` | INTEGER NOT NULL | |
 | `enrollment_id` | TEXT | the code that created it |
-| `last_seen_at` | INTEGER | the last successful `hello` |
+| `last_seen_at` | INTEGER | the last successful `hello` of this key (the status snapshot stamps the active key only; migration 3 cleared stamps that predate the key) |
 | `confirmed_at` | INTEGER | the key's first `hello` (migration 2); NULL = **pending**: redeemed, not yet used. A pending key may say its first `hello` within 24 h |
 | `revoked_at` | INTEGER | NULL while active or pending |
 | `revoked_reason` | TEXT | `admin`, `re-enrolled`, `proxy-deleted`, `unenrolled` |

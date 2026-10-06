@@ -51,7 +51,7 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
   const live = new LiveHub({ clock, maxPerSession: cfg.limits.sseStreamsPerSession, keepaliveMs: 25_000 });
   const status = new StatusStore({ db, clock, registry, live, offlineAfterMs: cfg.offlineAfterS * 1000, snapshotMs: cfg.statusSnapshotS * 1000 });
   const hub = new Hub({ db, clock, cfg, registry, audit, status, log, signingKey: signing.key, serverKeyFingerprint: signing.fingerprint });
-  const enrollment = new Enrollment({ db, clock, audit, registry, cfg, serverKeys: [signing.publicKeyB64], onKeyRevoked: (k) => hub.closeKey(k, 4401) });
+  const enrollment = new Enrollment({ db, clock, audit, registry, cfg, serverKeys: [signing.publicKeyB64], onKeyRevoked: (k) => hub.closeKey(k, 4401), onProxyChanged: (p) => live.publishRegistry('proxy', p) });
   const backup = createBackup({ db, clock, cfg, audit, env: merged });
 
   const app = express();

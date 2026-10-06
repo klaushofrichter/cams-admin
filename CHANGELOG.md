@@ -7,14 +7,13 @@ then empties it on `main`.
 
 ### Fixed
 
-- Enrollment answers with the `connectUrl` on the origin the proxy enrolled
-  on, when that origin is `PUBLIC_URL` or in the new optional
-  `INTERNAL_URLS` (e.g. the in-cluster Service URL); any other Host gets the
-  public URL. The cluster's cam-proxy, which enrolls in-cluster, refused the
-  public `wss://` URL as "on another host".
-- A redeemed key is **pending** until its first hello: an enroll answer the
-  proxy refused or lost no longer leaves an active key nobody holds, and a
-  re-enrollment keeps the working key until the new key connects. A pending
-  key expires after 24 h; the next code retires it. The proxy page shows
-  pending keys; the audit log has `key-confirmed`.
+- A key redeemed by a proxy that had connected before with its previous key,
+  and never used itself, showed as **active** after the pending-keys
+  migration: the status snapshot had stamped the proxy's last hello onto it
+  (a "last seen" older than the key), and migration 2 read that stamp as a
+  confirmation. The snapshot now stamps the active key only, and migration 3
+  turns such keys pending again (or retires them when a newer pending key
+  exists).
+- The proxy page updates live when a code is redeemed: the code box and
+  "a code is live" go, the new pending key appears.
 
