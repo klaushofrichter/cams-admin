@@ -14,6 +14,9 @@ import { requireCsrf, requireSysadmin, writeLimiter } from '../auth/middleware';
 import { reconcile } from '../status/derive';
 import { FieldError } from '../validate';
 import { Buckets } from '../channel/limits';
+import { monitorEventLoopDelay } from 'perf_hooks';
+import { existsSync, statSync } from 'fs';
+import { readEpoch } from '../db/open';
 
 export interface ManualBackup { at: number; ok: boolean; litestream: { ok: boolean; status?: string; error?: string }; snapshot: { ok: boolean; key?: string; bytes?: number; error?: string } }
 export interface BackupState {
@@ -65,6 +68,21 @@ export function apiRouter(d: ApiDeps): express.Router {
     return { ended: n };
   }));
   r.get('/dashboard', h(() => dashboard(d)));
+  // The load test's view of the process (NODE_ENV=development only).
+  if (d.cfg.nodeEnv === 'development') {
+    const lag = monitorEventLoopDelay({ resolution: 10 });
+    lag.enable();
+    r.get('/dev/metrics', h(() => {
+      const out = {
+        rssBytes: process.memoryUsage().rss, heapUsedBytes: process.memoryUsage().heapUsed,
+        loopLagP50Ms: lag.percentile(50) / 1e6, loopLagP99Ms: lag.percentile(99) / 1e6, loopLagMaxMs: lag.max / 1e6,
+        dbBytes: (() => { try { return statSync(d.cfg.dbFile).size + (existsSync(`${d.cfg.dbFile}-wal`) ? statSync(`${d.cfg.dbFile}-wal`).size : 0); } catch { return 0; } })(),
+        writeEpoch: readEpoch(d.db), connections: d.hub.stats(), sseStreams: d.live.count(),
+      };
+      lag.reset();
+      return out;
+    }));
+  }
   // "Backup now" (Klaus 2026-10-06): a Litestream sync + a manual snapshot.
   r.get('/backup', h(() => d.backup.state()));
   r.post('/backup/now', h(async (_q, res) => {
