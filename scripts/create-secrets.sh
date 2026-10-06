@@ -38,6 +38,15 @@ done
 case "$ONLY" in check|oauth|signing|backup|runner|github|all) ;; *) echo "create-secrets: bad --only $ONLY" >&2; exit 2 ;; esac
 die() { echo "create-secrets: $*" >&2; exit 1; }
 
+# Temp files hold secret values: removed on every exit, Ctrl-C and SIGTERM included.
+TMPFILES=()
+cleanup() { [ "${#TMPFILES[@]}" -gt 0 ] && rm -f "${TMPFILES[@]}"; return 0; }
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+# Sets NEWTMP (not via $(…): a subshell would lose the TMPFILES entry).
+newtmp() { NEWTMP=$(mktemp "${TMPDIR:-/tmp}/cams-admin-secret.XXXXXX"); TMPFILES+=("$NEWTMP"); }
+
 [ -f "$ENV_FILE" ] || die "$ENV_FILE not found"
 perms=$(stat -c '%a' "$ENV_FILE" 2>/dev/null || stat -f '%Lp' "$ENV_FILE")
 case "$perms" in *00) ;; *) die "$ENV_FILE is readable by others (mode $perms); run: chmod 600 $ENV_FILE" ;; esac
@@ -80,7 +89,7 @@ apply_env_secret() { # NAMESPACE NAME KEY...
   [ "$name" = cams-admin-oauth ] && names="$names, GOOGLE_REDIRECT_URI"
   say "apply secret $name in $ns (context $CONTEXT): $names"
   [ "$DRY" = 1 ] && return 0
-  local tmp; tmp=$(mktemp)
+  local tmp; newtmp; tmp="$NEWTMP"
   local k; for k in "$@"; do printf '%s=%s\n' "$k" "$(get "$k")" >> "$tmp"; done
   if [ "$name" = cams-admin-oauth ]; then
     local ru; ru=$(get GOOGLE_REDIRECT_URI); printf 'GOOGLE_REDIRECT_URI=%s\n' "${ru:-$DEFAULT_REDIRECT}" >> "$tmp"
@@ -108,7 +117,7 @@ if want runner; then
   [ -n "$CONTEXT" ] || die "set KUBE_CONTEXT in $ENV_FILE"
   say "apply secret runner-pat in cams-admin-runner (context $CONTEXT): token"
   if [ "$DRY" = 0 ]; then
-    tmp=$(mktemp); printf 'token=%s\n' "$(get CAMSADMIN_GITHUB_PAT)" > "$tmp"
+    newtmp; tmp="$NEWTMP"; printf 'token=%s\n' "$(get CAMSADMIN_GITHUB_PAT)" > "$tmp"
     kubectl --context "$CONTEXT" -n cams-admin-runner create secret generic runner-pat --from-env-file="$tmp" --dry-run=client -o yaml | kubectl --context "$CONTEXT" apply -f - >/dev/null
     rm -f "$tmp"
   fi
