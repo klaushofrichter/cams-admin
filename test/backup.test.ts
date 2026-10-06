@@ -4,25 +4,19 @@ import { join } from 'path';
 import { gunzipSync } from 'zlib';
 import { existsSync, readdirSync, writeFileSync } from 'fs';
 import { DatabaseSync } from 'node:sqlite';
-import { openDb } from '../server/db/open';
-import { Audit } from '../server/audit';
-import { Registry } from '../server/registry';
 import { fileStore } from '../server/backup/store';
 import { backupNow, runSnapshot, snapshotKey } from '../server/backup/snapshot';
 import { LitestreamWatch, parseMetrics } from '../server/backup/litestream';
 import { nextRunAt } from '../server/backup/scheduler';
 import { backupAlerts } from '../server/backup/service';
 import { fakeClock } from './helpers/clock';
+import { makeRegistry } from './helpers/registry';
 import { loadConfig } from '../server/config';
 import { tmpDir } from './helpers/tmp';
 
 let n = 0;
 function setup(dir: string) {
-  const dbFile = join(dir, `b${n}/cams-admin.db`);
-  const db = openDb(dbFile);
-  const clock = fakeClock(Date.UTC(2026, 9, 6, 8, 15, 0));
-  const audit = new Audit(db, clock);
-  const reg = new Registry(db, clock, audit);
+  const { db, dbFile, clock, audit, reg } = makeRegistry(dir, { file: join(dir, `b${n}/cams-admin.db`), start: Date.UTC(2026, 9, 6, 8, 15, 0) });
   reg.createAccount('a@example.com', { name: 'home', displayName: 'Home' });
   const store = fileStore(join(dir, `store${n++}`));
   const deps = { db, dbFile, clock, audit, store, prefix: 'cams-admin/test/', retentionDays: 30 };

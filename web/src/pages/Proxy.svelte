@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { api, errorText } from '../lib/api';
-  import { live } from '../lib/live';
+  import { coalesced, live } from '../lib/live';
   import { camClass, when } from '../lib/format';
   import { summaryLeaves } from '../lib/summaryTree';
   import StateChip from '../components/StateChip.svelte';
@@ -30,8 +30,7 @@
   }
   onMount(() => {
     load();
-    let t: ReturnType<typeof setTimeout> | null = null;
-    const soon = () => { if (!t) t = setTimeout(() => { t = null; load(); }, 250); };
+    const soon = coalesced(load, 250);
     return live({ status: (s) => { if (s.proxyId === proxyId) soon(); }, registry: soon, open: soon });
   });
 

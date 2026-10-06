@@ -27,6 +27,13 @@ export function manualKey(prefix: string, at: number): string {
 }
 
 type SnapResult = { ok: boolean; key?: string; bytes?: number; error?: string };
+
+// One row per job name in `jobs`; last_ok_at keeps the last success.
+function recordJob(db: Db, name: string, at: number, ok: boolean, detail: unknown): void {
+  db.prepare(`INSERT INTO jobs (name, last_run_at, last_ok_at, last_outcome, last_detail) VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(name) DO UPDATE SET last_run_at = excluded.last_run_at, last_ok_at = COALESCE(excluded.last_ok_at, jobs.last_ok_at), last_outcome = excluded.last_outcome, last_detail = excluded.last_detail`)
+    .run(name, at, ok ? at : null, ok ? 'ok' : 'failed', JSON.stringify(detail));
+}
 let running: Promise<SnapResult> | null = null;
 
 export function runSnapshot(d: SnapshotDeps): Promise<SnapResult> {
@@ -70,9 +77,7 @@ async function doSnapshot(d: SnapshotDeps): Promise<SnapResult> {
     /* pruning failures don't fail the snapshot */
   }
   tx(d.db, () => {
-    d.db.prepare(`INSERT INTO jobs (name, last_run_at, last_ok_at, last_outcome, last_detail) VALUES ('snapshot', ?, ?, ?, ?)
-      ON CONFLICT(name) DO UPDATE SET last_run_at = excluded.last_run_at, last_ok_at = COALESCE(excluded.last_ok_at, jobs.last_ok_at), last_outcome = excluded.last_outcome, last_detail = excluded.last_detail`)
-      .run(at, result.ok ? at : null, result.ok ? 'ok' : 'failed', JSON.stringify(result.ok ? { key, bytes: result.bytes, pruned } : { error: result.error }));
+    recordJob(d.db, 'snapshot', at, result.ok, result.ok ? { key, bytes: result.bytes, pruned } : { error: result.error });
     d.audit.write({ actorType: d.actor ? 'sysadmin' : 'system', actor: d.actor ?? 'system', action: 'backup-snapshot', outcome: result.ok ? 'ok' : 'failed', detail: result.ok ? { key, bytes: result.bytes, pruned, store: d.store.describe() } : { error: result.error } });
   });
   return result;
@@ -124,12 +129,10 @@ export function backupNow(d: SnapshotDeps & { socketPath: string | null }): Prom
     const ok = litestream.ok && snapshot.ok;
     const result: BackupNowResult = { ok, at, litestream, snapshot };
     tx(d.db, () => {
-      d.db.prepare(`INSERT INTO jobs (name, last_run_at, last_ok_at, last_outcome, last_detail) VALUES ('backup-now', ?, ?, ?, ?)
-        ON CONFLICT(name) DO UPDATE SET last_run_at = excluded.last_run_at, last_ok_at = COALESCE(excluded.last_ok_at, jobs.last_ok_at), last_outcome = excluded.last_outcome, last_detail = excluded.last_detail`)
-        .run(at, ok ? at : null, ok ? 'ok' : 'failed', JSON.stringify(result));
+      recordJob(d.db, 'backup-now', at, ok, result);
       d.audit.write({
         actorType: 'sysadmin', actor: d.actor ?? 'system', action: 'backup-now', outcome: ok ? 'ok' : 'failed',
-        detail: { litestream: litestream.ok ? (litestream as { status?: string }).status : litestream.error, snapshot: snapshot.ok ? snapshot.key : snapshot.error, bytes: snapshot.bytes ?? null },
+        detail: { litestream: litestream.ok ? litestream.status : litestream.error, snapshot: snapshot.ok ? snapshot.key : snapshot.error, bytes: snapshot.bytes ?? null },
       });
     });
     return result;

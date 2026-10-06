@@ -31,6 +31,7 @@ export class Connection {
   proxyId: string | null = null;
   keyId: string | null = null;
   replaced = false;
+  closeReason: string | null = null;
   private challengeAt: number;
   private seqOut = 0;
   private seqIn = 0;
@@ -75,11 +76,15 @@ export class Connection {
     this.ws.send(JSON.stringify({ v: 1, type, id: ulid(now), seq: this.seqOut, ts: now, ...extra, body }));
   }
 
+  private stopTimers(): void {
+    clearTimeout(this.helloTimer);
+    if (this.pingTimer) clearInterval(this.pingTimer);
+  }
+
   close(code: number, reason: string): void {
     if (this.state === 'closed') return;
     this.state = 'closed';
-    clearTimeout(this.helloTimer);
-    if (this.pingTimer) clearInterval(this.pingTimer);
+    this.stopTimers();
     try {
       this.ws.close(code, reason);
     } catch {
@@ -122,7 +127,6 @@ export class Connection {
         this.send('error', { code: 'unsupported_type', message: `type ${String(v.type).slice(0, 32)} is not supported` }, v.id ? { re: v.id } : {});
         return;
       }
-      if (v.code === 'unsupported_type') return this.close(CLOSE.bad_message, 'bad_message');
       return this.close(CLOSE.bad_message, 'bad_message');
     }
     if (this.state === 'challenged') return v.msg.type === 'hello' ? this.onHello(v.msg) : this.close(CLOSE.bad_message, 'bad_message');
@@ -146,7 +150,7 @@ export class Connection {
       actorType: 'proxy', actor: proxyId ?? 'unknown', action: 'proxy-auth-refused', outcome: 'refused',
       targetType: proxyId ? 'proxy' : null, targetId: proxyId, detail: { reason },
     });
-    this.host.deps.refused?.(proxyId, reason);
+    d.refused?.(proxyId, reason);
     this.close(CLOSE.unauthorized, 'unauthorized');
   }
 
@@ -213,12 +217,9 @@ export class Connection {
     this.close(1000, 'bye');
   }
 
-  closeReason: string | null = null;
-
   private onClose(code: number, reason: string): void {
     this.state = 'closed';
-    clearTimeout(this.helloTimer);
-    if (this.pingTimer) clearInterval(this.pingTimer);
+    this.stopTimers();
     this.host.closed(this);
     if (this.proxyId && !this.replaced && !this.host.isClosing()) this.host.deps.status.disconnected(this.proxyId, this.closeReason ?? `${code}${reason ? ' ' + reason : ''}`);
   }

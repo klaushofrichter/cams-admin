@@ -1,6 +1,6 @@
-import { createHash } from 'crypto';
 import type { Request, RequestHandler, Response } from 'express';
 import { rateLimit } from 'express-rate-limit';
+import { sha256Hex } from './ids';
 
 // express-rate-limit with a key that is never the client address (spec §7,
 // kube-setup 2026-10-06): a session, or one budget in total.
@@ -17,4 +17,4 @@ export function limiter(o: { windowMs: number; limit: number; key: (req: Request
   });
 }
 
-export const sessionKey = (cookie: unknown): string => (typeof cookie === 'string' ? 'session:' + createHash('sha256').update(cookie).digest('hex').slice(0, 32) : 'anonymous');
+export const sessionKey = (cookie: unknown): string => (typeof cookie === 'string' ? 'session:' + sha256Hex(cookie).slice(0, 32) : 'anonymous');

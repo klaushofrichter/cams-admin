@@ -49,7 +49,6 @@ export function reconcile(
   registered: { proxyCameraId: string | null }[],
   accountCamsIds: Set<string>,
   s: StatusRow | null,
-  _registeredPins: string[],
 ): { reportedNotRegistered: { ref: string; proposedCamsId: string }[]; registeredNotReported: string[] } {
   const reported = s?.reported?.cameras;
   if (!reported) return { reportedNotRegistered: [], registeredNotReported: [] };

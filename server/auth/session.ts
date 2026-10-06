@@ -1,7 +1,8 @@
-import { createHash, randomBytes } from 'crypto';
+import { randomBytes } from 'crypto';
 import type { Clock } from '../clock';
 import { tx, type Db } from '../db/open';
 import { normaliseEmail } from '../validate';
+import { sha256Hex as hash } from '../ids';
 
 // System administrator sessions (spec §7): server-side rows keyed by the
 // SHA-256 of the cookie value; 12 hours absolute, no silent renewal.
@@ -9,7 +10,6 @@ export const SESSION_COOKIE = '__Host-cams_admin';
 export const SESSION_MS = 12 * 3600_000;
 
 export interface Session { idHash: string; email: string; createdAt: number; expiresAt: number }
-const hash = (v: string) => createHash('sha256').update(v).digest('hex');
 
 // ALLOWED_EMAILS, re-read on every call: removing an email ends access at
 // that person's next request.

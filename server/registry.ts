@@ -269,8 +269,7 @@ export class Registry {
   deleteProxy(actor: string, accountId: string, id: string): { keyIds: string[] } {
     return guard(() => tx(this.db, () => {
       const p = this.getProxy(accountId, id);
-      const keyIds = this.activeKeyIds(id);
-      this.db.prepare(`UPDATE proxy_keys SET revoked_at = ?, revoked_reason = 'proxy-deleted' WHERE proxy_id = ? AND revoked_at IS NULL`).run(this.clock.now(), id);
+      const keyIds = this.revokeActiveKeys(id, 'proxy-deleted', this.clock.now());
       this.db.prepare('DELETE FROM proxies WHERE id = ?').run(id);
       this.log(actor, 'proxy-delete', accountId, 'proxy', id, p.name);
       return { keyIds };
@@ -282,16 +281,24 @@ export class Registry {
     return guard(() => tx(this.db, () => {
       const p = this.getProxy(accountId, id);
       const now = this.clock.now();
-      this.db.prepare(`UPDATE proxy_keys SET revoked_at = ?, revoked_reason = 'blocked' WHERE proxy_id = ? AND revoked_at IS NULL`).run(now, id);
-      this.db.prepare(`UPDATE enrollment_codes SET cancelled_at = ? WHERE proxy_id = ? AND used_at IS NULL AND cancelled_at IS NULL`).run(now, id);
+      this.revokeActiveKeys(id, 'blocked', now);
+      this.cancelLiveCodes(id, now);
       this.db.prepare(`UPDATE proxies SET state = 'revoked', updated_at = ?, version = version + 1 WHERE id = ?`).run(now, id);
       this.log(actor, 'proxy-block', accountId, 'proxy', id, p.name);
       return this.getProxy(accountId, id);
     }));
   }
 
-  private activeKeyIds(proxyId: string): string[] {
-    return (this.db.prepare('SELECT id FROM proxy_keys WHERE proxy_id = ? AND revoked_at IS NULL').all(proxyId) as Row[]).map((r) => r.id as string);
+  // Inside the caller's transaction: the proxy's active key(s) revoked, their ids returned.
+  revokeActiveKeys(proxyId: string, reason: 'proxy-deleted' | 'blocked' | 're-enrolled', now: number): string[] {
+    const ids = (this.db.prepare('SELECT id FROM proxy_keys WHERE proxy_id = ? AND revoked_at IS NULL').all(proxyId) as Row[]).map((r) => r.id as string);
+    this.db.prepare('UPDATE proxy_keys SET revoked_at = ?, revoked_reason = ? WHERE proxy_id = ? AND revoked_at IS NULL').run(now, reason, proxyId);
+    return ids;
+  }
+
+  // Inside the caller's transaction: every unused, uncancelled code of the proxy.
+  cancelLiveCodes(proxyId: string, now: number): void {
+    this.db.prepare('UPDATE enrollment_codes SET cancelled_at = ? WHERE proxy_id = ? AND used_at IS NULL AND cancelled_at IS NULL').run(now, proxyId);
   }
 
   listKeys(accountId: string, proxyId: string): ProxyKey[] {

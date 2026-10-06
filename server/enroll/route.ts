@@ -1,6 +1,7 @@
 import express from 'express';
 import type { Enrollment } from './codes';
 import { ApiError } from '../registry';
+import { bodyErrors } from '../bodyErrors';
 
 // POST /proxy/v1/enroll (spec §8.2): JSON, at most 8 KiB.
 export function enrollRouter(enr: Enrollment): express.Router {
@@ -21,11 +22,6 @@ export function enrollRouter(enr: Enrollment): express.Router {
   r.get('/proxy/v1/connect', (_req, res) => {
     res.status(426).set('Cache-Control', 'no-store').json({ error: 'unsupported_protocol', supported: ['cams-admin.v1'] });
   });
-  r.use('/proxy/v1/enroll', ((err, _req, res, next) => {
-    const status = (err as { status?: number }).status;
-    if (status === 413) return res.status(413).json({ error: 'too_large' });
-    if (status === 400) return res.status(400).json({ error: 'bad_request' });
-    next(err);
-  }) as express.ErrorRequestHandler);
+  r.use('/proxy/v1/enroll', bodyErrors);
   return r;
 }

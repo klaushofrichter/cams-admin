@@ -4,7 +4,7 @@ import type { Clock } from '../clock';
 import type { Config } from '../config';
 import type { Db } from '../db/open';
 import type { Audit } from '../audit';
-import { ApiError, type Registry } from '../registry';
+import { ApiError, type ProxyKey, type Registry } from '../registry';
 import type { Enrollment } from '../enroll/codes';
 import type { Hub } from '../channel/hub';
 import type { StatusStore } from '../status/store';
@@ -18,6 +18,7 @@ import { limiter, sessionKey } from '../rateLimit';
 import { monitorEventLoopDelay } from 'perf_hooks';
 import { existsSync, statSync } from 'fs';
 import { readEpoch } from '../db/open';
+import { bodyErrors } from '../bodyErrors';
 
 export interface ManualBackup { at: number; ok: boolean; litestream: { ok: boolean; status?: string; error?: string }; snapshot: { ok: boolean; key?: string; bytes?: number; error?: string } }
 export interface BackupState {
@@ -32,6 +33,8 @@ export interface ApiDeps {
 
 type H = (req: Request, res: Response) => unknown;
 const p = (req: Request, k: string) => String(req.params[k]);
+// Keys leave the API without their public key.
+const keyView = ({ publicKey: _pk, ...k }: ProxyKey) => k;
 
 export function apiRouter(d: ApiDeps): express.Router {
   const r = express.Router();
@@ -119,7 +122,7 @@ export function apiRouter(d: ApiDeps): express.Router {
   const proxyBase = '/accounts/:accountId/proxies/:proxyId';
   r.get('/accounts/:accountId/proxies', h((req) => {
     const acc = d.registry.getAccount(p(req, 'accountId'));
-    return { items: d.registry.listProxies(acc.id).map((px) => ({ ...px, status: d.status.view(px.id) })) };
+    return { items: d.registry.listProxies(acc.id).map((px) => ({ ...px, status: d.status.viewOf(px) })) };
   }));
   r.post('/accounts/:accountId/proxies', h((req, res) => { created(res); const px = d.registry.createProxy(actor(res), p(req, 'accountId'), req.body); reg('proxy', px.id); return px; }));
   r.get(proxyBase, h((req) => d.registry.getProxy(p(req, 'accountId'), p(req, 'proxyId'))));
@@ -136,13 +139,12 @@ export function apiRouter(d: ApiDeps): express.Router {
     return c;
   }));
   r.delete(`${proxyBase}/enrollment-codes/:codeId`, h((req, res) => { d.enrollment.cancelCode(actor(res), p(req, 'accountId'), p(req, 'proxyId'), p(req, 'codeId')); reg('proxy', p(req, 'proxyId')); }));
-  r.get(`${proxyBase}/keys`, h((req) => ({ items: d.registry.listKeys(p(req, 'accountId'), p(req, 'proxyId')).map(({ publicKey: _pk, ...k }) => k) })));
+  r.get(`${proxyBase}/keys`, h((req) => ({ items: d.registry.listKeys(p(req, 'accountId'), p(req, 'proxyId')).map(keyView) })));
   r.post(`${proxyBase}/keys/:keyId/revoke`, h((req, res) => {
     const k = d.registry.revokeKey({ type: 'sysadmin', id: actor(res) }, p(req, 'accountId'), p(req, 'proxyId'), p(req, 'keyId'));
     d.hub.closeKey(k.id, 4403);
     reg('proxy', p(req, 'proxyId'));
-    const { publicKey: _pk, ...rest } = k;
-    return rest;
+    return keyView(k);
   }));
   r.post(`${proxyBase}/block`, h((req, res) => {
     const px = d.registry.blockProxy(actor(res), p(req, 'accountId'), p(req, 'proxyId'));
@@ -190,19 +192,14 @@ export function apiRouter(d: ApiDeps): express.Router {
     return d.audit.list({ account: s('account'), actorType: s('actorType'), action: s('action'), from: n('from'), to: n('to'), limit: n('limit'), cursor: s('cursor') });
   }));
 
-  r.use('/', ((err, _req, res, next) => {
-    const status = (err as { status?: number }).status;
-    if (status === 413) return void res.status(413).json({ error: 'too_large' });
-    if (status === 400) return void res.status(400).json({ error: 'bad_request' });
-    next(err);
-  }) as express.ErrorRequestHandler);
+  r.use('/', bodyErrors);
   r.use((_req, res) => void res.status(404).json({ error: 'not_found' }));
   return r;
 }
 
 export function proxyDetail(d: ApiDeps, accountId: string, proxyId: string) {
   const px = d.registry.getProxy(accountId, proxyId);
-  const view = d.status.view(proxyId);
+  const view = d.status.viewOf(px);
   const row = d.status.row(proxyId);
   const cams = d.registry.listCameras(accountId);
   const mine = cams.filter((c) => c.proxyId === proxyId);
@@ -211,8 +208,8 @@ export function proxyDetail(d: ApiDeps, accountId: string, proxyId: string) {
     view,
     summary: row?.summary ?? null,
     reported: row?.reported ?? null,
-    reconcile: reconcile(px, mine, new Set(cams.map((c) => c.camsId)), row, px.caFingerprints),
-    keys: d.registry.listKeys(accountId, proxyId).map(({ publicKey: _pk, ...k }) => k),
+    reconcile: reconcile(px, mine, new Set(cams.map((c) => c.camsId)), row),
+    keys: d.registry.listKeys(accountId, proxyId).map(keyView),
     enrollment: d.enrollment.liveCode(proxyId),
     connected: d.hub.connected(proxyId),
   };
@@ -220,20 +217,22 @@ export function proxyDetail(d: ApiDeps, accountId: string, proxyId: string) {
 
 export function dashboard(d: ApiDeps) {
   const accounts = d.registry.listAccounts();
-  const allCams = d.registry.listCameras();
+  // Three queries in all, grouped here (not one per account).
+  const proxiesOf = groupBy(d.registry.listProxies(), (px) => px.accountId);
+  const camerasOf = groupBy(d.registry.listCameras(), (c) => c.accountId);
   let proxies = 0, proxiesOnline = 0, cameras = 0, camerasOnline = 0, problems = 0;
   const out = accounts.map((a) => {
-    const pxs = d.registry.listProxies(a.id).map((px) => {
-      const v = d.status.view(px.id);
-      const row = d.status.row(px.id);
-      const mine = allCams.filter((c) => c.proxyId === px.id);
-      const rec = reconcile(px, mine, new Set(allCams.filter((c) => c.accountId === a.id).map((c) => c.camsId)), row, px.caFingerprints);
+    const accCams = camerasOf.get(a.id) ?? [];
+    const camsIds = new Set(accCams.map((c) => c.camsId));
+    const pxs = (proxiesOf.get(a.id) ?? []).map((px) => {
+      const v = d.status.viewOf(px);
+      const rec = reconcile(px, accCams.filter((c) => c.proxyId === px.id), camsIds, d.status.row(px.id));
       proxies++;
       if (v.state === 'online') proxiesOnline++;
       if (v.state === 'online' && (v.problemCount ?? 0) > 0) problems += v.problemCount ?? 0;
       return { id: px.id, name: px.name, displayName: px.displayName, runsOn: px.runsOn, state: v.state, connected: v.connected, lastHeartbeatAt: v.lastHeartbeatAt, ok: v.ok, problemCount: v.problemCount, version: v.version, pin: v.pin, skewMs: v.skewMs, skewProblem: v.skewProblem, stale: v.stale, unreadable: v.unreadable, cameras: v.cameras, reconcile: rec };
     });
-    const accCams = allCams.filter((c) => c.accountId === a.id).map((c) => {
+    const camRows = accCams.map((c) => {
       const px = pxs.find((x) => x.id === c.proxyId);
       const live = px?.cameras.find((x) => x.ref === c.proxyCameraId);
       const online = live ? live.online : null;
@@ -241,7 +240,7 @@ export function dashboard(d: ApiDeps) {
       if (online) camerasOnline++;
       return { id: c.id, camsId: c.camsId, name: c.name, kind: c.kind, proxyId: c.proxyId, proxyCameraId: c.proxyCameraId, online };
     });
-    return { id: a.id, name: a.name, displayName: a.displayName, users: a.users, proxies: pxs, cameras: accCams, warnings: a.admins === 0 ? ['no-admin'] : [] };
+    return { id: a.id, name: a.name, displayName: a.displayName, users: a.users, proxies: pxs, cameras: camRows, warnings: a.admins === 0 ? ['no-admin'] : [] };
   });
   return {
     accounts: out,
@@ -250,4 +249,16 @@ export function dashboard(d: ApiDeps) {
     refusedProxyIds: [...d.hub.refusedIds.entries()].map(([id, v]) => ({ id, ...v })),
     serverTime: d.clock.now(),
   };
+}
+
+// Items by key, in their original order.
+function groupBy<T>(items: T[], key: (x: T) => string): Map<string, T[]> {
+  const m = new Map<string, T[]>();
+  for (const x of items) {
+    const k = key(x);
+    const list = m.get(k);
+    if (list) list.push(x);
+    else m.set(k, [x]);
+  }
+  return m;
 }

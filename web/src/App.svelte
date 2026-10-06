@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { api, setUnauthorized } from './lib/api';
+  import { api, setUnauthorized, WRITE_HEADERS } from './lib/api';
   import { parse, type Route } from './lib/router';
   import SignIn from './pages/SignIn.svelte';
   import Dashboard from './pages/Dashboard.svelte';
@@ -23,7 +23,7 @@
   });
 
   async function signOut() {
-    const r = await fetch('/auth/logout', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Cams-Admin': '1' }, body: '{}' });
+    const r = await fetch('/auth/logout', { method: 'POST', headers: WRITE_HEADERS, body: '{}' });
     if (r.ok) location.href = '/auth/signed-out';
   }
 </script>

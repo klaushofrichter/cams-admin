@@ -8,3 +8,9 @@ export function live(handlers: { status?: (s: LiveStatus) => void; registry?: (r
   es.addEventListener('open', () => handlers.open?.());
   return () => es.close();
 }
+
+// fn at most once per `ms`, a burst of calls coalesced into one.
+export function coalesced(fn: () => void, ms: number): () => void {
+  let t: ReturnType<typeof setTimeout> | null = null;
+  return () => { if (!t) t = setTimeout(() => { t = null; fn(); }, ms); };
+}

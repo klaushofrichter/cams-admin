@@ -31,12 +31,12 @@ export function createBackup(d: { db: Db; clock: Clock; cfg: Config; audit: Audi
   const startedAt = d.clock.now();
   let timer: NodeJS.Timeout | null = null;
   const tz = d.env.TZ || 'America/Chicago';
-  const snap = (actor?: string) => runSnapshot({ db: d.db, dbFile: d.cfg.dbFile, clock: d.clock, audit: d.audit, store, prefix, retentionDays: d.cfg.snapshotRetentionDays, actor });
+  const deps = { db: d.db, dbFile: d.cfg.dbFile, clock: d.clock, audit: d.audit, store, prefix, retentionDays: d.cfg.snapshotRetentionDays };
 
   const schedule = () => {
     const at = nextRunAt(d.clock.now(), d.cfg.snapshotAt, tz);
     timer = setTimeout(() => {
-      snap().then((r) => log.info({ ok: r.ok, key: r.key, error: r.error }, 'snapshot')).finally(schedule);
+      runSnapshot(deps).then((r) => log.info({ ok: r.ok, key: r.key, error: r.error }, 'snapshot')).finally(schedule);
     }, Math.max(1000, at - d.clock.now()));
     timer.unref();
   };
@@ -44,15 +44,17 @@ export function createBackup(d: { db: Db; clock: Clock; cfg: Config; audit: Audi
   return {
     store,
     state(): BackupState {
-      const j = d.db.prepare(`SELECT * FROM jobs WHERE name = 'snapshot'`).get() as Record<string, string | number | null> | undefined;
+      // One read for both jobs (state() backs /health and the dashboard).
+      const jobs = new Map((d.db.prepare(`SELECT * FROM jobs WHERE name IN ('snapshot', 'backup-now')`).all() as Record<string, string | number | null>[]).map((r) => [r.name, r]));
+      const j = jobs.get('snapshot');
+      const m = jobs.get('backup-now');
       const lastOkAt = (j?.last_ok_at as number | null) ?? null;
       const detail = j?.last_detail ? JSON.parse(j.last_detail as string) : null;
-      const m = d.db.prepare(`SELECT last_detail FROM jobs WHERE name = 'backup-now'`).get() as { last_detail: string } | undefined;
       return {
         configured: !!d.cfg.backup,
         litestream: !!watch,
         store: store.describe().replace(/^file:\/\/.*/, 'local folder (no S3 configured)'),
-        lastManual: m ? (JSON.parse(m.last_detail) as ManualBackup) : null,
+        lastManual: m ? (JSON.parse(m.last_detail as string) as ManualBackup) : null,
         lastSnapshotAt: lastOkAt,
         lastSnapshotOk: j ? j.last_outcome === 'ok' : null,
         lastSnapshotError: j?.last_outcome === 'failed' ? (detail?.error ?? 'failed') : null,
@@ -61,7 +63,7 @@ export function createBackup(d: { db: Db; clock: Clock; cfg: Config; audit: Audi
       };
     },
     async backupNow(actor: string) {
-      return backupNow({ db: d.db, dbFile: d.cfg.dbFile, clock: d.clock, audit: d.audit, store, prefix, retentionDays: d.cfg.snapshotRetentionDays, actor, socketPath: d.cfg.litestreamSocket });
+      return backupNow({ ...deps, actor, socketPath: d.cfg.litestreamSocket });
     },
     start() {
       watch?.start();

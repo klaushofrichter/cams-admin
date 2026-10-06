@@ -5,6 +5,7 @@ import { statSync } from 'fs';
 import { createServer } from 'http';
 import { tmpDir } from './helpers/tmp';
 import { startHub } from './helpers/channel';
+import { until } from './helpers/server';
 import { backoffDelay, enroll, ProxyClient, type KeyFile } from '../test-client/client';
 import { readKeyFile, writeKeyFile } from '../test-client/keyfile';
 import { makeSummary } from '../test-client/summaries';
@@ -17,7 +18,6 @@ afterEach(async () => { while (cleanups.length) await cleanups.pop()!(); });
 
 const fast = { backoffCapMs: 50, replacedWaitMs: 40, rejectedRetryMs: 100_000, incompatibleRetryMs: 100_000, connectTimeoutMs: 2000 };
 const cfgUrl = (base: string) => `${base.replace('http', 'ws')}/proxy/v1/connect`;
-const until = async (fn: () => boolean, ms = 3000) => { const t = Date.now(); while (!fn()) { if (Date.now() - t > ms) throw new Error('timeout'); await new Promise((r) => setTimeout(r, 10)); } };
 
 async function hubWithEnroll(dir: string, env: Record<string, string> = {}) {
   const h = await startHub(dir, { HEARTBEAT_MIN_GAP_MS: '0', LIMIT_MSG_PER_MIN: '10000', ...env });
@@ -31,7 +31,7 @@ async function hubWithEnroll(dir: string, env: Record<string, string> = {}) {
   await new Promise<void>((r) => srv.listen(0, '127.0.0.1', r));
   cleanups.push(() => new Promise((r) => srv.close(r)));
   const base = `http://127.0.0.1:${(srv.address() as { port: number }).port}`;
-  cfg.connectUrl = `${base.replace('http', 'ws')}/proxy/v1/connect`;
+  cfg.connectUrl = cfgUrl(base);
   const newCode = (name: string) => {
     const p = h.registry.createProxy('a@example.com', h.acc.id, { name, displayName: name, runsOn: 'cloud' });
     return { proxyId: p.id, code: enr.createCode('a@example.com', h.acc.id, p.id, 24).code };

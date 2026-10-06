@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { api } from '../lib/api';
-  import { live } from '../lib/live';
+  import { coalesced, live } from '../lib/live';
   import { ago, camClass } from '../lib/format';
   import StateChip from '../components/StateChip.svelte';
   import Ago from '../components/Ago.svelte';
@@ -14,8 +14,7 @@
   const load = () => api('GET', '/dashboard').then((x) => { d = x; error = ''; }).catch((e) => (error = String(e)));
   onMount(() => {
     load();
-    let t: ReturnType<typeof setTimeout> | null = null;
-    const soon = () => { if (!t) t = setTimeout(() => { t = null; load(); }, 300); };
+    const soon = coalesced(load, 300);
     // Status events update rows in place; registry events (and reconnects) reload.
     const stop = live({
       status: (s) => {

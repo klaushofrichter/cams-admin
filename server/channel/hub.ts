@@ -34,6 +34,8 @@ function reject(socket: Duplex, status: number, text: string, body?: object): vo
   socket.destroy();
 }
 
+const closeReason = (code: 4401 | 4403) => (code === 4403 ? 'revoked' : 'unauthorized');
+
 // The proxies' WebSocket endpoint (spec §8): one connection per proxy, the
 // newest authenticated one wins.
 export class Hub implements ConnectionHost {
@@ -48,6 +50,7 @@ export class Hub implements ConnectionHost {
   private attackUntil = 0;
   // Recently refused proxy ids (for the dashboard after a restore, §13.5).
   readonly refusedIds = new Map<string, { at: number; reason: string }>();
+  closing = false;
 
   constructor(readonly deps: HubDeps) {
     // ws's own cap is set above ours, so an oversize frame gets our 4413
@@ -79,9 +82,7 @@ export class Hub implements ConnectionHost {
     if (req.headers.origin !== undefined) return reject(socket, 403, 'Forbidden');
     const offered = String(req.headers['sec-websocket-protocol'] ?? '').split(',').map((s) => s.trim());
     if (!offered.includes(SUBPROTOCOL)) return reject(socket, 426, 'Upgrade Required', { error: 'unsupported_protocol', supported: [SUBPROTOCOL] });
-    let pending = 0;
-    for (const c of this.all) if (c.state === 'challenged') pending++;
-    if (pending >= this.deps.cfg.limits.pendingSockets) return reject(socket, 503, 'Service Unavailable', { error: 'busy' });
+    if (this.pending() >= this.deps.cfg.limits.pendingSockets) return reject(socket, 503, 'Service Unavailable', { error: 'busy' });
     this.wss.handleUpgrade(req, socket, head, (ws) => {
       const c = new Connection(ws, this);
       this.all.add(c);
@@ -128,21 +129,24 @@ export class Hub implements ConnectionHost {
     return this.byProxy.has(proxyId);
   }
 
-  closeProxy(proxyId: string, code: 4401 | 4403, reason = code === 4403 ? 'revoked' : 'unauthorized'): void {
-    this.byProxy.get(proxyId)?.close(code, reason);
+  closeProxy(proxyId: string, code: 4401 | 4403): void {
+    this.byProxy.get(proxyId)?.close(code, closeReason(code));
   }
 
   closeKey(keyId: string, code: 4401 | 4403 = 4401): void {
-    for (const c of this.byProxy.values()) if (c.keyId === keyId) c.close(code, code === 4403 ? 'revoked' : 'unauthorized');
+    for (const c of this.byProxy.values()) if (c.keyId === keyId) c.close(code, closeReason(code));
+  }
+
+  // Sockets without a completed hello.
+  private pending(): number {
+    let n = 0;
+    for (const c of this.all) if (c.state === 'challenged') n++;
+    return n;
   }
 
   stats(): { open: number; pending: number; live: number } {
-    let pending = 0;
-    for (const c of this.all) if (c.state === 'challenged') pending++;
-    return { open: this.all.size, pending, live: this.byProxy.size };
+    return { open: this.all.size, pending: this.pending(), live: this.byProxy.size };
   }
-
-  closing = false;
 
   // bye + 1001 to everyone; waits (≤ 1 s) for the sockets to close. Close
   // events after this point no longer touch the status store (its database

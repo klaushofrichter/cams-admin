@@ -1,7 +1,7 @@
 import { join } from 'path';
-import { chmodSync, writeFileSync, mkdirSync } from 'fs';
+import { mkdirSync } from 'fs';
 import { buildServer, type Built } from '../../server/server';
-import { generateKeyPair } from '../../server/crypto/ed25519';
+import { writeSigningKey } from './signingKey';
 import { enroll, ProxyClient, type ClientOptions, type KeyFile } from '../../test-client/client';
 import { makeSummary } from '../../test-client/summaries';
 
@@ -13,10 +13,7 @@ export async function startServer(dir: string, env: Record<string, string> = {},
   process.env.ALLOWED_EMAILS = 'admin@example.com';
   const d = join(dir, `srv${n++}`);
   mkdirSync(d, { recursive: true });
-  const keyFile = join(d, 'signing.pem');
-  writeFileSync(keyFile, `-----BEGIN PRIVATE KEY-----\n${generateKeyPair().privateKeyPkcs8B64}\n-----END PRIVATE KEY-----\n`);
-  chmodSync(keyFile, 0o600);
-  return launch(d, keyFile, env, port);
+  return launch(d, writeSigningKey(join(d, 'signing.pem')), env, port);
 }
 
 async function launch(d: string, keyFile: string, env: Record<string, string>, port: number): Promise<Running> {

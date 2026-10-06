@@ -1,26 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import request from 'supertest';
 import express from 'express';
-import { join } from 'path';
-import { openDb } from '../server/db/open';
-import { Audit } from '../server/audit';
-import { Registry } from '../server/registry';
 import { Enrollment } from '../server/enroll/codes';
 import { enrollRouter } from '../server/enroll/route';
 import { loadConfig } from '../server/config';
 import { fingerprint, generateKeyPair, privateFromB64, sign, signedText } from '../server/crypto/ed25519';
 import { normaliseCode } from '../server/ids';
 import { tmpDir } from './helpers/tmp';
-import { fakeClock } from './helpers/clock';
-
-const ACTOR = 'admin@example.com';
-let n = 0;
+import { ACTOR, makeRegistry } from './helpers/registry';
 
 function setup(dir: string) {
-  const db = openDb(join(dir, `e${n++}.db`));
-  const clock = fakeClock();
-  const audit = new Audit(db, clock);
-  const reg = new Registry(db, clock, audit);
+  const { db, clock, audit, reg } = makeRegistry(dir);
   const cfg = loadConfig({ PUBLIC_URL: 'https://cams-admin.example.net' });
   const server = generateKeyPair();
   const revoked: string[] = [];

@@ -5,6 +5,9 @@ export class ApiFailure extends Error {
   }
 }
 
+// Every write: JSON plus the header a cross-site form can't send.
+export const WRITE_HEADERS = { 'Content-Type': 'application/json', 'X-Cams-Admin': '1' } as const;
+
 let onUnauthorized: () => void = () => undefined;
 export const setUnauthorized = (fn: () => void) => (onUnauthorized = fn);
 
@@ -12,7 +15,7 @@ export async function api<T = any>(method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'D
   const write = method !== 'GET';
   const r = await fetch(`/api/v1${path}`, {
     method,
-    headers: write ? { 'Content-Type': 'application/json', 'X-Cams-Admin': '1' } : {},
+    headers: write ? WRITE_HEADERS : {},
     body: write ? JSON.stringify(body ?? {}) : undefined,
     credentials: 'same-origin',
   });

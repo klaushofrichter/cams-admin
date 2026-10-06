@@ -21,6 +21,7 @@ export interface EnrollDeps {
 export type EnrollAnswer = { status: number; body: Record<string, unknown> };
 
 const LIFETIMES = [1, 24, 168];
+const limited = (retryAfterS: number): EnrollAnswer => ({ status: 429, body: { error: 'rate_limited', retryAfterS } });
 const WINDOW = 15 * 60_000;
 
 export class Enrollment {
@@ -43,7 +44,7 @@ export class Enrollment {
       const p = this.d.registry.getProxy(accountId, proxyId);
       if (p.state === 'revoked') throw new ApiError(409, 'proxy_blocked');
       const now = this.d.clock.now();
-      this.d.db.prepare('UPDATE enrollment_codes SET cancelled_at = ? WHERE proxy_id = ? AND used_at IS NULL AND cancelled_at IS NULL').run(now, proxyId);
+      this.d.registry.cancelLiveCodes(proxyId, now);
       const code = newEnrollmentCode();
       const id = newId('enr');
       const expiresAt = now + h * 3600_000;
@@ -76,7 +77,7 @@ export class Enrollment {
   redeem(raw: unknown): EnrollAnswer {
     const now = this.d.clock.now();
     const g = this.global.take('global', now);
-    if (!g.ok) return { status: 429, body: { error: 'rate_limited', retryAfterS: g.retryAfterS } };
+    if (!g.ok) return limited(g.retryAfterS);
     const v = validateEnroll(raw);
     if (!v.ok) return this.refuse(400, v.code, v.code, 'malformed');
     const b = raw as { code: string; publicKey: string; proof: string };
@@ -84,7 +85,7 @@ export class Enrollment {
     if (!code) return this.refuse(401, 'invalid_code', 'unknown', 'unknown');
     const hash = codeHash(code);
     const c = this.perCode.take(hash, now);
-    if (!c.ok) return { status: 429, body: { error: 'rate_limited', retryAfterS: c.retryAfterS } };
+    if (!c.ok) return limited(c.retryAfterS);
 
     const row = this.d.db.prepare(`SELECT e.*, p.state, p.account_id, p.name proxy_name, a.name account_name FROM enrollment_codes e
       JOIN proxies p ON p.id = e.proxy_id JOIN accounts a ON a.id = p.account_id WHERE e.code_hash = ?`).get(hash) as Record<string, string | number | null> | undefined;
@@ -92,7 +93,7 @@ export class Enrollment {
     const reason = row.used_at !== null ? 'used' : row.cancelled_at !== null ? 'cancelled' : (row.expires_at as number) <= now ? 'expired' : row.state === 'revoked' ? 'proxy-blocked' : null;
     if (reason) return this.refuse(401, 'invalid_code', reason, row.id as string);
 
-    let ok = false;
+    let ok: boolean;
     try {
       ok = verify(publicFromB64(b.publicKey), signedText.enroll(code, b.publicKey), b.proof);
     } catch {
@@ -110,8 +111,7 @@ export class Enrollment {
       // Re-check inside the transaction: a parallel redemption may have won.
       const u = this.d.db.prepare('UPDATE enrollment_codes SET used_at = ? WHERE id = ? AND used_at IS NULL AND cancelled_at IS NULL').run(now, row.id as string);
       if (u.changes === 0) throw new ApiError(401, 'invalid_code');
-      oldKeys = (this.d.db.prepare('SELECT id FROM proxy_keys WHERE proxy_id = ? AND revoked_at IS NULL').all(proxyId) as { id: string }[]).map((k) => k.id);
-      this.d.db.prepare(`UPDATE proxy_keys SET revoked_at = ?, revoked_reason = 're-enrolled' WHERE proxy_id = ? AND revoked_at IS NULL`).run(now, proxyId);
+      oldKeys = this.d.registry.revokeActiveKeys(proxyId, 're-enrolled', now);
       this.d.db.prepare('INSERT INTO proxy_keys (id, proxy_id, public_key, fingerprint, created_at, enrollment_id) VALUES (?,?,?,?,?,?)').run(keyId, proxyId, b.publicKey, fp, now, row.id as string);
       this.d.db.prepare(`UPDATE proxies SET state = 'enrolled', updated_at = ?, version = version + 1 WHERE id = ?`).run(now, proxyId);
       this.d.audit.write({ actorType: 'proxy', actor: proxyId, action: 'proxy-enrolled', accountId, targetType: 'proxy', targetId: proxyId, targetLabel: row.proxy_name as string, outcome: 'ok', detail: { keyId, fingerprint: fp, codeId: row.id, replacedKeys: oldKeys } });

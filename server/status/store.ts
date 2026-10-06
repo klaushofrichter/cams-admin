@@ -1,8 +1,8 @@
 import type { Clock } from '../clock';
 import type { Db } from '../db/open';
 import { tx } from '../db/open';
-import type { Registry } from '../registry';
-import type { LiveHub, LiveStatus } from '../live';
+import type { Proxy, Registry } from '../registry';
+import type { LiveHub } from '../live';
 import { validateSummary } from '../contract';
 import { cameraStates, deriveProxyState, heartbeatFresh, pinState, SKEW_PROBLEM_MS, type PinState, type ProxyState, type Reported, type StatusRow } from './derive';
 
@@ -87,26 +87,29 @@ export class StatusStore {
     this.d.db.prepare('INSERT INTO status_events (proxy_id, camera_ref, at, kind, detail) VALUES (?,?,?,?,?)').run(proxyId, cameraRef, this.d.clock.now(), kind, detail ? JSON.stringify(detail).slice(0, 2048) : null);
   }
 
-  // Runs fn on the in-memory row; returns the events it raised. A proxy that
+  // Runs fn on the in-memory row, then publishes the new state. A proxy that
   // was deleted while connected: nothing happens, never a throw. Events are
   // written with the row in one transaction; without events the row is only
-  // marked for the next snapshot.
-  private guarded(proxyId: string, fn: (r: StatusRow, ev: (kind: string, cameraRef?: string | null, detail?: Record<string, unknown> | null) => void) => void, publish = true): void {
-    if (!this.exists(proxyId)) {
+  // marked for the next snapshot. The proxy row is read once per call (a
+  // heartbeat costs two SELECTs: this one and the active key).
+  private guarded(proxyId: string, fn: (r: StatusRow, ev: (kind: string, cameraRef?: string | null, detail?: Record<string, unknown> | null) => void, p: Proxy) => void): void {
+    const p = this.d.registry.proxyById(proxyId);
+    if (!p) {
       this.mem.delete(proxyId);
       return;
     }
     const r = this.mem.get(proxyId) ?? emptyRow(proxyId);
     this.mem.set(proxyId, r);
     const events: [string, string | null, Record<string, unknown> | null][] = [];
-    fn(r, (kind, cameraRef = null, detail = null) => events.push([kind, cameraRef, detail]));
+    fn(r, (kind, cameraRef = null, detail = null) => events.push([kind, cameraRef, detail]), p);
     if (events.length) {
       tx(this.d.db, () => {
         for (const [k, c, det] of events) this.event(proxyId, k, c, det);
         this.persist(r);
       });
     } else this.dirty.add(proxyId);
-    if (publish) this.publish(proxyId);
+    const v = this.viewOf(p);
+    this.d.live.publishStatus({ proxyId, accountId: v.accountId, state: v.state, ok: v.ok, problemCount: v.problemCount, lastHeartbeatAt: v.lastHeartbeatAt, cameras: v.cameras });
   }
 
   hello(proxyId: string, version: string | null, proxyTs: number): void {
@@ -121,14 +124,13 @@ export class StatusStore {
   }
 
   heartbeat(proxyId: string, body: HeartbeatBody, proxyTs: number): void {
-    this.guarded(proxyId, (r, ev) => {
+    this.guarded(proxyId, (r, ev, proxy) => {
       const now = this.d.clock.now();
       const old = { ...r };
       const v = validateSummary(body.summary, body.truncated === true);
       const info = (body.proxy && typeof body.proxy === 'object' ? body.proxy : {}) as Record<string, unknown>;
       const tls = (info.tls && typeof info.tls === 'object' ? info.tls : null) as Record<string, unknown> | null;
       const reportedFps = asStrArray(tls?.caFingerprint);
-      const proxy = this.d.registry.proxyById(proxyId)!;
       const pin = pinState(proxy.caFingerprints, reportedFps);
       let summary: unknown, ok: boolean, problemCount: number, version: string | null = null, summaryAt: number | null = null, cams: Reported['cameras'] = [];
       if (v.ok) {
@@ -204,6 +206,12 @@ export class StatusStore {
   view(proxyId: string): ProxyView {
     const p = this.d.registry.proxyById(proxyId);
     if (!p) throw new Error(`no proxy ${proxyId}`);
+    return this.viewOf(p);
+  }
+
+  // The view of a proxy row the caller already has.
+  viewOf(p: Proxy): ProxyView {
+    const proxyId = p.id;
     const s = this.row(proxyId);
     const state = deriveProxyState(p, s, !!this.d.registry.activeKey(proxyId), this.d.clock.now(), this.d.offlineAfterMs);
     const summary = s?.summary as { unreadable?: string } | null;
@@ -214,17 +222,6 @@ export class StatusStore {
       cameras: cameraStates(s, state), pin: pinState(p.caFingerprints, s?.reported?.caFingerprint ?? []), unreadable: summary?.unreadable ?? null,
       stale: !!s && s.lastHelloAt !== null && !this.seenThisRun.has(proxyId),
     };
-  }
-
-  liveStatus(proxyId: string): LiveStatus | null {
-    if (!this.exists(proxyId)) return null;
-    const v = this.view(proxyId);
-    return { proxyId, accountId: v.accountId, state: v.state, ok: v.ok, problemCount: v.problemCount, lastHeartbeatAt: v.lastHeartbeatAt, cameras: v.cameras };
-  }
-
-  private publish(proxyId: string): void {
-    const s = this.liveStatus(proxyId);
-    if (s) this.d.live.publishStatus(s);
   }
 
   // Status events, newest first, paged by id.

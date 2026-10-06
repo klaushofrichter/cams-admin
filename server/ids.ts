@@ -10,15 +10,16 @@ function randomChars(n: number): string {
   return s;
 }
 
-function timeChars(ms: number): string {
+// n as `len` Crockford characters, most significant first.
+function fixedChars(n: number, len: number): string {
   let s = '';
-  let t = Math.max(0, Math.floor(ms));
-  for (let i = 0; i < 10; i++) {
-    s = CROCKFORD[t % 32] + s;
-    t = Math.floor(t / 32);
+  for (let i = 0; i < len; i++) {
+    s = CROCKFORD[n % 32] + s;
+    n = Math.floor(n / 32);
   }
   return s;
 }
+const timeChars = (ms: number): string => fixedChars(Math.max(0, Math.floor(ms)), 10);
 
 export type IdPrefix = 'acc' | 'usr' | 'prx' | 'cam' | 'key' | 'enr' | 'con';
 // About 100 random bits: 20 characters of 5 bits.
@@ -27,21 +28,13 @@ export const newId = (prefix: IdPrefix): string => `${prefix}_${randomChars(20)}
 // within one ms in this process) + 5 random.
 let lastMs = -1;
 let seq = 0;
-function seqChars(n: number): string {
-  let s = '';
-  for (let i = 0; i < 5; i++) {
-    s = CROCKFORD[n % 32] + s;
-    n = Math.floor(n / 32);
-  }
-  return s;
-}
 export function auditId(now: number): string {
   if (now === lastMs) seq++;
   else {
     lastMs = now;
     seq = 0;
   }
-  return `aud_${timeChars(now)}${seqChars(seq)}${randomChars(5)}`;
+  return `aud_${timeChars(now)}${fixedChars(seq, 5)}${randomChars(5)}`;
 }
 // A ULID-shaped id (26 characters) for envelope ids.
 export const ulid = (now: number): string => timeChars(now) + randomChars(16);
@@ -60,5 +53,6 @@ export function normaliseCode(input: unknown): string | null {
   return `${CODE_TAG}-${group(body)}`;
 }
 
+export const sha256Hex = (v: string): string => createHash('sha256').update(v).digest('hex');
 // 100 bits of entropy: a fast hash is enough.
-export const codeHash = (canonical: string): string => createHash('sha256').update(canonical).digest('hex');
+export const codeHash = sha256Hex;
