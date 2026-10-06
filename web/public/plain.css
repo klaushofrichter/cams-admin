@@ -1,0 +1,6 @@
+/* The server-rendered sign-in, refusal and signed-out pages. */
+:root { color-scheme: dark light; --bg: #0B1220; --text: #E6EDF7; --accent: #22D3EE; }
+@media (prefers-color-scheme: light) { :root { --bg: #F5F8FC; --text: #0F1B2D; --accent: #0891B2; } }
+body { margin: 0; background: var(--bg); color: var(--text); font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
+main.plain { max-width: 32rem; margin: 15vh auto; padding: 0 16px; }
+a { color: var(--accent); }
