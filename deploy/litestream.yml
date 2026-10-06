@@ -6,7 +6,7 @@
 addr: ":9090"
 snapshot:
   interval: 24h
-  retention: 72h
+  retention: 720h  # 30 days, the same as the snapshots (coordinator 2026-10-06)
 dbs:
   - path: /var/lib/cams-admin/cams-admin.db
     replica:

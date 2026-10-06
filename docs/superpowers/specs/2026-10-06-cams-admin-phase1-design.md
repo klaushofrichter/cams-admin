@@ -161,7 +161,7 @@ secret stored as a hash.**
 **R4. Backup: Litestream to AWS S3, plus a daily `VACUUM INTO` snapshot to the
 same bucket under its own prefix.**
 
-- MinIO is used only as the local and CI test target.
+- A local S3 (SeaweedFS in Docker; MinIO no longer publishes images) is the only local and CI test target.
 - The details, the IAM policy and the restore procedure are in §13. The bucket
   and IAM setup is a request (`docs/kube-setup-request.md`).
 
@@ -1180,7 +1180,9 @@ the CLI and the UI card.
   cams-admin/dev/…                         optional: a cluster or cloud test instance
   ```
 
-  Local and CI runs use MinIO and never touch this bucket.
+  Local and CI runs use a local S3 (SeaweedFS) and never touch this bucket;
+  the first real-bucket check happens at the first deploy, coordinated with
+  Klaus.
 - **Snapshot retention (Klaus 2026-10-06):** **30 days**, configurable with
   `BACKUP_SNAPSHOT_RETENTION_DAYS` (1–3650). After each successful snapshot
   the app lists `snapshots/` and deletes the objects older than the retention,
@@ -1195,8 +1197,9 @@ the CLI and the UI card.
   - expired object delete markers: removed;
   - incomplete multipart uploads: aborted after 7 days.
 
-  Litestream's own retention (`retention: 72h`, a snapshot every 24 h) prunes
-  its prefix. With versioning on, a deletion only leaves a noncurrent version
+  Litestream's own retention (Litestream 0.5.17's top-level `snapshot:`
+  block: `interval: 24h`, `retention: 720h`, i.e. 30 days like the
+  snapshots; coordinator 2026-10-06) prunes its prefix. With versioning on, a deletion only leaves a noncurrent version
   for 30 days, so a bad or compromised client can't destroy history outright.
 
 ### 13.2 IAM (least privilege)
@@ -1314,10 +1317,12 @@ the CLI and the UI card.
 
 ### 13.6 Tested restore
 
-- **In CI (every PR):** a `restore` job starts MinIO as a service container,
+- **In CI (every PR):** a `restore` step starts a local S3 (SeaweedFS in
+  Docker, pinned by digest: MinIO no longer publishes images, checked
+  2026-10-06; never the real bucket),
   then runs `scripts/backup/restore-test.sh`:
   1. Start the built app with a Litestream binary (pinned) against
-     `s3://test/cams-admin/ci/` on MinIO.
+     `s3://restore-test/cams-admin/ci/` on the local S3.
   2. Create accounts, users, proxies and an enrollment through the API.
   3. Trigger a snapshot.
   4. Kill both processes.
@@ -1427,7 +1432,7 @@ request says so, so that kube-setup doesn't add it by habit.
 | `HEARTBEAT_S`, `OFFLINE_AFTER_S` | 30, 90 | the tests set 1 and 3 |
 | `ENROLL_CODE_DEFAULT_H` | 24 | |
 | `BACKUP_S3_BUCKET`, `BACKUP_S3_PREFIX`, `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | unset = no snapshot upload (dev) | |
-| `S3_ENDPOINT` | unset | MinIO for local and CI only |
+| `S3_ENDPOINT` | unset | the local S3 (SeaweedFS) for local and CI only |
 | `BACKUP_SNAPSHOT_AT` | `03:15` | in `TZ` |
 | `BACKUP_SNAPSHOT_RETENTION_DAYS` | 30 | snapshots older than this are deleted after each successful snapshot (§13.1) |
 | `LITESTREAM_METRICS_URL` | unset | `http://127.0.0.1:9090/metrics` in the pod; unset = `lastReplicationAt` stays null (dev) |
@@ -1506,7 +1511,7 @@ request says so, so that kube-setup doesn't add it by habit.
 ### 15.3 Local stack on the Mac (`scripts/localstack/`)
 
 - **One command** starts:
-  - cams-admin (built) on :8090, with MinIO in Docker as the S3 target;
+  - cams-admin (built) on :29000, with a local S3 (SeaweedFS) in Docker as the S3 target;
   - and three accounts:
     - `alpha`: one cam-proxy with two cam-sims;
     - `beta`: two cam-proxies, one with one cam-sim and one with three;
