@@ -236,7 +236,7 @@ export function dashboard(d: ApiDeps) {
       proxies++;
       if (v.state === 'online') proxiesOnline++;
       if (v.state === 'online' && (v.problemCount ?? 0) > 0) problems += v.problemCount ?? 0;
-      return { id: px.id, name: px.name, displayName: px.displayName, runsOn: px.runsOn, state: v.state, connected: v.connected, lastHeartbeatAt: v.lastHeartbeatAt, ok: v.ok, problemCount: v.problemCount, version: v.version, pin: v.pin, skewMs: v.skewMs, skewProblem: v.skewProblem, stale: v.stale, unreadable: v.unreadable, cameras: v.cameras, reconcile: rec };
+      return { id: px.id, name: px.name, displayName: px.displayName, runsOn: px.runsOn, state: v.state, connected: v.connected, lastHeartbeatAt: v.lastHeartbeatAt, ok: v.ok, problemCount: v.problemCount, version: v.version, pin: v.pin, skewMs: v.skewMs, skewProblem: v.skewProblem, stale: v.stale, unreadable: v.unreadable, cameras: v.cameras, commands: v.commands, allow: v.allow, reconcile: rec };
     });
     const camRows = accCams.map((c) => {
       const px = pxs.find((x) => x.id === c.proxyId);

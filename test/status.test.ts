@@ -121,6 +121,48 @@ describe('status store', () => {
   });
 });
 
+describe('status: the proxy\'s command policy and token revision (P2)', () => {
+  const dir = tmpDir();
+  const p2 = (now: number, commands: unknown, extra: object = {}) => ({ ...makeProxyInfo({ now }), commands, tokens: { revision: 7, client: 1, admin: 1, blocked: [] }, configRevision: 'sha256:' + 'a'.repeat(64), ...extra });
+  const cmdInfo = (o: object = {}) => ({ enabled: true, paused: false, pauseReason: null, allow: ['tokens.apply'], seenWindow: 1000, ...o });
+
+  it('derives unsupported / none-allowed / paused / off / allowed', () => {
+    const s = setup(dir);
+    s.store.hello(s.prx.id, 'v1', s.clock.now(), ['status']);
+    s.hb();
+    expect(s.store.view(s.prx.id)).toMatchObject({ commands: 'unsupported', allow: [] });
+    s.store.hello(s.prx.id, 'v2', s.clock.now(), ['status', 'commands']);
+    for (const [info, want] of [[cmdInfo({ allow: [] }), 'none-allowed'], [cmdInfo({ paused: true, pauseReason: 'local' }), 'paused'], [cmdInfo({ enabled: false }), 'off'], [cmdInfo(), 'allowed']] as const) {
+      s.hb(undefined, p2(s.clock.now(), info));
+      expect(s.store.view(s.prx.id).commands, want).toBe(want);
+    }
+    expect(s.store.view(s.prx.id).allow).toEqual(['tokens.apply']);
+    expect(s.store.row(s.prx.id)!.reported).toMatchObject({ tokens: { revision: 7, client: 1, admin: 1, blocked: [] }, configRevision: 'sha256:' + 'a'.repeat(64), capabilities: ['status', 'commands'] });
+    // A P2 report without the commands capability (a hello that dropped it) is unsupported.
+    s.store.hello(s.prx.id, 'v1', s.clock.now(), ['status']);
+    s.hb(undefined, p2(s.clock.now(), cmdInfo()));
+    expect(s.store.view(s.prx.id).commands).toBe('unsupported');
+    // The live stream carries the derived policy.
+    expect(s.res.events('status').at(-1)).toMatchObject({ commands: 'unsupported' });
+  });
+
+  it('malformed P2 fields are clamped and never break the heartbeat', () => {
+    const s = setup(dir);
+    s.store.hello(s.prx.id, 'v2', s.clock.now(), ['status', 'commands']);
+    s.hb(undefined, p2(s.clock.now(), { enabled: true, paused: false, pauseReason: 'x'.repeat(10240), allow: Array.from({ length: 100 }, (_, i) => `entry-${i}-${'y'.repeat(100)}`), seenWindow: 'many' }, { tokens: { revision: 'x' }, configRevision: 'nope' }));
+    const rep = s.store.row(s.prx.id)!.reported!;
+    expect(rep.commands!.pauseReason).toHaveLength(200);
+    expect(rep.commands!.allow).toHaveLength(32);
+    expect(rep.commands!.allow.every((a) => a.length <= 64)).toBe(true);
+    expect(rep.commands!.seenWindow).toBe(0);
+    expect(rep.tokens).toBeNull();
+    expect(rep.configRevision).toBeNull();
+    expect(s.store.view(s.prx.id)).toMatchObject({ state: 'online', commands: 'allowed' });
+    s.hb(undefined, p2(s.clock.now(), 'garbage'));
+    expect(s.store.view(s.prx.id).commands).toBe('unsupported');
+  });
+});
+
 describe('live hub', () => {
   it('limits 5 streams per session and sends keep-alive comments', () => {
     const r = { clock: { now: () => 0 } };

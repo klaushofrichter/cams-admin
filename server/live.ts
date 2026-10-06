@@ -5,7 +5,7 @@ import type { Clock } from './clock';
 // `status` on every proxy change, `registry` when a row changes, a comment
 // every 25 s. At most 5 streams per session.
 
-export interface LiveStatus { proxyId: string; accountId: string; state: string; ok: boolean | null; problemCount: number | null; lastHeartbeatAt: number | null; cameras: { ref: string; online: boolean | null }[] }
+export interface LiveStatus { proxyId: string; accountId: string; state: string; ok: boolean | null; problemCount: number | null; lastHeartbeatAt: number | null; cameras: { ref: string; online: boolean | null }[]; commands?: string }
 
 export class LiveHub {
   private streams = new Map<string, Set<Response>>();

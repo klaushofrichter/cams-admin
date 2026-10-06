@@ -4,7 +4,7 @@ import { tx } from '../db/open';
 import type { Proxy, Registry } from '../registry';
 import type { LiveHub } from '../live';
 import { validateSummary } from '../contract';
-import { cameraStates, deriveProxyState, heartbeatFresh, pinState, SKEW_PROBLEM_MS, type CommandsInfo, type PinState, type ProxyState, type Reported, type StatusRow, type TokensInfo } from './derive';
+import { cameraStates, deriveCommands, deriveProxyState, type CommandsPolicy, heartbeatFresh, pinState, SKEW_PROBLEM_MS, type CommandsInfo, type PinState, type ProxyState, type Reported, type StatusRow, type TokensInfo } from './derive';
 
 // The latest state of each proxy and its transitions, fed by the channel
 // (spec §8.5, §8.6). The live state is in MEMORY (kube-setup's S3 cost rule,
@@ -21,6 +21,7 @@ export interface ProxyView {
   proxyId: string; accountId: string; state: ProxyState; connected: boolean; connectedSince: number | null; lastHelloAt: number | null; lastHeartbeatAt: number | null;
   closedReason: string | null; version: string | null; skewMs: number | null; skewProblem: boolean; ok: boolean | null; problemCount: number | null;
   cameras: { ref: string; online: boolean | null }[]; pin: PinState; unreadable: string | null; stale: boolean;
+  commands: CommandsPolicy; allow: string[];
 }
 
 type Row = Record<string, unknown>;
@@ -133,7 +134,7 @@ export class StatusStore {
       });
     } else this.dirty.add(proxyId);
     const v = this.viewOf(p);
-    this.d.live.publishStatus({ proxyId, accountId: v.accountId, state: v.state, ok: v.ok, problemCount: v.problemCount, lastHeartbeatAt: v.lastHeartbeatAt, cameras: v.cameras });
+    this.d.live.publishStatus({ proxyId, accountId: v.accountId, state: v.state, ok: v.ok, problemCount: v.problemCount, lastHeartbeatAt: v.lastHeartbeatAt, cameras: v.cameras, commands: v.commands });
   }
 
   hello(proxyId: string, version: string | null, proxyTs: number, capabilities: string[] = []): void {
@@ -254,6 +255,7 @@ export class StatusStore {
       skewProblem: s?.clockSkewMs != null && Math.abs(s.clockSkewMs) > SKEW_PROBLEM_MS, ok: s?.ok ?? null, problemCount: s?.problemCount ?? null,
       cameras: cameraStates(s, state), pin: pinState(p.caFingerprints, s?.reported?.caFingerprint ?? []), unreadable: summary?.unreadable ?? null,
       stale: !!s && s.lastHelloAt !== null && !this.seenThisRun.has(proxyId),
+      commands: deriveCommands(s?.reported), allow: deriveCommands(s?.reported) === 'unsupported' ? [] : [...(s?.reported?.commands?.allow ?? [])],
     };
   }
 

@@ -68,3 +68,13 @@ export function reconcile(
     registeredNotReported: [...regIds].filter((id) => !repIds.has(id)),
   };
 }
+
+// P2: what cams-admin may send this proxy, as the proxy reports it (the
+// proxy decides; commands are off by default on every proxy).
+export type CommandsPolicy = 'unsupported' | 'off' | 'paused' | 'none-allowed' | 'allowed';
+export function deriveCommands(rep: Reported | null | undefined): CommandsPolicy {
+  if (!rep?.capabilities?.includes('commands') || !rep.commands) return 'unsupported';
+  if (!rep.commands.enabled) return 'off';
+  if (rep.commands.paused) return 'paused';
+  return rep.commands.allow.length === 0 ? 'none-allowed' : 'allowed';
+}
