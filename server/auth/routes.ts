@@ -15,14 +15,12 @@ import { sha256Hex } from '../ids';
 const STATE_COOKIE = 'cams_admin_oauth';
 const STATE_MS = 10 * 60_000;
 
-// __Host- needs Secure; browsers accept it on http://localhost too.
-const COOKIE = { httpOnly: true, secure: true, sameSite: 'lax', path: '/' } as const;
-
 const page = (title: string, body: string) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><link rel="stylesheet" href="/plain.css"></head><body><main class="plain"><h1>${title}</h1>${body}</main></body></html>`;
 const SIGNED_OUT = page('Signed out', '<p><a href="/auth/google/login">Sign in</a></p>');
 
 export function authRoutes(d: { cfg: Config; sessions: Sessions; audit: Audit; clock: Clock; live: LiveHub | null }): express.Router {
   const r = express.Router();
+  const secure = true; // __Host- needs Secure; browsers accept it on http://localhost too
   // Completed callbacks that failed, in total (before sign-in there is no
   // identity to key on, spec §7). Counted only after the state check and
   // never on success, so junk requests can't lock anyone out.
@@ -35,14 +33,14 @@ export function authRoutes(d: { cfg: Config; sessions: Sessions; audit: Audit; c
   // The cookie carries state, PKCE verifier and OIDC nonce: random, base64url.
   r.get('/auth/google/login', loginLimit, (_req, res) => {
     const [state, verifier, nonce] = [16, 32, 16].map((n) => randomBytes(n).toString('base64url'));
-    res.cookie(STATE_COOKIE, `${state}.${verifier}.${nonce}`, { ...COOKIE, maxAge: STATE_MS });
+    res.cookie(STATE_COOKIE, `${state}.${verifier}.${nonce}`, { httpOnly: true, secure, sameSite: 'lax', maxAge: STATE_MS, path: '/' });
     res.redirect(302, authUrl(d.cfg, state, verifier, nonce));
   });
 
   const checkState: express.RequestHandler = (req, res, next) => {
     const cookie = req.cookies?.[STATE_COOKIE];
     const state = req.query.state;
-    res.clearCookie(STATE_COOKIE, COOKIE);
+    res.clearCookie(STATE_COOKIE, { httpOnly: true, secure, sameSite: 'lax', path: '/' });
     const parts = typeof cookie === 'string' ? cookie.split('.') : [];
     if (parts.length !== 3 || !parts.every((p) => /^[A-Za-z0-9_-]{16,64}$/.test(p)) || typeof state !== 'string' || parts[0].length !== state.length || !timingSafeEqual(Buffer.from(parts[0]), Buffer.from(state))) {
       return void res.status(400).type('html').send(page('Sign-in expired', '<p><a href="/auth/google/login">Sign in again</a></p>'));
@@ -71,7 +69,7 @@ export function authRoutes(d: { cfg: Config; sessions: Sessions; audit: Audit; c
     }
     const s = d.sessions.create(email);
     d.audit.write({ actorType: 'sysadmin', actor: email, action: 'signin', outcome: 'ok' });
-    res.cookie(SESSION_COOKIE, s.value, { ...COOKIE, maxAge: SESSION_MS });
+    res.cookie(SESSION_COOKIE, s.value, { httpOnly: true, secure, sameSite: 'lax', path: '/', maxAge: SESSION_MS });
     res.redirect(302, '/');
   });
 
@@ -86,7 +84,7 @@ export function authRoutes(d: { cfg: Config; sessions: Sessions; audit: Audit; c
       d.audit.write({ actorType: 'sysadmin', actor: s.email, action: 'signout', outcome: 'ok' });
       d.live?.endSession(s.idHash);
     }
-    res.clearCookie(SESSION_COOKIE, COOKIE);
+    res.clearCookie(SESSION_COOKIE, { httpOnly: true, secure, sameSite: 'lax', path: '/' });
     res.status(200).type('html').send(SIGNED_OUT);
   });
   return r;
