@@ -9,6 +9,8 @@ import type { Enrollment } from '../enroll/codes';
 import type { Hub } from '../channel/hub';
 import type { StatusStore } from '../status/store';
 import type { LiveHub } from '../live';
+import type { Commands } from '../commands/service';
+import type { Tokens } from '../tokens/service';
 import { SESSION_COOKIE, type Sessions } from '../auth/session';
 import { requireCsrf, requireSysadmin, writeLimiter } from '../auth/middleware';
 import { reconcile } from '../status/derive';
@@ -35,6 +37,7 @@ export interface BackupService { state(): BackupState; backupNow(actor: string):
 
 export interface ApiDeps {
   db: Db; clock: Clock; cfg: Config; audit: Audit; registry: Registry; enrollment: Enrollment; hub: Hub; status: StatusStore; live: LiveHub; sessions: Sessions; backup: BackupService;
+  commands: Commands; tokens: Tokens;
 }
 
 type H = (req: Request, res: Response) => unknown;
@@ -55,7 +58,7 @@ export function apiRouter(d: ApiDeps): express.Router {
       const out = await fn(req, res);
       if (!res.headersSent) {
         if (out === undefined) res.status(204).end();
-        else res.status(req.method === 'POST' && res.locals.created ? 201 : 200).json(out);
+        else res.status(res.locals.status ?? (req.method === 'POST' && res.locals.created ? 201 : 200)).json(out);
       }
     } catch (e) {
       if (e instanceof ApiError) return void res.status(e.status).json({ error: e.code, ...(e.field ? { field: e.field } : {}) });
@@ -159,6 +162,26 @@ export function apiRouter(d: ApiDeps): express.Router {
     return px;
   }));
   r.get(`${proxyBase}/status`, h((req) => proxyDetail(d, p(req, 'accountId'), p(req, 'proxyId'))));
+
+  // --- P2: command history and managed tokens (shown once, stored as hashes) -----------
+  const tokenBase = `${proxyBase}/tokens`;
+  r.get(`${proxyBase}/commands`, h((req) => d.commands.list(p(req, 'accountId'), p(req, 'proxyId'), { limit: limit(req), cursor: typeof req.query.cursor === 'string' ? req.query.cursor : undefined })));
+  r.get(`${proxyBase}/commands/:cmdId`, h((req) => d.commands.get(p(req, 'accountId'), p(req, 'proxyId'), p(req, 'cmdId'))));
+  r.get(tokenBase, h((req) => d.tokens.list(p(req, 'accountId'), p(req, 'proxyId'))));
+  r.post(tokenBase, h((req, res) => {
+    // The token's only appearance: never cached, never repeated.
+    res.set('Cache-Control', 'no-store');
+    const out = d.tokens.issue(actor(res), p(req, 'accountId'), p(req, 'proxyId'), req.body);
+    created(res);
+    return { ...out, shownOnce: true };
+  }));
+  r.post(`${tokenBase}/apply`, h((req, res) => {
+    const out = d.tokens.reapply(actor(res), p(req, 'accountId'), p(req, 'proxyId'));
+    res.locals.status = 202;
+    return out;
+  }));
+  r.post(`${tokenBase}/:tokenId/retire`, h((req, res) => d.tokens.retire(actor(res), p(req, 'accountId'), p(req, 'proxyId'), p(req, 'tokenId'), req.body?.hours)));
+  r.post(`${tokenBase}/:tokenId/revoke`, h((req, res) => d.tokens.revoke(actor(res), p(req, 'accountId'), p(req, 'proxyId'), p(req, 'tokenId'))));
   r.get(`${proxyBase}/status-events`, h((req) => {
     d.registry.getProxy(p(req, 'accountId'), p(req, 'proxyId'));
     return d.status.events(p(req, 'proxyId'), limit(req), req.query.cursor ? Number(req.query.cursor) : undefined);

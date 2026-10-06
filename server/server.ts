@@ -77,7 +77,7 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
   app.use(enrollRouter(enrollment));
   app.use(cookieParser());
   app.use(authRoutes({ cfg, sessions, audit, clock, live }));
-  const api = apiRouter({ db, clock, cfg, audit, registry, enrollment, hub, status, live, sessions, backup });
+  const api = apiRouter({ db, clock, cfg, audit, registry, enrollment, hub, status, live, sessions, backup, commands, tokens });
   app.use('/api/v1', api);
   app.use('/api', (_req, res) => void res.status(404).json({ error: 'not_found' }));
   // The Svelte build (npm run build:web); every other GET is the SPA.
