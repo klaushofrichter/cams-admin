@@ -129,8 +129,12 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
       await hub.shutdown();
       live.close();
       try { status.flush(true); } catch (e) { log.error({ err: e }, 'status_flush_failed'); }
-      await new Promise((r) => (http.listening ? http.close(r) : r(undefined)));
-      http.closeAllConnections?.();
+      // close() waits for every connection: idle keep-alive ones would hold
+      // it forever, so they are cut first (a request in flight still ends).
+      const httpClosed = new Promise((r) => (http.listening ? http.close(r) : r(undefined)));
+      http.closeIdleConnections();
+      setTimeout(() => http.closeAllConnections(), 2000).unref();
+      await httpClosed;
       try { writeEpochFile(db, epochFile); } catch { /* closing */ }
       db.close();
     },
