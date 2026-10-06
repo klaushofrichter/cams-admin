@@ -23,8 +23,26 @@ function timeChars(ms: number): string {
 export type IdPrefix = 'acc' | 'usr' | 'prx' | 'cam' | 'key' | 'enr' | 'con';
 // About 100 random bits: 20 characters of 5 bits.
 export const newId = (prefix: IdPrefix): string => `${prefix}_${randomChars(20)}`;
-// Sortable: 10 time characters (ms) + 10 random.
-export const auditId = (now: number): string => `aud_${timeChars(now)}${randomChars(10)}`;
+// Sortable: 10 time characters (ms) + 5 sequence characters (monotonic
+// within one ms in this process) + 5 random.
+let lastMs = -1;
+let seq = 0;
+function seqChars(n: number): string {
+  let s = '';
+  for (let i = 0; i < 5; i++) {
+    s = CROCKFORD[n % 32] + s;
+    n = Math.floor(n / 32);
+  }
+  return s;
+}
+export function auditId(now: number): string {
+  if (now === lastMs) seq++;
+  else {
+    lastMs = now;
+    seq = 0;
+  }
+  return `aud_${timeChars(now)}${seqChars(seq)}${randomChars(5)}`;
+}
 // A ULID-shaped id (26 characters) for envelope ids.
 export const ulid = (now: number): string => timeChars(now) + randomChars(16);
 
