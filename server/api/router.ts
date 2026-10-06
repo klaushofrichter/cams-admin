@@ -22,10 +22,16 @@ import { bodyErrors } from '../bodyErrors';
 
 export interface ManualBackup { at: number; ok: boolean; litestream: { ok: boolean; status?: string; error?: string }; snapshot: { ok: boolean; key?: string; bytes?: number; error?: string } }
 export interface BackupState {
-  lastSnapshotAt: number | null; lastSnapshotOk: boolean | null; lastSnapshotError: string | null; lastReplicationAt: number | null;
+  lastSnapshotAt: number | null; lastSnapshotOk: boolean | null; lastSnapshotError: string | null;
+  // The newest object of the Litestream replica in S3 (LastModified, ms).
+  lastReplicationAt: number | null;
+  // The S3 check: its last run, the last error (null after a success), the error count since start.
+  lastReplicationCheckAt: number | null; lastReplicationError: string | null; replicationCheckErrors: number;
+  // Litestream's own counters (null until its metrics were read).
+  litestreamSyncErrors: number | null; litestreamReplicaErrors: number | null; litestreamMetricsError: string | null;
   lastManual: ManualBackup | null; alerts: string[]; configured: boolean; litestream: boolean; store: string;
 }
-export interface BackupService { state(): BackupState; backupNow(actor: string): Promise<ManualBackup | { busy: true }> }
+export interface BackupService { state(): BackupState; backupNow(actor: string): Promise<ManualBackup | { busy: true }>; start?(): void; stop?(): void }
 
 export interface ApiDeps {
   db: Db; clock: Clock; cfg: Config; audit: Audit; registry: Registry; enrollment: Enrollment; hub: Hub; status: StatusStore; live: LiveHub; sessions: Sessions; backup: BackupService;

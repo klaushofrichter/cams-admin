@@ -61,7 +61,12 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
   app.use(securityHeaders(cfg));
   app.get('/health', (_req, res) => {
     const b = backup.state();
-    res.set('Cache-Control', 'no-store').json({ status: 'ok', version: version(), backup: { lastReplicationAt: b.lastReplicationAt, lastSnapshotAt: b.lastSnapshotAt, lastManualAt: b.lastManual?.at ?? null, lastManualOk: b.lastManual?.ok ?? null } });
+    res.set('Cache-Control', 'no-store').json({ status: 'ok', version: version(), backup: {
+      lastReplicationAt: b.lastReplicationAt, lastSnapshotAt: b.lastSnapshotAt, lastManualAt: b.lastManual?.at ?? null, lastManualOk: b.lastManual?.ok ?? null,
+      // Public: error names and counts only, never a message (it can name the bucket).
+      replicationCheckError: b.lastReplicationError?.split(':')[0] ?? null, replicationCheckErrors: b.replicationCheckErrors,
+      litestreamSyncErrors: b.litestreamSyncErrors, litestreamReplicaErrors: b.litestreamReplicaErrors,
+    } });
   });
   app.use(enrollRouter(enrollment));
   app.use(cookieParser());
