@@ -67,6 +67,11 @@ Order as always: **commit, push, then apply.**
     `k8s.grafana.com/metrics.portNumber: "9090"` (Litestream's metrics; not
     `prometheus.io/*`). `/health` also reports `backup.lastReplicationAt` and
     `backup.lastSnapshotAt` for the Grafana dead-man alert kube-setup adds.
+    Since 2026-10-06 `lastReplicationAt` is the LastModified of the newest
+    replica object in S3 (end to end, restored from S3 after a restart), and
+    an idle database writes once per sync interval so that it keeps
+    uploading; the alert contract is unchanged (now − lastReplicationAt >
+    7500 s = 2 × 3600 + 300 for 15 min; no data = alerting).
   - Security context as in requirement 7 of
     `docs/cluster-deployment-requirements.md`: user 1000, read-only root,
     no privilege escalation, all capabilities dropped.

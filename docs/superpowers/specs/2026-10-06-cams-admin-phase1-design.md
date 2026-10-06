@@ -1080,7 +1080,7 @@ answer `{"error": "<code>"}` with 400/401/403/404/409/413/429. Writes follow
 |---|---|---|
 | POST | `/proxy/v1/enroll` | §8.2 |
 | GET (upgrade) | `/proxy/v1/connect` | §8.3 |
-| GET, HEAD | `/health` | `{status, version, backup: {lastReplicationAt, lastSnapshotAt, lastManualAt, lastManualOk}}` (ms or null); no counts and no other database detail. For the release smoke test, the probes and kube-setup's Grafana dead-man alert. **`HEAD /health` answers 200** with no body (UptimeRobot), which a test asserts |
+| GET, HEAD | `/health` | `{status, version, backup: {lastReplicationAt, lastSnapshotAt, lastManualAt, lastManualOk, replicationCheckError, replicationCheckErrors, litestreamSyncErrors, litestreamReplicaErrors}}` (times in ms or null; `lastReplicationAt` is the newest replica object's LastModified in S3, §13.3; the error is a name such as `AccessDenied`, never a message); no database counts and no other database detail. For the release smoke test, the probes and kube-setup's Grafana dead-man alert. **`HEAD /health` answers 200** with no body (UptimeRobot), which a test asserts |
 
 ### 11.4 Audit actions (closed list)
 
@@ -1287,13 +1287,43 @@ the CLI and the UI card.
   The pod carries `k8s.grafana.com/scrape: "true"`,
   `k8s.grafana.com/metrics.portNumber: "9090"` (not `prometheus.io/*`), so
   the cluster's Grafana collects them.
-- The app polls the same endpoint over localhost every 30 s
-  (`LITESTREAM_METRICS_URL`). It records `lastReplicationAt`: the last time
-  it saw Litestream's replication counter advance. The plan pins the metric
-  name against the Litestream release. `/health` reports it, together with
-  the last successful snapshot, so kube-setup's Grafana dead-man alert can
-  watch the backup from outside. The dashboard's backup card shows the same
-  numbers.
+- **`lastReplicationAt` is end-to-end (fixed 2026-10-06):** the
+  LastModified of the newest object under `${BACKUP_S3_PREFIX}litestream/`
+  in S3, read with ListObjectsV2 (the app's IAM user has ListBucket on the
+  prefix) at startup and every `REPLICATION_CHECK_S` (300). It used to be
+  the last time `litestream_sync_count` rose, but that counter is
+  Litestream's local WAL sync (~1/s): kube-setup measured it advancing every
+  second while nothing reached S3, and the value was lost at every restart.
+  - **Lookup:** Litestream 0.5.17 writes `<path>/<level %04x>/<minTXID>-<maxTXID>.ltx`,
+    and within a level the key order is the TXID order. A full listing of
+    the prefix at startup and hourly (one request per 1000 objects) finds
+    the level directories; between them, one request per level directory
+    with `StartAfter` = the last key seen there. About 35,000 LIST requests
+    a month (4 levels × 12 × 24 × 30 + the hourly listings), ≈ $0.18.
+  - **Errors** keep the last known value; the Backup page shows the error,
+    `/health` its name and a count (`replicationCheckError`,
+    `replicationCheckErrors`), and the dashboard the alert
+    `replication-check-failed`.
+- **Heartbeat write:** Litestream uploads only when the database changed, so
+  an idle database would look stale. When nothing was written for one
+  `LITESTREAM_SYNC_INTERVAL_S`, the app updates the `backup-heartbeat` row
+  of `jobs` (checked 12 times per interval): at most one write and one PUT
+  per interval, ≈720 a month at 1 h, none while the fleet's status snapshot
+  writes anyway. Litestream uploads a write after an idle interval at once
+  (0.5.17 wakes on new data), so a healthy replica gets a new object at
+  least every ~65 min.
+- The app also polls Litestream's metrics over localhost every 30 s
+  (`LITESTREAM_METRICS_URL`) for its error counters, checked against the
+  0.5.17 source: `litestream_sync_error_count` (local sync errors) and
+  `litestream_replica_operation_errors_total` (replica errors; in 0.5.17
+  the S3 client counts only failed DELETEs there; a failed PUT is only
+  logged and retried, measured with the local S3 paused: no metric moved).
+  Above zero: the alerts `litestream-sync-errors`,
+  `litestream-replica-errors`; `/health` reports both counters
+  (`litestreamSyncErrors`, `litestreamReplicaErrors`, null until read).
+- `/health` reports `lastReplicationAt` with the last successful snapshot,
+  so kube-setup's Grafana dead-man alert can watch the backup from outside.
+  The dashboard's backup card shows the same numbers.
 
 ### 13.4 Daily snapshot
 
@@ -1312,11 +1342,14 @@ the CLI and the UI card.
   version, so it is the fallback if a replica is unusable. It is a single
   file Klaus can open with `sqlite3`.
 - **Alerts:** a failed snapshot, or none in 26 h, shows red on the dashboard.
-  So does Litestream when no sync has advanced for 2 × its sync interval +
-  5 min (`LITESTREAM_SYNC_INTERVAL_S`, 3600 to match `deploy/litestream.yml`;
-  security review 2026-10-06: a fixed 5 min would fire constantly with the
-  hourly sync). `/health` reports `lastReplicationAt` for kube-setup's
-  dead-man alert, which must use the same window.
+  So does Litestream when the newest replica object in S3 is older than
+  2 × its sync interval + 5 min (`LITESTREAM_SYNC_INTERVAL_S`, 3600 to match
+  `deploy/litestream.yml`, so 7500 s; security review 2026-10-06: a fixed
+  5 min would fire constantly with the hourly sync). With the heartbeat a
+  healthy replica's newest object is at most ~65 min old, plus up to 5 min
+  until the next S3 check. `/health` reports `lastReplicationAt` for
+  kube-setup's dead-man alert, which uses the same window (now −
+  lastReplicationAt > 7500 s for 15 min; no data = alerting).
 
 ### 13.4a Backup now (Klaus 2026-10-06)
 
@@ -1484,8 +1517,9 @@ request says so, so that kube-setup doesn't add it by habit.
 | `S3_ENDPOINT` | unset | the local S3 (SeaweedFS) for local and CI only |
 | `BACKUP_SNAPSHOT_AT` | `03:15` | in `TZ` |
 | `BACKUP_SNAPSHOT_RETENTION_DAYS` | 30 | snapshots older than this are deleted after each successful snapshot (§13.1) |
-| `LITESTREAM_SYNC_INTERVAL_S` | 3600 | the sync interval in `deploy/litestream.yml`; the replication-lag alert fires after 2 × it + 5 min |
-| `LITESTREAM_METRICS_URL` | unset | `http://127.0.0.1:9090/metrics` in the pod; unset = `lastReplicationAt` stays null (dev) |
+| `LITESTREAM_SYNC_INTERVAL_S` | 3600 | the sync interval in `deploy/litestream.yml`; the heartbeat write's interval; the replication-lag alert fires after 2 × it + 5 min |
+| `LITESTREAM_METRICS_URL` | unset | `http://127.0.0.1:9090/metrics` in the pod; unset = no Litestream here: no S3 check, no heartbeat write, `lastReplicationAt` stays null (dev) |
+| `REPLICATION_CHECK_S` | 300 | how often `lastReplicationAt` is read from S3 (§13.3) |
 | `LOG_LEVEL` | info | |
 
 ## 15. Testing
