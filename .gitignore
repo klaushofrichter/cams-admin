@@ -8,3 +8,4 @@ data/
 .superpowers/
 test-results/
 playwright-report/
+.cache/

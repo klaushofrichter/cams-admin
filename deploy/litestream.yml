@@ -1,0 +1,17 @@
+# Litestream 0.5.17 (pinned by digest in kube-setup's manifest), the
+# native sidecar of the cams-admin pod (spec §13.3). Environment from the
+# cams-admin-backup Secret; credentials as AWS_ACCESS_KEY_ID /
+# AWS_SECRET_ACCESS_KEY. Metrics on :9090 for the pod's
+# k8s.grafana.com/scrape annotations and the app's LITESTREAM_METRICS_URL.
+addr: ":9090"
+snapshot:
+  interval: 24h
+  retention: 72h
+dbs:
+  - path: /var/lib/cams-admin/cams-admin.db
+    replica:
+      type: s3
+      bucket: ${BACKUP_S3_BUCKET}
+      path: ${BACKUP_S3_PREFIX}litestream
+      region: ${AWS_REGION}
+      sync-interval: 1s
