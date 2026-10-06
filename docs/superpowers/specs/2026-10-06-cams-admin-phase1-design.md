@@ -1753,7 +1753,10 @@ e2e).**
   camera's state) against a built cams-admin with a real SQLite file.
 - **Pass criteria:** every heartbeat acknowledged; no proxy shown offline
   while it was sending; p99 heartbeat→ack latency under 50 ms; server RSS
-  under 200 MiB and flat over the last 30 minutes; the database under
+  under 200 MiB; the live heap after a forced GC flat after the warm-up
+  quarter (Theil–Sen trend under 5 % growth; RSS is no leak signal: on
+  2026-10-06 it swung 55–168 MiB within one hour while the heap after GC
+  stayed at 18.0–18.3 MiB, on main and on phase 2 alike); the database under
   50 MiB; SSE status events delivered to two dashboard streams for every
   state change; the event loop lag p99 under 20 ms.
 - A short variant (`--duration 2m`) runs in CI as part of `test`, with the

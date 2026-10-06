@@ -21,7 +21,7 @@ function fixedChars(n: number, len: number): string {
 }
 const timeChars = (ms: number): string => fixedChars(Math.max(0, Math.floor(ms)), 10);
 
-export type IdPrefix = 'acc' | 'usr' | 'prx' | 'cam' | 'key' | 'enr' | 'con';
+export type IdPrefix = 'acc' | 'usr' | 'prx' | 'cam' | 'key' | 'enr' | 'con' | 'cmd' | 'tok';
 // About 100 random bits: 20 characters of 5 bits.
 export const newId = (prefix: IdPrefix): string => `${prefix}_${randomChars(20)}`;
 // Sortable: 10 time characters (ms) + 5 sequence characters (monotonic

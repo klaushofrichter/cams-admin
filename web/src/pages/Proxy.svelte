@@ -7,6 +7,8 @@
   import StateChip from '../components/StateChip.svelte';
   import Ago from '../components/Ago.svelte';
   import Confirm from '../components/Confirm.svelte';
+  import ProxyCommands from '../components/ProxyCommands.svelte';
+  import ProxyTokens from '../components/ProxyTokens.svelte';
 
   let { accountId, proxyId }: { accountId: string; proxyId: string } = $props();
 
@@ -18,11 +20,13 @@
   let lifetimeH = $state(24);
   let confirm = $state<null | { kind: 'revoke' | 'block' | 'delete'; keyId?: string }>(null);
   let showAll = $state(false);
+  let refresh = $state(0); // bumps after every load: the command and token cards reload with it
 
   async function load() {
     try {
       d = await api('GET', `/accounts/${accountId}/proxies/${proxyId}/status`);
       events = (await api('GET', `/accounts/${accountId}/proxies/${proxyId}/status-events?limit=30`)).items;
+      refresh++;
     } catch (e: any) {
       if (e?.status === 404) gone = true;
       else error = errorText(e);
@@ -139,6 +143,9 @@
       {/if}
     {/if}
   </section>
+
+  <ProxyCommands {accountId} {proxyId} policy={d.view.commands} allow={d.view.allow} {refresh} />
+  <ProxyTokens {accountId} {proxyId} proxyName={d.proxy.name} policy={d.view.commands} allow={d.view.allow} {refresh} />
 
   <section class="card grid" data-testid="reconcile">
     <h3>Reconciliation</h3>

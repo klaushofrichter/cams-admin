@@ -7,6 +7,9 @@ describe('ids', () => {
   it('has a type prefix and 20 Crockford characters', () => {
     expect(newId('acc')).toMatch(new RegExp(`^acc_${B32}{20}$`));
     expect(newId('prx')).toMatch(new RegExp(`^prx_${B32}{20}$`));
+    // P2: the contract's cmd_ and tok_ patterns
+    expect(newId('cmd')).toMatch(/^cmd_[0-9A-HJKMNP-TV-Z]{20}$/);
+    expect(newId('tok')).toMatch(/^tok_[0-9A-HJKMNP-TV-Z]{20}$/);
   });
   it('is unique', () => {
     const s = new Set(Array.from({ length: 1000 }, () => newId('cam')));

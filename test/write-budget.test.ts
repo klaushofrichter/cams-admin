@@ -53,6 +53,35 @@ describe('database write budget', () => {
     expect(r.clock.now() - store.row(ids[0])!.lastHeartbeatAt!).toBeLessThan(30_000);
   });
 
+  it('P2: 20 proxies whose commands.paused flips every 5 minutes for an hour stay within the same budget', () => {
+    const r = makeRegistry(dir);
+    const live = new LiveHub({ clock: r.clock, maxPerSession: 5, keepaliveMs: 0 });
+    const store = new StatusStore({ db: r.db, clock: r.clock, registry: r.reg, live, offlineAfterMs: 90_000, snapshotMs: 600_000 });
+    const acc = r.reg.createAccount(ACTOR, { name: 'p2load', displayName: 'P2' });
+    const ids: string[] = [];
+    for (let i = 0; i < 20; i++) {
+      const p = r.reg.createProxy(ACTOR, acc.id, { name: `q${i}`, displayName: `Q${i}`, runsOn: 'cloud' });
+      r.db.prepare(`UPDATE proxies SET state='enrolled' WHERE id=?`).run(p.id);
+      r.db.prepare(`INSERT INTO proxy_keys (id, proxy_id, public_key, fingerprint, created_at, confirmed_at) VALUES (?, ?, ?, 'fp', 1, 1)`).run(`key_q${i}`, p.id, `pk${i}`);
+      ids.push(p.id);
+    }
+    const info = (paused: boolean) => ({ ...makeProxyInfo({ now: r.clock.now() }), commands: { enabled: true, paused, pauseReason: paused ? 'local' : null, allow: ['tokens.apply'], seenWindow: 1000 }, tokens: { revision: 3, client: 1, admin: 0, blocked: [] }, configRevision: 'sha256:' + 'b'.repeat(64) });
+    for (const id of ids) {
+      store.hello(id, 'v2026.10.06.1', r.clock.now(), ['status', 'commands']);
+      store.heartbeat(id, { summary: makeSummary({ cameras: 4, now: r.clock.now() }), proxy: info(false), truncated: false }, r.clock.now());
+    }
+    store.flush(true);
+    const start = readEpoch(r.db);
+    for (let t = 0; t < 3600; t += 10) {
+      r.clock.advance(10_000);
+      const paused = Math.floor(t / 300) % 2 === 1;
+      if (t % 30 === 0) for (const id of ids) store.heartbeat(id, { summary: makeSummary({ cameras: 4, now: r.clock.now() }), proxy: info(paused), truncated: false }, r.clock.now());
+      store.tick();
+    }
+    expect(readEpoch(r.db) - start).toBeLessThanOrEqual(9);
+    expect(store.view(ids[0]).commands).toMatch(/^(allowed|paused)$/);
+  });
+
   it('an idle database: exactly one backup heartbeat write per sync interval', () => {
     const r = makeRegistry(dir);
     const hb = new BackupHeartbeat(r.db, r.clock, 3600_000);

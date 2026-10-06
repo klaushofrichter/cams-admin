@@ -8,7 +8,7 @@ import { MIGRATIONS } from '../server/db/migrations';
 import { toKey } from '../server/registry';
 import { tmpDir } from './helpers/tmp';
 
-const TABLES = ['accounts', 'account_users', 'proxies', 'proxy_keys', 'enrollment_codes', 'cameras', 'sims', 'proxy_status', 'status_events', 'audit_log', 'sessions', 'jobs', 'meta'];
+const TABLES = ['accounts', 'account_users', 'proxies', 'proxy_keys', 'enrollment_codes', 'cameras', 'sims', 'proxy_status', 'status_events', 'audit_log', 'sessions', 'jobs', 'meta', 'commands', 'proxy_tokens', 'proxy_token_state'];
 
 function seed(db: DatabaseSync) {
   db.exec(`INSERT INTO accounts (id,name,display_name,created_at,updated_at) VALUES ('acc_a','alpha','A',1,1),('acc_b','beta','B',1,1);
@@ -142,6 +142,40 @@ describe('database', () => {
       { id: 'key_new', confirmed_at: null, last_seen_at: null, revoked: 0, revoked_reason: null },
       { id: 'key_old', confirmed_at: 1000, last_seen_at: 1000, revoked: 1, revoked_reason: 're-enrolled' },
     ]);
+  });
+
+  it('migration 4 (P2): a version-3 database gains commands, proxy_tokens, proxy_token_state with its rows intact', () => {
+    expect(LATEST_VERSION).toBe(4);
+    const f = join(dir, 'm4.db');
+    const raw = new DatabaseSync(f);
+    for (let i = 0; i < 3; i++) MIGRATIONS[i](raw);
+    raw.exec('PRAGMA user_version = 3');
+    seed(raw);
+    raw.close();
+    const db = openDb(f);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(4);
+    expect(db.prepare('SELECT id FROM proxies ORDER BY id').all()).toEqual([{ id: 'prx_a' }, { id: 'prx_b' }]);
+    expect(db.prepare('SELECT count(*) n FROM commands').get()).toEqual({ n: 0 });
+  });
+
+  it('proxy_tokens: hash shape and unique; same-account proxy; a proxy delete removes its tokens and token state and keeps its commands', () => {
+    const db = openDb(join(dir, 'tok.db'));
+    seed(db);
+    const H = (c: string) => 'sha256:' + c.repeat(64);
+    const tok = (id: string, hash: string, acc = 'acc_a', prx = 'prx_a') => db.prepare(`INSERT INTO proxy_tokens (id,account_id,proxy_id,kind,holder,label,hash,state,issued_revision,created_at,created_by) VALUES (?,?,?,'client','manual','l',?,'pending',1,1,'a@example.com')`).run(id, acc, prx, hash);
+    tok('tok_1', H('a'));
+    expect(() => tok('tok_2', H('a'))).toThrow(/UNIQUE/);
+    expect(() => tok('tok_3', 'sha256:short')).toThrow(/CHECK/);
+    expect(() => tok('tok_4', 'md5:' + 'a'.repeat(67))).toThrow(/CHECK/);
+    expect(() => tok('tok_5', H('b'), 'acc_b', 'prx_a')).toThrow(/FOREIGN KEY/);
+    db.prepare(`INSERT INTO proxy_token_state (proxy_id, revision) VALUES ('prx_a', 3)`).run();
+    const cmd = (id: string, state: string) => db.prepare(`INSERT INTO commands (id,account_id,proxy_id,actor,command,args,state,created_at) VALUES (?,'acc_a','prx_a','a@example.com','tokens.apply','{}',?,1)`).run(id, state);
+    cmd('cmd_1', 'done');
+    expect(() => cmd('cmd_2', 'lost')).toThrow(/CHECK/);
+    db.prepare(`DELETE FROM proxies WHERE id = 'prx_a'`).run();
+    expect(db.prepare('SELECT count(*) n FROM proxy_tokens').get()).toEqual({ n: 0 });
+    expect(db.prepare('SELECT count(*) n FROM proxy_token_state').get()).toEqual({ n: 0 });
+    expect(db.prepare(`SELECT proxy_id FROM commands WHERE id = 'cmd_1'`).get()).toEqual({ proxy_id: null });
   });
 
   it('refuses sim details for a camera that is not a sim', () => {

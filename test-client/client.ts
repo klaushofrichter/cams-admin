@@ -1,5 +1,6 @@
 import { EventEmitter } from 'events';
-import { generateKeyPair, privateFromB64, publicFromB64, sign, signedText, verify } from '../server/crypto/ed25519';
+import { generateKeyPair, privateFromB64, publicFromB64, sign, signEnvelope, signedText, verify } from '../server/crypto/ed25519';
+import { refCheck } from './commands';
 import { normaliseCode, ulid } from '../server/ids';
 import { makeProxyInfo } from './summaries';
 
@@ -52,12 +53,34 @@ export interface ClientOptions {
   random?: () => number;
   version?: string;
   clockOffsetMs?: number; // a proxy clock that is off (tests)
+  // P2: answer commands (the reference check of ./commands.ts), apply
+  // tokens.apply to an in-memory set, announce the commands capability.
+  // Without it the client is a P1 proxy.
+  commands?: { allow: string[]; paused?: boolean; enabled?: boolean };
 }
+
+export interface ManagedToken { id: string; kind: 'client' | 'admin'; label: string; retireAt: number | null }
+type DoneBody = { status: string; code?: string; result?: Record<string, unknown> };
 
 export class ProxyClient extends EventEmitter {
   state: ClientState = 'idle';
   stats = { sent: 0, acked: 0, reconnects: 0, connects: 0, ackLatencyMs: [] as number[], errors: 0 };
   debugDropAcks = false;
+  // P2 (with the commands option): what the proxy holds and saw.
+  commands: { allow: string[]; paused?: boolean; enabled?: boolean } | null;
+  tokens = new Map<string, ManagedToken>(); // hash → token
+  tokensRevision = 0;
+  receivedCommands: { id: string; ts: number; body: Record<string, any>; [k: string]: unknown }[] = [];
+  refuseNext: { code: string; retryAfterS?: number } | null = null; // tests: the proxy's own refusal (e.g. its rate limit)
+  dropCommands = 0; // ignore the next n commands entirely (tests: a lost command)
+  dropAfterReceived = 0; // run the next n commands, send received, then cut the socket before done (tests)
+  connId: string | null = null;
+  debugHoldEvents = false; // never send command.done events (tests: only the re-sent cmdId can finalise)
+  executed: string[] = []; // cmdIds that ran (once each, whatever was re-sent)
+  private journal = new Map<string, DoneBody>();
+  private undelivered: string[] = []; // cmdIds whose done never went out (sent as events after the next welcome)
+  private seen = new Set<string>();
+  private serverOffset = 0;
   private ws: WebSocket | null = null;
   private seqOut = 0;
   private seqIn = 0;
@@ -75,6 +98,7 @@ export class ProxyClient extends EventEmitter {
 
   constructor(private o: ClientOptions) {
     super();
+    this.commands = o.commands ? { paused: false, ...o.commands } : null;
   }
 
   private log(event: string, detail?: object): void {
@@ -93,8 +117,22 @@ export class ProxyClient extends EventEmitter {
     this.connect();
   }
 
+  // Tests: no reconnect until release() (a proxy that stays away for a while).
+  holdReconnect = false;
+  private held: (() => void) | null = null;
+  release(): void {
+    this.holdReconnect = false;
+    const h = this.held;
+    this.held = null;
+    h?.();
+  }
+
   private schedule(reason: string, delayMs: number): void {
     if (this.stopping) return;
+    if (this.holdReconnect) {
+      this.held = () => this.schedule(reason, delayMs);
+      return;
+    }
     this.emit('schedule', { reason, delayMs });
     if (this.timer) clearTimeout(this.timer);
     this.timer = setTimeout(() => this.connect(), delayMs);
@@ -149,7 +187,7 @@ export class ProxyClient extends EventEmitter {
     return id;
   }
 
-  private onMessage(m: { v: number; type: string; seq: number; id: string; re?: string; sig?: string; body: Record<string, unknown> }): void {
+  private onMessage(m: { v: number; type: string; seq: number; id: string; ts: number; re?: string; sig?: string; body: Record<string, unknown> }): void {
     if (m.v !== 1) throw new Error(`envelope v${m.v}`);
     if (m.seq !== this.seqIn + 1) throw new Error('seq');
     this.seqIn = m.seq;
@@ -172,7 +210,10 @@ export class ProxyClient extends EventEmitter {
         }
         const ts = this.now();
         const k = this.o.key;
-        this.send('hello', { proxyId: k.proxyId, keyId: k.keyId, connId: b.connId, nonce: b.nonce, ts, version: this.o.version ?? 'test-client', capabilities: ['status'] }, {
+        this.connId = b.connId;
+        this.seen = new Set();
+        this.serverOffset = b.serverTime - this.now();
+        this.send('hello', { proxyId: k.proxyId, keyId: k.keyId, connId: b.connId, nonce: b.nonce, ts, version: this.o.version ?? 'test-client', capabilities: this.commands ? ['status', 'commands'] : ['status'] }, {
           sig: sign(privateFromB64(k.privateKey), signedText.hello(b.connId, b.nonce, k.proxyId, k.keyId, ts)),
         });
         return;
@@ -183,6 +224,11 @@ export class ProxyClient extends EventEmitter {
         this.log('admin_connected');
         this.nextInS = (m.body.heartbeatS as number) ?? 30;
         void this.heartbeat();
+        // A done that never went out on its own connection: an event now.
+        for (const cmdId of this.debugHoldEvents ? [] : this.undelivered.splice(0)) {
+          const d = this.journal.get(cmdId);
+          if (d) this.sendSigned('event', { proxyId: this.o.key.proxyId, connId: this.connId, kind: 'command.done', cmdId, phase: 'done', ...d });
+        }
         return;
       case 'ack': {
         if (this.debugDropAcks) return;
@@ -201,10 +247,80 @@ export class ProxyClient extends EventEmitter {
       case 'bye':
         this.emit('bye', m.body);
         return;
-      default:
-        // P3 commands and anything unknown: not supported here.
-        this.send('error', { code: 'unsupported_type', message: `type ${m.type} is not supported` }, { re: m.id });
+      case 'command':
+        if (this.commands) return this.onCommand(m);
+        break;
     }
+    // P3 commands and anything unknown: not supported here.
+    this.send('error', { code: 'unsupported_type', message: `type ${m.type} is not supported` }, { re: m.id });
+  }
+
+  private sendSigned(type: 'result' | 'event', body: Record<string, unknown>, extra: Record<string, unknown> = {}): void {
+    this.seqOut++;
+    const m: Record<string, unknown> = { v: 1, type, id: ulid(Date.now()), seq: this.seqOut, ts: this.now(), ...extra, body };
+    m.sig = signEnvelope(privateFromB64(this.o.key.privateKey), m);
+    this.ws?.send(JSON.stringify(m));
+  }
+
+  // The proxy side of a command (P2 contract, check order 1–12).
+  private onCommand(m: { id: string; ts: number; body: Record<string, any> }): void {
+    this.receivedCommands.push(m);
+    if (this.dropCommands > 0) {
+      this.dropCommands--;
+      return;
+    }
+    const k = this.o.key;
+    const b = m.body;
+    const verdict = refCheck(m, {
+      now: this.now() + this.serverOffset, proxyId: k.proxyId, connId: this.connId ?? '', serverKeys: k.serverKeys,
+      allow: this.commands!.allow, paused: this.commands!.paused === true, seen: this.seen, journal: this.journal,
+      enabled: this.commands!.enabled !== false, tokens: [...this.tokens].map(([hash, t]) => ({ ...t, hash })),
+    });
+    const head = { proxyId: k.proxyId, connId: this.connId, cmdId: b.cmdId };
+    const done = (d: DoneBody, extra: object = {}) => this.sendSigned('result', { ...head, phase: 'done', ...d, ...extra }, { re: m.id });
+    switch (verdict.kind) {
+      case 'bad_message':
+        this.send('error', { code: 'bad_message', message: 'no readable cmdId' }, { re: m.id });
+        return;
+      case 'nack':
+        return done({ status: 'refused', code: verdict.code });
+      case 'duplicate':
+        return done(this.journal.get(b.cmdId)!, { duplicate: true });
+    }
+    if (this.refuseNext) {
+      const r = this.refuseNext;
+      this.refuseNext = null;
+      return done({ status: 'refused', code: r.code }, r.retryAfterS !== undefined ? { retryAfterS: r.retryAfterS } : {});
+    }
+    this.sendSigned('result', { ...head, phase: 'received' }, { re: m.id });
+    this.executed.push(b.cmdId);
+    const args = b.args as { revision: number; tokens: (ManagedToken & { hash: string })[] };
+    const stale = args.revision <= this.tokensRevision;
+    if (!stale) {
+      this.tokens = new Map(args.tokens.map((t) => [t.hash, { id: t.id, kind: t.kind, label: t.label, retireAt: t.retireAt }]));
+      this.tokensRevision = args.revision;
+    }
+    const d: DoneBody = { status: 'ok', result: { revision: this.tokensRevision, applied: !stale, stale, ...this.tokenCounts() } };
+    this.journal.set(b.cmdId, d);
+    if (this.dropAfterReceived > 0) {
+      this.dropAfterReceived--;
+      this.undelivered.push(b.cmdId);
+      this.closeSocket();
+      return;
+    }
+    done(d);
+  }
+
+  private tokenCounts(): { client: number; admin: number; blocked: string[] } {
+    const now = this.now() + this.serverOffset;
+    const live = [...this.tokens.values()].filter((t) => t.retireAt === null || t.retireAt > now);
+    return { client: live.filter((t) => t.kind === 'client').length, admin: live.filter((t) => t.kind === 'admin').length, blocked: [] };
+  }
+
+  // Would this proxy accept the token now (a managed token, not past retireAt)?
+  accepts(hash: string): boolean {
+    const t = this.tokens.get(hash);
+    return !!t && (t.retireAt === null || t.retireAt > this.now() + this.serverOffset);
   }
 
   private rejectNext = false;
@@ -254,7 +370,13 @@ export class ProxyClient extends EventEmitter {
     }
     try {
       const summary = await this.o.summary();
-      const body = { summary, proxy: this.o.proxyInfo ? this.o.proxyInfo() : makeProxyInfo({ now: Date.now() }), truncated: false };
+      const info = (this.o.proxyInfo ? this.o.proxyInfo() : makeProxyInfo({ now: Date.now() })) as Record<string, unknown>;
+      const proxy = this.commands ? {
+        ...info,
+        commands: { enabled: this.commands.enabled !== false, paused: this.commands.paused === true, pauseReason: null, allow: [...this.commands.allow], seenWindow: 1000 },
+        tokens: { revision: this.tokensRevision, ...this.tokenCounts() },
+      } : info;
+      const body = { summary, proxy, truncated: false };
       const id = this.send('heartbeat', body);
       this.unacked.set(id, Date.now());
       this.stats.sent++;

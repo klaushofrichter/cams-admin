@@ -9,6 +9,7 @@ export const AUDIT_ACTIONS = [
   'proxy-create', 'proxy-update', 'proxy-delete', 'proxy-block', 'camera-create', 'camera-update', 'camera-delete', 'camera-adopt', 'sim-update', 'sim-delete',
   'enrollment-code-create', 'enrollment-code-cancel', 'proxy-enrolled', 'key-confirmed', 'enroll-refused', 'key-revoke', 'proxy-auth-refused',
   'backup-snapshot', 'backup-now', 'restore-detected',
+  'command-create', 'command-result', 'command-expired', 'token-issue', 'token-retire', 'token-revoke',
   'audit-throttled',
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
@@ -92,7 +93,12 @@ export class Audit {
   }
 
   prune(): void {
-    tx(this.db, () => this.db.prepare('DELETE FROM audit_log WHERE at < ?').run(this.clock.now() - KEEP_MS));
+    const before = this.clock.now() - KEEP_MS;
+    tx(this.db, () => {
+      this.db.prepare('DELETE FROM audit_log WHERE at < ?').run(before);
+      // The command history follows the audit log's 400 days (open commands stay).
+      this.db.prepare(`DELETE FROM commands WHERE created_at < ? AND state NOT IN ('queued','sent','received')`).run(before);
+    });
   }
 }
 

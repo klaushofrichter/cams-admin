@@ -18,7 +18,8 @@ describe('audit log', () => {
   it('has the closed list of spec §11.4', () => {
     expect(AUDIT_ACTIONS).toContain('proxy-enrolled');
     expect(AUDIT_ACTIONS).toContain('audit-throttled');
-    expect(AUDIT_ACTIONS).toHaveLength(31);
+    for (const a of ['command-create', 'command-result', 'command-expired', 'token-issue', 'token-retire', 'token-revoke']) expect(AUDIT_ACTIONS).toContain(a);
+    expect(AUDIT_ACTIONS).toHaveLength(37);
   });
 
   it('refuses an unknown action', () => {
@@ -68,5 +69,19 @@ describe('audit log', () => {
     audit.write({ ...base, action: 'signout' });
     audit.prune();
     expect(audit.list({}).items.map((r) => r.action)).toEqual(['signout']);
+  });
+
+  it('prunes finished commands older than 400 days with the audit log; open ones stay', () => {
+    const { db, audit, clock } = setup();
+    db.exec(`INSERT INTO accounts (id,name,display_name,created_at,updated_at) VALUES ('acc_a','alpha','A',1,1)`);
+    const t0 = clock.now();
+    const cmd = (id: string, state: string) => db.prepare(`INSERT INTO commands (id,account_id,proxy_id,actor,command,args,state,created_at) VALUES (?,'acc_a',NULL,'a','tokens.apply','{}',?,?)`).run(id, state, t0);
+    cmd('cmd_done', 'done');
+    cmd('cmd_queued', 'queued');
+    clock.advance(401 * 86400_000);
+    cmd('cmd_new', 'done');
+    db.prepare('UPDATE commands SET created_at = ? WHERE id = ?').run(clock.now(), 'cmd_new');
+    audit.prune();
+    expect(db.prepare('SELECT id FROM commands ORDER BY id').all()).toEqual([{ id: 'cmd_new' }, { id: 'cmd_queued' }]);
   });
 });

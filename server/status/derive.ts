@@ -5,7 +5,13 @@ export type ProxyState = 'pending' | 'never-connected' | 'online' | 'offline' | 
 export type PinState = 'match' | 'mismatch' | 'hint' | 'none';
 
 export interface ReportedCamera { ref: string; online: boolean; name?: string; model?: string | null }
-export interface Reported { cameras: ReportedCamera[]; caFingerprint: string[]; site?: string | null; publicUrl?: string | null; startedAt?: number | null; uptimeS?: number | null; configSchema?: number | null; pin?: PinState }
+export interface CommandsInfo { enabled: boolean; paused: boolean; pauseReason: string | null; allow: string[]; seenWindow: number }
+export interface TokensInfo { revision: number; client: number; admin: number; blocked: string[] }
+export interface Reported {
+  cameras: ReportedCamera[]; caFingerprint: string[]; site?: string | null; publicUrl?: string | null; startedAt?: number | null; uptimeS?: number | null; configSchema?: number | null; pin?: PinState;
+  // P2: the hello's capabilities and the heartbeat's command policy, token and config revisions.
+  capabilities?: string[]; commands?: CommandsInfo | null; tokens?: TokensInfo | null; configRevision?: string | null;
+}
 
 export interface StatusRow {
   proxyId: string; connected: boolean; connectedSince: number | null; lastHelloAt: number | null; lastHeartbeatAt: number | null;
@@ -61,4 +67,14 @@ export function reconcile(
     })),
     registeredNotReported: [...regIds].filter((id) => !repIds.has(id)),
   };
+}
+
+// P2: what cams-admin may send this proxy, as the proxy reports it (the
+// proxy decides; commands are off by default on every proxy).
+export type CommandsPolicy = 'unsupported' | 'off' | 'paused' | 'none-allowed' | 'allowed';
+export function deriveCommands(rep: Reported | null | undefined): CommandsPolicy {
+  if (!rep?.capabilities?.includes('commands') || !rep.commands) return 'unsupported';
+  if (!rep.commands.enabled) return 'off';
+  if (rep.commands.paused) return 'paused';
+  return rep.commands.allow.length === 0 ? 'none-allowed' : 'allowed';
 }

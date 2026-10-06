@@ -6,12 +6,13 @@
 // camera), keeps two dashboard SSE streams open, samples the server, and
 // checks the pass criteria. Exit code 0 = pass.
 import { spawn } from 'child_process';
-import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { chmodSync, existsSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { createServer } from 'net';
 import { enroll, ProxyClient } from './client';
 import { makeSummary } from './summaries';
+import { heapTrend, HEAP_GROWTH_LIMIT_PCT } from './trend';
 import { generateKeyPair } from '../server/crypto/ed25519';
 
 const args = process.argv.slice(2);
@@ -22,6 +23,10 @@ const CAMERAS = Number(opt('cameras', '4'));
 const DURATION = dur(opt('duration', '60m'));
 const HB = Number(opt('heartbeat', '30'));
 const REPORT = opt('report', '');
+// --snapshots DIR: V8 heap snapshots of the server after the warm-up and at the end, kept in DIR.
+const SNAPSHOTS = opt('snapshots', '');
+// --sample 60s: the sampling interval (default: duration / 60, 2 s – 60 s).
+const SAMPLE = args.includes('--sample') ? dur(opt('sample', '60s')) : 0;
 const EMAIL = 'load@example.com';
 const say = (m: string) => process.stdout.write(`load: ${m}\n`);
 
@@ -43,7 +48,8 @@ async function main() {
     SERVER_SIGNING_KEY_FILE: keyFile, ALLOWED_EMAILS: EMAIL, HEARTBEAT_S: String(HB), OFFLINE_AFTER_S: String(HB * 3),
     LIMIT_ENROLL_GLOBAL: '100000', LIMIT_WRITES_PER_SESSION: '100000', TICK_MS: '1000',
   };
-  const srv = spawn(process.execPath, [serverJs], { env, stdio: ['ignore', 'inherit', 'inherit'] });
+  // --expose-gc: the samples read the live heap after a full GC (/dev/metrics?gc=1).
+  const srv = spawn(process.execPath, ['--expose-gc', serverJs], { env, stdio: ['ignore', 'inherit', 'inherit'] });
   let stopping = false;
   srv.on('exit', (c) => { if (!stopping) { say(`server exited (${c})`); process.exit(1); } });
   for (let i = 0; i < 100; i++) { try { if ((await fetch(`${url}/health`)).ok) break; } catch { /* starting */ } await new Promise((r) => setTimeout(r, 100)); }
@@ -114,17 +120,25 @@ async function main() {
       }
     });
   }
-  const samples: { t: number; rss: number; lagP99: number; db: number; writes: number }[] = [];
+  const samples: { t: number; rss: number; heap: number | null; lagP99: number; db: number; writes: number }[] = [];
   const sample = async () => {
-    const m = await api('GET', '/dev/metrics');
-    samples.push({ t: Date.now() - t0, rss: m.rssBytes, lagP99: m.loopLagP99Ms, db: m.dbBytes, writes: m.writeEpoch });
+    const m = await api('GET', '/dev/metrics?gc=1');
+    samples.push({ t: Date.now() - t0, rss: m.rssBytes, heap: m.heapAfterGcBytes, lagP99: m.loopLagP99Ms, db: m.dbBytes, writes: m.writeEpoch });
   };
-  const sampler = setInterval(() => void sample().catch(() => undefined), Math.max(2000, Math.min(60_000, DURATION / 60)));
+  const sampler = setInterval(() => void sample().catch(() => undefined), SAMPLE || Math.max(2000, Math.min(60_000, DURATION / 60)));
+  const snapshot = async (name: string) => {
+    if (!SNAPSHOTS) return;
+    const { file } = await api('POST', '/dev/heap-snapshot', {});
+    renameSync(file, join(SNAPSHOTS, `${name}.heapsnapshot`));
+    say(`heap snapshot ${name}`);
+  };
+  if (SNAPSHOTS) setTimeout(() => void snapshot('start').catch((e) => say(`snapshot failed: ${e}`)), DURATION / 4);
   const progress = setInterval(() => say(`${Math.round((Date.now() - t0) / 1000)} s: ${clients.filter((x) => x.c.state === 'connected').length}/${clients.length} connected, ${clients.reduce((n, x) => n + x.c.stats.acked, 0)} acks`), Math.max(10_000, DURATION / 12));
   await new Promise((r) => setTimeout(r, DURATION));
   clearInterval(sampler);
   clearInterval(progress);
   await sample();
+  await snapshot('end');
   // No new camera changes; each one reaches the server with the proxy's next
   // heartbeat (up to one interval + jitter later), then both SSE streams.
   // Wait until every change is seen, at most 2 intervals + 3 s after the last.
@@ -145,14 +159,11 @@ async function main() {
   const startedAt = Math.min(HB * 1000, 5000) + 3000;
   const offlineSeen = streams[0].filter((e) => e.at - t0 > startedAt && e.state !== 'online').length;
   const missedSse = missed();
-  // Flat = the mean of the last quarter's samples against the second
-  // quarter's (single samples swing with GC: an hour's run ended 71.7 →
-  // 72.2 MiB yet two single samples differed by 40 %).
-  const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / Math.max(1, xs.length);
-  const q2 = samples.filter((x) => x.t >= DURATION / 4 && x.t < DURATION / 2).map((x) => x.rss);
-  const q4 = samples.filter((x) => x.t >= (DURATION * 3) / 4).map((x) => x.rss);
+  // A leak shows in the live heap after a full GC, not in RSS (which swung
+  // ±10–15 % between runs of the same build): its Theil–Sen trend after the
+  // warm-up quarter, as growth over the measured span (test-client/trend.ts).
   const rssMax = Math.max(...samples.map((x) => x.rss));
-  const rssGrowth = q2.length && q4.length ? (mean(q4) - mean(q2)) / mean(q2) : 0;
+  const heap = heapTrend(samples, DURATION);
   const lagP99 = Math.max(...samples.slice(1).map((x) => x.lagP99));
   const db = samples[samples.length - 1].db;
   const writes = samples[samples.length - 1].writes - samples[0].writes;
@@ -164,14 +175,14 @@ async function main() {
     ['no proxy shown offline while sending', offlineSeen === 0 && online === PROXIES, `${offlineSeen} non-online events; ${online}/${PROXIES} online at the end`],
     ['p99 heartbeat→ack under 50 ms', pct(lat, 99) < 50, `p50 ${pct(lat, 50)} ms, p99 ${pct(lat, 99)} ms, max ${Math.max(...lat)} ms`],
     ['server RSS under 200 MiB', rssMax < 200 * MiB, `max ${(rssMax / MiB).toFixed(1)} MiB`],
-    ['RSS flat (last quarter vs second quarter, means, < 10 % growth)', rssGrowth < 0.1, `${(rssGrowth * 100).toFixed(1)} %`],
+    [`heap after GC flat (Theil–Sen trend after the warm-up < ${HEAP_GROWTH_LIMIT_PCT} %)`, heap.ok, heap.detail],
     ['database under 50 MiB', db < 50 * MiB, `${(db / MiB).toFixed(2)} MiB`],
     ['event loop lag p99 under 20 ms', lagP99 < 20, `${lagP99.toFixed(1)} ms`],
     ['SSE: both dashboards saw every camera change', missedSse.every((m) => m === 0), `${changes.length} changes; missed ${missedSse.join(', ')}`],
   ];
   const report = {
     proxies: PROXIES, cameras: CAMERAS, durationS: DURATION / 1000, heartbeatS: HB, heartbeatsSent: sent, acked, ackLatencyMs: { p50: pct(lat, 50), p99: pct(lat, 99), max: Math.max(...lat) },
-    rssMiB: { start: samples[0].rss / MiB, max: rssMax / MiB, end: samples[samples.length - 1].rss / MiB, growthPct: rssGrowth * 100 }, samples, loopLagP99Ms: lagP99, dbMiB: db / MiB, dbWriteTransactions: writes,
+    rssMiB: { start: samples[0].rss / MiB, max: rssMax / MiB, end: samples[samples.length - 1].rss / MiB }, heapTrend: heap, samples, loopLagP99Ms: lagP99, dbMiB: db / MiB, dbWriteTransactions: writes,
     cameraChanges: changes.length, sseEvents: streams.map((s) => s.length), checks: checks.map(([name, ok, detail]) => ({ name, ok, detail })),
   };
   for (const [name, ok, detail] of checks) say(`${ok ? 'PASS' : 'FAIL'}  ${name}: ${detail}`);

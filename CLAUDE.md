@@ -22,6 +22,13 @@ cam-sim). Spec: `docs/superpowers/specs/2026-10-06-cams-admin-phase1-design.md`.
 - **The protocol contract** is `contract/` (`npm run contract:make` after
   changing `contract/build.ts`). A new summary field goes into the contract
   first; cam-proxy vendors it.
+- **Commands:** the contract's check order (contract/README.md) is
+  normative; a change to a command, a result or an event goes into
+  `contract/` first, and `scripts/contract/cam-proxy-check.sh` must stay
+  green against cam-proxy `main`.
+- **Tokens are shown once and stored only as SHA-256 hashes** (8 hex digits
+  in views and audit details). Never log, store, audit or test with a real
+  token.
 - **e2e lock:** before any Playwright run in a shared scratchpad, take the
   lock the coordinator names (`mkdir …/e2e.lock`, retry every 30 s), `rmdir`
   after. Never kill processes by name pattern: stop only PIDs you started.
