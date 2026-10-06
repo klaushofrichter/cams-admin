@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { WebSocketServer } from 'ws';
+import { WebSocketServer, type WebSocket as WsSocket } from 'ws';
 import { join } from 'path';
 import { statSync } from 'fs';
 import { createServer } from 'http';
@@ -12,6 +12,8 @@ import { makeSummary } from '../test-client/summaries';
 import { Enrollment } from '../server/enroll/codes';
 import { enrollRouter } from '../server/enroll/route';
 import express from 'express';
+import V from '../contract/v1/vectors.json';
+import { keyFromSeed, privateFromB64, publicFromB64, sign, signEnvelope, signedText, verifyEnvelope } from '../server/crypto/ed25519';
 
 const cleanups: (() => unknown)[] = [];
 afterEach(async () => { while (cleanups.length) await cleanups.pop()!(); });
@@ -147,5 +149,87 @@ describe('the protocol test client', () => {
     await until(() => c.stats.acked >= 1);
     await c.stop('restart');
     await until(() => h.status.view(proxyId).state === 'stopped');
+  });
+});
+
+describe('the test client as a P2 proxy (commands option)', () => {
+  it('announces commands, reports policy and tokens, answers a signed tokens.apply (received, done, duplicate, nacks)', async () => {
+    const serverPriv = privateFromB64(keyFromSeed(V.keys.server.seedHex).privateKeyPkcs8B64);
+    const wss = new WebSocketServer({ port: 0, host: '127.0.0.1' });
+    cleanups.push(() => new Promise((r) => wss.close(r)));
+    await new Promise((r) => wss.on('listening', r));
+    const port = (wss.address() as { port: number }).port;
+    const got: any[] = [];
+    const waiters: (() => void)[] = [];
+    let sock: WsSocket | null = null;
+    let seq = 0;
+    const CON = 'con_0123456789ABCDEFGHJK';
+    const PRX = 'prx_0123456789ABCDEFGHJK';
+    const send = (m: Record<string, unknown>) => sock!.send(JSON.stringify(m));
+    const env = (type: string, body: object, extra: object = {}) => { seq++; return { v: 1, type, id: '01K6' + String(Date.now()).padStart(15, '0') + String(seq).padStart(7, '0'), seq, ts: Date.now(), ...extra, body }; };
+    wss.on('connection', (ws) => {
+      sock = ws;
+      seq = 0;
+      const t = Date.now();
+      const nonce = 'q83vEjRWeJCrze8SNFZ4kKvN7xI0VniQq83vEjRWeJA';
+      send(env('challenge', { connId: CON, nonce, serverTime: t }, { sig: sign(serverPriv, signedText.challenge(CON, nonce, t)) }));
+      ws.on('message', (d) => {
+        const m = JSON.parse(String(d));
+        got.push(m);
+        if (m.type === 'hello') send(env('welcome', { heartbeatS: 30, offlineAfterS: 90, maxMessageBytes: 262144, serverTime: Date.now() }));
+        waiters.splice(0).forEach((w) => w());
+      });
+    });
+    const next = async (pred: (m: any) => boolean) => {
+      const t = Date.now();
+      for (;;) {
+        const i = got.findIndex(pred);
+        if (i >= 0) return got.splice(i, 1)[0];
+        if (Date.now() - t > 3000) throw new Error('timeout');
+        await new Promise<void>((r) => { waiters.push(r); setTimeout(r, 100); });
+      }
+    };
+    const pk = keyFromSeed(V.keys.proxy.seedHex);
+    const key: KeyFile = { v: 1, url: `http://127.0.0.1:${port}`, connectUrl: `ws://127.0.0.1:${port}/`, proxyId: PRX, keyId: 'key_0123456789ABCDEFGHJK', privateKey: pk.privateKeyPkcs8B64, publicKey: pk.publicKeySpkiB64, serverKeys: [V.keys.server.publicKey], account: 'home', enrolledAt: 0 };
+    const c = client(key, { heartbeatS: 30, commands: { allow: ['tokens.apply'] } });
+    c.start();
+    expect((await next((m) => m.type === 'hello')).body.capabilities).toEqual(['status', 'commands']);
+    const hb = await next((m) => m.type === 'heartbeat');
+    expect(hb.body.proxy.commands).toEqual({ enabled: true, paused: false, pauseReason: null, allow: ['tokens.apply'], seenWindow: 1000 });
+    expect(hb.body.proxy.tokens).toEqual({ revision: 0, client: 0, admin: 0, blocked: [] });
+    const proxyPub = publicFromB64(pk.publicKeySpkiB64);
+    const args = { v: 1, revision: 3, tokens: [{ id: 'tok_0123456789ABCDEFGHJK', kind: 'client', hash: 'sha256:' + 'c'.repeat(64), label: 'cams', retireAt: null }] };
+    const command = (cmdId: string, a: object = args) => { const m = env('command', { proxyId: PRX, connId: CON, cmdId, exp: Date.now() + 60_000, actor: 'admin@example.com', command: 'tokens.apply', args: a }); return { ...m, sig: signEnvelope(serverPriv, m) }; };
+    const CMD = 'cmd_0123456789ABCDEFGHJK';
+    const first = command(CMD);
+    send(first);
+    const rec = await next((m) => m.type === 'result' && m.body.phase === 'received');
+    expect(rec.re).toBe(first.id);
+    const done = await next((m) => m.type === 'result' && m.body.phase === 'done');
+    expect(done.body).toMatchObject({ proxyId: PRX, connId: CON, cmdId: CMD, status: 'ok', result: { revision: 3, applied: true, stale: false, client: 1, admin: 0, blocked: [] } });
+    expect(verifyEnvelope(proxyPub, done)).toBe(true);
+    expect(c.tokens.has('sha256:' + 'c'.repeat(64))).toBe(true);
+    expect(c.receivedCommands).toHaveLength(1);
+    // The same cmdId in a new envelope: the stored answer, duplicate.
+    send(command(CMD));
+    expect((await next((m) => m.type === 'result' && m.body.phase === 'done')).body).toMatchObject({ status: 'ok', duplicate: true, result: { revision: 3 } });
+    // A lower revision: stale, not applied.
+    send(command('cmd_1123456789ABCDEFGHJK', { ...args, revision: 2, tokens: [] }));
+    expect((await next((m) => m.type === 'result' && m.body.phase === 'done')).body).toMatchObject({ status: 'ok', result: { revision: 3, applied: false, stale: true } });
+    expect(c.tokens.size).toBe(1);
+    // Paused: refused.
+    c.commands!.paused = true;
+    send(command('cmd_2123456789ABCDEFGHJK'));
+    expect((await next((m) => m.type === 'result' && m.body.phase === 'done')).body).toMatchObject({ status: 'refused', code: 'paused' });
+    // A command signed by another key: bad_signature.
+    const other = privateFromB64(keyFromSeed(V.keys.other.seedHex).privateKeyPkcs8B64);
+    const forged = env('command', { proxyId: PRX, connId: CON, cmdId: 'cmd_3123456789ABCDEFGHJK', exp: Date.now() + 60_000, actor: 'x', command: 'tokens.apply', args });
+    send({ ...forged, sig: signEnvelope(other, forged) });
+    expect((await next((m) => m.type === 'result' && m.body.phase === 'done')).body).toMatchObject({ status: 'refused', code: 'bad_signature' });
+  });
+
+  it('without the option the client is a P1 proxy: status only, commands answered unsupported_type', async () => {
+    const c = new ProxyClient({ key: { serverKeys: [] } as unknown as KeyFile, summary: () => ({}) });
+    expect(c.commands).toBeNull();
   });
 });

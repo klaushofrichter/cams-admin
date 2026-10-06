@@ -17,7 +17,7 @@ const { input, NOW } = require(join(root, 'test/helpers/health-input.ts'));
 
 const strict = join(__dirname, '../../contract/v1/strict');
 const ajv = new Ajv2020({ strict: true, allErrors: true });
-for (const f of readdirSync(strict)) ajv.addSchema(JSON.parse(readFileSync(join(strict, f), 'utf8')));
+for (const f of readdirSync(strict).filter((x) => x.endsWith('.json'))) ajv.addSchema(JSON.parse(readFileSync(join(strict, f), 'utf8')));
 const HB = 'https://cams-admin.skylar.technology/contract/v1/strict/heartbeat.schema.json';
 
 const one = input();

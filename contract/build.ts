@@ -101,11 +101,46 @@ export function buildSchemas(mode: Mode): Record<string, S> {
   };
   const nonce: S = { type: 'string', pattern: '^[A-Za-z0-9_-]{43}$' };
   const summaryRef = (name: string): S => (strict ? { $ref: `${name}.schema.json` } : { type: 'object' });
+
+  // --- P2: commands, results, events, managed tokens (migration spec §7, §10) ---
+  const cmdId = id('cmd');
+  const tokId = id('tok');
+  const hash: S = { type: 'string', pattern: '^sha256:[0-9a-f]{64}$' };
+  const label: S = { type: 'string', minLength: 1, maxLength: 64, pattern: '^[^\\u0000-\\u001f\\u007f]+$' };
+  const commandBody = obj({
+    proxyId: id('prx'), connId: id('con'), cmdId, exp: int(), actor: str(),
+    command: strict ? { type: 'string', enum: [...WIRE_COMMANDS] } : { type: 'string', pattern: '^[a-z][a-z.]{0,31}$' },
+    // The command's own args schema (commands/<name>.args) checks the rest.
+    args: { type: 'object', properties: { v: int(1) }, required: ['v'] },
+  }, ['proxyId', 'connId', 'cmdId', 'exp', 'actor', 'command', 'args']);
+  const resultCore: Record<string, S> = {
+    proxyId: id('prx'), connId: id('con'), cmdId, phase: en(['received', 'done']),
+    status: en(['ok', 'failed', 'conflict', 'refused']), code: str(64), retryAfterS: int(0), duplicate: bool, result: { type: 'object' },
+  };
+  const resultBody: S = {
+    ...obj(resultCore, ['proxyId', 'connId', 'cmdId', 'phase'], ['status', 'code', 'retryAfterS', 'duplicate', 'result']),
+    // done needs a status (both modes: a result without one is unusable).
+    if: { properties: { phase: { const: 'done' } }, required: ['phase'] }, then: { properties: { status: resultCore.status }, required: ['status'] },
+  };
+  const eventBody = obj({ ...resultCore, kind: en(['command.done']), phase: { const: 'done' } },
+    ['proxyId', 'connId', 'kind', 'cmdId', 'phase', 'status'], ['code', 'retryAfterS', 'duplicate', 'result']);
+  const tokensArgs = obj({
+    v: { const: 1 }, revision: int(1),
+    tokens: arr(obj({ id: tokId, kind: en(['client', 'admin']), hash, label, retireAt: nullable(int()) }, ['id', 'kind', 'hash', 'label', 'retireAt']), 64),
+  }, ['v', 'revision', 'tokens']);
+  const tokensResult = obj({ revision: int(), applied: bool, stale: bool, client: int(), admin: int(), blocked: arr(tokId, 64) }, ['revision', 'applied', 'stale']);
+  const commandsInfo = obj({
+    enabled: bool, paused: bool, pauseReason: nullable(str()), allow: arr(strict ? { type: 'string', enum: [...ALLOW_ENTRIES] } : str(64), 32), seenWindow: int(),
+  }, ['enabled', 'paused', 'allow']);
+  const tokensInfo = obj({ revision: int(), client: int(), admin: int(), blocked: arr(tokId, 64) }, ['revision']);
+
   const proxyInfo = obj({
     startedAt: nullable(int()), uptimeS: nullable(num), configSchema: nullable(int()),
     tls: nullable(obj({ site: str(63), caFingerprint: arr(fp, 2) }, ['site', 'caFingerprint'])),
     publicUrl: nullable(str(300)),
-  }, []);
+    // P2, optional in both modes (a P1 heartbeat stays valid).
+    commands: commandsInfo, tokens: tokensInfo, configRevision: nullable(hash),
+  }, [], ['commands', 'tokens', 'configRevision']);
   const heartbeatBody: S = {
     ...obj({ summary: { type: 'object' }, proxy: proxyInfo, truncated: bool }, ['summary']),
     // The summary's own checks run separately at run time (an unreadable
@@ -141,6 +176,11 @@ export function buildSchemas(mode: Mode): Record<string, S> {
     ack: message('ack', obj({ nextInS: int(1) }, ['nextInS']), { re: 'required' }),
     error: message('error', obj({ code: str(64), message: str(), retryAfterS: int(0) }, ['code'], ['retryAfterS']), { re: 'optional' }),
     bye: message('bye', obj({ reason: str(64) }, ['reason']), { re: 'none' }),
+    command: message('command', commandBody, { sig: true, re: 'none' }),
+    result: message('result', resultBody, { sig: true, re: 'required' }),
+    event: message('event', eventBody, { sig: true, re: 'none' }),
+    'commands/tokens.apply.args': { $id: BASE + 'commands/tokens.apply.args.schema.json', title: 'tokens.apply args v1', ...tokensArgs },
+    'commands/tokens.apply.result': { $id: BASE + 'commands/tokens.apply.result.schema.json', title: 'tokens.apply result v1', ...tokensResult },
     'enroll-request': {
       $id: BASE + 'enroll-request.schema.json', title: 'POST /proxy/v1/enroll request',
       ...obj({
@@ -162,6 +202,19 @@ export function buildSchemas(mode: Mode): Record<string, S> {
   return Object.fromEntries(Object.entries(schemas).map(([k, v]) => [k, { $schema: 'https://json-schema.org/draft/2020-12/schema', ...v }]));
 }
 
-export const MESSAGE_TYPES = ['challenge', 'hello', 'welcome', 'heartbeat', 'ack', 'error', 'bye'] as const;
-// Reserved for P2/P3: defined, not implemented; answered with unsupported_type.
-export const RESERVED_TYPES = ['command', 'result', 'event', 'key.rotate'] as const;
+export const MESSAGE_TYPES = ['challenge', 'hello', 'welcome', 'heartbeat', 'ack', 'error', 'bye', 'command', 'result', 'event'] as const;
+// Reserved: defined, not implemented; answered with unsupported_type.
+export const RESERVED_TYPES = ['key.rotate'] as const;
+
+// The command names on the wire (strict enum). P2 implements tokens.apply.
+export const WIRE_COMMANDS = ['tokens.apply', 'config.get', 'config.set', 'config.unset', 'config.rollback', 'camera.action', 'camera.name.set', 'proxy.restart'] as const;
+// The camera actions a proxy may allow for remote use (camera.action:<a>).
+export const REMOTE_ACTIONS = [
+  'camera-test', 'onvif-resubscribe', 'camera-ftp-test', 'poe-switch-read', 'inventory', 'inventory-cancel', 'retention-run', 'restart',
+  'camera-reboot', 'camera-powercycle', 'camera-ftp-setup', 'camera-ftp-off', 'camera-ntp-set', 'camera-cert-push',
+] as const;
+// The proxy's allow-list entries (camsAdmin.allowCommands); anything else is a load error on the proxy.
+export const ALLOW_ENTRIES: readonly string[] = [
+  'tokens.apply', 'tokens.apply.admin', 'config.get', 'config.set', 'config.unset', 'config.rollback', 'camera.name.set', 'proxy.restart',
+  ...REMOTE_ACTIONS.map((a) => `camera.action:${a}`),
+];

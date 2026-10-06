@@ -3,7 +3,8 @@
 // Run once; the file is committed and both repos test against it.
 import { writeFileSync } from 'fs';
 import { join } from 'path';
-import { fingerprint, keyFromSeed, privateFromB64, sign, signedText } from '../../server/crypto/ed25519';
+import { fingerprint, keyFromSeed, privateFromB64, sign, signEnvelope, signedText } from '../../server/crypto/ed25519';
+import { jcs } from '../../server/crypto/jcs';
 
 const seeds = { proxy: '01'.repeat(32), server: '02'.repeat(32), other: '03'.repeat(32) };
 const keys = Object.fromEntries(Object.entries(seeds).map(([n, seedHex]) => {
@@ -23,10 +24,28 @@ const signatures = cases.map((c) => {
   const text = (signedText[c.kind] as (...a: (string | number)[]) => string)(...c.args);
   return { ...c, text, sig: sign(privateFromB64(keys[c.key].privateKey), text) };
 });
+// P2: canonical JSON (RFC 8785) cases and signed envelopes.
+const jcsCases = [
+  { name: 'rfc8785-sorting', input: { '\u20ac': 'Euro', '\r': 'CR', '\ufb33': 'Hebrew', '1': 'One', '\ud83d\ude00': 'Smiley', '\u0080': 'Control', '\u00f6': 'Latin' } },
+  { name: 'numbers', input: [0, -0, 1, -1, 0.1, 1e21, 1e-7, 9007199254740991, 1791273600000] },
+  { name: 'escapes', input: { s: 'a"\\\b\f\n\r\t\u0001\u001f\u007f\u2028/<>&é😀' } },
+  { name: 'nesting', input: { b: [true, false, null, { z: [], a: {} }], a: '' } },
+].map((c) => ({ ...c, text: jcs(c.input) }));
+const env = (type: string, seq: number, body: object, extra: object = {}) => ({ v: 1, type, id: '01K6' + String(seq).padStart(22, '0'), seq, ts: 1791273600000 + seq, ...extra, body });
+const CON = connId, PRX = 'prx_0123456789ABCDEFGHJK', CMD = 'cmd_0123456789ABCDEFGHJK';
+const tokensArgs = { v: 1, revision: 1, tokens: [{ id: 'tok_0123456789ABCDEFGHJK', kind: 'client', hash: 'sha256:' + '0'.repeat(63) + '1', label: 'cams example', retireAt: null }] };
+const tokensResult = { revision: 1, applied: true, stale: false, client: 1, admin: 0, blocked: [] };
+const envelopeCases = [
+  { kind: 'command', key: 'server', envelope: env('command', 3, { proxyId: PRX, connId: CON, cmdId: CMD, exp: 1791273600003 + 60000, actor: 'admin@example.org', command: 'tokens.apply', args: tokensArgs }) },
+  { kind: 'result', key: 'proxy', envelope: env('result', 4, { proxyId: PRX, connId: CON, cmdId: CMD, phase: 'done', status: 'ok', result: tokensResult }, { re: '01K6' + '3'.padStart(22, '0') }) },
+  { kind: 'event', key: 'proxy', envelope: env('event', 2, { proxyId: PRX, connId: CON, kind: 'command.done', cmdId: CMD, phase: 'done', status: 'ok', result: tokensResult }) },
+].map((c) => ({ ...c, text: jcs(c.envelope), sig: signEnvelope(privateFromB64(keys[c.key].privateKey), c.envelope) }));
 const out = {
   $comment: 'Fixed Ed25519 test keys (PKCS#8 = 302e020100300506032b657004220420 + seed) and the signed strings of spec 8.2/8.3. Test keys only: never use them for a real proxy.',
   keys,
   signatures,
+  jcs: jcsCases,
+  envelopes: envelopeCases,
 };
 writeFileSync(join(__dirname, '../../contract/v1/vectors.json'), JSON.stringify(out, null, 2) + '\n');
 console.log(`wrote ${signatures.length} vectors`);
