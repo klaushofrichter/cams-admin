@@ -35,16 +35,16 @@ for (const e of vectors.envelopes) {
   report(got === e.text, `jcs envelope ${e.kind}`, JSON.stringify(got));
 }
 
-interface Ctx { now: number; proxyId: string; connId: string; serverKeys: string[]; allow: string[]; paused: boolean; seen: string[] }
+interface Ctx { now: number; proxyId: string; connId: string; serverKeys: string[]; allow: string[]; paused: boolean; seen: string[]; enabled?: boolean; tokens?: object[] }
 const DIR = join(__dirname, '../../contract/v1/fixtures');
 const ctxOf = (c: Ctx, journal: (id: string) => unknown = () => undefined) => {
   const seen = new SeenIds();
   for (const id of c.seen ?? []) seen.add(id, c.now);
-  return { proxyId: c.proxyId, connId: c.connId, serverKeys: c.serverKeys, serverNow: c.now, seen, policy: { enabled: true, paused: !!c.paused, allow: c.allow ?? [] }, journal, limits: new CommandLimits(() => c.now), implemented: IMPLEMENTED };
+  return { proxyId: c.proxyId, connId: c.connId, serverKeys: c.serverKeys, serverNow: c.now, seen, policy: { enabled: c.enabled !== false, paused: !!c.paused, allow: c.allow ?? [] }, journal, limits: new CommandLimits(() => c.now), implemented: IMPLEMENTED, currentTokens: c.tokens ?? [] };
 };
 const fixtures = readdirSync(DIR).filter((f) => f.endsWith('.json')).map((f) => ({ name: f.replace(/\.json$/, ''), ...JSON.parse(readFileSync(join(DIR, f), 'utf8')) }));
 const cmds = fixtures.filter((f) => f.schema === 'command' && f.$context);
-report(cmds.length >= 14, 'command fixtures present', String(cmds.length));
+report(cmds.length >= 17, 'command fixtures present', String(cmds.length));
 for (const f of cmds) {
   const want = f.name.startsWith('valid-') ? 'run' : f.$expect.runtime;
   let got: string;

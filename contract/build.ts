@@ -112,7 +112,12 @@ export function buildSchemas(mode: Mode): Record<string, S> {
     command: strict ? { type: 'string', enum: [...WIRE_COMMANDS] } : { type: 'string', pattern: '^[a-z][a-z.]{0,31}$' },
     // The command's own args schema (commands/<name>.args) checks the rest.
     args: { type: 'object', properties: { v: int(1) }, required: ['v'] },
-  }, ['proxyId', 'connId', 'cmdId', 'exp', 'actor', 'command', 'args']);
+    // tokens.apply only: the set only removes tokens from the proxy's current
+    // set (nothing added or changed). The proxy verifies the claim; a true
+    // one is accepted while paused and without an allow entry (never with
+    // the env switch off). Optional: older proxies ignore it.
+    revocationOnly: bool,
+  }, ['proxyId', 'connId', 'cmdId', 'exp', 'actor', 'command', 'args'], ['revocationOnly']);
   const resultCore: Record<string, S> = {
     proxyId: id('prx'), connId: id('con'), cmdId, phase: en(['received', 'done']),
     status: en(['ok', 'failed', 'conflict', 'refused']), code: str(64), retryAfterS: int(0), duplicate: bool, result: { type: 'object' },

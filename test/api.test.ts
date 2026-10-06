@@ -69,7 +69,7 @@ describe('the API', () => {
     const acc = (await a.api('post', '/accounts', { name: 'home', displayName: 'Home' })).body;
     await a.api('post', `/accounts/${acc.id}/proxies`, { name: 'pi', displayName: 'Pi', runsOn: 'local-host' });
     const d = (await a.api('get', '/dashboard')).body;
-    expect(d.accounts[0]).toMatchObject({ name: 'home', proxies: [{ name: 'pi', state: 'pending' }], warnings: ['no-admin'] });
+    expect(d.accounts[0]).toMatchObject({ name: 'home', proxies: [{ name: 'pi', state: 'pending', commands: 'unsupported', allow: [] }], warnings: ['no-admin'] });
     expect(d.backup).toMatchObject({ lastSnapshotAt: null, alerts: expect.any(Array) });
     expect(d.summary).toMatchObject({ accounts: 1, proxies: 1, proxiesOnline: 0 });
   });

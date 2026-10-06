@@ -9,6 +9,8 @@ import type { Enrollment } from '../enroll/codes';
 import type { Hub } from '../channel/hub';
 import type { StatusStore } from '../status/store';
 import type { LiveHub } from '../live';
+import type { Commands } from '../commands/service';
+import type { Tokens } from '../tokens/service';
 import { SESSION_COOKIE, type Sessions } from '../auth/session';
 import { requireCsrf, requireSysadmin, writeLimiter } from '../auth/middleware';
 import { reconcile } from '../status/derive';
@@ -17,6 +19,8 @@ import { Buckets } from '../channel/limits';
 import { limiter, sessionKey } from '../rateLimit';
 import { monitorEventLoopDelay } from 'perf_hooks';
 import { existsSync, statSync } from 'fs';
+import { join } from 'path';
+import { writeHeapSnapshot } from 'v8';
 import { readEpoch } from '../db/open';
 import { bodyErrors } from '../bodyErrors';
 
@@ -35,6 +39,7 @@ export interface BackupService { state(): BackupState; backupNow(actor: string):
 
 export interface ApiDeps {
   db: Db; clock: Clock; cfg: Config; audit: Audit; registry: Registry; enrollment: Enrollment; hub: Hub; status: StatusStore; live: LiveHub; sessions: Sessions; backup: BackupService;
+  commands: Commands; tokens: Tokens;
 }
 
 type H = (req: Request, res: Response) => unknown;
@@ -55,7 +60,7 @@ export function apiRouter(d: ApiDeps): express.Router {
       const out = await fn(req, res);
       if (!res.headersSent) {
         if (out === undefined) res.status(204).end();
-        else res.status(req.method === 'POST' && res.locals.created ? 201 : 200).json(out);
+        else res.status(res.locals.status ?? (req.method === 'POST' && res.locals.created ? 201 : 200)).json(out);
       }
     } catch (e) {
       if (e instanceof ApiError) return void res.status(e.status).json({ error: e.code, ...(e.field ? { field: e.field } : {}) });
@@ -85,9 +90,16 @@ export function apiRouter(d: ApiDeps): express.Router {
   if (d.cfg.nodeEnv === 'development') {
     const lag = monitorEventLoopDelay({ resolution: 10 });
     lag.enable();
-    r.get('/dev/metrics', h(() => {
+    r.get('/dev/metrics', h((req) => {
+      // ?gc=1 with --expose-gc: the live heap after a full GC (what a leak grows).
+      const gc = (globalThis as { gc?: () => void }).gc;
+      let heapAfterGcBytes: number | null = null;
+      if (req.query.gc === '1' && typeof gc === 'function') {
+        gc();
+        heapAfterGcBytes = process.memoryUsage().heapUsed;
+      }
       const out = {
-        rssBytes: process.memoryUsage().rss, heapUsedBytes: process.memoryUsage().heapUsed,
+        rssBytes: process.memoryUsage().rss, heapUsedBytes: process.memoryUsage().heapUsed, heapAfterGcBytes,
         loopLagP50Ms: lag.percentile(50) / 1e6, loopLagP99Ms: lag.percentile(99) / 1e6, loopLagMaxMs: lag.max / 1e6,
         dbBytes: (() => { try { return statSync(d.cfg.dbFile).size + (existsSync(`${d.cfg.dbFile}-wal`) ? statSync(`${d.cfg.dbFile}-wal`).size : 0); } catch { return 0; } })(),
         writeEpoch: readEpoch(d.db), connections: d.hub.stats(), sseStreams: d.live.count(),
@@ -95,6 +107,8 @@ export function apiRouter(d: ApiDeps): express.Router {
       lag.reset();
       return out;
     }));
+    // A V8 heap snapshot into the data folder (the load test's start/end diff).
+    r.post('/dev/heap-snapshot', h(() => ({ file: writeHeapSnapshot(join(d.cfg.dataDir, `heap-${Date.now()}.heapsnapshot`)) })));
   }
   // "Backup now" (Klaus 2026-10-06): a Litestream sync + a manual snapshot.
   r.get('/backup', h(() => d.backup.state()));
@@ -159,6 +173,27 @@ export function apiRouter(d: ApiDeps): express.Router {
     return px;
   }));
   r.get(`${proxyBase}/status`, h((req) => proxyDetail(d, p(req, 'accountId'), p(req, 'proxyId'))));
+
+  // --- P2: command history and managed tokens (shown once, stored as hashes) -----------
+  const tokenBase = `${proxyBase}/tokens`;
+  r.get(`${proxyBase}/commands`, h((req) => d.commands.list(p(req, 'accountId'), p(req, 'proxyId'), { limit: limit(req), cursor: typeof req.query.cursor === 'string' ? req.query.cursor : undefined })));
+  r.get(`${proxyBase}/commands/:cmdId`, h((req) => d.commands.get(p(req, 'accountId'), p(req, 'proxyId'), p(req, 'cmdId'))));
+  r.get(tokenBase, h((req) => d.tokens.list(p(req, 'accountId'), p(req, 'proxyId'))));
+  r.post(tokenBase, h((req, res) => {
+    // The token's only appearance: never cached, never repeated.
+    res.set('Cache-Control', 'no-store');
+    const out = d.tokens.issue(actor(res), p(req, 'accountId'), p(req, 'proxyId'), req.body);
+    created(res);
+    return { ...out, shownOnce: true };
+  }));
+  r.post(`${tokenBase}/apply`, h((req, res) => {
+    const out = d.tokens.reapply(actor(res), p(req, 'accountId'), p(req, 'proxyId'));
+    res.locals.status = 202;
+    return out;
+  }));
+  r.post(`${tokenBase}/confirm-restore`, h((req, res) => d.tokens.confirmRestore(actor(res), p(req, 'accountId'), p(req, 'proxyId'))));
+  r.post(`${tokenBase}/:tokenId/retire`, h((req, res) => d.tokens.retire(actor(res), p(req, 'accountId'), p(req, 'proxyId'), p(req, 'tokenId'), req.body?.hours)));
+  r.post(`${tokenBase}/:tokenId/revoke`, h((req, res) => d.tokens.revoke(actor(res), p(req, 'accountId'), p(req, 'proxyId'), p(req, 'tokenId'))));
   r.get(`${proxyBase}/status-events`, h((req) => {
     d.registry.getProxy(p(req, 'accountId'), p(req, 'proxyId'));
     return d.status.events(p(req, 'proxyId'), limit(req), req.query.cursor ? Number(req.query.cursor) : undefined);
@@ -236,7 +271,7 @@ export function dashboard(d: ApiDeps) {
       proxies++;
       if (v.state === 'online') proxiesOnline++;
       if (v.state === 'online' && (v.problemCount ?? 0) > 0) problems += v.problemCount ?? 0;
-      return { id: px.id, name: px.name, displayName: px.displayName, runsOn: px.runsOn, state: v.state, connected: v.connected, lastHeartbeatAt: v.lastHeartbeatAt, ok: v.ok, problemCount: v.problemCount, version: v.version, pin: v.pin, skewMs: v.skewMs, skewProblem: v.skewProblem, stale: v.stale, unreadable: v.unreadable, cameras: v.cameras, reconcile: rec };
+      return { id: px.id, name: px.name, displayName: px.displayName, runsOn: px.runsOn, state: v.state, connected: v.connected, lastHeartbeatAt: v.lastHeartbeatAt, ok: v.ok, problemCount: v.problemCount, version: v.version, pin: v.pin, skewMs: v.skewMs, skewProblem: v.skewProblem, stale: v.stale, unreadable: v.unreadable, cameras: v.cameras, commands: v.commands, allow: v.allow, reconcile: rec };
     });
     const camRows = accCams.map((c) => {
       const px = pxs.find((x) => x.id === c.proxyId);

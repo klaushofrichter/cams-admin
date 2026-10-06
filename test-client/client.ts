@@ -56,7 +56,7 @@ export interface ClientOptions {
   // P2: answer commands (the reference check of ./commands.ts), apply
   // tokens.apply to an in-memory set, announce the commands capability.
   // Without it the client is a P1 proxy.
-  commands?: { allow: string[]; paused?: boolean };
+  commands?: { allow: string[]; paused?: boolean; enabled?: boolean };
 }
 
 export interface ManagedToken { id: string; kind: 'client' | 'admin'; label: string; retireAt: number | null }
@@ -67,13 +67,16 @@ export class ProxyClient extends EventEmitter {
   stats = { sent: 0, acked: 0, reconnects: 0, connects: 0, ackLatencyMs: [] as number[], errors: 0 };
   debugDropAcks = false;
   // P2 (with the commands option): what the proxy holds and saw.
-  commands: { allow: string[]; paused?: boolean } | null;
+  commands: { allow: string[]; paused?: boolean; enabled?: boolean } | null;
   tokens = new Map<string, ManagedToken>(); // hash → token
   tokensRevision = 0;
   receivedCommands: { id: string; ts: number; body: Record<string, any>; [k: string]: unknown }[] = [];
+  refuseNext: { code: string; retryAfterS?: number } | null = null; // tests: the proxy's own refusal (e.g. its rate limit)
   dropCommands = 0; // ignore the next n commands entirely (tests: a lost command)
   dropAfterReceived = 0; // run the next n commands, send received, then cut the socket before done (tests)
   connId: string | null = null;
+  debugHoldEvents = false; // never send command.done events (tests: only the re-sent cmdId can finalise)
+  executed: string[] = []; // cmdIds that ran (once each, whatever was re-sent)
   private journal = new Map<string, DoneBody>();
   private undelivered: string[] = []; // cmdIds whose done never went out (sent as events after the next welcome)
   private seen = new Set<string>();
@@ -114,8 +117,22 @@ export class ProxyClient extends EventEmitter {
     this.connect();
   }
 
+  // Tests: no reconnect until release() (a proxy that stays away for a while).
+  holdReconnect = false;
+  private held: (() => void) | null = null;
+  release(): void {
+    this.holdReconnect = false;
+    const h = this.held;
+    this.held = null;
+    h?.();
+  }
+
   private schedule(reason: string, delayMs: number): void {
     if (this.stopping) return;
+    if (this.holdReconnect) {
+      this.held = () => this.schedule(reason, delayMs);
+      return;
+    }
     this.emit('schedule', { reason, delayMs });
     if (this.timer) clearTimeout(this.timer);
     this.timer = setTimeout(() => this.connect(), delayMs);
@@ -208,7 +225,7 @@ export class ProxyClient extends EventEmitter {
         this.nextInS = (m.body.heartbeatS as number) ?? 30;
         void this.heartbeat();
         // A done that never went out on its own connection: an event now.
-        for (const cmdId of this.undelivered.splice(0)) {
+        for (const cmdId of this.debugHoldEvents ? [] : this.undelivered.splice(0)) {
           const d = this.journal.get(cmdId);
           if (d) this.sendSigned('event', { proxyId: this.o.key.proxyId, connId: this.connId, kind: 'command.done', cmdId, phase: 'done', ...d });
         }
@@ -257,6 +274,7 @@ export class ProxyClient extends EventEmitter {
     const verdict = refCheck(m, {
       now: this.now() + this.serverOffset, proxyId: k.proxyId, connId: this.connId ?? '', serverKeys: k.serverKeys,
       allow: this.commands!.allow, paused: this.commands!.paused === true, seen: this.seen, journal: this.journal,
+      enabled: this.commands!.enabled !== false, tokens: [...this.tokens].map(([hash, t]) => ({ ...t, hash })),
     });
     const head = { proxyId: k.proxyId, connId: this.connId, cmdId: b.cmdId };
     const done = (d: DoneBody, extra: object = {}) => this.sendSigned('result', { ...head, phase: 'done', ...d, ...extra }, { re: m.id });
@@ -269,7 +287,13 @@ export class ProxyClient extends EventEmitter {
       case 'duplicate':
         return done(this.journal.get(b.cmdId)!, { duplicate: true });
     }
+    if (this.refuseNext) {
+      const r = this.refuseNext;
+      this.refuseNext = null;
+      return done({ status: 'refused', code: r.code }, r.retryAfterS !== undefined ? { retryAfterS: r.retryAfterS } : {});
+    }
     this.sendSigned('result', { ...head, phase: 'received' }, { re: m.id });
+    this.executed.push(b.cmdId);
     const args = b.args as { revision: number; tokens: (ManagedToken & { hash: string })[] };
     const stale = args.revision <= this.tokensRevision;
     if (!stale) {
@@ -349,7 +373,7 @@ export class ProxyClient extends EventEmitter {
       const info = (this.o.proxyInfo ? this.o.proxyInfo() : makeProxyInfo({ now: Date.now() })) as Record<string, unknown>;
       const proxy = this.commands ? {
         ...info,
-        commands: { enabled: true, paused: this.commands.paused === true, pauseReason: null, allow: [...this.commands.allow], seenWindow: 1000 },
+        commands: { enabled: this.commands.enabled !== false, paused: this.commands.paused === true, pauseReason: null, allow: [...this.commands.allow], seenWindow: 1000 },
         tokens: { revision: this.tokensRevision, ...this.tokenCounts() },
       } : info;
       const body = { summary, proxy, truncated: false };

@@ -1,8 +1,8 @@
-import { randomBytes } from 'crypto';
+import { randomBytes, type KeyObject } from 'crypto';
 import type { WebSocket, RawData } from 'ws';
 import type { HubDeps } from './hub';
 import { newId, ulid } from '../ids';
-import { publicFromB64, sign, signedText, verify } from '../crypto/ed25519';
+import { publicFromB64, sign, signEnvelope, signedText, verify } from '../crypto/ed25519';
 import { validateMessage, type Envelope } from '../contract';
 import { Buckets } from './limits';
 import { pendingExpired } from '../registry';
@@ -34,6 +34,9 @@ export class Connection {
   keyId: string | null = null;
   replaced = false;
   closeReason: string | null = null;
+  // P2: what the hello announced, and the verified key that signs this proxy's results.
+  capabilities: string[] = [];
+  proxyKey: KeyObject | null = null;
   private challengeAt: number;
   private seqOut = 0;
   private seqIn = 0;
@@ -76,6 +79,20 @@ export class Connection {
     this.seqOut++;
     const now = this.host.deps.clock.now();
     this.ws.send(JSON.stringify({ v: 1, type, id: ulid(now), seq: this.seqOut, ts: now, ...extra, body }));
+  }
+
+  // A signed message (contract P2): sig over jcs(envelope without sig). The
+  // body is built with this connection's time and id. The envelope id, or
+  // null when the connection is not live.
+  sendSigned(type: 'command', build: (now: number, connId: string) => Record<string, unknown>): string | null {
+    if (this.state !== 'live' || this.ws.readyState !== this.ws.OPEN) return null;
+    const d = this.host.deps;
+    const now = d.clock.now();
+    this.seqOut++;
+    const m: Record<string, unknown> = { v: 1, type, id: ulid(now), seq: this.seqOut, ts: now, body: build(now, this.connId) };
+    m.sig = signEnvelope(d.signingKey, m);
+    this.ws.send(JSON.stringify(m));
+    return m.id as string;
   }
 
   private stopTimers(): void {
@@ -140,6 +157,11 @@ export class Connection {
       case 'error':
         d.log.info({ proxyId: this.proxyId, code: String(v.msg.body.code).slice(0, 64) }, 'proxy_error');
         return;
+      case 'result':
+      case 'event':
+        if (d.commands) return d.commands.onMessage(this, v.msg);
+        this.send('error', { code: 'unsupported_type', message: `type ${v.msg.type} is not supported` }, { re: v.msg.id });
+        return;
       default:
         return this.close(CLOSE.bad_message, 'bad_message');
     }
@@ -158,7 +180,7 @@ export class Connection {
 
   private onHello(m: Envelope): void {
     const d = this.host.deps;
-    const b = m.body as { proxyId: string; keyId: string; connId: string; nonce: string; ts: number; version?: string };
+    const b = m.body as { proxyId: string; keyId: string; connId: string; nonce: string; ts: number; version?: string; capabilities?: unknown };
     // The nonce must be this connection's, under helloTimeout old: a recorded
     // hello is useless on any other connection (the replay protection).
     if (b.connId !== this.connId || b.nonce !== this.nonce || d.clock.now() - this.challengeAt >= this.helloTimeout) return this.refuse('nonce', b.proxyId);
@@ -169,7 +191,8 @@ export class Connection {
     const pending = key.confirmed_at === null;
     if (pending && pendingExpired(key.created_at, d.clock.now())) return this.refuse('expired-pending-key', b.proxyId);
     if (key.state !== 'enrolled' && !(pending && key.state === 'pending')) return this.refuse('proxy-not-enrolled', b.proxyId);
-    if (!verify(publicFromB64(key.public_key), signedText.hello(this.connId, this.nonce, b.proxyId, b.keyId, b.ts), m.sig)) return this.refuse('bad-signature', b.proxyId);
+    const pub = publicFromB64(key.public_key);
+    if (!verify(pub, signedText.hello(this.connId, this.nonce, b.proxyId, b.keyId, b.ts), m.sig)) return this.refuse('bad-signature', b.proxyId);
     // Verified: now the proxy's own budget (a flapping proxy, two sharing a key).
     if (!this.host.helloBudget(b.proxyId)) {
       this.send('error', { code: 'rate_limited', message: 'too many hellos', retryAfterS: 60 });
@@ -184,11 +207,14 @@ export class Connection {
     clearTimeout(this.helloTimer);
     this.proxyId = b.proxyId;
     this.keyId = b.keyId;
+    this.proxyKey = pub;
+    this.capabilities = Array.isArray(b.capabilities) ? b.capabilities.filter((x): x is string => typeof x === 'string').slice(0, 16).map((x) => x.slice(0, 32)) : [];
     this.state = 'live';
     this.host.authenticated(this);
     for (const k of replacedKeys) this.host.closeKey(k, CLOSE.unauthorized);
-    d.status.hello(b.proxyId, typeof b.version === 'string' ? b.version : null, b.ts);
+    d.status.hello(b.proxyId, typeof b.version === 'string' ? b.version : null, b.ts, this.capabilities);
     this.send('welcome', { heartbeatS: d.cfg.heartbeatS, offlineAfterS: d.cfg.offlineAfterS, maxMessageBytes: d.cfg.limits.frameBytes, serverTime: d.clock.now() });
+    d.commands?.onLive(this);
     this.pingTimer = setInterval(() => {
       if (!this.alive) return this.ws.terminate();
       this.alive = false;

@@ -72,6 +72,18 @@ proxyId/connId (`wrong_target`) → envelope id unseen (`replayed`) → `exp`
 (`not_allowed`) → rate (`rate_limited`) → `args.v` (`unsupported_version`) and
 args (`invalid_args`) → allow entries the args need (`not_allowed`) → busy.
 
+**`revocationOnly`** (optional boolean in a `command` body; `tokens.apply`
+only; added after the first P2 contract, backward compatible): the set only
+removes tokens from the proxy's current managed set: every entry of
+`args.tokens` is in the current set with the same `id`, `kind`, `hash`,
+`label` and `retireAt`. The proxy verifies the claim at step 10 (a false
+claim → `invalid_args`); a true claim skips the pause (step 7, but never the
+env kill switch: `paused`), the allow-list (step 8) and the allow entries the
+args need (step 11). A proxy that predates it ignores the field and treats
+the command as a plain `tokens.apply`. Proxy fixtures carry the proxy's
+current set in `$context.tokens` and the env switch in `$context.enabled`
+(default true).
+
 Uniqueness of `id` and `hash` inside `tokens.apply`'s `tokens` cannot be said
 in JSON Schema: it is checked in code on both sides.
 

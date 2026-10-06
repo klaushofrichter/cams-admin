@@ -181,4 +181,50 @@ UPDATE proxy_keys SET revoked_at = unixepoch() * 1000, revoked_reason = 're-enro
 UPDATE proxy_keys SET confirmed_at = NULL, last_seen_at = NULL
   WHERE confirmed_at IS NOT NULL AND last_seen_at < created_at;
 `),
+  // 4: phase 2, commands and managed tokens (migration spec §5). Never a
+  // token, only its hash. issued_revision: the revision whose set first
+  // carried the token (a heartbeat's tokens.revision confirms it).
+  (db) => db.exec(`
+CREATE TABLE commands (
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  proxy_id TEXT REFERENCES proxies(id) ON DELETE SET NULL,
+  actor TEXT NOT NULL,
+  command TEXT NOT NULL,
+  args TEXT NOT NULL CHECK (length(args) <= 16384),
+  dry_run INTEGER NOT NULL DEFAULT 0 CHECK (dry_run IN (0,1)),
+  revocation_only INTEGER NOT NULL DEFAULT 0 CHECK (revocation_only IN (0,1)),
+  state TEXT NOT NULL CHECK (state IN ('queued','sent','received','done','refused','failed','expired','unknown')),
+  outcome_code TEXT,
+  result TEXT CHECK (result IS NULL OR length(result) <= 98304),
+  result_sig TEXT,
+  created_at INTEGER NOT NULL, sent_at INTEGER, finished_at INTEGER,
+  attempts INTEGER NOT NULL DEFAULT 0
+) STRICT;
+CREATE INDEX commands_proxy_created ON commands(proxy_id, created_at);
+CREATE INDEX commands_open ON commands(state, created_at) WHERE state IN ('queued','sent','received');
+
+CREATE TABLE proxy_tokens (
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  proxy_id TEXT NOT NULL REFERENCES proxies(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK (kind IN ('client','admin')),
+  holder TEXT NOT NULL,
+  label TEXT NOT NULL CHECK (length(label) BETWEEN 1 AND 64),
+  hash TEXT NOT NULL UNIQUE CHECK (hash GLOB 'sha256:*' AND length(hash) = 71),
+  state TEXT NOT NULL CHECK (state IN ('pending','active','retiring','revoked','external')),
+  issued_revision INTEGER NOT NULL,
+  applied_revision INTEGER,
+  retire_at INTEGER, revoked_at INTEGER, revoked_revision INTEGER,
+  created_at INTEGER NOT NULL, created_by TEXT NOT NULL,
+  FOREIGN KEY (account_id, proxy_id) REFERENCES proxies(account_id, id)
+) STRICT;
+CREATE INDEX proxy_tokens_proxy ON proxy_tokens(proxy_id, state);
+
+CREATE TABLE proxy_token_state (
+  proxy_id TEXT PRIMARY KEY REFERENCES proxies(id) ON DELETE CASCADE,
+  revision INTEGER NOT NULL DEFAULT 0,
+  applied_revision INTEGER NOT NULL DEFAULT 0
+) STRICT;
+`),
 ];

@@ -41,8 +41,32 @@ It will run at `cams-admin.skylar.technology`. Phase 1 is specified in
   **Backup now** for before a major change. The restore is tested on every
   PR ([docs/restore.md](docs/restore.md)).
 
+## Commands and managed tokens (migration phase 2)
+
+- **Signed commands:** cams-admin sends a proxy signed, versioned,
+  idempotent commands on the same channel (Ed25519 over RFC 8785 canonical
+  JSON, bound to the proxy and the connection, 60 s lifetime). It keeps one
+  in flight per proxy, re-sends with the same `cmdId` until the proxy
+  answers, and stores the proxy's signed result as evidence. In phase 2 the
+  only command is `tokens.apply`.
+- **The proxy decides:** commands are off by default on every proxy. Each
+  proxy's own allow-list (set locally with its admin token) says what
+  cams-admin may send, and it can pause them. cams-admin shows what the proxy
+  reports and never assumes more.
+- **Managed tokens:** on a proxy's page, *Issue client token* / *Issue admin
+  token* makes a 32-byte token, shows it **once**, and stores only its
+  SHA-256 hash. The proxy gets the full managed set (`tokens.apply`, with a
+  revision). Rotate by issuing a new token, switching cams to it, then
+  *Retire* (the proxy stops accepting it at the time you choose) or *Revoke*
+  the old one. A revoke is kept at once whatever the proxy can take; it goes
+  out as a revocation-only set, which a proxy accepts even while paused or
+  without `tokens.apply` allowed (never with its env kill switch off), and the
+  card says "not yet on proxy" until the proxy has it. A proxy that missed a
+  set (offline, refused) gets the current one again from its next heartbeat.
+
 There is no video: cams-admin is a control plane, not in any data path.
-Camera passwords and cam-proxy tokens never pass through it.
+Camera passwords never pass through it; a managed proxy token passes through
+it exactly once, in the answer that shows it.
 
 ## Running it
 
@@ -66,7 +90,7 @@ the Secrets come from `.env` through `scripts/create-secrets.sh`
 | `npm run test:e2e` | Playwright, desktop and phone, against the built server and a fake Google |
 | `scripts/backup/restore-test.sh` | Litestream and the snapshot against a local S3, restored and compared |
 | `scripts/contract/cam-proxy-check.sh` | cam-proxy main's real health summary against the strict contract |
-| `npm run load -- --proxies 50 --cameras 4 --duration 60m` | the load test (CI runs 20 proxies for 2 minutes) |
+| `npm run load -- --proxies 50 --cameras 4 --duration 60m [--sample 60s] [--snapshots DIR]` | the load test (CI runs 20 proxies for 2 minutes); the leak check is the live heap after a forced GC (Theil–Sen trend), `--snapshots` keeps start/end heap snapshots for `npx tsx scripts/load/heap-diff.ts` |
 
 The proxy monitoring is tested the way spec §15.4 lays out: protocol
 conformance, every metric arriving and shown, ageing out, reconnects, clock

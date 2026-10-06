@@ -21,7 +21,7 @@ describe('JCS (RFC 8785)', () => {
   it('the committed vectors: every jcs case, every envelope signature', () => {
     const v = vectors as unknown as { jcs: { name: string; input: unknown; text: string }[]; envelopes: { key: string; envelope: Record<string, unknown>; text: string; sig: string }[] };
     expect(v.jcs.length).toBeGreaterThanOrEqual(4);
-    expect(v.envelopes.map((e) => (e.envelope as { type: string }).type)).toEqual(['command', 'result', 'event']);
+    expect(v.envelopes.map((e) => (e.envelope as { type: string }).type)).toEqual(['command', 'result', 'event', 'command']);
     for (const c of v.jcs) expect(jcs(c.input), c.name).toBe(c.text);
     for (const e of v.envelopes) {
       const k = (vectors.keys as Record<string, { seedHex: string; publicKey: string }>)[e.key];

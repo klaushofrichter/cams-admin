@@ -3,6 +3,7 @@
   import { api } from '../lib/api';
   import { coalesced, live } from '../lib/live';
   import { ago, camClass } from '../lib/format';
+  import { commandsText } from '../lib/commands';
   import StateChip from '../components/StateChip.svelte';
   import Ago from '../components/Ago.svelte';
   import { clock } from '../lib/clock.svelte';
@@ -22,6 +23,7 @@
         for (const a of d.accounts) {
           const p = a.proxies.find((x: any) => x.id === s.proxyId);
           if (!p) continue;
+          if (s.commands !== undefined && s.commands !== p.commands) soon();
           Object.assign(p, { state: s.state, ok: s.ok, problemCount: s.problemCount, lastHeartbeatAt: s.lastHeartbeatAt, cameras: s.cameras, stale: false });
           for (const c of a.cameras) if (c.proxyId === p.id) c.online = s.cameras.find((k) => k.ref === c.proxyCameraId)?.online ?? null;
           if (s.state !== 'online' || s.cameras.length !== p.cameras.length) soon();
@@ -82,6 +84,7 @@
             {#if p.unreadable}<span class="badge bad">{p.unreadable}</span>{/if}
             {#if p.pin === 'mismatch'}<span class="badge bad" data-testid="badge-pin-{p.name}">pin mismatch</span>{/if}
             {#if p.pin === 'hint'}<span class="badge" data-testid="badge-pin-hint-{p.name}">no pin registered</span>{/if}
+            {#if p.commands && p.commands !== 'unsupported'}<span class="badge" class:warn={p.commands === 'paused' || p.commands === 'off'} data-testid="proxy-commands-{p.name}" title="commands">{commandsText(p.commands, p.allow)}</span>{/if}
             {#if p.skewProblem}<span class="badge warn" data-testid="badge-skew-{p.name}">clock off {Math.round(p.skewMs / 1000)} s</span>{/if}
             {#if p.reconcile.reportedNotRegistered.length}<span class="badge warn" data-testid="badge-reported-{p.name}">{p.reconcile.reportedNotRegistered.length} reported, not registered</span>{/if}
             {#if p.reconcile.registeredNotReported.length}<span class="badge warn" data-testid="badge-registered-{p.name}">{p.reconcile.registeredNotReported.length} registered, not reported</span>{/if}
