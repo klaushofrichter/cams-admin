@@ -5,7 +5,13 @@ export type ProxyState = 'pending' | 'never-connected' | 'online' | 'offline' | 
 export type PinState = 'match' | 'mismatch' | 'hint' | 'none';
 
 export interface ReportedCamera { ref: string; online: boolean; name?: string; model?: string | null }
-export interface Reported { cameras: ReportedCamera[]; caFingerprint: string[]; site?: string | null; publicUrl?: string | null; startedAt?: number | null; uptimeS?: number | null; configSchema?: number | null; pin?: PinState }
+export interface CommandsInfo { enabled: boolean; paused: boolean; pauseReason: string | null; allow: string[]; seenWindow: number }
+export interface TokensInfo { revision: number; client: number; admin: number; blocked: string[] }
+export interface Reported {
+  cameras: ReportedCamera[]; caFingerprint: string[]; site?: string | null; publicUrl?: string | null; startedAt?: number | null; uptimeS?: number | null; configSchema?: number | null; pin?: PinState;
+  // P2: the hello's capabilities and the heartbeat's command policy, token and config revisions.
+  capabilities?: string[]; commands?: CommandsInfo | null; tokens?: TokensInfo | null; configRevision?: string | null;
+}
 
 export interface StatusRow {
   proxyId: string; connected: boolean; connectedSince: number | null; lastHelloAt: number | null; lastHeartbeatAt: number | null;

@@ -74,6 +74,8 @@ export class ProxyClient extends EventEmitter {
   dropCommands = 0; // ignore the next n commands entirely (tests: a lost command)
   dropAfterReceived = 0; // run the next n commands, send received, then cut the socket before done (tests)
   connId: string | null = null;
+  debugHoldEvents = false; // never send command.done events (tests: only the re-sent cmdId can finalise)
+  executed: string[] = []; // cmdIds that ran (once each, whatever was re-sent)
   private journal = new Map<string, DoneBody>();
   private undelivered: string[] = []; // cmdIds whose done never went out (sent as events after the next welcome)
   private seen = new Set<string>();
@@ -208,7 +210,7 @@ export class ProxyClient extends EventEmitter {
         this.nextInS = (m.body.heartbeatS as number) ?? 30;
         void this.heartbeat();
         // A done that never went out on its own connection: an event now.
-        for (const cmdId of this.undelivered.splice(0)) {
+        for (const cmdId of this.debugHoldEvents ? [] : this.undelivered.splice(0)) {
           const d = this.journal.get(cmdId);
           if (d) this.sendSigned('event', { proxyId: this.o.key.proxyId, connId: this.connId, kind: 'command.done', cmdId, phase: 'done', ...d });
         }
@@ -270,6 +272,7 @@ export class ProxyClient extends EventEmitter {
         return done(this.journal.get(b.cmdId)!, { duplicate: true });
     }
     this.sendSigned('result', { ...head, phase: 'received' }, { re: m.id });
+    this.executed.push(b.cmdId);
     const args = b.args as { revision: number; tokens: (ManagedToken & { hash: string })[] };
     const stale = args.revision <= this.tokensRevision;
     if (!stale) {

@@ -11,6 +11,7 @@ import type { StatusStore } from '../status/store';
 import type { Logger } from '../log';
 import { Buckets } from './limits';
 import { CLOSE, Connection, type ConnectionHost } from './connection';
+import type { Commands } from '../commands/service';
 
 export const SUBPROTOCOL = 'cams-admin.v1';
 export const CONNECT_PATH = '/proxy/v1/connect';
@@ -26,6 +27,7 @@ export interface HubDeps {
   signingKey: KeyObject;
   serverKeyFingerprint: string;
   refused?: (proxyId: string | null, reason: string) => void;
+  commands?: Commands;
 }
 
 function reject(socket: Duplex, status: number, text: string, body?: object): void {
@@ -127,6 +129,12 @@ export class Hub implements ConnectionHost {
 
   connected(proxyId: string): boolean {
     return this.byProxy.has(proxyId);
+  }
+
+  // The proxy's live (authenticated) connection, if any.
+  live(proxyId: string): Connection | null {
+    const c = this.byProxy.get(proxyId);
+    return c && c.state === 'live' ? c : null;
   }
 
   closeProxy(proxyId: string, code: 4401 | 4403): void {

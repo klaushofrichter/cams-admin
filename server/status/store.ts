@@ -4,7 +4,7 @@ import { tx } from '../db/open';
 import type { Proxy, Registry } from '../registry';
 import type { LiveHub } from '../live';
 import { validateSummary } from '../contract';
-import { cameraStates, deriveProxyState, heartbeatFresh, pinState, SKEW_PROBLEM_MS, type PinState, type ProxyState, type Reported, type StatusRow } from './derive';
+import { cameraStates, deriveProxyState, heartbeatFresh, pinState, SKEW_PROBLEM_MS, type CommandsInfo, type PinState, type ProxyState, type Reported, type StatusRow, type TokensInfo } from './derive';
 
 // The latest state of each proxy and its transitions, fed by the channel
 // (spec §8.5, §8.6). The live state is in MEMORY (kube-setup's S3 cost rule,
@@ -31,6 +31,25 @@ const toStatus = (r: Row): StatusRow => ({
   ok: r.ok === null ? null : r.ok === 1, problemCount: r.problem_count as number | null, reported: r.reported ? JSON.parse(r.reported as string) : null, online: r.online === 1,
 });
 
+const isRecord = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x);
+const safeInt = (x: unknown): number | null => (Number.isSafeInteger(x) && (x as number) >= 0 ? (x as number) : null);
+const strList = (v: unknown, max: number, len: number): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string').slice(0, max).map((x) => x.slice(0, len)) : []);
+
+// P2 heartbeat fields, clamped whatever a proxy sends (they live in memory
+// and the status snapshot; never a reason to refuse the heartbeat).
+export function parseCommandsInfo(x: unknown): CommandsInfo | null {
+  if (!isRecord(x)) return null;
+  return {
+    enabled: x.enabled === true, paused: x.paused === true, pauseReason: typeof x.pauseReason === 'string' ? x.pauseReason.slice(0, 200) : null,
+    allow: strList(x.allow, 32, 64), seenWindow: safeInt(x.seenWindow) ?? 0,
+  };
+}
+export function parseTokensInfo(x: unknown): TokensInfo | null {
+  if (!isRecord(x) || safeInt(x.revision) === null) return null;
+  return { revision: x.revision as number, client: safeInt(x.client) ?? 0, admin: safeInt(x.admin) ?? 0, blocked: strList(x.blocked, 64, 40) };
+}
+export const parseConfigRevision = (x: unknown): string | null => (typeof x === 'string' && /^sha256:[0-9a-f]{64}$/.test(x) ? x : null);
+
 const asStrArray = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string').slice(0, 2) : []);
 
 const emptyRow = (proxyId: string): StatusRow => ({
@@ -42,6 +61,7 @@ export class StatusStore {
   // Proxies whose stored status predates this process (stale until they say hello).
   private seenThisRun = new Set<string>();
   private mem = new Map<string, StatusRow>();
+  private caps = new Map<string, string[]>(); // the last hello's capabilities
   private dirty = new Set<string>();
   private lastFlush: number;
   private snapshotMs: number;
@@ -114,12 +134,16 @@ export class StatusStore {
     this.d.live.publishStatus({ proxyId, accountId: v.accountId, state: v.state, ok: v.ok, problemCount: v.problemCount, lastHeartbeatAt: v.lastHeartbeatAt, cameras: v.cameras });
   }
 
-  hello(proxyId: string, version: string | null, proxyTs: number): void {
+  hello(proxyId: string, version: string | null, proxyTs: number, capabilities: string[] = []): void {
     this.seenThisRun.add(proxyId);
     this.guarded(proxyId, (r, ev) => {
       const now = this.d.clock.now();
       const oldVersion = r.proxyVersion;
-      Object.assign(r, { connected: true, connectedSince: now, lastHelloAt: now, stopped: false, closedReason: null, proxyVersion: version ?? r.proxyVersion, clockSkewMs: proxyTs - now });
+      // A new connection: the command report is the next heartbeat's (a downgraded proxy has none).
+      const caps = capabilities.slice(0, 16);
+      this.caps.set(proxyId, caps);
+      const reported: Reported | null = r.reported ? { ...r.reported, capabilities: caps, ...(caps.includes('commands') ? {} : { commands: null, tokens: null }) } : null;
+      Object.assign(r, { connected: true, connectedSince: now, lastHelloAt: now, stopped: false, closedReason: null, proxyVersion: version ?? r.proxyVersion, clockSkewMs: proxyTs - now, reported });
       ev('connected');
       if (version && oldVersion && version !== oldVersion) ev('version-changed', null, { from: oldVersion, to: version });
     });
@@ -152,6 +176,8 @@ export class StatusStore {
         cameras: cams, caFingerprint: reportedFps, site: typeof tls?.site === 'string' ? tls.site : null,
         publicUrl: typeof info.publicUrl === 'string' ? info.publicUrl : null, startedAt: typeof info.startedAt === 'number' ? info.startedAt : null,
         uptimeS: typeof info.uptimeS === 'number' ? info.uptimeS : null, configSchema: typeof info.configSchema === 'number' ? info.configSchema : null, pin,
+        capabilities: this.caps.get(proxyId) ?? old.reported?.capabilities ?? [],
+        commands: parseCommandsInfo(info.commands), tokens: parseTokensInfo(info.tokens), configRevision: parseConfigRevision(info.configRevision),
       };
       Object.assign(r, { lastHeartbeatAt: now, summary, summaryAt, ok, problemCount, reported, clockSkewMs: proxyTs - now, proxyVersion: version ?? r.proxyVersion, online: true, stopped: false });
 
@@ -202,6 +228,7 @@ export class StatusStore {
 
   forget(proxyId: string): void {
     this.mem.delete(proxyId);
+    this.caps.delete(proxyId);
     this.dirty.delete(proxyId);
   }
 

@@ -12,6 +12,7 @@ import { Registry } from './registry';
 import { LiveHub } from './live';
 import { StatusStore } from './status/store';
 import { Hub, CONNECT_PATH } from './channel/hub';
+import { Commands } from './commands/service';
 import { Enrollment } from './enroll/codes';
 import { enrollRouter } from './enroll/route';
 import { Sessions } from './auth/session';
@@ -25,7 +26,7 @@ import { limiter } from './rateLimit';
 import { version } from './version';
 
 export interface Built {
-  cfg: Config; clock: Clock; db: Db; audit: Audit; registry: Registry; live: LiveHub; status: StatusStore; hub: Hub; enrollment: Enrollment; sessions: Sessions; backup: BackupService;
+  cfg: Config; clock: Clock; db: Db; audit: Audit; registry: Registry; live: LiveHub; status: StatusStore; hub: Hub; commands: Commands; enrollment: Enrollment; sessions: Sessions; backup: BackupService;
   app: express.Express; http: Server; epochFile: string;
   tick(): void;
   writeRoutes(): string[];
@@ -51,6 +52,8 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
   const live = new LiveHub({ clock, maxPerSession: cfg.limits.sseStreamsPerSession, keepaliveMs: 25_000 });
   const status = new StatusStore({ db, clock, registry, live, offlineAfterMs: cfg.offlineAfterS * 1000, snapshotMs: cfg.statusSnapshotS * 1000 });
   const hub = new Hub({ db, clock, cfg, registry, audit, status, log, signingKey: signing.key, serverKeyFingerprint: signing.fingerprint });
+  const commands = new Commands({ db, clock, audit, registry, status, live, log, hub: () => hub });
+  hub.deps.commands = commands;
   const enrollment = new Enrollment({ db, clock, audit, registry, cfg, serverKeys: [signing.publicKeyB64], onKeyRevoked: (k) => hub.closeKey(k, 4401), onProxyChanged: (p) => live.publishRegistry('proxy', p) });
   const backup = createBackup({ db, clock, cfg, audit, env: merged });
 
@@ -95,6 +98,7 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
   const tick = () => {
     try {
       status.tick();
+      commands.tick();
       audit.flushThrottled();
       writeEpochFile(db, epochFile);
       if (clock.now() - lastDaily > 86400_000) {
@@ -111,7 +115,7 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
   let closed = false;
 
   return {
-    cfg, clock, db, audit, registry, live, status, hub, enrollment, sessions, backup, app, http, epochFile, tick,
+    cfg, clock, db, audit, registry, live, status, hub, commands, enrollment, sessions, backup, app, http, epochFile, tick,
     writeRoutes() {
       const out: string[] = [];
       for (const layer of (api as unknown as { stack: { route?: { path: string; methods: Record<string, boolean> } }[] }).stack) {
