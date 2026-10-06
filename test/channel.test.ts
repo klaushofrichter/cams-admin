@@ -4,6 +4,7 @@ import { tmpDir } from './helpers/tmp';
 import { handshake, opened, rawConnect, startHub } from './helpers/channel';
 import { privateFromB64, publicFromB64, sign, signedText, verify } from '../server/crypto/ed25519';
 import { makeProxyInfo, makeSummary } from '../test-client/summaries';
+import { PENDING_KEY_MS } from '../server/registry';
 
 const stops: (() => Promise<void>)[] = [];
 afterEach(async () => { while (stops.length) await stops.pop()!(); });
@@ -106,6 +107,43 @@ describe('the proxy channel', () => {
     const reasons = h.audit.list({ action: 'proxy-auth-refused' }).items.map((i) => i.detail.reason);
     expect(reasons).toContain('revoked-key');
     expect(reasons).toContain('unknown-key');
+  });
+
+  it('a pending key gets in with its first hello: confirmed, the proxy enrolled', async () => {
+    const h = await hub(dir);
+    const p = h.addKey(h.created().id, { pending: true });
+    const r = rawConnect(h.url);
+    await handshake(r, p);
+    expect(await r.next()).toMatchObject({ type: 'welcome' });
+    expect(h.registry.getProxy(h.acc.id, p.proxyId).state).toBe('enrolled');
+    expect(h.registry.activeKey(p.proxyId)?.id).toBe(p.keyId);
+    expect(h.registry.listKeys(h.acc.id, p.proxyId)[0].confirmedAt).toBeGreaterThan(0);
+  });
+
+  it('re-enrolled: the new key\'s hello revokes the old key and closes its connection', async () => {
+    const h = await hub(dir);
+    const old = h.enrolled();
+    const a = rawConnect(h.url);
+    await handshake(a, old); await a.next();
+    const fresh = h.addKey(old.proxyId, { pending: true });
+    const b = rawConnect(h.url);
+    await handshake(b, fresh);
+    expect(await b.next()).toMatchObject({ type: 'welcome' });
+    expect([4401, 4409]).toContain((await a.closed).code);
+    expect(h.registry.listKeys(h.acc.id, old.proxyId).find((k) => k.id === old.keyId)).toMatchObject({ revokedReason: 're-enrolled' });
+    const c = rawConnect(h.url);
+    await handshake(c, old);
+    expect((await c.closed).code).toBe(4401);
+  });
+
+  it('an expired pending key (an orphan from a lost enroll answer) is refused', async () => {
+    const h = await hub(dir);
+    const p = h.addKey(h.created().id, { pending: true, createdAt: Date.now() - PENDING_KEY_MS - 1 });
+    const r = rawConnect(h.url);
+    await handshake(r, p);
+    expect((await r.closed).code).toBe(4401);
+    expect(h.audit.list({ action: 'proxy-auth-refused' }).items[0].detail.reason).toBe('expired-pending-key');
+    expect(h.registry.getProxy(h.acc.id, p.proxyId).state).toBe('pending');
   });
 
   it('a recorded hello replayed on a new connection fails (4401)', async () => {

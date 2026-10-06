@@ -13,7 +13,7 @@ function setup(dir: string) {
   const acc = r.reg.createAccount(ACTOR, { name: 'home', displayName: 'Home' });
   const prx = r.reg.createProxy(ACTOR, acc.id, { name: 'pi', displayName: 'Pi', runsOn: 'local-host' });
   r.db.prepare(`UPDATE proxies SET state='enrolled' WHERE id=?`).run(prx.id);
-  r.db.prepare(`INSERT INTO proxy_keys (id, proxy_id, public_key, fingerprint, created_at) VALUES ('key_1', ?, 'pk', 'fp', 1)`).run(prx.id);
+  r.db.prepare(`INSERT INTO proxy_keys (id, proxy_id, public_key, fingerprint, created_at, confirmed_at) VALUES ('key_1', ?, 'pk', 'fp', 1, 1)`).run(prx.id);
   const res = new FakeRes();
   live.subscribe('s1', res as never);
   const events = () => (r.db.prepare('SELECT kind, camera_ref FROM status_events ORDER BY id').all() as { kind: string; camera_ref: string | null }[]).map((e) => e.kind + (e.camera_ref ? `:${e.camera_ref}` : ''));

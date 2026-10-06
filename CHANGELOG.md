@@ -7,16 +7,14 @@ then empties it on `main`.
 
 ### Fixed
 
-- Backup: `lastReplicationAt` (on `/health` and the Backup page) is now the
-  time of the newest Litestream object in S3, read from the bucket at
-  startup and every 5 minutes. It used to follow Litestream's local sync
-  counter, which kept advancing while nothing reached S3, and was empty
-  after every restart.
-- Backup: an idle database writes once an hour so that Litestream keeps
-  uploading and a healthy backup never looks stale.
-
-### Added
-
-- Backup: `/health` and the Backup page report a failing S3 check and
-  Litestream's sync and replica error counters, with dashboard alerts.
+- Enrollment answers with the `connectUrl` on the origin the proxy enrolled
+  on, when that origin is `PUBLIC_URL` or in the new optional
+  `INTERNAL_URLS` (e.g. the in-cluster Service URL); any other Host gets the
+  public URL. The cluster's cam-proxy, which enrolls in-cluster, refused the
+  public `wss://` URL as "on another host".
+- A redeemed key is **pending** until its first hello: an enroll answer the
+  proxy refused or lost no longer leaves an active key nobody holds, and a
+  re-enrollment keeps the working key until the new key connects. A pending
+  key expires after 24 h; the next code retires it. The proxy page shows
+  pending keys; the audit log has `key-confirmed`.
 

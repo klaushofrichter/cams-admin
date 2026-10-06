@@ -5,6 +5,7 @@ import { newId, ulid } from '../ids';
 import { publicFromB64, sign, signedText, verify } from '../crypto/ed25519';
 import { validateMessage, type Envelope } from '../contract';
 import { Buckets } from './limits';
+import { pendingExpired } from '../registry';
 import type { HeartbeatBody } from '../status/store';
 
 // One proxy socket: challenge → hello → live (spec §8.3–§8.7).
@@ -22,6 +23,7 @@ export interface ConnectionHost {
   helloBudget(proxyId: string): boolean;
   helloTimeoutMs(): number;
   isClosing(): boolean;
+  closeKey(keyId: string, code?: 4401 | 4403): void;
 }
 
 export class Connection {
@@ -160,21 +162,31 @@ export class Connection {
     // The nonce must be this connection's, under helloTimeout old: a recorded
     // hello is useless on any other connection (the replay protection).
     if (b.connId !== this.connId || b.nonce !== this.nonce || d.clock.now() - this.challengeAt >= this.helloTimeout) return this.refuse('nonce', b.proxyId);
-    const key = d.db.prepare(`SELECT k.public_key, k.revoked_at, p.state FROM proxy_keys k JOIN proxies p ON p.id = k.proxy_id WHERE k.id = ? AND k.proxy_id = ?`).get(b.keyId, b.proxyId) as { public_key: string; revoked_at: number | null; state: string } | undefined;
+    const key = d.db.prepare(`SELECT k.public_key, k.revoked_at, k.confirmed_at, k.created_at, p.state FROM proxy_keys k JOIN proxies p ON p.id = k.proxy_id WHERE k.id = ? AND k.proxy_id = ?`).get(b.keyId, b.proxyId) as { public_key: string; revoked_at: number | null; confirmed_at: number | null; created_at: number; state: string } | undefined;
     if (!key) return this.refuse('unknown-key', b.proxyId);
     if (key.revoked_at !== null) return this.refuse('revoked-key', b.proxyId);
-    if (key.state !== 'enrolled') return this.refuse('proxy-not-enrolled', b.proxyId);
+    // A pending key (redeemed, no hello yet) gets in with its first hello, in time.
+    const pending = key.confirmed_at === null;
+    if (pending && pendingExpired(key.created_at, d.clock.now())) return this.refuse('expired-pending-key', b.proxyId);
+    if (key.state !== 'enrolled' && !(pending && key.state === 'pending')) return this.refuse('proxy-not-enrolled', b.proxyId);
     if (!verify(publicFromB64(key.public_key), signedText.hello(this.connId, this.nonce, b.proxyId, b.keyId, b.ts), m.sig)) return this.refuse('bad-signature', b.proxyId);
     // Verified: now the proxy's own budget (a flapping proxy, two sharing a key).
     if (!this.host.helloBudget(b.proxyId)) {
       this.send('error', { code: 'rate_limited', message: 'too many hellos', retryAfterS: 60 });
       return this.close(CLOSE.rate_limited, 'rate_limited');
     }
+    let replacedKeys: string[] = [];
+    if (pending) {
+      const c = d.registry.confirmKey(b.proxyId, b.keyId);
+      if (!c) return this.refuse('expired-pending-key', b.proxyId);
+      replacedKeys = c.revoked;
+    }
     clearTimeout(this.helloTimer);
     this.proxyId = b.proxyId;
     this.keyId = b.keyId;
     this.state = 'live';
     this.host.authenticated(this);
+    for (const k of replacedKeys) this.host.closeKey(k, CLOSE.unauthorized);
     d.status.hello(b.proxyId, typeof b.version === 'string' ? b.version : null, b.ts);
     this.send('welcome', { heartbeatS: d.cfg.heartbeatS, offlineAfterS: d.cfg.offlineAfterS, maxMessageBytes: d.cfg.limits.frameBytes, serverTime: d.clock.now() });
     this.pingTimer = setInterval(() => {

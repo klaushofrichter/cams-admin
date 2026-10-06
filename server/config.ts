@@ -26,6 +26,9 @@ export interface Config {
   publicUrl: string;
   publicOrigin: string;
   connectUrl: string;
+  // Origins a proxy may enroll on and get its connectUrl on: PUBLIC_URL's,
+  // then INTERNAL_URLS (e.g. the in-cluster service URL).
+  connectOrigins: string[];
   dbFile: string;
   dataDir: string;
   signingKeyFile: string | null;
@@ -70,6 +73,35 @@ export function wsUrl(base: string): string {
   return u.toString();
 }
 
+// http only where nothing leaves the host or the cluster network.
+const isLoopback = (h: string) => h === 'localhost' || h === '[::1]' || /^127(\.\d{1,3}){3}$/.test(h);
+const inCluster = (h: string) => /^[a-z0-9-]+(\.[a-z0-9-]+)*\.svc\.cluster\.local$/.test(h);
+
+function internalOrigins(raw: string | undefined): string[] {
+  if (!raw || !raw.trim()) return [];
+  return raw.split(',').map((x) => x.trim()).filter(Boolean).map((x) => {
+    let u: URL;
+    try {
+      u = new URL(x);
+    } catch {
+      throw new Error(`config: INTERNAL_URLS: ${JSON.stringify(x)} is not a URL`);
+    }
+    const bad = (why: string) => new Error(`config: INTERNAL_URLS: ${JSON.stringify(x)} ${why}`);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') throw bad('must be http(s)');
+    if (u.username || u.password || u.pathname !== '/' || u.search || u.hash || /[?#]/.test(x)) throw bad('must be an origin (no path, query or credentials)');
+    if (u.protocol === 'http:' && !isLoopback(u.hostname) && !inCluster(u.hostname)) throw bad('may use http only for *.svc.cluster.local or loopback');
+    return u.origin;
+  });
+}
+
+// The connect URL for an enrollment that arrived on requestOrigin: that
+// origin when it is allowlisted, otherwise the public one. A Host header is
+// never reflected unless it is on the list.
+export function connectUrlFor(cfg: Pick<Config, 'connectUrl' | 'connectOrigins' | 'publicOrigin'>, requestOrigin: string | null): string {
+  if (!requestOrigin || requestOrigin === cfg.publicOrigin || !cfg.connectOrigins.includes(requestOrigin)) return cfg.connectUrl;
+  return wsUrl(requestOrigin);
+}
+
 export function loadConfig(env: Env = process.env): Config {
   const publicUrl = env.PUBLIC_URL;
   if (!publicUrl || !/^https?:\/\/[^\s/]+/.test(publicUrl)) throw new Error('config: PUBLIC_URL is required (https://host)');
@@ -98,6 +130,7 @@ export function loadConfig(env: Env = process.env): Config {
     publicUrl: publicUrl.replace(/\/+$/, ''),
     publicOrigin: new URL(publicUrl).origin,
     connectUrl: wsUrl(env.PROXY_CONNECT_URL || publicUrl),
+    connectOrigins: [...new Set([new URL(publicUrl).origin, ...internalOrigins(env.INTERNAL_URLS)])],
     dbFile,
     dataDir: dirname(dbFile),
     signingKeyFile: env.SERVER_SIGNING_KEY_FILE || null,

@@ -56,7 +56,7 @@ describe('audit completeness', () => {
     if (action === 'enrollment-code-cancel') {
       // An enrolled key for the revoke row, and a report for the adopt row.
       a.db.prepare(`UPDATE proxies SET state='enrolled' WHERE id=?`).run(ids.prx);
-      a.db.prepare(`INSERT INTO proxy_keys (id, proxy_id, public_key, fingerprint, created_at) VALUES ('key_00000000000000000001', ?, 'pk', 'fp', 1)`).run(ids.prx);
+      a.db.prepare(`INSERT INTO proxy_keys (id, proxy_id, public_key, fingerprint, created_at, confirmed_at) VALUES ('key_00000000000000000001', ?, 'pk', 'fp', 1, 1)`).run(ids.prx);
       ids.key = 'key_00000000000000000001';
       a.status.heartbeat(ids.prx, { summary: makeSummary({ cameras: 2, now: Date.now() }), proxy: makeProxyInfo({ now: Date.now() }), truncated: false }, Date.now());
     }

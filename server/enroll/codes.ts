@@ -1,8 +1,9 @@
 import type { Clock } from '../clock';
 import type { Audit } from '../audit';
-import type { Config } from '../config';
+import { connectUrlFor, type Config } from '../config';
 import { tx, type Db } from '../db/open';
 import { ApiError, type Registry } from '../registry';
+export { PENDING_KEY_MS } from '../registry';
 import { codeHash, newEnrollmentCode, newId, normaliseCode } from '../ids';
 import { fingerprint, publicFromB64, signedText, verify } from '../crypto/ed25519';
 import { validateEnroll } from '../contract';
@@ -74,7 +75,10 @@ export class Enrollment {
   }
 
   // Spec §8.2 steps 2–4. Every failure about the code answers the same way.
-  redeem(raw: unknown): EnrollAnswer {
+  // The new key is pending until its first hello (confirmKey): an answer the
+  // proxy never used (it refused it, or it got lost) replaces nothing, and
+  // the next code retires that key. requestOrigin picks the connectUrl.
+  redeem(raw: unknown, requestOrigin: string | null = null): EnrollAnswer {
     const now = this.d.clock.now();
     const g = this.global.take('global', now);
     if (!g.ok) return limited(g.retryAfterS);
@@ -106,20 +110,27 @@ export class Enrollment {
     const accountId = row.account_id as string;
     const fp = fingerprint(b.publicKey);
     const keyId = newId('key');
-    let oldKeys: string[] = [];
+    const connectUrl = connectUrlFor(this.d.cfg, requestOrigin);
     tx(this.d.db, () => {
       // Re-check inside the transaction: a parallel redemption may have won.
       const u = this.d.db.prepare('UPDATE enrollment_codes SET used_at = ? WHERE id = ? AND used_at IS NULL AND cancelled_at IS NULL').run(now, row.id as string);
       if (u.changes === 0) throw new ApiError(401, 'invalid_code');
-      oldKeys = this.d.registry.revokeActiveKeys(proxyId, 're-enrolled', now);
+      // An earlier redemption whose key never said hello is retired.
+      const orphans = this.d.registry.revokeActiveKeys(proxyId, 're-enrolled', now, 'pending');
       this.d.db.prepare('INSERT INTO proxy_keys (id, proxy_id, public_key, fingerprint, created_at, enrollment_id) VALUES (?,?,?,?,?,?)').run(keyId, proxyId, b.publicKey, fp, now, row.id as string);
-      this.d.db.prepare(`UPDATE proxies SET state = 'enrolled', updated_at = ?, version = version + 1 WHERE id = ?`).run(now, proxyId);
-      this.d.audit.write({ actorType: 'proxy', actor: proxyId, action: 'proxy-enrolled', accountId, targetType: 'proxy', targetId: proxyId, targetLabel: row.proxy_name as string, outcome: 'ok', detail: { keyId, fingerprint: fp, codeId: row.id, replacedKeys: oldKeys } });
+      this.d.db.prepare('UPDATE proxies SET updated_at = ?, version = version + 1 WHERE id = ?').run(now, proxyId);
+      this.d.audit.write({ actorType: 'proxy', actor: proxyId, action: 'proxy-enrolled', accountId, targetType: 'proxy', targetId: proxyId, targetLabel: row.proxy_name as string, outcome: 'ok', detail: { keyId, fingerprint: fp, codeId: row.id, retiredPendingKeys: orphans, connectUrl } });
     });
-    for (const k of oldKeys) this.d.onKeyRevoked(k);
     return {
       status: 201,
-      body: { v: 1, proxyId, keyId, account: row.account_name, connectUrl: this.d.cfg.connectUrl, serverKeys: this.d.serverKeys, heartbeatS: this.d.cfg.heartbeatS },
+      body: { v: 1, proxyId, keyId, account: row.account_name, connectUrl, serverKeys: this.d.serverKeys, heartbeatS: this.d.cfg.heartbeatS },
     };
+  }
+
+  // The key's first hello (the channel calls the registry directly).
+  confirmKey(proxyId: string, keyId: string): { revoked: string[] } | null {
+    const r = this.d.registry.confirmKey(proxyId, keyId);
+    for (const k of r?.revoked ?? []) this.d.onKeyRevoked(k);
+    return r;
   }
 }

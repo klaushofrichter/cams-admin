@@ -114,10 +114,20 @@ Order as always: **commit, push, then apply.**
 - **Environment** (no secrets, in the Deployment):
   - `PUBLIC_URL=https://cams-admin.skylar.technology`;
   - `DB_FILE=/var/lib/cams-admin/cams-admin.db`;
-  - `TRUST_PROXY=1` (for the scheme only: cams-admin never keys a rate limit
+  - `TRUST_PROXY=1` (for the scheme and the forwarded host only: cams-admin never keys a rate limit
     or a throttle on the client address, since LAN proxies hairpin in as
     `192.168.1.1` and the in-cluster cam-proxy could forge
     `X-Forwarded-For`; limits key on the session, the proxy id or the code);
+  - `INTERNAL_URLS=http://cams-admin.cams-admin.svc.cluster.local:8080`
+    (added 2026-10-06): the in-cluster origin the cluster's cam-proxy
+    enrolls on. cams-admin answers an enrollment that arrives on an
+    allowlisted origin (`PUBLIC_URL` or one of these) with a `connectUrl` on
+    that same origin, here
+    `ws://cams-admin.cams-admin.svc.cluster.local:8080/proxy/v1/connect`;
+    without the line the cluster proxy gets the public `wss://` URL and
+    refuses it ("connectUrl is on another host"). As a Deployment env entry:
+    `- name: INTERNAL_URLS` / `value: "http://cams-admin.cams-admin.svc.cluster.local:8080"`.
+    Plain http is accepted only for `*.svc.cluster.local` and loopback;
   - `LITESTREAM_METRICS_URL=http://127.0.0.1:9090/metrics`;
   - `LITESTREAM_SOCKET=/run/litestream/litestream.sock`;
   - `LITESTREAM_SYNC_INTERVAL_S=3600` (the sync interval of `deploy/litestream.yml`; a dead-man alert on `/health`'s `backup.lastReplicationAt` should allow 2 × it + 5 min);

@@ -159,4 +159,14 @@ CREATE TABLE meta (
 ) STRICT;
 INSERT INTO meta (id, write_epoch) VALUES (1, 0);
 `),
+  // 2: a key is pending until its first hello (confirmed_at). Pending keys
+  // don't replace the active one; a lost enroll answer leaves no active key.
+  // Existing keys: confirmed if they were ever seen, else pending.
+  (db) => db.exec(`
+ALTER TABLE proxy_keys ADD COLUMN confirmed_at INTEGER;
+UPDATE proxy_keys SET confirmed_at = last_seen_at WHERE last_seen_at IS NOT NULL;
+DROP INDEX proxy_keys_one_active;
+CREATE UNIQUE INDEX proxy_keys_one_active ON proxy_keys(proxy_id) WHERE revoked_at IS NULL AND confirmed_at IS NOT NULL;
+CREATE UNIQUE INDEX proxy_keys_one_pending ON proxy_keys(proxy_id) WHERE revoked_at IS NULL AND confirmed_at IS NULL;
+`),
 ];

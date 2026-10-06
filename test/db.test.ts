@@ -4,6 +4,7 @@ import { writeFileSync } from 'fs';
 import { DatabaseSync } from 'node:sqlite';
 import { openDb, tx, LATEST_VERSION, readEpoch } from '../server/db/open';
 import { checkEpoch, writeEpochFile } from '../server/db/epoch';
+import { MIGRATIONS } from '../server/db/migrations';
 import { tmpDir } from './helpers/tmp';
 
 const TABLES = ['accounts', 'account_users', 'proxies', 'proxy_keys', 'enrollment_codes', 'cameras', 'sims', 'proxy_status', 'status_events', 'audit_log', 'sessions', 'jobs', 'meta'];
@@ -59,14 +60,28 @@ describe('database', () => {
     expect(db.prepare(`SELECT account_id, proxy_id FROM cameras WHERE id='cam_1'`).get()).toEqual({ account_id: 'acc_a', proxy_id: null });
   });
 
-  it('allows one active key per proxy', () => {
+  it('allows one active (confirmed) key and one pending key per proxy', () => {
     const db = openDb(join(dir, 'k.db'));
     seed(db);
-    const ins = db.prepare(`INSERT INTO proxy_keys (id,proxy_id,public_key,fingerprint,created_at,revoked_at) VALUES (?,?,?,?,1,?)`);
-    ins.run('key_1', 'prx_a', 'pk1', 'f1', null);
-    expect(() => ins.run('key_2', 'prx_a', 'pk2', 'f2', null)).toThrow(/UNIQUE/);
+    const ins = db.prepare(`INSERT INTO proxy_keys (id,proxy_id,public_key,fingerprint,created_at,confirmed_at,revoked_at) VALUES (?,?,?,?,1,?,?)`);
+    ins.run('key_1', 'prx_a', 'pk1', 'f1', 1, null);
+    expect(() => ins.run('key_2', 'prx_a', 'pk2', 'f2', 1, null)).toThrow(/UNIQUE/);
+    ins.run('key_p1', 'prx_a', 'pkp1', 'fp1', null, null);
+    expect(() => ins.run('key_p2', 'prx_a', 'pkp2', 'fp2', null, null)).toThrow(/UNIQUE/);
     db.exec(`UPDATE proxy_keys SET revoked_at=2 WHERE id='key_1'`);
-    expect(() => ins.run('key_2', 'prx_a', 'pk2', 'f2', null)).not.toThrow();
+    expect(() => ins.run('key_2', 'prx_a', 'pk2', 'f2', 1, null)).not.toThrow();
+  });
+
+  it('migration 2: a key that was ever seen is confirmed; a never-used one becomes pending', () => {
+    const f = join(dir, 'm2.db');
+    const raw = new DatabaseSync(f);
+    MIGRATIONS[0](raw);
+    raw.exec('PRAGMA user_version = 1');
+    seed(raw);
+    raw.exec(`INSERT INTO proxy_keys (id,proxy_id,public_key,fingerprint,created_at,last_seen_at) VALUES ('key_seen','prx_a','pk1','f1',1,5),('key_orphan','prx_b','pk2','f2',1,NULL)`);
+    raw.close();
+    const db = openDb(f);
+    expect(db.prepare(`SELECT id, confirmed_at FROM proxy_keys ORDER BY id`).all()).toEqual([{ id: 'key_orphan', confirmed_at: null }, { id: 'key_seen', confirmed_at: 5 }]);
   });
 
   it('refuses sim details for a camera that is not a sim', () => {
