@@ -21,7 +21,7 @@
     "test": "vitest run",
     "test:e2e": "playwright test",
     "lint:types": "tsc --noEmit -p tsconfig.check.json",
-    "contract:strict": "tsx contract/make-strict.ts",
+    "contract:make": "tsx contract/make.ts",
     "client": "tsx test-client/cli.ts",
     "load": "tsx test-client/load.ts"
   },
