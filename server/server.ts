@@ -139,7 +139,8 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
 
 if (require.main === module) {
   const s = buildServer();
-  s.listen().then((port) => log.info({ port, version: version() }, 'cams_admin_listening'));
+  // HOST: e.g. 127.0.0.1 for the local stack; all interfaces by default (the pod).
+  s.listen(undefined, process.env.HOST || undefined).then((port) => log.info({ port, version: version() }, 'cams_admin_listening'));
   let stopping = false;
   const stop = (sig: string) => {
     if (stopping) return;
