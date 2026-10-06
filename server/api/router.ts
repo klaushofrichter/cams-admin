@@ -13,9 +13,14 @@ import type { Sessions } from '../auth/session';
 import { requireCsrf, requireSysadmin, writeLimiter } from '../auth/middleware';
 import { reconcile } from '../status/derive';
 import { FieldError } from '../validate';
+import { Buckets } from '../channel/limits';
 
-export interface BackupState { lastSnapshotAt: number | null; lastSnapshotOk: boolean | null; lastSnapshotError: string | null; lastReplicationAt: number | null; alerts: string[]; configured: boolean }
-export interface BackupService { state(): BackupState; snapshotNow(actor: string): Promise<{ ok: boolean; error?: string }> }
+export interface ManualBackup { at: number; ok: boolean; litestream: { ok: boolean; status?: string; error?: string }; snapshot: { ok: boolean; key?: string; bytes?: number; error?: string } }
+export interface BackupState {
+  lastSnapshotAt: number | null; lastSnapshotOk: boolean | null; lastSnapshotError: string | null; lastReplicationAt: number | null;
+  lastManual: ManualBackup | null; alerts: string[]; configured: boolean; litestream: boolean; store: string;
+}
+export interface BackupService { state(): BackupState; backupNow(actor: string): Promise<ManualBackup | { busy: true }> }
 
 export interface ApiDeps {
   db: Db; clock: Clock; cfg: Config; audit: Audit; registry: Registry; enrollment: Enrollment; hub: Hub; status: StatusStore; live: LiveHub; sessions: Sessions; backup: BackupService;
@@ -45,6 +50,8 @@ export function apiRouter(d: ApiDeps): express.Router {
   };
   const created = (res: Response) => (res.locals.created = true);
   const reg = (type: string, id: string) => d.live.publishRegistry(type, id);
+  // At most 6 manual backups an hour, in total (each one is a full copy).
+  const backupNowLimit = new Buckets({ capacity: 6, windowMs: 3600_000 });
   const limit = (req: Request) => (req.query.limit === undefined ? undefined : Number(req.query.limit));
 
   // --- session and live ---------------------------------------------------------------
@@ -58,7 +65,13 @@ export function apiRouter(d: ApiDeps): express.Router {
     return { ended: n };
   }));
   r.get('/dashboard', h(() => dashboard(d)));
-  r.post('/backup/snapshot', h(async (_q, res) => d.backup.snapshotNow(actor(res))));
+  // "Backup now" (Klaus 2026-10-06): a Litestream sync + a manual snapshot.
+  r.get('/backup', h(() => d.backup.state()));
+  r.post('/backup/now', h(async (_q, res) => {
+    const t = backupNowLimit.take('global', d.clock.now());
+    if (!t.ok) throw new ApiError(429, 'rate_limited');
+    return d.backup.backupNow(actor(res));
+  }));
 
   // --- accounts and users ---------------------------------------------------------------
   r.get('/accounts', h(() => ({ items: d.registry.listAccounts() })));

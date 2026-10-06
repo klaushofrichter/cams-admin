@@ -1073,7 +1073,7 @@ answer `{"error": "<code>"}` with 400/401/403/404/409/413/429. Writes follow
 |---|---|---|
 | POST | `/proxy/v1/enroll` | §8.2 |
 | GET (upgrade) | `/proxy/v1/connect` | §8.3 |
-| GET, HEAD | `/health` | `{status, version, backup: {lastReplicationAt, lastSnapshotAt}}` (ms or null); no counts and no other database detail. For the release smoke test, the probes and kube-setup's Grafana dead-man alert. **`HEAD /health` answers 200** with no body (UptimeRobot), which a test asserts |
+| GET, HEAD | `/health` | `{status, version, backup: {lastReplicationAt, lastSnapshotAt, lastManualAt, lastManualOk}}` (ms or null); no counts and no other database detail. For the release smoke test, the probes and kube-setup's Grafana dead-man alert. **`HEAD /health` answers 200** with no body (UptimeRobot), which a test asserts |
 
 ### 11.4 Audit actions (closed list)
 
@@ -1082,7 +1082,7 @@ answer `{"error": "<code>"}` with 400/401/403/404/409/413/429. Writes follow
 | sign-in | `signin`, `signin-refused`, `signout`, `sessions-ended` |
 | registry | `account-create`, `account-update`, `account-delete`, `user-create`, `user-update`, `user-delete`, `proxy-create`, `proxy-update`, `proxy-delete`, `proxy-block`, `camera-create`, `camera-update`, `camera-delete`, `camera-adopt`, `sim-update`, `sim-delete` |
 | enrollment and keys | `enrollment-code-create`, `enrollment-code-cancel`, `proxy-enrolled`, `enroll-refused`, `key-revoke`, `proxy-auth-refused` |
-| backup and system | `backup-snapshot`, `restore-detected` |
+| backup and system | `backup-snapshot`, `backup-now`, `restore-detected` |
 | throttling | `audit-throttled` |
 
 - `proxy-auth-refused` and `enroll-refused` are throttled to one record per
@@ -1306,6 +1306,25 @@ the CLI and the UI card.
   file Klaus can open with `sqlite3`.
 - **Alerts:** a failed snapshot, or none in 26 h, shows red on the dashboard.
   A failed Litestream (lag over 5 min) does too.
+
+### 13.4a Backup now (Klaus 2026-10-06)
+
+- A **Backup now** button on the Backup page (and the dashboard's backup
+  card), "which can be used ahead of some major change":
+  `POST /api/v1/backup/now`, system administrator only, with the CSRF rules
+  of §7, at most 6 an hour in total, audited as `backup-now`.
+- It (1) forces Litestream to upload its pending changes through
+  Litestream 0.5.17's control socket (`POST /sync` with `wait`, on
+  `LITESTREAM_SOCKET`, an emptyDir shared by the app and the sidecar), and
+  (2) writes a manual snapshot like the daily one, as
+  `snapshots/manual-<UTC>.sqlite.gz`, under the same 30-day lifecycle.
+- The answer and the page show the time, the size, and each step's success
+  or its error ("Litestream control socket unreachable", the S3 error);
+  `GET /api/v1/backup` and `/health` carry the last manual run next to the
+  last automatic replication and snapshot.
+- Tests: unit tests with a fake control socket and a failing store; the
+  restore test runs it against the local S3 and a real Litestream. Never the
+  real bucket from tests or the Mac.
 
 ### 13.5 Restore procedure (also in `docs/restore.md`, written with the code)
 

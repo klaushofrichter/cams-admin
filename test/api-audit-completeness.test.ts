@@ -32,7 +32,7 @@ describe('audit completeness', () => {
     ['post', '/accounts/:accountId/proxies/:proxyId/block', () => `/accounts/${ids.acc}/proxies/${ids.prx}/block`, () => ({}), 'proxy-block'],
     ['delete', '/accounts/:accountId/proxies/:proxyId', () => `/accounts/${ids.acc}/proxies/${ids.prx}`, () => ({}), 'proxy-delete'],
     ['delete', '/accounts/:accountId/users/:userId', () => `/accounts/${ids.acc}/users/${ids.usr}`, () => ({}), 'user-delete'],
-    ['post', '/backup/snapshot', () => '/backup/snapshot', () => ({}), 'backup-snapshot'],
+    ['post', '/backup/now', () => '/backup/now', () => ({}), 'backup-now'],
     ['delete', '/accounts/:accountId', () => `/accounts/${ids.acc}`, () => ({ confirmName: 'home' }), 'account-delete'],
     // Last: it ends every session, this test's too.
     ['post', '/sessions/end', () => '/sessions/end', () => ({}), 'sessions-ended'],

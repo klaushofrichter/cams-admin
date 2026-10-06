@@ -82,6 +82,16 @@ describe('the API', () => {
     expect((await a.api('get', `/audit?action=account-create&limit=2&cursor=${r.nextCursor}`)).body.items).toHaveLength(1);
   });
 
+  it('backup now: the result and state on GET /backup; 6 an hour, then 429', async () => {
+    const a = app();
+    const r = (await a.api('post', '/backup/now', {})).body;
+    expect(r).toMatchObject({ ok: false, litestream: { ok: false, error: 'Litestream is not configured (LITESTREAM_SOCKET)' }, snapshot: { ok: true, key: expect.stringMatching(/snapshots\/manual-\d{8}T\d{6}Z\.sqlite\.gz$/) } });
+    expect((await a.api('get', '/backup')).body).toMatchObject({ configured: false, store: 'local folder (no S3 configured)', lastManual: { ok: false, snapshot: { ok: true } } });
+    for (let i = 0; i < 5; i++) await a.api('post', '/backup/now', {});
+    expect((await a.api('post', '/backup/now', {})).status).toBe(429);
+    expect((await request(a.app).get('/health')).body.backup).toMatchObject({ lastManualAt: expect.any(Number), lastManualOk: false });
+  });
+
   it('answers malformed JSON with 400 and a big body with 413', async () => {
     const a = app();
     const bad = await request(a.app).post('/api/v1/accounts').set('Cookie', a.cookie).set('X-Cams-Admin', '1').set('Content-Type', 'application/json').send('{nope');

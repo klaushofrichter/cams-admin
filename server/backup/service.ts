@@ -3,9 +3,9 @@ import type { Clock } from '../clock';
 import type { Config } from '../config';
 import type { Db } from '../db/open';
 import type { Audit } from '../audit';
-import type { BackupService, BackupState } from '../api/router';
+import type { BackupService, BackupState, ManualBackup } from '../api/router';
 import { fileStore, s3Store, type ObjectStore } from './store';
-import { runSnapshot } from './snapshot';
+import { backupNow, runSnapshot } from './snapshot';
 import { LitestreamWatch } from './litestream';
 import { nextRunAt } from './scheduler';
 import { log } from '../log';
@@ -45,8 +45,12 @@ export function createBackup(d: { db: Db; clock: Clock; cfg: Config; audit: Audi
       const j = d.db.prepare(`SELECT * FROM jobs WHERE name = 'snapshot'`).get() as Record<string, string | number | null> | undefined;
       const lastOkAt = (j?.last_ok_at as number | null) ?? null;
       const detail = j?.last_detail ? JSON.parse(j.last_detail as string) : null;
+      const m = d.db.prepare(`SELECT last_detail FROM jobs WHERE name = 'backup-now'`).get() as { last_detail: string } | undefined;
       return {
         configured: !!d.cfg.backup,
+        litestream: !!watch,
+        store: store.describe().replace(/^file:\/\/.*/, 'local folder (no S3 configured)'),
+        lastManual: m ? (JSON.parse(m.last_detail) as ManualBackup) : null,
         lastSnapshotAt: lastOkAt,
         lastSnapshotOk: j ? j.last_outcome === 'ok' : null,
         lastSnapshotError: j?.last_outcome === 'failed' ? (detail?.error ?? 'failed') : null,
@@ -54,9 +58,8 @@ export function createBackup(d: { db: Db; clock: Clock; cfg: Config; audit: Audi
         alerts: backupAlerts({ now: d.clock.now(), configured: !!d.cfg.backup, lastOkAt, lastOutcome: (j?.last_outcome as string) ?? null, litestream: !!watch, lastReplicationAt: watch?.lastReplicationAt ?? null, startedAt }),
       };
     },
-    async snapshotNow(actor: string) {
-      const r = await snap(actor);
-      return r.ok ? { ok: true, key: r.key } as { ok: boolean } : { ok: false, error: r.error };
+    async backupNow(actor: string) {
+      return backupNow({ db: d.db, dbFile: d.cfg.dbFile, clock: d.clock, audit: d.audit, store, prefix, retentionDays: d.cfg.snapshotRetentionDays, actor, socketPath: d.cfg.litestreamSocket });
     },
     start() {
       watch?.start();

@@ -14,6 +14,10 @@
 # (kube-setup copies this file into the pod's ConfigMap), e.g. 30s for a
 # tighter window.
 addr: ":9090"
+# "Backup now" (the app POSTs /sync here): an emptyDir shared by both containers.
+socket:
+  enabled: true
+  path: /run/litestream/litestream.sock
 levels:
   - interval: 1h
   - interval: 24h

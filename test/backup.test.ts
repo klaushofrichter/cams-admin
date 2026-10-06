@@ -8,7 +8,7 @@ import { openDb } from '../server/db/open';
 import { Audit } from '../server/audit';
 import { Registry } from '../server/registry';
 import { fileStore } from '../server/backup/store';
-import { runSnapshot, snapshotKey } from '../server/backup/snapshot';
+import { backupNow, runSnapshot, snapshotKey } from '../server/backup/snapshot';
 import { LitestreamWatch, parseMetrics } from '../server/backup/litestream';
 import { nextRunAt } from '../server/backup/scheduler';
 import { backupAlerts } from '../server/backup/service';
@@ -115,3 +115,60 @@ describe('alerts and schedule', () => {
 });
 
 void existsSync;
+
+describe('backup now', () => {
+  const dir = tmpDir();
+  // A stand-in for Litestream's control socket (POST /sync, 0.5.17).
+  async function fakeSocket(path: string, answer: (body: any) => [number, object]) {
+    const srv = createServer((req, res) => {
+      let b = '';
+      req.on('data', (d) => (b += d));
+      req.on('end', () => {
+        const [code, out] = answer(JSON.parse(b || '{}'));
+        res.writeHead(code, { 'Content-Type': 'application/json' }).end(JSON.stringify(out));
+      });
+    });
+    await new Promise<void>((r) => srv.listen(path, r));
+    return srv;
+  }
+
+  it('forces a Litestream sync and writes a manual snapshot; audited; recorded', async () => {
+    const s = setup(dir);
+    const sock = join(dir, 'ls1.sock');
+    let asked: any = null;
+    const srv = await fakeSocket(sock, (b) => { asked = b; return [200, { status: 'synced', path: b.path, txid: 7, replicated_txid: 7 }]; });
+    const r = await backupNow({ ...s, socketPath: sock, actor: 'admin@example.com' });
+    srv.close();
+    expect(asked).toEqual({ path: s.dbFile, wait: true, timeout: 30 });
+    expect(r).toMatchObject({ ok: true, litestream: { ok: true, status: 'synced' }, snapshot: { ok: true, key: 'cams-admin/test/snapshots/manual-20261006T081500Z.sqlite.gz' } });
+    expect(r.snapshot.bytes).toBeGreaterThan(100);
+    expect(s.audit.list({ action: 'backup-now' }).items[0]).toMatchObject({ actor: 'admin@example.com', outcome: 'ok' });
+    expect(s.db.prepare(`SELECT last_outcome FROM jobs WHERE name='backup-now'`).get()).toEqual({ last_outcome: 'ok' });
+  });
+
+  it('a sidecar that is down and an unreachable S3 give clear, audited errors', async () => {
+    const s = setup(dir);
+    const r = await backupNow({ ...s, socketPath: join(dir, 'missing.sock'), store: { ...s.store, put: async () => { throw new Error('connect ECONNREFUSED 127.0.0.1:29012'); } }, actor: 'admin@example.com' });
+    expect(r.ok).toBe(false);
+    expect(r.litestream.error).toMatch(/Litestream control socket unreachable/);
+    expect(r.snapshot.error).toMatch(/ECONNREFUSED/);
+    expect(s.audit.list({ action: 'backup-now' }).items[0]).toMatchObject({ outcome: 'failed', detail: { litestream: expect.stringMatching(/unreachable/), snapshot: expect.stringMatching(/ECONNREFUSED/) } });
+  });
+
+  it('without a socket configured, the Litestream step says so and the snapshot still runs', async () => {
+    const s = setup(dir);
+    const r = await backupNow({ ...s, socketPath: null, actor: 'admin@example.com' });
+    expect(r.litestream).toMatchObject({ ok: false, error: 'Litestream is not configured (LITESTREAM_SOCKET)' });
+    expect(r.snapshot.ok).toBe(true);
+    expect(r.ok).toBe(false);
+  });
+
+  it('a Litestream error answer is reported', async () => {
+    const s = setup(dir);
+    const sock = join(dir, 'ls2.sock');
+    const srv = await fakeSocket(sock, () => [404, { error: 'database not found: /x' }]);
+    const r = await backupNow({ ...s, socketPath: sock, actor: 'a@example.com' });
+    srv.close();
+    expect(r.litestream).toMatchObject({ ok: false, error: 'Litestream: database not found: /x' });
+  });
+});

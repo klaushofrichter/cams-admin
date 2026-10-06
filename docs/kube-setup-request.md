@@ -56,6 +56,13 @@ Order as always: **commit, push, then apply.**
     `deploy/litestream.yml`, the source for the pod's Litestream ConfigMap).
   - An `emptyDir` `/tmp` (Memory, 16Mi, as cam-proxy) for the app, and for
     Litestream too if it needs one, because the root filesystem is read-only.
+  - An `emptyDir` `/run/litestream` (Memory, 1Mi) mounted in **both** the app
+    and the Litestream sidecar: Litestream's control socket
+    (`/run/litestream/litestream.sock`), which the app's **Backup now**
+    button uses to force a sync (`LITESTREAM_SOCKET`). Both containers run
+    as uid 1000, so the socket's mode 600 is enough.
+  - Litestream's config is `deploy/litestream.yml` in this repo (a ConfigMap
+    on your side).
   - Pod annotations `k8s.grafana.com/scrape: "true"` and
     `k8s.grafana.com/metrics.portNumber: "9090"` (Litestream's metrics; not
     `prometheus.io/*`). `/health` also reports `backup.lastReplicationAt` and
@@ -107,6 +114,7 @@ Order as always: **commit, push, then apply.**
     `192.168.1.1` and the in-cluster cam-proxy could forge
     `X-Forwarded-For`; limits key on the session, the proxy id or the code);
   - `LITESTREAM_METRICS_URL=http://127.0.0.1:9090/metrics`;
+  - `LITESTREAM_SOCKET=/run/litestream/litestream.sock`;
   - `BACKUP_SNAPSHOT_RETENTION_DAYS=30`;
   - `TZ` as for cams.
 - **Monitoring:** an UptimeRobot monitor may use `HEAD /health`, which

@@ -60,7 +60,7 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
   app.use(securityHeaders(cfg));
   app.get('/health', (_req, res) => {
     const b = backup.state();
-    res.set('Cache-Control', 'no-store').json({ status: 'ok', version: version(), backup: { lastReplicationAt: b.lastReplicationAt, lastSnapshotAt: b.lastSnapshotAt } });
+    res.set('Cache-Control', 'no-store').json({ status: 'ok', version: version(), backup: { lastReplicationAt: b.lastReplicationAt, lastSnapshotAt: b.lastSnapshotAt, lastManualAt: b.lastManual?.at ?? null, lastManualOk: b.lastManual?.ok ?? null } });
   });
   app.use(enrollRouter(enrollment));
   app.use(cookieParser());

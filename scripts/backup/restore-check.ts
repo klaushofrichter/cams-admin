@@ -62,9 +62,9 @@ async function main() {
     return;
   }
   if (cmd === 'snapshot') {
-    const r = await api(opt('url'), opt('cookie'), 'POST', '/backup/snapshot', {});
-    if (!r.ok) throw new Error(`snapshot failed: ${r.error}`);
-    console.log(`snapshot ${r.key}`);
+    const r = await api(opt('url'), opt('cookie'), 'POST', '/backup/now', {});
+    if (!r.ok) throw new Error(`backup now failed: litestream ${r.litestream.error ?? 'ok'}, snapshot ${r.snapshot.error ?? 'ok'}`);
+    console.log(`backup now: litestream ${r.litestream.status}, snapshot ${r.snapshot.key} (${r.snapshot.bytes} bytes)`);
     return;
   }
   if (cmd === 'dump') {
@@ -82,7 +82,7 @@ async function main() {
   }
   if (cmd === 'fetch-snapshot') {
     const st = s3Store({ bucket: env('BACKUP_S3_BUCKET'), region: 'us-east-1', endpoint: env('S3_ENDPOINT') });
-    const all = (await st.list(`${env('BACKUP_S3_PREFIX')}snapshots/`)).sort((a, b) => b.key.localeCompare(a.key));
+    const all = (await st.list(`${env('BACKUP_S3_PREFIX')}snapshots/`)).sort((a, b) => b.lastModified - a.lastModified);
     if (!all.length) throw new Error('no snapshot in the bucket');
     writeFileSync(opt('out'), gunzipSync(await st.get(all[0].key)));
     console.log(`fetched ${all[0].key}`);

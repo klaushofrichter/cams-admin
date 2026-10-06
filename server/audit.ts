@@ -8,7 +8,7 @@ export const AUDIT_ACTIONS = [
   'account-create', 'account-update', 'account-delete', 'user-create', 'user-update', 'user-delete',
   'proxy-create', 'proxy-update', 'proxy-delete', 'proxy-block', 'camera-create', 'camera-update', 'camera-delete', 'camera-adopt', 'sim-update', 'sim-delete',
   'enrollment-code-create', 'enrollment-code-cancel', 'proxy-enrolled', 'enroll-refused', 'key-revoke', 'proxy-auth-refused',
-  'backup-snapshot', 'restore-detected',
+  'backup-snapshot', 'backup-now', 'restore-detected',
   'audit-throttled',
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];

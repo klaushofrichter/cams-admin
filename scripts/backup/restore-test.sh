@@ -4,7 +4,8 @@
 # Litestream. Runs in CI (the `test` job) and on the Mac.
 #   1. the built app + `litestream replicate` against s3://restore-test/cams-admin/ci/
 #   2. accounts, users, proxies, cameras, sims, an enrollment (test client)
-#   3. a snapshot through the API
+#   3. "Backup now" through the API: a Litestream sync (control socket) and
+#      a manual snapshot to snapshots/manual-<UTC>.sqlite.gz
 #   4. both processes killed (SIGKILL)
 #   5. restored (a) from Litestream, (b) from the snapshot
 #   6. per-table counts and content hashes compared, integrity checked
@@ -27,7 +28,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-[ -f dist/server/server.js ] || npm run build:server >/dev/null
+npm run build:server >/dev/null   # always: a stale dist/ tests old code
 LITESTREAM="$(scripts/backup/litestream.sh)"
 note "litestream $("$LITESTREAM" version)"
 
@@ -42,6 +43,9 @@ npx tsx scripts/gen-signing-key.ts "$WORK/signing.pem" >/dev/null
 lsconf() { # lsconf DBFILE
   cat <<YAML
 addr: "127.0.0.1:$LS_PORT"
+socket:
+  enabled: true
+  path: $WORK/litestream.sock
 dbs:
   - path: $1
     replica:
@@ -56,7 +60,7 @@ YAML
 }
 app_env() { # app_env DBFILE PORT
   exec env NODE_ENV=development LOG_LEVEL=warn PORT="$2" PUBLIC_URL="http://127.0.0.1:$2" DB_FILE="$1" SERVER_SIGNING_KEY_FILE="$WORK/signing.pem" \
-    ALLOWED_EMAILS=restore@example.com LITESTREAM_METRICS_URL="http://127.0.0.1:$LS_PORT/metrics" TZ=America/Chicago "${@:3}"
+    ALLOWED_EMAILS=restore@example.com LITESTREAM_METRICS_URL="http://127.0.0.1:$LS_PORT/metrics" LITESTREAM_SOCKET="$WORK/litestream.sock" TZ=America/Chicago "${@:3}"
 }
 wait_health() { for _ in $(seq 1 60); do curl -fsS -o /dev/null "http://127.0.0.1:$1/health" 2>/dev/null && return 0; sleep 0.5; done; note "app on :$1 did not start"; exit 1; }
 
