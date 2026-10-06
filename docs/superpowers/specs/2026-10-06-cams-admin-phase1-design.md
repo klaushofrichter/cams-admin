@@ -1,6 +1,7 @@
 # cams-admin phase 1: fleet registry, proxy channel, dashboard (design)
 
-**Status:** draft for Klaus's review (2026-10-06). Nothing is built yet.
+**Status:** approved by Klaus (2026-10-06, "The spec is ok"), with his answers
+to the open questions folded in (§13, §15.4, §17, §18). Nothing is built yet.
 **Repos touched by phase 1:** cams-admin (new), cam-proxy (one optional
 addition, §9). cams and cam-sim are unchanged in phase 1.
 
@@ -40,8 +41,12 @@ addition, §9). cams and cam-sim are unchanged in phase 1.
     changed from here), badge row, Dependabot, branch protection, CodeQL,
     tests, Playwright e2e.
 11. **Testing:** several accounts with proxies and simulated cameras on the
-    Mac (a local-stack script). The Pi and the cluster's proxy are enrolled
-    later as the `home` account.
+    Mac (a local-stack script). The Pi and the cluster's proxy are enrolled as
+    the `home` account right after phase 1 ships (Klaus 2026-10-06; he allows
+    reconfiguring the Pi for it).
+12. **Testing emphasis** (Klaus 2026-10-06): "Make sure to have good testing
+    for the proxy monitoring and metric that go to the cams-admin." §15.4 is
+    that test plan.
 
 ## 1. Goals and non-goals
 
@@ -447,7 +452,7 @@ nothing would use it and an unused authenticated endpoint is attack surface.
   - **Why `Lax`:** the OAuth callback is a top-level redirect, and links from
     Slack must open signed in.
   - **Lifetime:** 12 hours absolute, with no silent renewal; a new Google
-    sign-in after that. Logout deletes the row.
+    sign-in after that (Klaus 2026-10-06: OK). Logout deletes the row.
   - **Bulk end:** `sessions` rows can be deleted in bulk; the `sessions-ended`
     action does it on demand.
 - **CSRF:**
@@ -458,9 +463,24 @@ nothing would use it and an unused authenticated endpoint is attack surface.
   - A cross-site form can't set the custom header, and a cross-site `fetch`
     with it triggers a CORS preflight that cams-admin never answers.
   - GETs change nothing.
-- **Rate limits:** sign-in callbacks are limited to 20 per address per 15 min.
-  API writes are limited to 120 per minute per session. With `TRUST_PROXY=1`
-  (Traefik) the limiter counts by `X-Forwarded-For`, as cams does.
+- **Rate limits never key on the client IP** (kube-setup 2026-10-06, a
+  binding code requirement with tests). Proxies on the home LAN reach the
+  public name by hairpin NAT and all arrive as the router's address, and the
+  in-cluster cam-proxy could set any `X-Forwarded-For`. So an address-keyed
+  limit would either lock out every LAN proxy at once or be bypassed by a
+  forged header. Every limit is keyed on an identity the server has
+  validated, or is global:
+  - sign-in callbacks: 60 per 15 min **in total** (there is no identity yet;
+    the OAuth `state` cookie makes each callback single-use anyway);
+  - API writes: 120 per minute **per session**;
+  - the proxy-side limits of §8.2 and §8.7: per code hash, per claimed
+    `proxyId`, per connection, and global budgets.
+
+  `TRUST_PROXY=1` stays (Traefik), but only for `req.secure` and the
+  protocol; the client address is never a limiter key and is never logged. A
+  test sends requests with rotating `X-Forwarded-For` values and asserts the
+  same budget applies, and another asserts that two "addresses" share no
+  budget split.
 - **Headers:** a strict CSP (`default-src 'self'`, no inline script),
   `frame-ancestors 'none'`, `Referrer-Policy: same-origin`, and HSTS (the
   ingress sets it too).
@@ -545,8 +565,9 @@ nothing would use it and an unused authenticated endpoint is attack surface.
 
   Each refusal is audited as `enroll-refused`. Unknown codes are throttled in
   the audit log, as cam-proxy throttles `auth-refused`.
-- **Rate limits:**
-  - 10 attempts per source address per 15 min;
+- **Rate limits** (never per client address, §7):
+  - 5 attempts per normalised code hash per 15 min (a retrying proxy with a
+    real code; a typo is a different hash);
   - 100 per 15 min in total. At 100 bits per code, guessing is hopeless
     anyway; the limits keep the audit log readable.
 - **Lifetime:** 24 h by default, 7 days at most.
@@ -763,7 +784,7 @@ proxy                                         cams-admin
 | inbound bytes per connection | 1 MiB per minute, then 4429 |
 | messages per connection | 20 per minute. Heartbeats arriving faster than one per 10 s are dropped (counted, not stored); 3 drops in a minute close with 4429 |
 | `hello` attempts per proxy id | 6 per minute |
-| failed handshakes per source address | 30 per 10 min, then the upgrade answers 429 |
+| failed handshakes | 300 per 10 min **in total** (never per source address, §7), then the upgrade answers 429 for 60 s; a failed `hello` also counts against the claimed `proxyId`'s 6 per minute |
 | open sockets without a completed `hello` | 50 in total; each must finish within 10 s |
 | connections | one per proxy (newest wins after authenticating) |
 
@@ -798,6 +819,16 @@ proxy                                         cams-admin
     `hello`.
   - Confidentiality rests on the cluster network and the NetworkPolicy. The
     heartbeat carries no secrets.
+  - **Stated plainly:** the in-cluster path
+    `http://cams-admin.cams-admin.svc.cluster.local:8080` is plain HTTP, so
+    the cluster proxy's **enrollment code crosses in clear** there, once.
+    That is accepted (kube-setup 2026-10-06): the path stays inside the
+    cluster behind NetworkPolicies on both ends, the code is one-time and
+    short-lived, and what it buys is bounded. Someone who sniffed and
+    redeemed it first would make the real proxy's enrollment fail visibly
+    (§8.10). After enrollment nothing reusable crosses: every session is
+    authenticated by the Ed25519 challenge and `hello` signatures, which a
+    sniffer can't replay on another connection.
 - Any other plain URL is a config error in cam-proxy.
 
 ### 8.10 Revocation and rotation (P1)
@@ -972,7 +1003,8 @@ proxy                                         cams-admin
 - This needs kube-setup to add egress from `cam-proxy` to the cams-admin
   pod on 8080, and ingress to cams-admin from `cam-proxy`
   (`docs/kube-setup-request.md`).
-- It comes after the first deployment, as part of enrolling `home`.
+- It comes right after the first deployment, as part of enrolling `home`
+  (Klaus 2026-10-06).
 
 ## 10. Secrets: where they live
 
@@ -1040,7 +1072,7 @@ answer `{"error": "<code>"}` with 400/401/403/404/409/413/429. Writes follow
 |---|---|---|
 | POST | `/proxy/v1/enroll` | §8.2 |
 | GET (upgrade) | `/proxy/v1/connect` | §8.3 |
-| GET | `/health` | `{status, version}`; no database detail, no counts. For the release smoke test and probes |
+| GET, HEAD | `/health` | `{status, version, backup: {lastReplicationAt, lastSnapshotAt}}` (ms or null); no counts and no other database detail. For the release smoke test, the probes and kube-setup's Grafana dead-man alert. **`HEAD /health` answers 200** with no body (UptimeRobot), which a test asserts |
 
 ### 11.4 Audit actions (closed list)
 
@@ -1128,8 +1160,12 @@ the CLI and the UI card.
 
 ### 13.1 Layout
 
-- **Bucket:** one bucket, e.g. `skylar-cams-admin-backup` (the name is
-  kube-setup's and Klaus's choice), in one region chosen by Klaus. It has:
+- **Bucket** (kube-setup 2026-10-06): a dedicated bucket
+  `klaushofrichter-k3s-cams-admin-backups` in **`us-east-1`**, where the
+  cluster's other buckets and the S3 cost alert live. It is never Velero's
+  bucket or the hostpath-backups bucket. Klaus creates the bucket, the IAM
+  user and its key himself, and the key goes straight into a file. The AWS
+  account id never appears in this public repository. The bucket has:
   - **Block Public Access:** all four settings on;
   - **versioning:** on;
   - **default encryption:** SSE-S3 (AES-256). SSE-KMS is possible but adds a
@@ -1145,10 +1181,18 @@ the CLI and the UI card.
   ```
 
   Local and CI runs use MinIO and never touch this bucket.
+- **Snapshot retention (Klaus 2026-10-06):** **30 days**, configurable with
+  `BACKUP_SNAPSHOT_RETENTION_DAYS` (1–3650). After each successful snapshot
+  the app lists `snapshots/` and deletes the objects older than the retention,
+  never the newest one, whatever its age.
 - **Lifecycle rules:**
-  - `snapshots/`: current objects expire after 90 days;
+  - `snapshots/`: current objects expire after 30 days, the same number as
+    the app's default. Raising the retention means raising this rule in the
+    same change (Klaus, in the AWS console); the app's pruning alone can't
+    keep a snapshot longer than the rule;
   - noncurrent versions (whole bucket): expire 30 days after becoming
     noncurrent;
+  - expired object delete markers: removed;
   - incomplete multipart uploads: aborted after 7 days.
 
   Litestream's own retention (`retention: 72h`, a snapshot every 24 h) prunes
@@ -1169,10 +1213,14 @@ the CLI and the UI card.
       "Resource": "arn:aws:s3:::BUCKET",
       "Condition": { "StringLike": { "s3:prefix": ["cams-admin/prod/", "cams-admin/prod/*"] } } },
     { "Sid": "ObjectsInPrefix", "Effect": "Allow",
-      "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+      "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject",
+                 "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"],
       "Resource": "arn:aws:s3:::BUCKET/cams-admin/prod/*" } ] }
 ```
 
+- `BUCKET` is `klaushofrichter-k3s-cams-admin-backups`. The multipart actions
+  let Litestream and the SDK clean up an interrupted upload (kube-setup
+  2026-10-06).
 - The deletes Litestream needs for retention create only delete markers,
   because of versioning.
 - No `s3:GetObjectVersion`, `s3:DeleteObjectVersion` or `s3:PutLifecycle*`:
@@ -1191,9 +1239,14 @@ the CLI and the UI card.
 
 ### 13.3 Continuous replication (Litestream)
 
-- Litestream runs as a **sidecar** container in the pod, pinned by digest,
-  with `litestream replicate -config /etc/litestream.yml`. It replicates
-  `/var/lib/cams-admin/cams-admin.db` to `s3://BUCKET/cams-admin/prod/litestream`.
+- Litestream runs as a **native sidecar** (an init container with
+  `restartPolicy: Always`; the cluster runs Kubernetes 1.36), pinned by
+  digest, with `litestream replicate -config /etc/litestream.yml`. The order
+  is: the `restore` init container, then the `litestream` sidecar, then the
+  app. Kubernetes stops a native sidecar after the app, so Litestream sees the
+  app's last writes; `terminationGracePeriodSeconds: 60` leaves time for its
+  final sync. It replicates
+  `/var/lib/cams-admin/cams-admin.db` to `s3://klaushofrichter-k3s-cams-admin-backups/cams-admin/prod/litestream`.
 - **The window of loss (RPO)** is seconds: Litestream's sync interval, 1 s
   by default.
 - **An init container** runs
@@ -1201,9 +1254,17 @@ the CLI and the UI card.
   so a fresh volume, such as a new node or a cloud move, comes up with the
   latest state automatically. An existing database is never overwritten. The
   flag names are checked against the pinned Litestream release in the plan.
-- Litestream exposes metrics on its own port: the replica lag, and the
-  errors. The dashboard's backup card shows them (read over localhost) next
-  to the last snapshot.
+- Litestream exposes Prometheus metrics on its own port (`addr: ":9090"`).
+  The pod carries `k8s.grafana.com/scrape: "true"`,
+  `k8s.grafana.com/metrics.portNumber: "9090"` (not `prometheus.io/*`), so
+  the cluster's Grafana collects them.
+- The app polls the same endpoint over localhost every 30 s
+  (`LITESTREAM_METRICS_URL`). It records `lastReplicationAt`: the last time
+  it saw Litestream's replication counter advance. The plan pins the metric
+  name against the Litestream release. `/health` reports it, together with
+  the last successful snapshot, so kube-setup's Grafana dead-man alert can
+  watch the backup from outside. The dashboard's backup card shows the same
+  numbers.
 
 ### 13.4 Daily snapshot
 
@@ -1294,21 +1355,34 @@ request says so, so that kube-setup doesn't add it by habit.
   - `build-push.yml`: the default branch → `:main`, never deployed.
   - `deploy-production.yml`: a merge to `production` runs on the in-cluster
     runner. It pins the image digest, patches the Deployment, waits for the
-    rollout, and polls `https://cams-admin.skylar.technology/health` until it
-    serves the new version. It then cuts `vYYYY.MM.DD.N` with notes from
+    rollout by polling the Deployment's status (the runner may only get,
+    watch and patch, so no `kubectl rollout status`; as in cam-sim and
+    cam-proxy), and polls `https://cams-admin.skylar.technology/health` until
+    it serves the new version. It then holds a WebSocket through the public
+    ingress for at least 5 minutes (`scripts/release/ws-hold.ts`, with a canary
+    proxy key from a runner Secret; skipped with a warning until that Secret
+    exists), which proves that Traefik keeps a long-lived connection. It then
+    cuts `vYYYY.MM.DD.N` with notes from
     `## [Unreleased]` in CHANGELOG.md and clears that section, as cams does.
 - **Cluster shape** (requested from kube-setup, `docs/kube-setup-request.md`):
   - **Namespaces:** `cams-admin` and `cams-admin-runner`.
   - **Deployment** `cams-admin`: `replicas: 1`, `strategy: Recreate`, the
-    Litestream sidecar and the restore init container (§13.3).
+    restore init container and the Litestream native sidecar (§13.3),
+    `terminationGracePeriodSeconds: 60`, and an `emptyDir` `/tmp` (Memory,
+    16Mi, as cam-proxy) for the read-only root filesystem.
   - **Not a Knative service:** a WebSocket would be cut at `timeoutSeconds`,
     and scale-to-zero or two revisions would break the single-writer SQLite.
   - **Service:** port 8080.
-  - **Volume:** a 1Gi `local-path` PVC with reclaim policy Retain.
-  - **Ingress:** a Traefik Ingress for `cams-admin.skylar.technology` with a
-    cert-manager Let's Encrypt certificate (`issue-temporary-certificate`,
-    as on the shared gateway). WebSocket upgrades pass through Traefik
+  - **Volume:** a 1Gi `local-path` PVC; kube-setup patches its PV to
+    `Retain` after the first bind.
+  - **Ingress:** its own Traefik Ingress in namespace `cams-admin` (not the
+    shared knative-gateway Ingress) for `cams-admin.skylar.technology`, with
+    a cert-manager Let's Encrypt certificate over HTTP-01
+    (`issue-temporary-certificate`). WebSocket upgrades pass through Traefik
     unchanged.
+  - **Timeouts:** Traefik's entrypoint `readTimeout` is 60 s. The server
+    pings every proxy socket every 25 s and proxies send a heartbeat every
+    30 s, so no connection is ever idle for 60 s.
   - **Secrets:**
     - `cams-admin-oauth`: Google client, `SYSADMIN_EMAILS`;
     - `cams-admin-signing`: the Ed25519 key;
@@ -1318,8 +1392,13 @@ request says so, so that kube-setup doesn't add it by habit.
     printing them.
   - **NetworkPolicy:**
     - ingress from Traefik on 8080, and from the `cam-proxy` pod on 8080;
-    - egress to DNS, and to 443 on non-cluster addresses (Google OAuth and
-      token endpoints, S3; NetworkPolicy can't name hosts);
+    - with default-deny ingress, also Traefik (`kube-system`,
+      `app.kubernetes.io/name=traefik`) to pods labelled
+      `acme.cert-manager.io/http01-solver=true` on 8089, or the certificate
+      never issues;
+    - egress to DNS, and to TCP 443 at `0.0.0.0/0` except `10.42.0.0/16`,
+      `10.43.0.0/16` and `192.168.1.0/24` (Google OAuth and token endpoints,
+      S3; NetworkPolicy can't name hosts);
     - in `cam-proxy`: egress to the cams-admin pod on 8080.
   - **Runner:** a repo-scoped `cams-admin-runner` with a `deploy-sa` that may
     get, watch and patch `deployments/cams-admin` only.
@@ -1350,6 +1429,8 @@ request says so, so that kube-setup doesn't add it by habit.
 | `BACKUP_S3_BUCKET`, `BACKUP_S3_PREFIX`, `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | unset = no snapshot upload (dev) | |
 | `S3_ENDPOINT` | unset | MinIO for local and CI only |
 | `BACKUP_SNAPSHOT_AT` | `03:15` | in `TZ` |
+| `BACKUP_SNAPSHOT_RETENTION_DAYS` | 30 | snapshots older than this are deleted after each successful snapshot (§13.1) |
+| `LITESTREAM_METRICS_URL` | unset | `http://127.0.0.1:9090/metrics` in the pod; unset = `lastReplicationAt` stays null (dev) |
 | `LOG_LEVEL` | info | |
 
 ## 15. Testing
@@ -1378,8 +1459,8 @@ request says so, so that kube-setup doesn't add it by habit.
     the real server: enroll, connect, heartbeat, replace, revoke mid-session,
     oversize, flood, `bye`;
   - the restore test (§13.6).
-- **Contract test with the real cam-proxy**, on GitHub Actions only, as cams
-  does with its pinned image:
+- **Contract test with the real cam-proxy** (see also §15.4 for the shared
+  schema), on GitHub Actions only, as cams does with its pinned image:
   - start a cam-sim and the cam-proxy image pinned by tag and digest;
   - enroll it with the CLI against the test server;
   - assert the dashboard API shows its camera online;
@@ -1441,9 +1522,154 @@ request says so, so that kube-setup doesn't add it by habit.
 - **Afterwards** it prints the URLs. `--down` stops everything; its work
   directory is outside the repo, as in cams's livestack.
 - **Never on the Mac:** the real camera, the Pi or the cluster.
-- **Later, with Klaus:** the `home` account, enrolling the Pi and the cluster
-  proxy. The Pi needs a cam-proxy release with the client and one enrollment
+- **Right after phase 1 ships** (Klaus 2026-10-06): the `home` account,
+  enrolling the Pi and the cluster proxy. Klaus allows reconfiguring the Pi
+  for it. The Pi needs a cam-proxy release with the client and one enrollment
   (CLI or UI). The cluster proxy needs the kube-setup egress (§9.4).
+
+### 15.4 Proxy monitoring and metrics: the test plan (Klaus's emphasis)
+
+Klaus, 2026-10-06: "Make sure to have good testing for the proxy monitoring
+and metric that go to the cams-admin." This section is binding for both
+repos. Every test below names the repo it lives in.
+
+**The shared contract (both repos).**
+- The wire format is written down once, as JSON Schema (draft 2020-12), in
+  cams-admin `contract/v1/`:
+  - `envelope.schema.json` (§8.4), one schema per message type
+    (`challenge`, `hello`, `welcome`, `heartbeat`, `ack`, `error`, `bye`),
+    `enroll-request.schema.json` and `enroll-response.schema.json` (§8.2);
+  - `health-summary.schema.json`: cam-proxy's summary, schema 1, every field
+    of `HealthSummary` in `src/health/summary.ts` with its type and bounds;
+  - `fixtures/`: valid and invalid example messages, one file each, named
+    for what they show (`heartbeat-4cam.json`, `heartbeat-truncated.json`,
+    `hello-bad-sig.json`, …), plus `vectors.json`: fixed Ed25519 keys,
+    nonces and the exact signed strings with their signatures (§8.2, §8.3).
+- Each schema has a **strict** variant (`additionalProperties: false`
+  everywhere) for tests. The server stays lenient at run time (§8.1: unknown
+  fields are ignored), so the strict variant is what catches drift.
+- **cams-admin** tests: the server's validator accepts every valid fixture
+  and refuses every invalid one with the documented close code or error; the
+  validator and the schema agree on a generated corpus (property test: random
+  mutations of the valid fixtures, the validator's verdict equals the strict
+  schema's for the bound checks it shares); the signature code reproduces
+  `vectors.json` byte for byte.
+- **cam-proxy** keeps a copy in `test/contract/cams-admin-v1/` (vendored, the
+  source commit in a `SOURCE` file) and tests that:
+  - the heartbeat it builds from the four-camera fixture, the one-camera Pi
+    fixture and a truncated one validates against the **strict** schema. A
+    new summary field in cam-proxy therefore fails cam-proxy's own test until
+    the contract in cams-admin gains it, and cams-admin then shows it;
+  - its `hello`, enrollment request and signatures reproduce `vectors.json`.
+- **Drift check:** a cam-proxy CI step fetches `contract/v1/` from
+  cams-admin's `main` and fails when the vendored copy differs from it
+  without a newer `SOURCE`. cams-admin's CI runs the reverse: a job fetches
+  cam-proxy's `main` and builds a heartbeat with its real `buildHealth` from
+  its fixture, then validates it against the strict schema. Neither side can
+  change the payload alone.
+
+**Protocol conformance (cams-admin, integration, the real server and the
+protocol test client of §15.5).**
+- Envelope: missing `v`/`type`/`id`/`seq`/`body`; wrong types; an unknown `v`
+  (4400); an unknown `type` (`error unsupported_type`, connection stays up);
+  unknown extra fields (ignored); `seq` starting at 0, a gap, a repeat
+  (4400).
+- Versioning: no subprotocol, only unknown ones (426 with the supported
+  list), `cams-admin.v2, cams-admin.v1` (server picks v1); a browser
+  `Origin` (403).
+- Enrollment: valid; used; expired (fake clock at exactly `expires_at`);
+  cancelled; a code of a `revoked` proxy; a bad proof; a proof for another
+  key; an oversize body (413); `v: 2`; two concurrent redemptions (exactly
+  one 201); re-enrollment revokes the old key and closes its live socket
+  (4401).
+- Key signature: a `hello` signed with the wrong key, a revoked key, another
+  proxy's key, a key of a deleted proxy; a challenge signature the client
+  must refuse (the test client checks it like cam-proxy will).
+- Replay: a recorded `hello` replayed on a new connection; a `hello` with a
+  nonce older than 10 s; a `hello` for connection A sent on connection B.
+  All 4401, each with the audit reason.
+- Size and rate limits: a frame of 256 KiB + 1 (4413); 1 MiB + 1 per minute
+  (4429); heartbeats faster than one per 10 s (dropped and counted, the
+  third drop in a minute 4429); 7 `hello`s for one `proxyId` in a minute;
+  51 sockets that never say `hello`; 301 failed handshakes in 10 min (429).
+  **No limit keys on the client address:** the same tests run with
+  rotating `X-Forwarded-For` values and get the same results.
+
+**Heartbeat and metric correctness, end to end (cams-admin integration and
+e2e).**
+- **Every field arrives, is stored and is shown.** A table test walks the
+  strict health-summary schema: for every leaf field it sends a heartbeat in
+  which that field has a distinctive value, then asserts the value is in
+  `proxy_status.summary`, in `GET …/proxies/:id/status`, and (e2e) on the
+  proxy page's Live status. A field in the schema with no assertion fails
+  the test, so a new field can't be left unshown.
+- **Derived values:** `ok`, `problemCount`, per-camera `online`, `version`,
+  `clock_skew_ms`, the reconciliation badges and the pin check, from
+  heartbeats built to produce each one.
+- **Ageing out:** with `OFFLINE_AFTER_S` = 3 and a fake clock (unit) and a
+  real one (integration): online at 2.9 s, offline at 3.0 s; cameras turn
+  `unknown`, never their last value; an `offline` status event and an SSE
+  `status` event arrive; the stored summary stays for the detail page,
+  marked stale.
+- **Reconnect and backoff:** a socket closed without `bye` keeps the proxy
+  online until 90 s (3 s in tests) after its last heartbeat; a reconnect
+  inside the window shows no outage and writes `connected` but no
+  `offline`; a `bye restart` shows `stopped`, not offline. On the client
+  side (the test client here, cam-proxy's client there, §15.2): full-jitter
+  backoff bounds, the reset after 60 s up, and the reaction to each close
+  code of §8.8.
+- **Clock skew:** a proxy 10 minutes behind and 10 minutes ahead is still
+  accepted; its skew is stored and shown; over 60 s is a problem on the
+  dashboard; `ts` never changes liveness (server time only).
+- **Restart of cams-admin:** the stored status survives; proxies show stale
+  until they reconnect; then live again without a page reload.
+
+**Fault injection (cams-admin integration and the local stack).**
+- cams-admin down, then started: proxies reconnect within the backoff cap
+  (test cap: 5 s) and the dashboard recovers on its own.
+- cams-admin restarting mid-heartbeat (`1001 going_away`, then gone).
+- A network drop (a TCP proxy in the test that blackholes traffic): the
+  client notices by the missing `ack` after 3 heartbeats and reconnects;
+  the server marks offline by age. A half-open socket is reaped by the
+  server's ping/pong.
+- A slow link (the same TCP proxy adding 2 s latency and 32 KiB/s): the
+  heartbeat still arrives within its interval and nothing is dropped.
+- Malformed messages: invalid JSON, a binary frame, a valid envelope with a
+  hostile summary (64 KiB strings, 1000 cameras, nested depth 1000, HTML
+  and control characters). The server refuses or clamps; the UI renders
+  text only (e2e asserts no element was injected).
+- A revoked key while connected (4403, then the client's `rejected` state);
+  a blocked proxy; a deleted account while its proxies are connected.
+- Two proxies with the same key: the newest wins (4409), the other waits
+  30 s; over two minutes the dashboard shows at most the expected flaps and
+  an audit trail of replacements.
+
+**Load (local, on the Mac; numbers go in the PR).**
+- `npm run load -- --proxies 50 --cameras 4 --duration 60m` runs 50
+  simulated proxies with 4 cameras each (realistic four-camera summaries,
+  heartbeats every 30 s with jitter, and 1 % of heartbeats changing a
+  camera's state) against a built cams-admin with a real SQLite file.
+- **Pass criteria:** every heartbeat acknowledged; no proxy shown offline
+  while it was sending; p99 heartbeat→ack latency under 50 ms; server RSS
+  under 200 MiB and flat over the last 30 minutes; the database under
+  50 MiB; SSE status events delivered to two dashboard streams for every
+  state change; the event loop lag p99 under 20 ms.
+- A short variant (`--duration 2m`) runs in CI as part of `test`, with the
+  same criteria scaled down.
+
+**The real cam-proxy (once its client is released).** The contract test of
+§15.1 (pinned cam-proxy image + cam-sim on GitHub Actions), and the local
+stack of §15.3 running real cam-proxies against cams-admin.
+
+### 15.5 Protocol test client (cams-admin)
+
+cams-admin ships its own client of the protocol in `test-client/` (also the
+engine of the load test and the release WebSocket check): enroll with a
+code, keep the key file, connect, verify the challenge, `hello`, send
+heartbeats from a configurable summary generator (N cameras, faults on
+demand), honour `ack.nextInS`, reconnect with the §8.8 backoff, and send
+`bye`. It is written against the contract, not the server's code, so it is
+a second, independent implementation of the protocol.
 
 ## 16. UI
 
@@ -1506,11 +1732,13 @@ colour comes from them. It is desktop-first and usable at phone width.
     owner's override; it is never flipped without his asking);
   - no force pushes or deletions;
   - no required reviews.
-- **Default branch:** unprotected. Repository setting
-  `delete_branch_on_merge: true`.
-- The repository was created with `develop` as its default branch. The other
-  camera repos use `main` + `production`. This spec assumes `main`, after
-  renaming `develop` (open question 1).
+- **Default branch: `main`** (renamed from `develop` on 2026-10-06, Klaus),
+  unprotected, as in the Obsidian note *Cluster/Building a New Service*:
+  feature branch → PR → `main` → promotion PR → `production` → deploy.
+  Repository setting `delete_branch_on_merge: true`.
+- **`production`** is created from `main` together with the release workflow
+  (the first promotion), and protected as above in the same step. Until then
+  there is nothing to protect and no deploy.
 - **Repository files:** `CLAUDE.md`, `CHANGELOG.md` (`## [Unreleased]`) and
   `.env.example` (names only). `.superpowers/` is gitignored.
 - **Public repo:**
@@ -1519,15 +1747,9 @@ colour comes from them. It is desktop-first and usable at phone width.
   - test fixtures use RFC 5737 / RFC 2606 names and addresses;
   - no clips or media.
 
-## 18. Open questions for Klaus
+## 18. Open questions
 
-1. **Default branch:** may the repository's `develop` be renamed to `main`,
-   to match cams, cam-proxy and cam-sim?
-2. **S3:** the region and bucket name, and is 90 days of daily snapshots
-   right? (The bucket and IAM user are in `docs/kube-setup-request.md`.)
-3. **Sessions:** is a 12-hour system-administrator session, with a fresh
-   Google sign-in after it, right for you?
-4. **Enrolling `home`:** do you want the Pi and the cluster's proxy enrolled
-   as soon as P1 is released, or after a period with only the Mac test
-   accounts? The Pi needs a cam-proxy release and one enrollment; the
-   cluster's proxy needs the kube-setup egress.
+None. Resolved on 2026-10-06: the default branch is `main` (§17); snapshot
+retention is 30 days, configurable (§13.1); the 12-hour session stays (§7);
+`home` is enrolled right after phase 1 ships (§15.3); the bucket, region and
+IAM additions came from the kube-setup session (§13.1, §13.2).
