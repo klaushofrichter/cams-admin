@@ -115,7 +115,14 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
       return out;
     },
     async listen(port = cfg.port, host?: string) {
-      await new Promise<void>((r) => http.listen(port, host, r));
+      // An error (EADDRINUSE) rejects instead of hanging.
+      await new Promise<void>((resolve, reject) => {
+        http.once('error', reject);
+        http.listen(port, host, () => {
+          http.off('error', reject);
+          resolve();
+        });
+      });
       timer = setInterval(tick, cfg.tickMs);
       timer.unref();
       backup.start?.();

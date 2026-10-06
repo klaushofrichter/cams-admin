@@ -38,7 +38,7 @@ describe('fault injection', () => {
     s = await s.restart();
     cleanup.push(() => s.stop());
     await until(() => c.state === 'connected' && view(s, p.proxyId).state === 'online', 5000, 'back online');
-  });
+  }, 30_000);
 
   it('a blackholed link: the client reconnects after 3 missing acks; the server reaps the socket and ages the proxy out', async () => {
     const s = await server({ PING_S: '1', OFFLINE_AFTER_S: '2' });

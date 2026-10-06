@@ -21,3 +21,15 @@ describe('/health', () => {
     expect(r.text ?? '').toBe('');
   });
 });
+
+describe('listen', () => {
+  const dir = tmpDir();
+  it('rejects on a port in use instead of hanging', async () => {
+    const a = testApp(dir);
+    const b = testApp(dir);
+    const port = await a.listen(0, '127.0.0.1');
+    await expect(b.listen(port, '127.0.0.1')).rejects.toThrow(/EADDRINUSE/);
+    await a.close();
+    await b.close();
+  });
+});
