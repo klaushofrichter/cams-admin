@@ -161,7 +161,7 @@ secret stored as a hash.**
 **R4. Backup: Litestream to AWS S3, plus a daily `VACUUM INTO` snapshot to the
 same bucket under its own prefix.**
 
-- MinIO is used only as the local and CI test target.
+- A local S3 (SeaweedFS in Docker; MinIO no longer publishes images) is the only local and CI test target.
 - The details, the IAM policy and the restore procedure are in §13. The bucket
   and IAM setup is a request (`docs/kube-setup-request.md`).
 
@@ -202,10 +202,11 @@ same bucket under its own prefix.**
   belong to one process. The Deployment has `replicas: 1` and
   `strategy: Recreate`. Horizontal scale is not a goal: tens of proxies send
   one small message per 30 s each.
-- **In-memory state:** the open connections (`proxyId → connection`) and
-  the per-proxy rate counters. Everything shown on the dashboard is also
-  written to `proxy_status`, so a restart shows the last known state, marked
-  stale until the proxies reconnect.
+- **In-memory state:** the open connections (`proxyId → connection`), the
+  per-proxy rate counters, and the live status of every proxy. Meaningful
+  changes are written at once and the rest every 10 min to `proxy_status`
+  (§13.3, S3 cost), so a restart shows the last known state, marked stale
+  until the proxies reconnect.
 
 ## 4. Data model
 
@@ -423,7 +424,7 @@ nothing would use it and an unused authenticated endpoint is attack surface.
 - **Account `viewer`:** in cams (P4), it may watch live video, recordings and
   the archive, and change nothing.
 - **System administrator:** not a role in any account. It is whoever is in
-  `SYSADMIN_EMAILS`. A system administrator who also uses cams needs a row in
+  `ALLOWED_EMAILS`. A system administrator who also uses cams needs a row in
   each account, like anyone else.
 - An account with no `admin` user is allowed; the UI warns about it.
 
@@ -431,13 +432,17 @@ nothing would use it and an unused authenticated endpoint is attack surface.
 
 - **Google OAuth** (authorization code flow, scope `openid email`) with its
   own OAuth client, separate from cams's. The redirect URI is
-  `https://cams-admin.skylar.technology/auth/google/callback`, plus
-  `http://localhost:8090/auth/google/callback` for development. The code
+  `https://cams-admin.skylar.technology/auth/callback` (registered by Klaus;
+  the app serves the callback on `GOOGLE_REDIRECT_URI`'s path, which must be
+  under `/auth/` on the `PUBLIC_URL` origin), plus
+  `http://localhost:8090/auth/callback` for development. The flow uses PKCE
+  (S256) and an OIDC `nonce`; the ID token's signature, `iss`, `aud`, `exp`,
+  `iat`/`nbf` (2 min skew), `nonce` and `email_verified` are checked. The code
   reuses cams's proven pieces:
   - the state nonce in an httpOnly cookie, compared in constant time;
   - `prompt=select_account`, so that Logout really logs out;
   - the email from the ID token, with `email_verified` required.
-- **Allowlist:** `SYSADMIN_EMAILS`, comma-separated, normalised like account
+- **Allowlist:** `ALLOWED_EMAILS`, comma-separated, normalised like account
   emails. It is re-read and **re-checked on every request** (cams's
   `getAllowedEmails` pattern), so removing an email ends that person's
   access at the next request. A refused sign-in is audited (`signin-refused`)
@@ -463,6 +468,9 @@ nothing would use it and an unused authenticated endpoint is attack surface.
   - A cross-site form can't set the custom header, and a cross-site `fetch`
     with it triggers a CORS preflight that cams-admin never answers.
   - GETs change nothing.
+- **Sign-in limit:** completed callbacks that fail are counted in total
+  (after the state check, successes not counted), so junk requests can't lock
+  anyone out.
 - **Rate limits never key on the client IP** (kube-setup 2026-10-06, a
   binding code requirement with tests). Proxies on the home LAN reach the
   public name by hairpin NAT and all arrive as the router's address, and the
@@ -783,8 +791,8 @@ proxy                                         cams-admin
 | frame size (`maxPayload`) | 256 KiB |
 | inbound bytes per connection | 1 MiB per minute, then 4429 |
 | messages per connection | 20 per minute. Heartbeats arriving faster than one per 10 s are dropped (counted, not stored); 3 drops in a minute close with 4429 |
-| `hello` attempts per proxy id | 6 per minute |
-| failed handshakes | 300 per 10 min **in total** (never per source address, §7), then the upgrade answers 429 for 60 s; a failed `hello` also counts against the claimed `proxyId`'s 6 per minute |
+| `hello`s per proxy id | 6 per minute, counted only after the signature verified (a forged hello naming a victim's id costs it nothing), then 4429 |
+| failed handshakes | bad `hello`s only (key, nonce, signature; never idle timeouts, which the pending cap bounds): 300 per 10 min in total. Past that, upgrades are **still accepted** up to the pending cap and a valid `hello` still gets in, but new sockets get a 2 s `hello` deadline for 10 min. No upgrade is refused for it, so an attacker can't keep real proxies out (security review 2026-10-06) |
 | open sockets without a completed `hello` | 50 in total; each must finish within 10 s |
 | connections | one per proxy (newest wins after authenticating) |
 
@@ -1033,7 +1041,7 @@ answer `{"error": "<code>"}` with 400/401/403/404/409/413/429. Writes follow
 
 | method | path | |
 |---|---|---|
-| GET | `/auth/google/login`, `/auth/google/callback`; POST `/auth/logout` | sign-in and out |
+| GET | `/auth/google/login`, `/auth/callback` (the path of `GOOGLE_REDIRECT_URI`); POST `/auth/logout` | sign-in and out |
 | GET | `/api/v1/me` | `{email, expiresAt}` |
 | GET | `/api/v1/dashboard` | every account with its proxies (state, last heartbeat age, ok, problems, version, pin check) and cameras (state, reconciliation), plus the backup card |
 | GET | `/api/v1/live` | SSE: `status` events (`{proxyId, state, ok, problemCount, lastHeartbeatAt, cameras:[{ref, online}]}`) on every change and at least every 30 s per online proxy; `registry` events (`{type, id}`) when a row changes, so other open tabs reload it. Heartbeat comment every 25 s. At most 5 streams per session |
@@ -1072,7 +1080,7 @@ answer `{"error": "<code>"}` with 400/401/403/404/409/413/429. Writes follow
 |---|---|---|
 | POST | `/proxy/v1/enroll` | §8.2 |
 | GET (upgrade) | `/proxy/v1/connect` | §8.3 |
-| GET, HEAD | `/health` | `{status, version, backup: {lastReplicationAt, lastSnapshotAt}}` (ms or null); no counts and no other database detail. For the release smoke test, the probes and kube-setup's Grafana dead-man alert. **`HEAD /health` answers 200** with no body (UptimeRobot), which a test asserts |
+| GET, HEAD | `/health` | `{status, version, backup: {lastReplicationAt, lastSnapshotAt, lastManualAt, lastManualOk}}` (ms or null); no counts and no other database detail. For the release smoke test, the probes and kube-setup's Grafana dead-man alert. **`HEAD /health` answers 200** with no body (UptimeRobot), which a test asserts |
 
 ### 11.4 Audit actions (closed list)
 
@@ -1081,7 +1089,7 @@ answer `{"error": "<code>"}` with 400/401/403/404/409/413/429. Writes follow
 | sign-in | `signin`, `signin-refused`, `signout`, `sessions-ended` |
 | registry | `account-create`, `account-update`, `account-delete`, `user-create`, `user-update`, `user-delete`, `proxy-create`, `proxy-update`, `proxy-delete`, `proxy-block`, `camera-create`, `camera-update`, `camera-delete`, `camera-adopt`, `sim-update`, `sim-delete` |
 | enrollment and keys | `enrollment-code-create`, `enrollment-code-cancel`, `proxy-enrolled`, `enroll-refused`, `key-revoke`, `proxy-auth-refused` |
-| backup and system | `backup-snapshot`, `restore-detected` |
+| backup and system | `backup-snapshot`, `backup-now`, `restore-detected` |
 | throttling | `audit-throttled` |
 
 - `proxy-auth-refused` and `enroll-refused` are throttled to one record per
@@ -1180,7 +1188,9 @@ the CLI and the UI card.
   cams-admin/dev/…                         optional: a cluster or cloud test instance
   ```
 
-  Local and CI runs use MinIO and never touch this bucket.
+  Local and CI runs use a local S3 (SeaweedFS) and never touch this bucket;
+  the first real-bucket check happens at the first deploy, coordinated with
+  Klaus.
 - **Snapshot retention (Klaus 2026-10-06):** **30 days**, configurable with
   `BACKUP_SNAPSHOT_RETENTION_DAYS` (1–3650). After each successful snapshot
   the app lists `snapshots/` and deletes the objects older than the retention,
@@ -1195,8 +1205,9 @@ the CLI and the UI card.
   - expired object delete markers: removed;
   - incomplete multipart uploads: aborted after 7 days.
 
-  Litestream's own retention (`retention: 72h`, a snapshot every 24 h) prunes
-  its prefix. With versioning on, a deletion only leaves a noncurrent version
+  Litestream's own retention (Litestream 0.5.17's top-level `snapshot:`
+  block: `interval: 24h`, `retention: 720h`, i.e. 30 days like the
+  snapshots; coordinator 2026-10-06) prunes its prefix. With versioning on, a deletion only leaves a noncurrent version
   for 30 days, so a bad or compromised client can't destroy history outright.
 
 ### 13.2 IAM (least privilege)
@@ -1247,8 +1258,26 @@ the CLI and the UI card.
   app's last writes; `terminationGracePeriodSeconds: 60` leaves time for its
   final sync. It replicates
   `/var/lib/cams-admin/cams-admin.db` to `s3://klaushofrichter-k3s-cams-admin-backups/cams-admin/prod/litestream`.
-- **The window of loss (RPO)** is seconds: Litestream's sync interval, 1 s
-  by default.
+- **The window of loss (RPO)** is up to 1 h: Litestream's
+  `sync-interval: 1h` (Klaus 2026-10-06: not mission critical yet; S3 cost),
+  compactions every 1 h and 24 h (`deploy/litestream.yml`, configurable
+  there). That window applies only when the volume itself is lost: a
+  graceful stop (Recreate, a node drain) uploads everything, because the
+  native sidecar stops after the app and syncs on SIGTERM (checked with
+  0.5.17, 2026-10-06). The daily snapshot is independent of it.
+- **Writes and S3 cost** (PUTs at $0.005 per 1000; the account alerts at
+  $5/month; kube-setup 2026-10-06):
+  - The live status (heartbeats, last seen, the current summary) is kept
+    **in memory**. SQLite is written only for meaningful changes (a proxy or
+    camera going online or offline, problems, version, pin, connect, stop,
+    enrollment, registry and audit writes) and by a coarse snapshot of the
+    status every 10 min (`STATUS_SNAPSHOT_S`) for the dashboard after a
+    restart. A steady fleet writes about 6 transactions an hour.
+  - `test/write-budget.test.ts` runs 20 proxies × 4 cameras for a simulated
+    hour and asserts at most 8 write transactions.
+  - Expected with the hourly sync: under 2,000 PUTs a month (Litestream at
+    most 24 syncs a day plus compactions, the daily snapshot and its
+    pruning), a few cents.
 - **An init container** runs
   `litestream restore -if-db-not-exists -if-replica-exists -o /var/lib/cams-admin/cams-admin.db s3://…`,
   so a fresh volume, such as a new node or a cloud move, comes up with the
@@ -1283,7 +1312,30 @@ the CLI and the UI card.
   version, so it is the fallback if a replica is unusable. It is a single
   file Klaus can open with `sqlite3`.
 - **Alerts:** a failed snapshot, or none in 26 h, shows red on the dashboard.
-  A failed Litestream (lag over 5 min) does too.
+  So does Litestream when no sync has advanced for 2 × its sync interval +
+  5 min (`LITESTREAM_SYNC_INTERVAL_S`, 3600 to match `deploy/litestream.yml`;
+  security review 2026-10-06: a fixed 5 min would fire constantly with the
+  hourly sync). `/health` reports `lastReplicationAt` for kube-setup's
+  dead-man alert, which must use the same window.
+
+### 13.4a Backup now (Klaus 2026-10-06)
+
+- A **Backup now** button on the Backup page (and the dashboard's backup
+  card), "which can be used ahead of some major change":
+  `POST /api/v1/backup/now`, system administrator only, with the CSRF rules
+  of §7, at most 6 an hour in total, audited as `backup-now`.
+- It (1) forces Litestream to upload its pending changes through
+  Litestream 0.5.17's control socket (`POST /sync` with `wait`, on
+  `LITESTREAM_SOCKET`, an emptyDir shared by the app and the sidecar), and
+  (2) writes a manual snapshot like the daily one, as
+  `snapshots/manual-<UTC>.sqlite.gz`, under the same 30-day lifecycle.
+- The answer and the page show the time, the size, and each step's success
+  or its error ("Litestream control socket unreachable", the S3 error);
+  `GET /api/v1/backup` and `/health` carry the last manual run next to the
+  last automatic replication and snapshot.
+- Tests: unit tests with a fake control socket and a failing store; the
+  restore test runs it against the local S3 and a real Litestream. Never the
+  real bucket from tests or the Mac.
 
 ### 13.5 Restore procedure (also in `docs/restore.md`, written with the code)
 
@@ -1314,10 +1366,12 @@ the CLI and the UI card.
 
 ### 13.6 Tested restore
 
-- **In CI (every PR):** a `restore` job starts MinIO as a service container,
+- **In CI (every PR):** a `restore` step starts a local S3 (SeaweedFS in
+  Docker, pinned by digest: MinIO no longer publishes images, checked
+  2026-10-06; never the real bucket),
   then runs `scripts/backup/restore-test.sh`:
   1. Start the built app with a Litestream binary (pinned) against
-     `s3://test/cams-admin/ci/` on MinIO.
+     `s3://restore-test/cams-admin/ci/` on the local S3.
   2. Create accounts, users, proxies and an enrollment through the API.
   3. Trigger a snapshot.
   4. Kill both processes.
@@ -1384,7 +1438,7 @@ request says so, so that kube-setup doesn't add it by habit.
     pings every proxy socket every 25 s and proxies send a heartbeat every
     30 s, so no connection is ever idle for 60 s.
   - **Secrets:**
-    - `cams-admin-oauth`: Google client, `SYSADMIN_EMAILS`;
+    - `cams-admin-oauth`: Google client, `ALLOWED_EMAILS`;
     - `cams-admin-signing`: the Ed25519 key;
     - `cams-admin-backup`: S3.
 
@@ -1421,15 +1475,16 @@ request says so, so that kube-setup doesn't add it by habit.
 | `PROXY_CONNECT_URL` | from `PUBLIC_URL` | override (e.g. the cluster Service URL is given to the cluster proxy by hand) |
 | `DB_FILE` | `/var/lib/cams-admin/cams-admin.db` | |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI` | required | |
-| `SYSADMIN_EMAILS` | required | comma-separated |
+| `ALLOWED_EMAILS` | required | comma-separated |
 | `SERVER_SIGNING_KEY_FILE` | required | PKCS#8 PEM, mode 600; `scripts/gen-signing-key.ts` makes one |
 | `TRUST_PROXY` | 1 | |
 | `HEARTBEAT_S`, `OFFLINE_AFTER_S` | 30, 90 | the tests set 1 and 3 |
 | `ENROLL_CODE_DEFAULT_H` | 24 | |
 | `BACKUP_S3_BUCKET`, `BACKUP_S3_PREFIX`, `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | unset = no snapshot upload (dev) | |
-| `S3_ENDPOINT` | unset | MinIO for local and CI only |
+| `S3_ENDPOINT` | unset | the local S3 (SeaweedFS) for local and CI only |
 | `BACKUP_SNAPSHOT_AT` | `03:15` | in `TZ` |
 | `BACKUP_SNAPSHOT_RETENTION_DAYS` | 30 | snapshots older than this are deleted after each successful snapshot (§13.1) |
+| `LITESTREAM_SYNC_INTERVAL_S` | 3600 | the sync interval in `deploy/litestream.yml`; the replication-lag alert fires after 2 × it + 5 min |
 | `LITESTREAM_METRICS_URL` | unset | `http://127.0.0.1:9090/metrics` in the pod; unset = `lastReplicationAt` stays null (dev) |
 | `LOG_LEVEL` | info | |
 
@@ -1506,7 +1561,7 @@ request says so, so that kube-setup doesn't add it by habit.
 ### 15.3 Local stack on the Mac (`scripts/localstack/`)
 
 - **One command** starts:
-  - cams-admin (built) on :8090, with MinIO in Docker as the S3 target;
+  - cams-admin (built) on :29000, with a local S3 (SeaweedFS) in Docker as the S3 target;
   - and three accounts:
     - `alpha`: one cam-proxy with two cam-sims;
     - `beta`: two cam-proxies, one with one cam-sim and one with three;
@@ -1518,7 +1573,7 @@ request says so, so that kube-setup doesn't add it by habit.
   session. `npm run dev:session -- <email>` inserts a `sessions` row straight
   into the local database file and prints the cookie value. The script
   refuses unless `NODE_ENV=development`, `PUBLIC_URL` is loopback, and the
-  email is in `SYSADMIN_EMAILS`. The server has no such route. It enrolls each proxy with the CLI, piping in the code.
+  email is in `ALLOWED_EMAILS`. The server has no such route. It enrolls each proxy with the CLI, piping in the code.
 - **Afterwards** it prints the URLs. `--down` stops everything; its work
   directory is outside the repo, as in cams's livestack.
 - **Never on the Mac:** the real camera, the Pi or the cluster.

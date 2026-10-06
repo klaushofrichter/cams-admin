@@ -1,0 +1,67 @@
+import { afterAll, describe, expect, it } from 'vitest';
+import { tmpDir } from './helpers/tmp';
+import { testApp } from './helpers/app';
+import { makeProxyInfo, makeSummary } from '../test-client/summaries';
+
+// Spec §11.2: every write records exactly one audit entry. The table below
+// lists every write route; a write route missing from it fails the test.
+describe('audit completeness', () => {
+  const dir = tmpDir();
+  const a = testApp(dir);
+  afterAll(() => a.close());
+  const count = () => (a.db.prepare('SELECT count(*) n FROM audit_log').get() as { n: number }).n;
+  const ids: Record<string, string> = {};
+
+  type Row = [method: 'post' | 'patch' | 'put' | 'delete', pattern: string, path: () => string, body: () => unknown, action: string];
+  const table: Row[] = [
+    ['post', '/accounts', () => '/accounts', () => ({ name: 'home', displayName: 'Home' }), 'account-create'],
+    ['patch', '/accounts/:accountId', () => `/accounts/${ids.acc}`, () => ({ displayName: 'H', version: 1 }), 'account-update'],
+    ['post', '/accounts/:accountId/users', () => `/accounts/${ids.acc}/users`, () => ({ email: 'u@example.com', role: 'viewer' }), 'user-create'],
+    ['patch', '/accounts/:accountId/users/:userId', () => `/accounts/${ids.acc}/users/${ids.usr}`, () => ({ role: 'admin', version: 1 }), 'user-update'],
+    ['post', '/accounts/:accountId/proxies', () => `/accounts/${ids.acc}/proxies`, () => ({ name: 'pi', displayName: 'Pi', runsOn: 'cloud' }), 'proxy-create'],
+    ['patch', '/accounts/:accountId/proxies/:proxyId', () => `/accounts/${ids.acc}/proxies/${ids.prx}`, () => ({ notes: 'n', version: 1 }), 'proxy-update'],
+    ['post', '/accounts/:accountId/proxies/:proxyId/enrollment-codes', () => `/accounts/${ids.acc}/proxies/${ids.prx}/enrollment-codes`, () => ({}), 'enrollment-code-create'],
+    ['delete', '/accounts/:accountId/proxies/:proxyId/enrollment-codes/:codeId', () => `/accounts/${ids.acc}/proxies/${ids.prx}/enrollment-codes/${ids.enr}`, () => ({}), 'enrollment-code-cancel'],
+    ['post', '/accounts/:accountId/proxies/:proxyId/keys/:keyId/revoke', () => `/accounts/${ids.acc}/proxies/${ids.prx}/keys/${ids.key}/revoke`, () => ({}), 'key-revoke'],
+    ['post', '/accounts/:accountId/proxies/:proxyId/adopt', () => `/accounts/${ids.acc}/proxies/${ids.prx}/adopt`, () => ({ proxyCameraId: 'cam2', kind: 'camera' }), 'camera-adopt'],
+    ['post', '/accounts/:accountId/cameras', () => `/accounts/${ids.acc}/cameras`, () => ({ camsId: 's1', name: 'S1', kind: 'sim' }), 'camera-create'],
+    ['patch', '/accounts/:accountId/cameras/:cameraId', () => `/accounts/${ids.acc}/cameras/${ids.cam}`, () => ({ name: 'S one', version: 1 }), 'camera-update'],
+    ['put', '/accounts/:accountId/cameras/:cameraId/sim', () => `/accounts/${ids.acc}/cameras/${ids.cam}/sim`, () => ({ runsOn: 'mac' }), 'sim-update'],
+    ['delete', '/accounts/:accountId/cameras/:cameraId/sim', () => `/accounts/${ids.acc}/cameras/${ids.cam}/sim`, () => ({}), 'sim-delete'],
+    ['delete', '/accounts/:accountId/cameras/:cameraId', () => `/accounts/${ids.acc}/cameras/${ids.cam}`, () => ({}), 'camera-delete'],
+    ['post', '/accounts/:accountId/proxies/:proxyId/block', () => `/accounts/${ids.acc}/proxies/${ids.prx}/block`, () => ({}), 'proxy-block'],
+    ['delete', '/accounts/:accountId/proxies/:proxyId', () => `/accounts/${ids.acc}/proxies/${ids.prx}`, () => ({}), 'proxy-delete'],
+    ['delete', '/accounts/:accountId/users/:userId', () => `/accounts/${ids.acc}/users/${ids.usr}`, () => ({}), 'user-delete'],
+    ['post', '/backup/now', () => '/backup/now', () => ({}), 'backup-now'],
+    ['delete', '/accounts/:accountId', () => `/accounts/${ids.acc}`, () => ({ confirmName: 'home' }), 'account-delete'],
+    // Last: it ends every session, this test's too.
+    ['post', '/sessions/end', () => '/sessions/end', () => ({}), 'sessions-ended'],
+  ];
+
+  it('the table covers every write route of the API', () => {
+    expect(a.writeRoutes().sort()).toEqual(table.map(([m, p]) => `${m.toUpperCase()} ${p}`).sort());
+  });
+
+  it.each(table.map((r) => [`${r[0].toUpperCase()} ${r[1]}`, r] as const))('%s writes exactly one audit record', async (_n, [m, , path, body, action]) => {
+    const before = count();
+    const r = await a.api(m, path(), body());
+    expect(r.status, JSON.stringify(r.body)).toBeLessThan(300);
+    // Ids for the next rows.
+    if (action === 'account-create') ids.acc = r.body.id;
+    if (action === 'user-create') ids.usr = r.body.id;
+    if (action === 'proxy-create') {
+      ids.prx = r.body.id;
+    }
+    if (action === 'enrollment-code-create') ids.enr = r.body.id;
+    if (action === 'enrollment-code-cancel') {
+      // An enrolled key for the revoke row, and a report for the adopt row.
+      a.db.prepare(`UPDATE proxies SET state='enrolled' WHERE id=?`).run(ids.prx);
+      a.db.prepare(`INSERT INTO proxy_keys (id, proxy_id, public_key, fingerprint, created_at) VALUES ('key_00000000000000000001', ?, 'pk', 'fp', 1)`).run(ids.prx);
+      ids.key = 'key_00000000000000000001';
+      a.status.heartbeat(ids.prx, { summary: makeSummary({ cameras: 2, now: Date.now() }), proxy: makeProxyInfo({ now: Date.now() }), truncated: false }, Date.now());
+    }
+    if (action === 'camera-create') ids.cam = r.body.id;
+    expect(count() - before).toBe(1);
+    expect(a.audit.list({ limit: 1 }).items[0].action).toBe(action);
+  });
+});

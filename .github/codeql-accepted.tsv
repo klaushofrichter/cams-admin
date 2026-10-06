@@ -1,0 +1,5 @@
+# Accepted CodeQL findings. The gate in production-checks.yml ignores exactly
+# these, and nothing else. Changing this file takes a pull request.
+# Format: ruleId<TAB>path<TAB>reason
+js/missing-token-validation	server/server.ts	CSRF is handled without tokens (spec §7): every state-changing /api and /auth/logout request passes requireCsrf (server/auth/middleware.ts): Content-Type application/json, the custom header X-Cams-Admin: 1 (a cross-site form can't set it; a cross-site fetch with it needs a CORS preflight that is never granted), and Origin, when present, equal to PUBLIC_URL's origin. The session cookie is __Host- and SameSite=Lax. Tested in test/auth.test.ts ("writes need JSON, X-Cams-Admin and a same-origin Origin").
+js/missing-token-validation	test/auth.test.ts	The test's own app mirrors server/server.ts (cookie-parser + requireCsrf) to test the CSRF rules; see the server/server.ts line.

@@ -1,0 +1,34 @@
+# Litestream 0.5.17 (pinned by digest in kube-setup's manifest), the
+# native sidecar of the cams-admin pod (spec §13.3). Environment from the
+# cams-admin-backup Secret; credentials as AWS_ACCESS_KEY_ID /
+# AWS_SECRET_ACCESS_KEY. Metrics on :9090 for the pod's
+# k8s.grafana.com/scrape annotations and the app's LITESTREAM_METRICS_URL.
+#
+# Sync once an hour (Klaus 2026-10-06: not mission critical yet; S3 PUTs
+# cost $0.005 per 1000). Up to 1 h of changes is lost only if the volume
+# itself is lost; a graceful stop (Recreate, a drain) still uploads
+# everything, because the native sidecar stops after the app and syncs on
+# SIGTERM (checked with 0.5.17 on 2026-10-06). The app keeps live status in
+# memory and writes SQLite only on meaningful changes plus a 10-minute
+# snapshot. Expected: under 2,000 PUTs a month. Tune sync-interval here
+# (kube-setup copies this file into the pod's ConfigMap), e.g. 30s for a
+# tighter window.
+addr: ":9090"
+# "Backup now" (the app POSTs /sync here): an emptyDir shared by both containers.
+socket:
+  enabled: true
+  path: /run/litestream/litestream.sock
+levels:
+  - interval: 1h
+  - interval: 24h
+snapshot:
+  interval: 24h
+  retention: 720h  # 30 days, the same as the app's snapshots
+dbs:
+  - path: /var/lib/cams-admin/cams-admin.db
+    replica:
+      type: s3
+      bucket: ${BACKUP_S3_BUCKET}
+      path: ${BACKUP_S3_PREFIX}litestream
+      region: ${AWS_REGION}
+      sync-interval: 1h

@@ -52,9 +52,17 @@ Order as always: **commit, push, then apply.**
       image pinned by digest, metrics on 9090;
     - `app`: port 8080; readiness and liveness on `/health`.
   - `terminationGracePeriodSeconds: 60`, so Litestream finishes its final
-    sync after the app stops.
+    sync after the app stops (it syncs only hourly otherwise:
+    `deploy/litestream.yml`, the source for the pod's Litestream ConfigMap).
   - An `emptyDir` `/tmp` (Memory, 16Mi, as cam-proxy) for the app, and for
     Litestream too if it needs one, because the root filesystem is read-only.
+  - An `emptyDir` `/run/litestream` (Memory, 1Mi) mounted in **both** the app
+    and the Litestream sidecar: Litestream's control socket
+    (`/run/litestream/litestream.sock`), which the app's **Backup now**
+    button uses to force a sync (`LITESTREAM_SOCKET`). Both containers run
+    as uid 1000, so the socket's mode 600 is enough.
+  - Litestream's config is `deploy/litestream.yml` in this repo (a ConfigMap
+    on your side).
   - Pod annotations `k8s.grafana.com/scrape: "true"` and
     `k8s.grafana.com/metrics.portNumber: "9090"` (Litestream's metrics; not
     `prometheus.io/*`). `/health` also reports `backup.lastReplicationAt` and
@@ -93,7 +101,7 @@ Order as always: **commit, push, then apply.**
   `.env`, without printing; please don't create them from the kube-setup
   side):
   - `cams-admin-oauth`: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`,
-    `GOOGLE_REDIRECT_URI`, `SYSADMIN_EMAILS`;
+    `GOOGLE_REDIRECT_URI`, `ALLOWED_EMAILS`;
   - `cams-admin-signing`: `signing-key.pem` (Ed25519), mounted as a file;
   - `cams-admin-backup`: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
     `AWS_REGION`, `BACKUP_S3_BUCKET`, `BACKUP_S3_PREFIX` (used by both the app
@@ -106,6 +114,8 @@ Order as always: **commit, push, then apply.**
     `192.168.1.1` and the in-cluster cam-proxy could forge
     `X-Forwarded-For`; limits key on the session, the proxy id or the code);
   - `LITESTREAM_METRICS_URL=http://127.0.0.1:9090/metrics`;
+  - `LITESTREAM_SOCKET=/run/litestream/litestream.sock`;
+  - `LITESTREAM_SYNC_INTERVAL_S=3600` (the sync interval of `deploy/litestream.yml`; a dead-man alert on `/health`'s `backup.lastReplicationAt` should allow 2 × it + 5 min);
   - `BACKUP_SNAPSHOT_RETENTION_DAYS=30`;
   - `TZ` as for cams.
 - **Monitoring:** an UptimeRobot monitor may use `HEAD /health`, which
