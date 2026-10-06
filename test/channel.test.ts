@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { request } from 'http';
 import { tmpDir } from './helpers/tmp';
 import { handshake, opened, rawConnect, startHub } from './helpers/channel';
-import { publicFromB64, signedText, verify } from '../server/crypto/ed25519';
+import { privateFromB64, publicFromB64, sign, signedText, verify } from '../server/crypto/ed25519';
 import { makeProxyInfo, makeSummary } from '../test-client/summaries';
 
 const stops: (() => Promise<void>)[] = [];
@@ -34,7 +34,7 @@ describe('the proxy channel', () => {
 
   it('refuses no or unknown subprotocols with 426 and the supported list', async () => {
     const h = await hub(dir);
-    for (const headers of [{}, { 'Sec-WebSocket-Protocol': 'cams-admin.v9' }]) {
+    for (const headers of [{}, { 'Sec-WebSocket-Protocol': 'cams-admin.v9' }] as Record<string, string>[]) {
       const r = await upgradeStatus(h.port, headers);
       expect(r.status).toBe(426);
       expect(JSON.parse(r.body)).toEqual({ error: 'unsupported_protocol', supported: ['cams-admin.v1'] });
@@ -118,7 +118,6 @@ describe('the proxy channel', () => {
     await r2.next();
     // Replay the first connection's hello verbatim.
     const ts = Date.now();
-    const { sign, privateFromB64 } = await import('../server/crypto/ed25519');
     r2.send('hello', { proxyId: p.proxyId, keyId: p.keyId, connId: ch.body.connId, nonce: ch.body.nonce, ts }, { sig: sign(privateFromB64(p.key.privateKeyPkcs8B64), signedText.hello(ch.body.connId, ch.body.nonce, p.proxyId, p.keyId, ts)) });
     expect((await r2.closed).code).toBe(4401);
   });
