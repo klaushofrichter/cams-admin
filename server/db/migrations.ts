@@ -193,6 +193,7 @@ CREATE TABLE commands (
   command TEXT NOT NULL,
   args TEXT NOT NULL CHECK (length(args) <= 16384),
   dry_run INTEGER NOT NULL DEFAULT 0 CHECK (dry_run IN (0,1)),
+  revocation_only INTEGER NOT NULL DEFAULT 0 CHECK (revocation_only IN (0,1)),
   state TEXT NOT NULL CHECK (state IN ('queued','sent','received','done','refused','failed','expired','unknown')),
   outcome_code TEXT,
   result TEXT CHECK (result IS NULL OR length(result) <= 98304),
@@ -214,7 +215,7 @@ CREATE TABLE proxy_tokens (
   state TEXT NOT NULL CHECK (state IN ('pending','active','retiring','revoked','external')),
   issued_revision INTEGER NOT NULL,
   applied_revision INTEGER,
-  retire_at INTEGER, revoked_at INTEGER,
+  retire_at INTEGER, revoked_at INTEGER, revoked_revision INTEGER,
   created_at INTEGER NOT NULL, created_by TEXT NOT NULL,
   FOREIGN KEY (account_id, proxy_id) REFERENCES proxies(account_id, id)
 ) STRICT;

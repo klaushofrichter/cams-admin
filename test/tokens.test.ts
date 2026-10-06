@@ -156,28 +156,91 @@ describe('tokens', () => {
     expect(audit('command-create').at(-1)).toMatchObject({ reason: 'reapply' });
   });
 
-  it('restore (R2-11): the proxy reports a higher revision → cams-admin jumps above it and re-sends once', async () => {
+  it('restore: a proxy ahead of cams-admin blocks token changes until an admin confirms; then the set goes out above it', async () => {
     const { acc, prx, client } = await proxy();
     client.tokensRevision = 50; // the proxy has seen revision 50 (from before the restore)
+    await until(() => T().list(acc, prx).ahead === 50, 5000, 'ahead from the heartbeat');
+    expect(() => T().issue(ACTOR, acc, prx, { kind: 'client', label: 'x' })).toThrow(expect.objectContaining({ status: 409, code: 'proxy_ahead' }));
+    expect(() => T().reapply(ACTOR, acc, prx)).toThrow(expect.objectContaining({ status: 409, code: 'proxy_ahead' }));
+    expect(() => T().confirmRestore(ACTOR, acc, 'prx_ZZZZZZZZZZZZZZZZZZZZ')).toThrow(expect.objectContaining({ status: 404 }));
+    const c = T().confirmRestore(ACTOR, acc, prx);
+    expect(c.commandId).toMatch(/^cmd_/);
+    await until(() => client.tokensRevision === 51);
+    expect(T().list(acc, prx)).toMatchObject({ ahead: null, revision: 51, appliedRevision: 51 });
+    expect(audit('command-create').filter((d) => d.reason === 'restore-confirmed')).toHaveLength(1);
     const r = T().issue(ACTOR, acc, prx, { kind: 'client', label: 'after restore' });
     await until(() => tokenState(acc, prx, r.tokenId) === 'active');
-    expect(T().list(acc, prx).revision).toBe(51);
-    expect(audit('command-create').filter((d) => d.reason === 'stale-revision')).toHaveLength(1);
-    expect(client.tokensRevision).toBe(51);
-    // A stale answer never confirms by itself: only the applied revision 51 did.
-    expect(appliedArgs(client).map((x) => x.revision)).toEqual([1, 51]);
+    expect(() => T().confirmRestore(ACTOR, acc, prx)).toThrow(expect.objectContaining({ status: 409, code: 'not_ahead' }));
   });
 
-  it('restore: a second stale answer within 10 minutes does not bump again', async () => {
+  it('restore: a stale answer at our own revision (another set with the same number) also asks for the confirmation, never auto-confirms', async () => {
     const { acc, prx, client } = await proxy();
-    client.tokensRevision = 50;
     const a = T().issue(ACTOR, acc, prx, { kind: 'client', label: 'a' });
     await until(() => tokenState(acc, prx, a.tokenId) === 'active');
-    client.tokensRevision = 500;
-    T().issue(ACTOR, acc, prx, { kind: 'client', label: 'b' });
-    await until(() => appliedArgs(client).length === 3);
-    await new Promise((r) => setTimeout(r, 200));
-    expect(audit('command-create').filter((d) => d.reason === 'stale-revision')).toHaveLength(1);
+    client.tokensRevision = 2; // the proxy already has a revision 2 we never sent
+    T().retire(ACTOR, acc, prx, a.tokenId, 24); // our revision 2
+    await until(() => T().list(acc, prx).ahead === 2);
+    expect(T().list(acc, prx).appliedRevision).toBe(1);
+  });
+
+  it('a revoke is committed whatever the proxy says, and stays "not on the proxy" until a set at or above its revision is applied', async () => {
+    const { acc, prx, client } = await proxy();
+    const a = T().issue(ACTOR, acc, prx, { kind: 'client', label: 'a' });
+    await until(() => tokenState(acc, prx, a.tokenId) === 'active');
+    // The proxy is paused and allows nothing (e.g. a leaked admin token narrowed it): the revoke still goes through, as a revocation.
+    client.commands!.paused = true;
+    client.commands!.allow = [];
+    await until(() => s.built.status.row(prx)?.reported?.commands?.paused === true && s.built.status.row(prx)?.reported?.commands?.allow.length === 0);
+    const v = T().revoke(ACTOR, acc, prx, a.tokenId);
+    expect(v).toMatchObject({ state: 'revoked', revokedRevision: 2, onProxy: false });
+    await until(() => client.tokens.size === 0);
+    await until(() => T().list(acc, prx).items[0].onProxy === true);
+    const cmd = client.receivedCommands.at(-1)!;
+    expect(cmd.body.revocationOnly).toBe(true);
+    // With the env switch off nothing goes out, the revoke stands.
+    const b = await proxy();
+    const t = T().issue(ACTOR, b.acc, b.prx, { kind: 'client', label: 'b' });
+    await until(() => tokenState(b.acc, b.prx, t.tokenId) === 'active');
+    b.client.commands!.enabled = false;
+    await until(() => s.built.status.row(b.prx)?.reported?.commands?.enabled === false);
+    expect(T().revoke(ACTOR, b.acc, b.prx, t.tokenId)).toMatchObject({ state: 'revoked', onProxy: false });
+    expect(b.client.tokens.size).toBe(1);
+    // A few heartbeats while it is still off: nothing can go out, and nothing waits for it later.
+    const hb = b.client.stats.sent;
+    await until(() => b.client.stats.sent >= hb + 3);
+    expect(b.client.tokens.size).toBe(1);
+    // Back on: the next heartbeat (proxy revision 1 < 2) re-sends the current set.
+    b.client.commands!.enabled = true;
+    await until(() => b.client.tokens.size === 0, 5000, 'resync');
+    await until(() => T().list(b.acc, b.prx).items[0].onProxy === true);
+  });
+
+  it('offline for more than 15 minutes: the revoke\'s tokens.apply expires; on reconnect the heartbeat (revision below ours) re-sends the set', async () => {
+    const { acc, prx, client } = await proxy();
+    const a = T().issue(ACTOR, acc, prx, { kind: 'client', label: 'a' });
+    await until(() => tokenState(acc, prx, a.tokenId) === 'active');
+    await client.stop('shutdown');
+    T().revoke(ACTOR, acc, prx, a.tokenId);
+    clock.advance(16 * 60_000);
+    s.built.commands.tick();
+    expect(T().list(acc, prx).items[0]).toMatchObject({ state: 'revoked', onProxy: false, lastCommand: { state: 'expired' } });
+    client.start();
+    await until(() => client.tokens.size === 0, 5000, 'resent after reconnect');
+    await until(() => T().list(acc, prx).appliedRevision === 2);
+    expect(audit('command-create').filter((d) => d.reason === 'resync')).toHaveLength(1);
+  });
+
+  it('a refused tokens.apply (the proxy\'s rate limit) is re-sent from the heartbeat only after retryAfterS', async () => {
+    const { acc, prx, client } = await proxy();
+    const a = T().issue(ACTOR, acc, prx, { kind: 'client', label: 'a' });
+    await until(() => tokenState(acc, prx, a.tokenId) === 'active');
+    client.refuseNext = { code: 'rate_limited', retryAfterS: 600 };
+    T().revoke(ACTOR, acc, prx, a.tokenId);
+    await until(() => T().list(acc, prx).items[0].lastCommand?.state === 'refused');
+    await new Promise((r) => setTimeout(r, 600)); // a few heartbeats: nothing re-sent yet
+    expect(client.tokens.size).toBe(1);
+    clock.advance(600_000);
+    await until(() => client.tokens.size === 0, 5000, 'resent after retryAfterS');
   });
 
   it('a heartbeat tokens.revision covering a pending token confirms it (a lost done); a repeat writes nothing', async () => {
@@ -212,6 +275,15 @@ describe('tokens', () => {
     const ins = s.built.db.prepare(`INSERT INTO proxy_tokens (id,account_id,proxy_id,kind,holder,label,hash,state,issued_revision,created_at,created_by) VALUES (?,?,?,'client','manual','x',?,'active',1,1,'a')`);
     for (let i = 0; i < 64; i++) ins.run(`tok_${String(i).padStart(20, '0')}`, acc, prx, `sha256:${i.toString(16).padStart(64, '0')}`);
     expect(() => T().issue(ACTOR, acc, prx, { kind: 'client', label: 'x' })).toThrow(expect.objectContaining({ status: 409, code: 'too_many_tokens' }));
+  });
+
+  it('a token id of proxy B under proxy A\'s path: 404 for retire and revoke', async () => {
+    const a = await proxy();
+    const b = await proxy();
+    const t = T().issue(ACTOR, b.acc, b.prx, { kind: 'client', label: 'b' });
+    expect(() => T().revoke(ACTOR, a.acc, a.prx, t.tokenId)).toThrow(expect.objectContaining({ status: 404 }));
+    expect(() => T().retire(ACTOR, a.acc, a.prx, t.tokenId, 2)).toThrow(expect.objectContaining({ status: 404 }));
+    expect(tokenState(b.acc, b.prx, t.tokenId)).not.toBe('revoked');
   });
 
   it('another account\'s proxy: 404', async () => {

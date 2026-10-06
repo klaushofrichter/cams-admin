@@ -71,6 +71,7 @@ export class ProxyClient extends EventEmitter {
   tokens = new Map<string, ManagedToken>(); // hash → token
   tokensRevision = 0;
   receivedCommands: { id: string; ts: number; body: Record<string, any>; [k: string]: unknown }[] = [];
+  refuseNext: { code: string; retryAfterS?: number } | null = null; // tests: the proxy's own refusal (e.g. its rate limit)
   dropCommands = 0; // ignore the next n commands entirely (tests: a lost command)
   dropAfterReceived = 0; // run the next n commands, send received, then cut the socket before done (tests)
   connId: string | null = null;
@@ -285,6 +286,11 @@ export class ProxyClient extends EventEmitter {
         return done({ status: 'refused', code: verdict.code });
       case 'duplicate':
         return done(this.journal.get(b.cmdId)!, { duplicate: true });
+    }
+    if (this.refuseNext) {
+      const r = this.refuseNext;
+      this.refuseNext = null;
+      return done({ status: 'refused', code: r.code }, r.retryAfterS !== undefined ? { retryAfterS: r.retryAfterS } : {});
     }
     this.sendSigned('result', { ...head, phase: 'received' }, { re: m.id });
     this.executed.push(b.cmdId);

@@ -95,6 +95,18 @@ describe('token and command routes', () => {
     }
   });
 
+  it('restore: a proxy ahead → 409 proxy_ahead on issue; POST …/tokens/confirm-restore sends the set above it', async () => {
+    const a = await proxy('api-ahead', { allow: ['tokens.apply'] });
+    a.client.tokensRevision = 9;
+    await until(async () => (await call('GET', `${a.base}/tokens`)).body.ahead === 9);
+    expect((await call('POST', `${a.base}/tokens`, { kind: 'client', label: 'x' })).body).toEqual({ error: 'proxy_ahead' });
+    const c = await call('POST', `${a.base}/tokens/confirm-restore`, {});
+    expect(c.status).toBe(200);
+    expect(c.body).toEqual({ commandId: expect.stringMatching(/^cmd_/) });
+    await until(async () => (await call('GET', `${a.base}/tokens`)).body.appliedRevision === 10);
+    expect((await call('POST', `${a.base}/tokens/confirm-restore`, {})).body).toEqual({ error: 'not_ahead' });
+  });
+
   it('errors: 400 field, 404 other account, 409 not_enrolled / unsupported_by_proxy / not_allowed_on_proxy / paused_on_proxy / not_active', async () => {
     const a = await proxy('api-b', { allow: ['tokens.apply'] });
     expect((await call('POST', `${a.base}/tokens`, { kind: 'client', label: '' })).body).toEqual({ error: 'invalid', field: 'label' });
@@ -119,6 +131,6 @@ describe('token and command routes', () => {
     const notEnrolled = await s.api('POST', `/accounts/${a.accountId}/proxies`, { name: 'fresh', displayName: 'Fresh', runsOn: 'cloud' });
     expect((await call('POST', `/accounts/${a.accountId}/proxies/${notEnrolled.id}/tokens`, { kind: 'client', label: 'x' })).body).toEqual({ error: 'not_enrolled' });
     // Nothing of the refused issues was stored.
-    expect((await call('GET', `/accounts/${a.accountId}/proxies/${notEnrolled.id}/tokens`)).body).toEqual({ revision: 0, appliedRevision: 0, items: [] });
+    expect((await call('GET', `/accounts/${a.accountId}/proxies/${notEnrolled.id}/tokens`)).body).toEqual({ revision: 0, appliedRevision: 0, ahead: null, items: [] });
   });
 });

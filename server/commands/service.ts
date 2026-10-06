@@ -35,6 +35,7 @@ export type WireCommand = 'tokens.apply';
 export interface CommandRow {
   id: string; accountId: string; proxyId: string | null; actor: string; command: string; args: Record<string, unknown>; state: CommandState;
   outcomeCode: string | null; result: Record<string, unknown> | null; createdAt: number; sentAt: number | null; finishedAt: number | null; attempts: number;
+  revocationOnly: boolean; retryAfterS: number | null;
 }
 interface Raw extends CommandRow { rawArgs: Record<string, unknown>; envelope: Record<string, unknown> | null }
 
@@ -72,6 +73,7 @@ function toRaw(r: DbRow): Raw {
     id: r.id as string, accountId: r.account_id as string, proxyId: r.proxy_id as string | null, actor: r.actor as string, command: r.command as string,
     args: summariseArgs(r.command as string, rawArgs), state: r.state as CommandState, outcomeCode: r.outcome_code as string | null, result,
     createdAt: r.created_at as number, sentAt: r.sent_at as number | null, finishedAt: r.finished_at as number | null, attempts: r.attempts as number,
+    revocationOnly: r.revocation_only === 1, retryAfterS: Number.isSafeInteger(body?.retryAfterS) ? (body!.retryAfterS as number) : null,
     rawArgs, envelope,
   };
 }
@@ -107,24 +109,28 @@ export class Commands {
   }
 
   // Pre-checks are UX (R2-15): the proxy re-checks everything.
-  create(actor: string, accountId: string, proxyId: string, command: WireCommand, args: Record<string, unknown>, meta?: { reason?: string }): CommandRow {
+  // revocationOnly (tokens.apply): the set only removes tokens; the proxy
+  // accepts it while paused and without an allow entry (never with its env
+  // switch off), so the pause and allow pre-checks don't apply.
+  create(actor: string, accountId: string, proxyId: string, command: WireCommand, args: Record<string, unknown>, meta?: { reason?: string; revocationOnly?: boolean }): CommandRow {
+    const revocation = meta?.revocationOnly === true && command === 'tokens.apply';
     const px = this.d.registry.getProxy(accountId, proxyId); // 404 for another account's proxy
     if (px.state !== 'enrolled') throw new ApiError(409, 'not_enrolled');
     const rep = this.d.status.row(proxyId)?.reported;
     if (!rep?.capabilities?.includes('commands') || !rep.commands) throw new ApiError(409, 'unsupported_by_proxy');
-    if (!rep.commands.enabled || rep.commands.paused) throw new ApiError(409, 'paused_on_proxy');
+    if (!rep.commands.enabled || (rep.commands.paused && !revocation)) throw new ApiError(409, 'paused_on_proxy');
     const v = validateCommandArgs(command, args);
     if (!v.ok) throw new ApiError(400, 'invalid_args');
-    for (const need of requiredEntries(command, args)) if (!rep.commands.allow.includes(need)) throw new ApiError(409, 'not_allowed_on_proxy');
+    if (!revocation) for (const need of requiredEntries(command, args)) if (!rep.commands.allow.includes(need)) throw new ApiError(409, 'not_allowed_on_proxy');
     const now = this.d.clock.now();
     if (!this.budget.take(proxyId, now).ok) throw new ApiError(429, 'rate_limited');
     const id = newId('cmd');
     tx(this.d.db, () => {
-      this.q(`INSERT INTO commands (id, account_id, proxy_id, actor, command, args, state, created_at) VALUES (?,?,?,?,?,?,'queued',?)`)
-        .run(id, accountId, proxyId, actor, command, JSON.stringify(args), now);
+      this.q(`INSERT INTO commands (id, account_id, proxy_id, actor, command, args, revocation_only, state, created_at) VALUES (?,?,?,?,?,?,?,'queued',?)`)
+        .run(id, accountId, proxyId, actor, command, JSON.stringify(args), revocation ? 1 : 0, now);
       this.d.audit.write({
         actorType: actor === 'system' ? 'system' : 'sysadmin', actor, action: 'command-create', accountId, targetType: 'proxy', targetId: proxyId, targetLabel: px.name, outcome: 'ok',
-        detail: { cmdId: id, command, ...(meta?.reason ? { reason: meta.reason } : {}), args: summariseArgs(command, args) },
+        detail: { cmdId: id, command, ...(meta?.reason ? { reason: meta.reason } : {}), ...(revocation ? { revocationOnly: true } : {}), args: summariseArgs(command, args) },
       });
     });
     queueMicrotask(() => this.safeDispatch(proxyId));
@@ -186,7 +192,7 @@ export class Commands {
       || (head.state === 'sent' && now - (head.sentAt ?? 0) >= RESEND_AFTER_MS)
       || (head.state === 'received' && this.inflightConn.get(head.id) !== c.connId);
     if (!due) return;
-    if (!sendCommand(c, { id: head.id, actor: head.actor, command: head.command, args: head.rawArgs, proxyId })) return;
+    if (!sendCommand(c, { id: head.id, actor: head.actor, command: head.command, args: head.rawArgs, proxyId, revocationOnly: head.revocationOnly })) return;
     this.inflightConn.set(head.id, c.connId);
     // One write per send; a re-send while `received` keeps the state.
     tx(this.d.db, () => this.q(`UPDATE commands SET state = ?, sent_at = ?, attempts = attempts + 1 WHERE id = ?`).run(head.state === 'received' ? 'received' : 'sent', now, head.id));

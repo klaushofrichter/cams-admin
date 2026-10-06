@@ -28,6 +28,7 @@ describe('audit completeness', () => {
     ['post', '/accounts/:accountId/proxies/:proxyId/tokens', () => `/accounts/${ids.acc}/proxies/${ids.prx}/tokens`, () => ({ kind: 'client', label: 'cams' }), ['token-issue', 'command-create']],
     ['post', '/accounts/:accountId/proxies/:proxyId/tokens/:tokenId/retire', () => `/accounts/${ids.acc}/proxies/${ids.prx}/tokens/${ids.tok}/retire`, () => ({ hours: 24 }), ['token-retire', 'command-create']],
     ['post', '/accounts/:accountId/proxies/:proxyId/tokens/:tokenId/revoke', () => `/accounts/${ids.acc}/proxies/${ids.prx}/tokens/${ids.tok}/revoke`, () => ({}), ['token-revoke', 'command-create']],
+    ['post', '/accounts/:accountId/proxies/:proxyId/tokens/confirm-restore', () => `/accounts/${ids.acc}/proxies/${ids.prx}/tokens/confirm-restore`, () => ({}), ['command-create']],
     ['post', '/accounts/:accountId/proxies/:proxyId/tokens/apply', () => `/accounts/${ids.acc}/proxies/${ids.prx}/tokens/apply`, () => ({}), ['command-create']],
     ['post', '/accounts/:accountId/cameras', () => `/accounts/${ids.acc}/cameras`, () => ({ camsId: 's1', name: 'S1', kind: 'sim' }), 'camera-create'],
     ['patch', '/accounts/:accountId/cameras/:cameraId', () => `/accounts/${ids.acc}/cameras/${ids.cam}`, () => ({ name: 'S one', version: 1 }), 'camera-update'],
@@ -68,6 +69,7 @@ describe('audit completeness', () => {
       a.status.hello(ids.prx, 'v2', Date.now(), ['status', 'commands']);
       a.status.heartbeat(ids.prx, { summary: makeSummary({ cameras: 2, now: Date.now() }), proxy: { ...makeProxyInfo({ now: Date.now() }), commands: { enabled: true, paused: false, pauseReason: null, allow: ['tokens.apply'], seenWindow: 1000 } }, truncated: false }, Date.now());
     }
+    if (actions[0] === 'token-revoke') a.tokens.onHeartbeat(ids.prx, { revision: 99 }); // a proxy ahead (restored cams-admin), for the confirm-restore row
     if (actions[0] === 'token-issue') {
       ids.tok = r.body.tokenId;
       a.db.prepare(`UPDATE proxy_tokens SET state = 'active' WHERE id = ?`).run(ids.tok); // as if the proxy confirmed it

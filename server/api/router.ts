@@ -180,6 +180,7 @@ export function apiRouter(d: ApiDeps): express.Router {
     res.locals.status = 202;
     return out;
   }));
+  r.post(`${tokenBase}/confirm-restore`, h((req, res) => d.tokens.confirmRestore(actor(res), p(req, 'accountId'), p(req, 'proxyId'))));
   r.post(`${tokenBase}/:tokenId/retire`, h((req, res) => d.tokens.retire(actor(res), p(req, 'accountId'), p(req, 'proxyId'), p(req, 'tokenId'), req.body?.hours)));
   r.post(`${tokenBase}/:tokenId/revoke`, h((req, res) => d.tokens.revoke(actor(res), p(req, 'accountId'), p(req, 'proxyId'), p(req, 'tokenId'))));
   r.get(`${proxyBase}/status-events`, h((req) => {
