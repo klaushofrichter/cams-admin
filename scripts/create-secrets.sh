@@ -56,7 +56,7 @@ say() { if [ "$DRY" = 1 ]; then echo "would $*"; else echo "$*"; fi; }
 want() { [ "$ONLY" = "$1" ] || [ "$ONLY" = all ]; }
 
 OAUTH=(GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET ALLOWED_EMAILS)
-DEFAULT_REDIRECT=https://cams-admin.skylar.technology/auth/google/callback
+DEFAULT_REDIRECT=https://cams-admin.skylar.technology/auth/callback
 BACKUP=(AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_REGION BACKUP_S3_BUCKET BACKUP_S3_PREFIX)
 
 # Check first, so a bad line stops the run before anything changes.

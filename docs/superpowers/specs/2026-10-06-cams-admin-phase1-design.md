@@ -432,8 +432,12 @@ nothing would use it and an unused authenticated endpoint is attack surface.
 
 - **Google OAuth** (authorization code flow, scope `openid email`) with its
   own OAuth client, separate from cams's. The redirect URI is
-  `https://cams-admin.skylar.technology/auth/google/callback`, plus
-  `http://localhost:8090/auth/google/callback` for development. The code
+  `https://cams-admin.skylar.technology/auth/callback` (registered by Klaus;
+  the app serves the callback on `GOOGLE_REDIRECT_URI`'s path, which must be
+  under `/auth/` on the `PUBLIC_URL` origin), plus
+  `http://localhost:8090/auth/callback` for development. The flow uses PKCE
+  (S256) and an OIDC `nonce`; the ID token's signature, `iss`, `aud`, `exp`,
+  `iat`/`nbf` (2 min skew), `nonce` and `email_verified` are checked. The code
   reuses cams's proven pieces:
   - the state nonce in an httpOnly cookie, compared in constant time;
   - `prompt=select_account`, so that Logout really logs out;
@@ -464,6 +468,9 @@ nothing would use it and an unused authenticated endpoint is attack surface.
   - A cross-site form can't set the custom header, and a cross-site `fetch`
     with it triggers a CORS preflight that cams-admin never answers.
   - GETs change nothing.
+- **Sign-in limit:** completed callbacks that fail are counted in total
+  (after the state check, successes not counted), so junk requests can't lock
+  anyone out.
 - **Rate limits never key on the client IP** (kube-setup 2026-10-06, a
   binding code requirement with tests). Proxies on the home LAN reach the
   public name by hairpin NAT and all arrive as the router's address, and the
@@ -1034,7 +1041,7 @@ answer `{"error": "<code>"}` with 400/401/403/404/409/413/429. Writes follow
 
 | method | path | |
 |---|---|---|
-| GET | `/auth/google/login`, `/auth/google/callback`; POST `/auth/logout` | sign-in and out |
+| GET | `/auth/google/login`, `/auth/callback` (the path of `GOOGLE_REDIRECT_URI`); POST `/auth/logout` | sign-in and out |
 | GET | `/api/v1/me` | `{email, expiresAt}` |
 | GET | `/api/v1/dashboard` | every account with its proxies (state, last heartbeat age, ok, problems, version, pin check) and cameras (state, reconciliation), plus the backup card |
 | GET | `/api/v1/live` | SSE: `status` events (`{proxyId, state, ok, problemCount, lastHeartbeatAt, cameras:[{ref, online}]}`) on every change and at least every 30 s per online proxy; `registry` events (`{type, id}`) when a row changes, so other open tabs reload it. Heartbeat comment every 25 s. At most 5 streams per session |

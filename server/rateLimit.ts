@@ -4,11 +4,12 @@ import { rateLimit } from 'express-rate-limit';
 
 // express-rate-limit with a key that is never the client address (spec §7,
 // kube-setup 2026-10-06): a session, or one budget in total.
-export function limiter(o: { windowMs: number; limit: number; key: (req: Request) => string; handler?: (req: Request, res: Response) => void }): RequestHandler {
+export function limiter(o: { windowMs: number; limit: number; key: (req: Request) => string; skipSuccessfulRequests?: boolean; handler?: (req: Request, res: Response) => void }): RequestHandler {
   return rateLimit({
     windowMs: o.windowMs,
     limit: o.limit,
     keyGenerator: o.key,
+    skipSuccessfulRequests: o.skipSuccessfulRequests ?? false,
     standardHeaders: 'draft-7',
     legacyHeaders: false,
     validate: false, // no IP-based keys to validate

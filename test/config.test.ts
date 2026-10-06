@@ -13,11 +13,14 @@ describe('config', () => {
     expect(loadConfig({ PUBLIC_URL: 'https://a.example.net', PROXY_CONNECT_URL: 'http://cams-admin.cams-admin.svc.cluster.local:8080' }).connectUrl)
       .toBe('ws://cams-admin.cams-admin.svc.cluster.local:8080/proxy/v1/connect');
   });
-  it('GOOGLE_REDIRECT_URI must be this app\'s callback: path and origin', () => {
-    expect(loadConfig({ PUBLIC_URL: 'https://a.example.net', GOOGLE_REDIRECT_URI: 'https://a.example.net/auth/google/callback' }).google.redirectUri).toBe('https://a.example.net/auth/google/callback');
-    expect(() => loadConfig({ PUBLIC_URL: 'https://a.example.net', GOOGLE_REDIRECT_URI: 'https://a.example.net/oauth2/callback' })).toThrow(/GOOGLE_REDIRECT_URI.*\/auth\/google\/callback/);
-    expect(() => loadConfig({ PUBLIC_URL: 'https://a.example.net', GOOGLE_REDIRECT_URI: 'https://b.example.net/auth/google/callback' })).toThrow(/GOOGLE_REDIRECT_URI.*PUBLIC_URL/);
-    expect(loadConfig({ PUBLIC_URL: 'https://a.example.net' }).google.redirectUri).toBe('https://a.example.net/auth/google/callback');
+  it('the callback is served on GOOGLE_REDIRECT_URI\'s path (default /auth/callback), on the PUBLIC_URL origin', () => {
+    expect(loadConfig({ PUBLIC_URL: 'https://a.example.net' }).google).toMatchObject({ redirectUri: 'https://a.example.net/auth/callback', callbackPath: '/auth/callback' });
+    expect(loadConfig({ PUBLIC_URL: 'https://a.example.net', GOOGLE_REDIRECT_URI: 'https://a.example.net/auth/callback' }).google.callbackPath).toBe('/auth/callback');
+    expect(loadConfig({ PUBLIC_URL: 'https://a.example.net', GOOGLE_REDIRECT_URI: 'https://a.example.net/auth/google/callback' }).google.callbackPath).toBe('/auth/google/callback');
+    for (const bad of ['https://a.example.net/oauth2/callback', 'https://a.example.net/auth/logout', 'https://a.example.net/auth/google/login', 'https://a.example.net/auth/', 'https://a.example.net/auth/x?y=1', 'https://a.example.net/auth/../api']) {
+      expect(() => loadConfig({ PUBLIC_URL: 'https://a.example.net', GOOGLE_REDIRECT_URI: bad }), bad).toThrow(/GOOGLE_REDIRECT_URI/);
+    }
+    expect(() => loadConfig({ PUBLIC_URL: 'https://a.example.net', GOOGLE_REDIRECT_URI: 'https://b.example.net/auth/callback' })).toThrow(/GOOGLE_REDIRECT_URI.*PUBLIC_URL/);
   });
 
   it('requires PUBLIC_URL and refuses nonsense numbers', () => {

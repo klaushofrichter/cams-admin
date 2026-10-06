@@ -1,6 +1,6 @@
 import express from 'express';
 import { createHash, randomBytes, timingSafeEqual } from 'crypto';
-import { CALLBACK_PATH, type Config } from '../config';
+import type { Config } from '../config';
 import type { Clock } from '../clock';
 import type { Audit } from '../audit';
 import type { LiveHub } from '../live';
@@ -19,31 +19,41 @@ const page = (title: string, body: string) => `<!doctype html><html lang="en"><h
 export function authRoutes(d: { cfg: Config; sessions: Sessions; audit: Audit; clock: Clock; live: LiveHub | null }): express.Router {
   const r = express.Router();
   const secure = true; // __Host- needs Secure; browsers accept it on http://localhost too
-  // In total: before sign-in there is no identity to key on (spec §7).
+  // Completed callbacks that failed, in total (before sign-in there is no
+  // identity to key on, spec §7). Counted only after the state check and
+  // never on success, so junk requests can't lock anyone out.
   const signinLimit = limiter({
-    windowMs: 15 * 60_000, limit: d.cfg.limits.signinGlobal, key: () => 'signin',
+    windowMs: 15 * 60_000, limit: d.cfg.limits.signinGlobal, key: () => 'signin', skipSuccessfulRequests: true,
     handler: (_req, res) => void res.status(429).type('html').send(page('Too many sign-ins', '<p>Try again in a few minutes.</p>')),
   });
   const loginLimit = limiter({ windowMs: 15 * 60_000, limit: d.cfg.limits.signinGlobal * 4, key: () => 'login' });
 
+  // The cookie carries state, PKCE verifier and OIDC nonce: random, base64url.
   r.get('/auth/google/login', loginLimit, (_req, res) => {
-    const nonce = randomBytes(16).toString('hex');
-    res.cookie(STATE_COOKIE, nonce, { httpOnly: true, secure, sameSite: 'lax', maxAge: STATE_MS, path: '/' });
-    res.redirect(302, authUrl(d.cfg, nonce));
+    const [state, verifier, nonce] = [16, 32, 16].map((n) => randomBytes(n).toString('base64url'));
+    res.cookie(STATE_COOKIE, `${state}.${verifier}.${nonce}`, { httpOnly: true, secure, sameSite: 'lax', maxAge: STATE_MS, path: '/' });
+    res.redirect(302, authUrl(d.cfg, state, verifier, nonce));
   });
 
-  r.get(CALLBACK_PATH, signinLimit, async (req, res) => {
+  const checkState: express.RequestHandler = (req, res, next) => {
     const cookie = req.cookies?.[STATE_COOKIE];
     const state = req.query.state;
     res.clearCookie(STATE_COOKIE, { httpOnly: true, secure, sameSite: 'lax', path: '/' });
-    if (typeof cookie !== 'string' || typeof state !== 'string' || cookie.length !== state.length || !timingSafeEqual(Buffer.from(cookie), Buffer.from(state))) {
+    const parts = typeof cookie === 'string' ? cookie.split('.') : [];
+    if (parts.length !== 3 || !parts.every((p) => /^[A-Za-z0-9_-]{16,64}$/.test(p)) || typeof state !== 'string' || parts[0].length !== state.length || !timingSafeEqual(Buffer.from(parts[0]), Buffer.from(state))) {
       return void res.status(400).type('html').send(page('Sign-in expired', '<p><a href="/auth/google/login">Sign in again</a></p>'));
     }
+    res.locals.oauth = { verifier: parts[1], nonce: parts[2] };
+    next();
+  };
+
+  r.get(d.cfg.google.callbackPath, checkState, signinLimit, async (req, res) => {
     if (typeof req.query.code !== 'string') return void res.status(400).type('html').send(page('Sign-in cancelled', '<p><a href="/auth/google/login">Sign in</a></p>'));
     let email: string;
     let verified: boolean;
     try {
-      const claims = await verifyIdToken(d.cfg, await exchangeCode(d.cfg, req.query.code), Date.now()); // Google's exp is wall-clock time
+      const { verifier, nonce } = res.locals.oauth as { verifier: string; nonce: string };
+      const claims = await verifyIdToken(d.cfg, await exchangeCode(d.cfg, req.query.code, verifier), Date.now(), nonce); // Google's exp is wall-clock time
       email = normaliseEmail(claims.email);
       verified = claims.emailVerified;
     } catch (e) {

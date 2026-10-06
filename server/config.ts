@@ -41,7 +41,7 @@ export interface Config {
   litestreamMetricsUrl: string | null;
   litestreamSocket: string | null;
   backup: { bucket: string; prefix: string; region: string; endpoint: string | null } | null;
-  google: { clientId: string; redirectUri: string; authUrl: string; tokenUrl: string; certsUrl: string; issuer: string };
+  google: { clientId: string; redirectUri: string; callbackPath: string; authUrl: string; tokenUrl: string; certsUrl: string; issuer: string };
   limits: Limits;
 }
 
@@ -55,7 +55,9 @@ function num(env: Env, key: string, def: number, min: number, max: number): numb
   return v;
 }
 
-export const CALLBACK_PATH = '/auth/google/callback';
+export const DEFAULT_CALLBACK_PATH = '/auth/callback';
+const CALLBACK_RE = /^\/auth(\/[a-z0-9][a-z0-9_-]{0,31}){1,3}$/;
+const RESERVED_AUTH_PATHS = ['/auth/google/login', '/auth/logout', '/auth/signed-out'];
 
 export function wsUrl(base: string): string {
   const u = new URL(base);
@@ -74,15 +76,19 @@ export function loadConfig(env: Env = process.env): Config {
   const snapshotAt = env.BACKUP_SNAPSHOT_AT || '03:15';
   if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(snapshotAt)) throw new Error('config: BACKUP_SNAPSHOT_AT must be HH:MM');
   const bucket = env.BACKUP_S3_BUCKET;
-  // The callback route is fixed; the registered redirect URI must name it.
-  const redirectUri = env.GOOGLE_REDIRECT_URI || `${publicUrl.replace(/\/+$/, '')}${CALLBACK_PATH}`;
+  // The callback is served on the registered redirect URI's path (Klaus
+  // registered /auth/callback): under /auth/, plain segments, not a route
+  // the app already has.
+  const redirectUri = env.GOOGLE_REDIRECT_URI || `${publicUrl.replace(/\/+$/, '')}${DEFAULT_CALLBACK_PATH}`;
   let ru: URL;
   try {
     ru = new URL(redirectUri);
   } catch {
     throw new Error('config: GOOGLE_REDIRECT_URI is not a URL');
   }
-  if (ru.pathname !== CALLBACK_PATH) throw new Error(`config: GOOGLE_REDIRECT_URI must end in ${CALLBACK_PATH} (the app's callback route)`);
+  if (ru.search || ru.hash || !CALLBACK_RE.test(ru.pathname) || RESERVED_AUTH_PATHS.includes(ru.pathname) || !/\/auth\/[^?#]*$/.test(redirectUri.replace(ru.origin, ''))) {
+    throw new Error('config: GOOGLE_REDIRECT_URI must be a path under /auth/ (plain segments, no query) that the app does not use otherwise, e.g. /auth/callback');
+  }
   if (ru.origin !== new URL(publicUrl).origin) throw new Error('config: GOOGLE_REDIRECT_URI must be on the PUBLIC_URL origin (the sign-in cookies are per host)');
   return {
     nodeEnv: env.NODE_ENV || 'production',
@@ -109,6 +115,7 @@ export function loadConfig(env: Env = process.env): Config {
     google: {
       clientId: env.GOOGLE_CLIENT_ID || '',
       redirectUri,
+      callbackPath: ru.pathname,
       authUrl: env.GOOGLE_AUTH_URL || 'https://accounts.google.com/o/oauth2/v2/auth',
       tokenUrl: env.GOOGLE_TOKEN_URL || 'https://oauth2.googleapis.com/token',
       certsUrl: env.GOOGLE_CERTS_URL || 'https://www.googleapis.com/oauth2/v3/certs',

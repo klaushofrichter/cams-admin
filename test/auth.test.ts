@@ -46,7 +46,7 @@ async function signIn(app: express.Express, xff?: string) {
   const stateCookie = login.headers['set-cookie'][0].split(';')[0];
   const r = await fetch(login.headers.location, { redirect: 'manual' });
   const back = new URL(r.headers.get('location')!);
-  const cb = request(app).get(`/auth/google/callback${back.search}`).set('Cookie', stateCookie);
+  const cb = request(app).get(`${back.pathname}${back.search}`).set('Cookie', stateCookie);
   if (xff) cb.set('X-Forwarded-For', xff);
   return cb;
 }
@@ -93,16 +93,19 @@ describe('sign-in', () => {
     const login = await request(s.app).get('/auth/google/login');
     const r = await fetch(login.headers.location, { redirect: 'manual' });
     const back = new URL(r.headers.get('location')!);
-    const cb = await request(s.app).get(`/auth/google/callback${back.search}`).set('Cookie', 'cams_admin_oauth=' + 'f'.repeat(32));
+    const cb = await request(s.app).get(`/auth/callback${back.search}`).set('Cookie', 'cams_admin_oauth=' + 'f'.repeat(32));
     expect(cb.status).toBe(400);
   });
 
   it('limits sign-in callbacks in total, whatever X-Forwarded-For says', async () => {
     const s = setup(dir, { LIMIT_SIGNIN_GLOBAL: '3' });
     g.setEmail('admin@example.com');
+    // Counted are completed callbacks that failed: a stranger, three times.
+    g.setEmail('stranger@example.org');
     const codes = [];
     for (let i = 0; i < 4; i++) codes.push((await signIn(s.app, `198.51.100.${i}`)).status);
-    expect(codes).toEqual([302, 302, 302, 429]);
+    expect(codes).toEqual([403, 403, 403, 429]);
+    g.setEmail('admin@example.com');
   });
 
   it('a session ends after 12 hours, on removal from the allowlist, and on logout', async () => {
@@ -157,6 +160,49 @@ describe('sign-in', () => {
     expect(r.headers['referrer-policy']).toBe('same-origin');
     expect(r.headers['strict-transport-security']).toMatch(/max-age=/);
     expect(r.headers['x-content-type-options']).toBe('nosniff');
+  });
+});
+
+describe('the ID token and the flow are checked', () => {
+  const dir = tmpDir();
+  afterAll(async () => { await fetch(`${g.url}/set?mode=normal`); });
+
+  it.each([
+    ['wrong-aud', 502], ['wrong-iss', 502], ['expired', 502], ['bad-sig', 502], ['unknown-kid', 502],
+    ['future-iat', 502], ['future-nbf', 502], ['wrong-nonce', 502], ['pkce-mismatch', 502],
+  ])('%s → %i and no session', async (mode, status) => {
+    const s = setup(dir);
+    g.setEmail('admin@example.com');
+    await fetch(`${g.url}/set?mode=${mode}`);
+    const r = await signIn(s.app);
+    await fetch(`${g.url}/set?mode=normal`);
+    expect(r.status).toBe(status);
+    expect(((r.headers['set-cookie'] as unknown as string[]) ?? []).some((c) => c.startsWith(`${SESSION_COOKIE}=`) && !c.startsWith(`${SESSION_COOKIE}=;`))).toBe(false);
+    expect(s.db.prepare('SELECT count(*) n FROM sessions').get()).toEqual({ n: 0 });
+  });
+
+  it('email_verified false → 403 and no session', async () => {
+    const s = setup(dir);
+    g.setEmail('admin@example.com', false);
+    expect((await signIn(s.app)).status).toBe(403);
+    expect(s.db.prepare('SELECT count(*) n FROM sessions').get()).toEqual({ n: 0 });
+  });
+
+  it('the login sends PKCE S256 and an OIDC nonce', async () => {
+    const s = setup(dir);
+    const login = await request(s.app).get('/auth/google/login');
+    const u = new URL(login.headers.location);
+    expect(u.searchParams.get('code_challenge_method')).toBe('S256');
+    expect(u.searchParams.get('code_challenge')).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(u.searchParams.get('nonce')).toMatch(/^[A-Za-z0-9_-]{22,}$/);
+    expect(u.searchParams.get('redirect_uri')).toBe('https://cams-admin.example.net/auth/callback');
+  });
+
+  it('junk callbacks (no valid state) do not use up the sign-in budget', async () => {
+    const s = setup(dir, { LIMIT_SIGNIN_GLOBAL: '3' });
+    for (let i = 0; i < 20; i++) expect((await request(s.app).get('/auth/callback?code=x&state=y')).status).toBe(400);
+    g.setEmail('admin@example.com');
+    expect((await signIn(s.app)).status).toBe(302);
   });
 });
 
