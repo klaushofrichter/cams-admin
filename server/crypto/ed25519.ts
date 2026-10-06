@@ -1,3 +1,4 @@
+import { jcs } from './jcs';
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, sign as nodeSign, verify as nodeVerify, type KeyObject } from 'crypto';
 
 // Ed25519 with Node's crypto (no dependency). Public keys travel as base64
@@ -58,3 +59,21 @@ export const signedText = {
   challenge: (connId: string, nonce: string, serverTime: number) => `cams-admin/v1 challenge\n${connId}\n${nonce}\n${serverTime}`,
   hello: (connId: string, nonce: string, proxyId: string, keyId: string, ts: number) => `cams-admin/v1 hello\n${connId}\n${nonce}\n${proxyId}\n${keyId}\n${ts}`,
 };
+
+// Contract P2: a signed envelope (command, result, event) carries
+// sig = base64(Ed25519(UTF-8(jcs(envelope without sig)))), computed over the
+// message as received (unknown fields included).
+export function unsigned(m: Record<string, unknown>): Record<string, unknown> {
+  const { sig: _sig, ...rest } = m;
+  return rest;
+}
+export const signEnvelope = (priv: KeyObject, m: Record<string, unknown>): string => sign(priv, jcs(unsigned(m)));
+export function verifyEnvelope(pub: KeyObject, m: Record<string, unknown>): boolean {
+  let text: string;
+  try {
+    text = jcs(unsigned(m));
+  } catch {
+    return false;
+  }
+  return verify(pub, text, m.sig);
+}
