@@ -13,6 +13,7 @@ import { LitestreamWatch, parseMetrics } from '../server/backup/litestream';
 import { nextRunAt } from '../server/backup/scheduler';
 import { backupAlerts } from '../server/backup/service';
 import { fakeClock } from './helpers/clock';
+import { loadConfig } from '../server/config';
 import { tmpDir } from './helpers/tmp';
 
 let n = 0;
@@ -114,8 +115,7 @@ describe('alerts and schedule', () => {
     expect(backupAlerts({ ...base, syncIntervalMs: 30_000, lastReplicationAt: NOW - 7 * 60_000 })).toEqual(['replication-lag']);
   });
 
-  it('LITESTREAM_SYNC_INTERVAL_S defaults to one hour', async () => {
-    const { loadConfig } = await import('../server/config');
+  it('LITESTREAM_SYNC_INTERVAL_S defaults to one hour', () => {
     expect(loadConfig({ PUBLIC_URL: 'https://a.example.net' }).litestreamSyncIntervalS).toBe(3600);
     expect(loadConfig({ PUBLIC_URL: 'https://a.example.net', LITESTREAM_SYNC_INTERVAL_S: '30' }).litestreamSyncIntervalS).toBe(30);
   });
