@@ -43,14 +43,19 @@ never overwritten.
 ## Managed tokens after a restore
 
 A restore takes the token table back to the backup's time. A token revoked
-after that backup is active again in cams-admin, and the next `tokens.apply`
-would hand it back to the proxy. Right after a restore, compare each proxy's
-Tokens card with the proxy's own audit log (its `admin-command` records list
-the token sets it applied) and revoke again what was revoked after the
-backup; a proxy admin can also block a token id locally on the proxy. The token
-revision catches up by itself: the proxy answers the next `tokens.apply` as
-stale and cams-admin re-sends the set above the proxy's revision (once per
-10 minutes per proxy).
+after that backup is active again in cams-admin, and a set sent now would
+hand it back to the proxy. So token changes stop by themselves: when a proxy
+reports a token revision above cams-admin's (or answers a set as stale at
+cams-admin's own revision), its Tokens card shows "the proxy is ahead — was
+cams-admin restored from a backup?" and Issue, Retire and Re-apply answer
+`409 proxy_ahead`. Revoke still works.
+
+1. Compare each such proxy's Tokens card with the proxy's own audit log
+   (its `admin-command` records list the token sets it applied) and revoke
+   again what was revoked after the backup. A proxy admin can also block a
+   token id locally on the proxy.
+2. **Confirm** on the card: cams-admin sends its current set above the
+   proxy's revision, and token changes work again.
 
 ## The quarterly drill
 

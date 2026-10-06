@@ -64,3 +64,25 @@ test('a proxy without commands says so and offers no Issue buttons', async ({ pa
     await c.stop('shutdown');
   }
 });
+
+test('a revoke while the proxy takes no commands shows "not yet on proxy" until it does', async ({ page }, info) => {
+  const { acc, px, c } = await proxyWith(page, uniq(info, 'rvk'), { allow: ['tokens.apply'] });
+  try {
+    await page.goto(`/#/accounts/${acc.id}/proxies/${px.id}`);
+    await expect(page.getByTestId('commands-policy')).toHaveText('allowed: tokens.apply');
+    await page.getByTestId('issue-client').click();
+    await page.getByTestId('shown-stored').check();
+    await page.getByTestId('shown-close').click();
+    const state = page.locator('[data-testid^="token-state-"]').first();
+    await expect(state).toHaveText('active');
+    c.commands!.enabled = false; // the env kill switch on the proxy
+    await expect(page.getByTestId('commands-policy')).toHaveText('commands are off on the proxy (environment)');
+    await page.locator('[data-testid^="token-revoke-"]').first().click();
+    await page.getByTestId('confirm-ok').click();
+    await expect(state).toHaveText('revoked, not yet on proxy');
+    c.commands!.enabled = true;
+    await expect(state).toHaveText('revoked', { timeout: 10_000 });
+  } finally {
+    await c.stop('shutdown');
+  }
+});

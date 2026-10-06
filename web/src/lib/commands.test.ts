@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { commandsText, cmdStateClass, cmdStateText, tokenStateClass, issueBlocked } from './commands';
+import { commandsText, cmdStateClass, cmdStateText, tokenStateClass, tokenStateText, issueBlocked, aheadText } from './commands';
 
 describe('commands (UI text)', () => {
   it('the proxy\'s command policy', () => {
@@ -33,5 +33,12 @@ describe('commands (UI text)', () => {
     expect(issueBlocked('admin', 'allowed', ['tokens.apply', 'tokens.apply.admin'])).toBeNull();
     expect(issueBlocked('client', 'allowed', ['config.get'])).toBe('the proxy does not allow tokens.apply');
     expect(issueBlocked('client', 'paused', ['tokens.apply'])).toBe('paused on the proxy');
+  });
+  it('a revoke not yet on the proxy, and a proxy ahead after a restore', () => {
+    expect(tokenStateText({ state: 'revoked', onProxy: false })).toBe('revoked, not yet on proxy');
+    expect(tokenStateText({ state: 'revoked', onProxy: true })).toBe('revoked');
+    expect(tokenStateText({ state: 'active', onProxy: true })).toBe('active');
+    expect(tokenStateClass('revoked', false)).toBe('warn');
+    expect(aheadText(12, 3)).toBe('The proxy is at token revision 12, ahead of cams-admin (3): was cams-admin restored from a backup? Check the tokens below (re-revoke what was revoked after the backup), then confirm.');
   });
 });

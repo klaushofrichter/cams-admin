@@ -26,8 +26,18 @@ export function cmdStateClass(state: string): string {
   return '';
 }
 
-export function tokenStateClass(state: string): string {
+export function tokenStateClass(state: string, onProxy = true): string {
+  if (state === 'revoked' && !onProxy) return 'warn';
   return state === 'active' ? 'ok' : state === 'retiring' ? 'warn' : state === 'revoked' ? 'bad' : '';
+}
+
+// A revoke is committed at once; the proxy enforces it once a set at or above its revision is applied.
+export function tokenStateText(t: { state: string; onProxy: boolean }): string {
+  return t.state === 'revoked' && !t.onProxy ? 'revoked, not yet on proxy' : t.state;
+}
+
+export function aheadText(proxyRevision: number, ours: number): string {
+  return `The proxy is at token revision ${proxyRevision}, ahead of cams-admin (${ours}): was cams-admin restored from a backup? Check the tokens below (re-revoke what was revoked after the backup), then confirm.`;
 }
 
 // Why an Issue button is disabled (null: it isn't). The proxy decides; this is the hint.

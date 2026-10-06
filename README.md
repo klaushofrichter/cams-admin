@@ -58,7 +58,11 @@ It will run at `cams-admin.skylar.technology`. Phase 1 is specified in
   SHA-256 hash. The proxy gets the full managed set (`tokens.apply`, with a
   revision). Rotate by issuing a new token, switching cams to it, then
   *Retire* (the proxy stops accepting it at the time you choose) or *Revoke*
-  the old one.
+  the old one. A revoke is kept at once whatever the proxy can take; it goes
+  out as a revocation-only set, which a proxy accepts even while paused or
+  without `tokens.apply` allowed (never with its env kill switch off), and the
+  card says "not yet on proxy" until the proxy has it. A proxy that missed a
+  set (offline, refused) gets the current one again from its next heartbeat.
 
 There is no video: cams-admin is a control plane, not in any data path.
 Camera passwords never pass through it; a managed proxy token passes through
