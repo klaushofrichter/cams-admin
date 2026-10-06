@@ -43,6 +43,12 @@ export async function startFakeGoogle(o: { port?: number; clientId?: string; iss
       });
       return;
     }
+    // The e2e sets who signs in next (test-only server, loopback).
+    if (u.pathname === '/set') {
+      email = u.searchParams.get('email') ?? email;
+      verified = u.searchParams.get('verified') !== 'false';
+      return void res.writeHead(204).end();
+    }
     if (u.pathname === '/certs') return void res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ keys: [jwk] }));
     res.writeHead(404).end();
   });
