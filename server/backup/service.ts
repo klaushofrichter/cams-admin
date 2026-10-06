@@ -12,13 +12,15 @@ import { log } from '../log';
 
 const H = 3600_000;
 
-export function backupAlerts(o: { now: number; configured: boolean; lastOkAt: number | null; lastOutcome: string | null; litestream: boolean; lastReplicationAt: number | null; startedAt: number }): string[] {
+// Replication lag: Litestream syncs every LITESTREAM_SYNC_INTERVAL_S (1 h),
+// so a sync is late after two intervals plus 5 min.
+export function backupAlerts(o: { now: number; configured: boolean; lastOkAt: number | null; lastOutcome: string | null; litestream: boolean; lastReplicationAt: number | null; startedAt: number; syncIntervalMs?: number }): string[] {
   const a: string[] = [];
   if (!o.configured) a.push('backup-not-configured');
   if (o.lastOutcome === 'failed') a.push('snapshot-failed');
   // None in 26 h (counted from start when there was never one).
   if (o.configured && o.now - (o.lastOkAt ?? o.startedAt) > 26 * H) a.push('snapshot-stale');
-  if (o.litestream && o.now - (o.lastReplicationAt ?? o.startedAt) > 5 * 60_000) a.push('replication-lag');
+  if (o.litestream && o.now - (o.lastReplicationAt ?? o.startedAt) > 2 * (o.syncIntervalMs ?? 3600_000) + 5 * 60_000) a.push('replication-lag');
   return a;
 }
 
@@ -55,7 +57,7 @@ export function createBackup(d: { db: Db; clock: Clock; cfg: Config; audit: Audi
         lastSnapshotOk: j ? j.last_outcome === 'ok' : null,
         lastSnapshotError: j?.last_outcome === 'failed' ? (detail?.error ?? 'failed') : null,
         lastReplicationAt: watch?.lastReplicationAt ?? null,
-        alerts: backupAlerts({ now: d.clock.now(), configured: !!d.cfg.backup, lastOkAt, lastOutcome: (j?.last_outcome as string) ?? null, litestream: !!watch, lastReplicationAt: watch?.lastReplicationAt ?? null, startedAt }),
+        alerts: backupAlerts({ now: d.clock.now(), configured: !!d.cfg.backup, lastOkAt, lastOutcome: (j?.last_outcome as string) ?? null, litestream: !!watch, lastReplicationAt: watch?.lastReplicationAt ?? null, startedAt, syncIntervalMs: d.cfg.litestreamSyncIntervalS * 1000 }),
       };
     },
     async backupNow(actor: string) {

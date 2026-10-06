@@ -1312,7 +1312,11 @@ the CLI and the UI card.
   version, so it is the fallback if a replica is unusable. It is a single
   file Klaus can open with `sqlite3`.
 - **Alerts:** a failed snapshot, or none in 26 h, shows red on the dashboard.
-  A failed Litestream (lag over 5 min) does too.
+  So does Litestream when no sync has advanced for 2 × its sync interval +
+  5 min (`LITESTREAM_SYNC_INTERVAL_S`, 3600 to match `deploy/litestream.yml`;
+  security review 2026-10-06: a fixed 5 min would fire constantly with the
+  hourly sync). `/health` reports `lastReplicationAt` for kube-setup's
+  dead-man alert, which must use the same window.
 
 ### 13.4a Backup now (Klaus 2026-10-06)
 
@@ -1480,6 +1484,7 @@ request says so, so that kube-setup doesn't add it by habit.
 | `S3_ENDPOINT` | unset | the local S3 (SeaweedFS) for local and CI only |
 | `BACKUP_SNAPSHOT_AT` | `03:15` | in `TZ` |
 | `BACKUP_SNAPSHOT_RETENTION_DAYS` | 30 | snapshots older than this are deleted after each successful snapshot (§13.1) |
+| `LITESTREAM_SYNC_INTERVAL_S` | 3600 | the sync interval in `deploy/litestream.yml`; the replication-lag alert fires after 2 × it + 5 min |
 | `LITESTREAM_METRICS_URL` | unset | `http://127.0.0.1:9090/metrics` in the pod; unset = `lastReplicationAt` stays null (dev) |
 | `LOG_LEVEL` | info | |
 

@@ -115,6 +115,7 @@ Order as always: **commit, push, then apply.**
     `X-Forwarded-For`; limits key on the session, the proxy id or the code);
   - `LITESTREAM_METRICS_URL=http://127.0.0.1:9090/metrics`;
   - `LITESTREAM_SOCKET=/run/litestream/litestream.sock`;
+  - `LITESTREAM_SYNC_INTERVAL_S=3600` (the sync interval of `deploy/litestream.yml`; a dead-man alert on `/health`'s `backup.lastReplicationAt` should allow 2 × it + 5 min);
   - `BACKUP_SNAPSHOT_RETENTION_DAYS=30`;
   - `TZ` as for cams.
 - **Monitoring:** an UptimeRobot monitor may use `HEAD /health`, which

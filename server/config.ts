@@ -40,6 +40,7 @@ export interface Config {
   snapshotRetentionDays: number;
   litestreamMetricsUrl: string | null;
   litestreamSocket: string | null;
+  litestreamSyncIntervalS: number;
   backup: { bucket: string; prefix: string; region: string; endpoint: string | null } | null;
   google: { clientId: string; redirectUri: string; callbackPath: string; authUrl: string; tokenUrl: string; certsUrl: string; issuer: string };
   limits: Limits;
@@ -111,6 +112,8 @@ export function loadConfig(env: Env = process.env): Config {
     snapshotRetentionDays: num(env, 'BACKUP_SNAPSHOT_RETENTION_DAYS', 30, 1, 3650),
     litestreamMetricsUrl: env.LITESTREAM_METRICS_URL || null,
     litestreamSocket: env.LITESTREAM_SOCKET || null,
+    // Must match deploy/litestream.yml's sync-interval (the lag alert uses it).
+    litestreamSyncIntervalS: num(env, 'LITESTREAM_SYNC_INTERVAL_S', 3600, 1, 86_400),
     backup: bucket ? { bucket, prefix: (env.BACKUP_S3_PREFIX || 'cams-admin/prod/').replace(/\/?$/, '/'), region: env.AWS_REGION || 'us-east-1', endpoint: env.S3_ENDPOINT || null } : null,
     google: {
       clientId: env.GOOGLE_CLIENT_ID || '',
