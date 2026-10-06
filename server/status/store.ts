@@ -62,6 +62,8 @@ export class StatusStore {
   private seenThisRun = new Set<string>();
   private mem = new Map<string, StatusRow>();
   private caps = new Map<string, string[]>(); // the last hello's capabilities
+  // P2: a heartbeat's token revision (Tokens confirms a set whose done was lost).
+  onTokens?: (proxyId: string, tokens: TokensInfo | null) => void;
   private dirty = new Set<string>();
   private lastFlush: number;
   private snapshotMs: number;
@@ -194,6 +196,8 @@ export class StatusStore {
       if (pin === 'mismatch' && oldPin !== 'mismatch') ev('pin-mismatch');
       if (pin === 'match' && oldPin === 'mismatch') ev('pin-match');
     });
+    const t = this.mem.get(proxyId)?.reported?.tokens;
+    if (t && this.onTokens) this.onTokens(proxyId, t);
   }
 
   disconnected(proxyId: string, reason: string): void {
