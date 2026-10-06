@@ -126,4 +126,17 @@ describe('live hub', () => {
     expect(rs[1].headers['content-type']).toBe('text/event-stream');
     live.close();
   });
+
+  it('ends a stream whose session is no longer valid at the next keep-alive', () => {
+    const live = new LiveHub({ clock: { now: () => 0 }, maxPerSession: 5, keepaliveMs: 0 });
+    let valid = true;
+    const r = new FakeRes();
+    live.subscribe('s', r as never, () => valid);
+    live.keepalive();
+    expect(r.ended).toBe(false);
+    valid = false;
+    live.keepalive();
+    expect(r.ended).toBe(true);
+    expect(live.count()).toBe(0);
+  });
 });

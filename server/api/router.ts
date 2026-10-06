@@ -9,7 +9,7 @@ import type { Enrollment } from '../enroll/codes';
 import type { Hub } from '../channel/hub';
 import type { StatusStore } from '../status/store';
 import type { LiveHub } from '../live';
-import type { Sessions } from '../auth/session';
+import { SESSION_COOKIE, type Sessions } from '../auth/session';
 import { requireCsrf, requireSysadmin, writeLimiter } from '../auth/middleware';
 import { reconcile } from '../status/derive';
 import { FieldError } from '../validate';
@@ -59,8 +59,9 @@ export function apiRouter(d: ApiDeps): express.Router {
 
   // --- session and live ---------------------------------------------------------------
   r.get('/me', h((_q, res) => ({ email: actor(res), expiresAt: res.locals.session.expiresAt })));
-  r.get('/live', (_req, res) => {
-    if (!d.live.subscribe(res.locals.session.idHash, res)) res.status(429).json({ error: 'too_many_streams' });
+  r.get('/live', (req, res) => {
+    const cookie = req.cookies?.[SESSION_COOKIE];
+    if (!d.live.subscribe(res.locals.session.idHash, res, () => d.sessions.get(cookie) !== null)) res.status(429).json({ error: 'too_many_streams' });
   });
   r.post('/sessions/end', h((_q, res) => {
     const n = d.sessions.endAll();

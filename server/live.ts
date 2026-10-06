@@ -9,14 +9,18 @@ export interface LiveStatus { proxyId: string; accountId: string; state: string;
 
 export class LiveHub {
   private streams = new Map<string, Set<Response>>();
+  private checks = new Map<Response, () => boolean>();
   private timer: NodeJS.Timeout | null = null;
   constructor(private o: { clock: Clock; maxPerSession: number; keepaliveMs: number }) {}
 
-  subscribe(session: string, res: Response): boolean {
+  // `valid` is checked at every keep-alive: a session that expired or whose
+  // email left the allowlist loses its stream (spec §7: access ends at once).
+  subscribe(session: string, res: Response, valid?: () => boolean): boolean {
     const set = this.streams.get(session) ?? new Set<Response>();
     if (set.size >= this.o.maxPerSession) return false;
     set.add(res);
     this.streams.set(session, set);
+    if (valid) this.checks.set(res, valid);
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('X-Accel-Buffering', 'no');
@@ -24,6 +28,7 @@ export class LiveHub {
     res.write('retry: 2000\n\n');
     res.on('close', () => {
       set.delete(res);
+      this.checks.delete(res);
       if (set.size === 0) this.streams.delete(session);
     });
     if (!this.timer && this.o.keepaliveMs > 0) {
@@ -44,6 +49,9 @@ export class LiveHub {
   }
 
   keepalive(): void {
+    for (const [res, valid] of [...this.checks]) {
+      if (!valid()) res.end();
+    }
     this.send(': keep-alive\n\n');
   }
 
