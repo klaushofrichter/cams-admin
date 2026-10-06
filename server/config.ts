@@ -34,6 +34,7 @@ export interface Config {
   pingS: number;
   helloTimeoutMs: number;
   tickMs: number;
+  statusSnapshotS: number;
   enrollCodeDefaultH: number;
   snapshotAt: string;
   snapshotRetentionDays: number;
@@ -84,6 +85,8 @@ export function loadConfig(env: Env = process.env): Config {
     pingS: num(env, 'PING_S', 25, 1, 55),
     helloTimeoutMs: num(env, 'HELLO_TIMEOUT_MS', 10_000, 50, 60_000),
     tickMs: num(env, 'TICK_MS', 10_000, 50, 60_000),
+    // kube-setup's S3 cost rule: live status in memory, a coarse snapshot to SQLite.
+    statusSnapshotS: num(env, 'STATUS_SNAPSHOT_S', 600, 1, 86_400),
     enrollCodeDefaultH: num(env, 'ENROLL_CODE_DEFAULT_H', 24, 1, 168),
     snapshotAt,
     snapshotRetentionDays: num(env, 'BACKUP_SNAPSHOT_RETENTION_DAYS', 30, 1, 3650),

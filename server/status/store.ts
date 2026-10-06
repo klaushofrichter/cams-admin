@@ -6,9 +6,14 @@ import type { LiveHub, LiveStatus } from '../live';
 import { validateSummary } from '../contract';
 import { cameraStates, deriveProxyState, heartbeatFresh, pinState, SKEW_PROBLEM_MS, type PinState, type ProxyState, type Reported, type StatusRow } from './derive';
 
-// The latest state of each proxy (proxy_status) and its transitions
-// (status_events), fed by the channel; spec §8.5, §8.6. Everything shown on
-// the dashboard is stored, so a restart shows the last known state.
+// The latest state of each proxy and its transitions, fed by the channel
+// (spec §8.5, §8.6). The live state is in MEMORY (kube-setup's S3 cost rule,
+// 2026-10-06): heartbeats never write the database by themselves. A
+// meaningful change (online/offline, problems, a camera, the version, the
+// pin, connect/stop) writes its status event and the proxy's row at once;
+// everything else reaches proxy_status in a coarse snapshot every
+// `snapshotMs` (10 min), so a restart shows the last known state, marked
+// stale until the proxies reconnect.
 
 export interface HeartbeatBody { summary: unknown; proxy?: Record<string, unknown> | null; truncated?: boolean }
 
@@ -28,55 +33,97 @@ const toStatus = (r: Row): StatusRow => ({
 
 const asStrArray = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string').slice(0, 2) : []);
 
+const emptyRow = (proxyId: string): StatusRow => ({
+  proxyId, connected: false, connectedSince: null, lastHelloAt: null, lastHeartbeatAt: null, closedReason: null, stopped: false, proxyVersion: null,
+  clockSkewMs: null, summary: null, summaryAt: null, ok: null, problemCount: null, reported: null, online: false,
+});
+
 export class StatusStore {
   // Proxies whose stored status predates this process (stale until they say hello).
   private seenThisRun = new Set<string>();
-  constructor(private d: { db: Db; clock: Clock; registry: Registry; live: LiveHub; offlineAfterMs: number }) {}
+  private mem = new Map<string, StatusRow>();
+  private dirty = new Set<string>();
+  private lastFlush: number;
+  private snapshotMs: number;
+  constructor(private d: { db: Db; clock: Clock; registry: Registry; live: LiveHub; offlineAfterMs: number; snapshotMs?: number }) {
+    this.snapshotMs = d.snapshotMs ?? 600_000;
+    this.lastFlush = d.clock.now();
+    for (const r of d.db.prepare('SELECT * FROM proxy_status').all() as Row[]) this.mem.set(r.proxy_id as string, toStatus(r));
+  }
 
   row(proxyId: string): StatusRow | null {
-    const r = this.d.db.prepare('SELECT * FROM proxy_status WHERE proxy_id = ?').get(proxyId) as Row | undefined;
-    return r ? toStatus(r) : null;
+    const r = this.mem.get(proxyId);
+    return r ? { ...r } : null;
+  }
+
+  private persist(r: StatusRow): void {
+    this.d.db.prepare(`INSERT INTO proxy_status (proxy_id, connected, connected_since, last_hello_at, last_heartbeat_at, closed_reason, stopped, proxy_version, clock_skew_ms, summary, summary_at, ok, problem_count, reported, online)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(proxy_id) DO UPDATE SET connected = excluded.connected, connected_since = excluded.connected_since,
+      last_hello_at = excluded.last_hello_at, last_heartbeat_at = excluded.last_heartbeat_at, closed_reason = excluded.closed_reason, stopped = excluded.stopped,
+      proxy_version = excluded.proxy_version, clock_skew_ms = excluded.clock_skew_ms, summary = excluded.summary, summary_at = excluded.summary_at, ok = excluded.ok,
+      problem_count = excluded.problem_count, reported = excluded.reported, online = excluded.online`)
+      .run(r.proxyId, r.connected ? 1 : 0, r.connectedSince, r.lastHelloAt, r.lastHeartbeatAt, r.closedReason, r.stopped ? 1 : 0, r.proxyVersion, r.clockSkewMs,
+        r.summary === null ? null : JSON.stringify(r.summary), r.summaryAt, r.ok === null ? null : r.ok ? 1 : 0, r.problemCount, r.reported ? JSON.stringify(r.reported) : null, r.online ? 1 : 0);
+    if (r.lastHelloAt !== null) this.d.db.prepare('UPDATE proxy_keys SET last_seen_at = ? WHERE proxy_id = ? AND revoked_at IS NULL AND (last_seen_at IS NULL OR last_seen_at < ?)').run(r.lastHelloAt, r.proxyId, r.lastHelloAt);
+    this.dirty.delete(r.proxyId);
+  }
+
+  // The coarse snapshot: every row changed since the last one, in one
+  // transaction. `force` (shutdown, tests) writes now.
+  flush(force = false): void {
+    const now = this.d.clock.now();
+    if (!force && now - this.lastFlush < this.snapshotMs) return;
+    this.lastFlush = now;
+    const rows = [...this.dirty].map((id) => this.mem.get(id)).filter((r): r is StatusRow => !!r && this.exists(r.proxyId));
+    this.dirty.clear();
+    if (rows.length) tx(this.d.db, () => { for (const r of rows) this.persist(r); });
   }
 
   private exists(proxyId: string): boolean {
     return !!this.d.db.prepare('SELECT 1 FROM proxies WHERE id = ?').get(proxyId);
   }
 
-  private event(proxyId: string, kind: string, cameraRef: string | null = null, detail: Record<string, unknown> | null = null): void {
+  private event(proxyId: string, kind: string, cameraRef: string | null, detail: Record<string, unknown> | null): void {
     this.d.db.prepare('INSERT INTO status_events (proxy_id, camera_ref, at, kind, detail) VALUES (?,?,?,?,?)').run(proxyId, cameraRef, this.d.clock.now(), kind, detail ? JSON.stringify(detail).slice(0, 2048) : null);
   }
 
-  private ensureRow(proxyId: string): void {
-    this.d.db.prepare('INSERT INTO proxy_status (proxy_id) VALUES (?) ON CONFLICT(proxy_id) DO NOTHING').run(proxyId);
-  }
-
-  // A proxy that was deleted while connected: nothing to write, never a throw.
-  private guarded(proxyId: string, fn: () => void): void {
-    if (!this.exists(proxyId)) return;
-    tx(this.d.db, () => {
-      this.ensureRow(proxyId);
-      fn();
-    });
-    this.publish(proxyId);
+  // Runs fn on the in-memory row; returns the events it raised. A proxy that
+  // was deleted while connected: nothing happens, never a throw. Events are
+  // written with the row in one transaction; without events the row is only
+  // marked for the next snapshot.
+  private guarded(proxyId: string, fn: (r: StatusRow, ev: (kind: string, cameraRef?: string | null, detail?: Record<string, unknown> | null) => void) => void, publish = true): void {
+    if (!this.exists(proxyId)) {
+      this.mem.delete(proxyId);
+      return;
+    }
+    const r = this.mem.get(proxyId) ?? emptyRow(proxyId);
+    this.mem.set(proxyId, r);
+    const events: [string, string | null, Record<string, unknown> | null][] = [];
+    fn(r, (kind, cameraRef = null, detail = null) => events.push([kind, cameraRef, detail]));
+    if (events.length) {
+      tx(this.d.db, () => {
+        for (const [k, c, det] of events) this.event(proxyId, k, c, det);
+        this.persist(r);
+      });
+    } else this.dirty.add(proxyId);
+    if (publish) this.publish(proxyId);
   }
 
   hello(proxyId: string, version: string | null, proxyTs: number): void {
     this.seenThisRun.add(proxyId);
-    this.guarded(proxyId, () => {
+    this.guarded(proxyId, (r, ev) => {
       const now = this.d.clock.now();
-      const old = this.row(proxyId)!;
-      this.d.db.prepare(`UPDATE proxy_status SET connected = 1, connected_since = ?, last_hello_at = ?, stopped = 0, closed_reason = NULL,
-        proxy_version = COALESCE(?, proxy_version), clock_skew_ms = ? WHERE proxy_id = ?`).run(now, now, version, proxyTs - now, proxyId);
-      this.d.db.prepare('UPDATE proxy_keys SET last_seen_at = ? WHERE proxy_id = ? AND revoked_at IS NULL').run(now, proxyId);
-      this.event(proxyId, 'connected');
-      if (version && old.proxyVersion && version !== old.proxyVersion) this.event(proxyId, 'version-changed', null, { from: old.proxyVersion, to: version });
+      const oldVersion = r.proxyVersion;
+      Object.assign(r, { connected: true, connectedSince: now, lastHelloAt: now, stopped: false, closedReason: null, proxyVersion: version ?? r.proxyVersion, clockSkewMs: proxyTs - now });
+      ev('connected');
+      if (version && oldVersion && version !== oldVersion) ev('version-changed', null, { from: oldVersion, to: version });
     });
   }
 
   heartbeat(proxyId: string, body: HeartbeatBody, proxyTs: number): void {
-    this.guarded(proxyId, () => {
+    this.guarded(proxyId, (r, ev) => {
       const now = this.d.clock.now();
-      const old = this.row(proxyId)!;
+      const old = { ...r };
       const v = validateSummary(body.summary, body.truncated === true);
       const info = (body.proxy && typeof body.proxy === 'object' ? body.proxy : {}) as Record<string, unknown>;
       const tls = (info.tls && typeof info.tls === 'object' ? info.tls : null) as Record<string, unknown> | null;
@@ -102,52 +149,56 @@ export class StatusStore {
         publicUrl: typeof info.publicUrl === 'string' ? info.publicUrl : null, startedAt: typeof info.startedAt === 'number' ? info.startedAt : null,
         uptimeS: typeof info.uptimeS === 'number' ? info.uptimeS : null, configSchema: typeof info.configSchema === 'number' ? info.configSchema : null, pin,
       };
-      this.d.db.prepare(`UPDATE proxy_status SET last_heartbeat_at = ?, summary = ?, summary_at = ?, ok = ?, problem_count = ?, reported = ?, clock_skew_ms = ?,
-        proxy_version = COALESCE(?, proxy_version), online = 1, stopped = 0 WHERE proxy_id = ?`)
-        .run(now, JSON.stringify(summary), summaryAt, ok ? 1 : 0, problemCount, JSON.stringify(reported), proxyTs - now, version, proxyId);
+      Object.assign(r, { lastHeartbeatAt: now, summary, summaryAt, ok, problemCount, reported, clockSkewMs: proxyTs - now, proxyVersion: version ?? r.proxyVersion, online: true, stopped: false });
 
-      // Transitions, each once (spec §8.6).
-      if (!old.online) this.event(proxyId, 'online');
-      if (old.summary !== null && (old.ok !== ok || old.problemCount !== problemCount)) this.event(proxyId, 'problems-changed', null, { ok, problemCount });
+      // Transitions, each once (spec §8.6): these alone write the database.
+      if (!old.online) ev('online');
+      if (old.summary !== null && (old.ok !== ok || old.problemCount !== problemCount)) ev('problems-changed', null, { ok, problemCount });
       const before = new Map((old.reported?.cameras ?? []).map((c) => [c.ref, c.online]));
       for (const c of cams) {
         const was = before.get(c.ref);
-        if (was !== undefined && was !== c.online) this.event(proxyId, c.online ? 'camera-online' : 'camera-offline', c.ref);
+        if (was !== undefined && was !== c.online) ev(c.online ? 'camera-online' : 'camera-offline', c.ref);
       }
-      if (version && old.proxyVersion && version !== old.proxyVersion) this.event(proxyId, 'version-changed', null, { from: old.proxyVersion, to: version });
+      if (version && old.proxyVersion && version !== old.proxyVersion) ev('version-changed', null, { from: old.proxyVersion, to: version });
       const oldPin = old.reported?.pin ?? 'none';
-      if (pin === 'mismatch' && oldPin !== 'mismatch') this.event(proxyId, 'pin-mismatch');
-      if (pin === 'match' && oldPin === 'mismatch') this.event(proxyId, 'pin-match');
+      if (pin === 'mismatch' && oldPin !== 'mismatch') ev('pin-mismatch');
+      if (pin === 'match' && oldPin === 'mismatch') ev('pin-match');
     });
   }
 
   disconnected(proxyId: string, reason: string): void {
-    this.guarded(proxyId, () => {
-      this.d.db.prepare('UPDATE proxy_status SET connected = 0, closed_reason = ? WHERE proxy_id = ?').run(reason.slice(0, 200), proxyId);
-      this.event(proxyId, 'disconnected', null, { reason: reason.slice(0, 200) });
+    this.guarded(proxyId, (r, ev) => {
+      Object.assign(r, { connected: false, closedReason: reason.slice(0, 200) });
+      ev('disconnected', null, { reason: reason.slice(0, 200) });
     });
   }
 
   // A deliberate stop is not an outage (spec §8.6).
   bye(proxyId: string, reason: string): void {
     if (reason !== 'shutdown' && reason !== 'restart') return;
-    this.guarded(proxyId, () => {
-      this.d.db.prepare(`UPDATE proxy_status SET stopped = 1, online = 0, closed_reason = ? WHERE proxy_id = ?`).run(`bye:${reason}`, proxyId);
-      this.event(proxyId, 'stopped', null, { reason });
+    this.guarded(proxyId, (r, ev) => {
+      Object.assign(r, { stopped: true, online: false, closedReason: `bye:${reason}` });
+      ev('stopped', null, { reason });
     });
   }
 
-  // Liveness tick: online → offline when the heartbeat aged out.
+  // Liveness tick: online → offline when the heartbeat aged out; then the
+  // coarse snapshot when it is due.
   tick(): void {
     const now = this.d.clock.now();
-    const rows = (this.d.db.prepare('SELECT * FROM proxy_status WHERE online = 1').all() as Row[]).map(toStatus);
-    for (const s of rows) {
-      if (heartbeatFresh(s, now, this.d.offlineAfterMs)) continue;
-      this.guarded(s.proxyId, () => {
-        this.d.db.prepare('UPDATE proxy_status SET online = 0 WHERE proxy_id = ?').run(s.proxyId);
-        if (!s.stopped) this.event(s.proxyId, 'offline', null, { lastHeartbeatAt: s.lastHeartbeatAt });
+    for (const s of [...this.mem.values()]) {
+      if (!s.online || heartbeatFresh(s, now, this.d.offlineAfterMs)) continue;
+      this.guarded(s.proxyId, (r, ev) => {
+        r.online = false;
+        if (!r.stopped) ev('offline', null, { lastHeartbeatAt: r.lastHeartbeatAt });
       });
     }
+    this.flush();
+  }
+
+  forget(proxyId: string): void {
+    this.mem.delete(proxyId);
+    this.dirty.delete(proxyId);
   }
 
   view(proxyId: string): ProxyView {

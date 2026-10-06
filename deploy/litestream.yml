@@ -3,10 +3,22 @@
 # cams-admin-backup Secret; credentials as AWS_ACCESS_KEY_ID /
 # AWS_SECRET_ACCESS_KEY. Metrics on :9090 for the pod's
 # k8s.grafana.com/scrape annotations and the app's LITESTREAM_METRICS_URL.
+#
+# S3 cost (kube-setup 2026-10-06: PUTs are $0.005 per 1000, the account
+# alerts at $5/month): sync every 30 s instead of 1 s, compactions every
+# 5 min and 1 h. The app keeps live status in memory and writes SQLite only
+# on meaningful changes plus a 10-minute snapshot, so the database is idle
+# most of the time and most sync ticks upload nothing. Worst case (the DB
+# changing every 30 s all month): about 96,000 PUTs, about $0.48/month;
+# expected: 10,000–20,000 PUTs, about $0.05–0.10/month (README "Backup").
+# Tune here (kube-setup copies this file into the pod's ConfigMap).
 addr: ":9090"
+levels:
+  - interval: 5m
+  - interval: 1h
 snapshot:
   interval: 24h
-  retention: 720h  # 30 days, the same as the snapshots (coordinator 2026-10-06)
+  retention: 720h  # 30 days, the same as the app's snapshots
 dbs:
   - path: /var/lib/cams-admin/cams-admin.db
     replica:
@@ -14,4 +26,4 @@ dbs:
       bucket: ${BACKUP_S3_BUCKET}
       path: ${BACKUP_S3_PREFIX}litestream
       region: ${AWS_REGION}
-      sync-interval: 1s
+      sync-interval: 30s

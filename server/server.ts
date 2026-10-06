@@ -48,7 +48,7 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
   const registry = new Registry(db, clock, audit);
   const sessions = new Sessions(db, clock);
   const live = new LiveHub({ clock, maxPerSession: cfg.limits.sseStreamsPerSession, keepaliveMs: 25_000 });
-  const status = new StatusStore({ db, clock, registry, live, offlineAfterMs: cfg.offlineAfterS * 1000 });
+  const status = new StatusStore({ db, clock, registry, live, offlineAfterMs: cfg.offlineAfterS * 1000, snapshotMs: cfg.statusSnapshotS * 1000 });
   const hub = new Hub({ db, clock, cfg, registry, audit, status, log, signingKey: signing.key, serverKeyFingerprint: signing.fingerprint });
   const enrollment = new Enrollment({ db, clock, audit, registry, cfg, serverKeys: [signing.publicKeyB64], onKeyRevoked: (k) => hub.closeKey(k, 4401) });
   const backup = createBackup({ db, clock, cfg, audit, env: merged });
@@ -125,6 +125,7 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
       backup.stop?.();
       await hub.shutdown();
       live.close();
+      try { status.flush(true); } catch (e) { log.error({ err: e }, 'status_flush_failed'); }
       await new Promise((r) => (http.listening ? http.close(r) : r(undefined)));
       http.closeAllConnections?.();
       try { writeEpochFile(db, epochFile); } catch { /* closing */ }
