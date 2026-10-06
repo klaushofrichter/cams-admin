@@ -63,6 +63,20 @@ describe('the v1 contract', () => {
     expect(r.ok && (r.summary as { items: { label: string }[] }).items[0].label.length).toBe(200);
   });
 
+  it('a __proto__ key from a proxy never becomes a prototype', () => {
+    const f = read(join(V1, 'fixtures', 'valid-heartbeat-1cam-pi.json'));
+    const hostile = JSON.parse(JSON.stringify(f.message.body.summary).replace(/^\{/, '{"__proto__":{"polluted":1,"ok":false},'));
+    hostile.camera = JSON.parse(JSON.stringify(hostile.camera).replace(/^\{/, '{"__proto__":{"admin":true},'));
+    const r = validateSummary(hostile, false);
+    expect(r.ok).toBe(true);
+    const out = (r as { summary: Record<string, any> }).summary;
+    expect(Object.getPrototypeOf(out)).toBe(Object.prototype);
+    expect(out.polluted).toBeUndefined();
+    expect(Object.getPrototypeOf(out.camera)).toBe(Object.prototype);
+    expect(out.camera.admin).toBeUndefined();
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+  });
+
   it('a depth bomb in an unknown field is accepted and never walked deeply', () => {
     let deep: unknown = 1;
     for (let i = 0; i < 1000; i++) deep = { d: deep };

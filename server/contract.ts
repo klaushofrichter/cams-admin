@@ -65,7 +65,11 @@ export function sanitize(v: unknown, depth = 0): unknown {
   if (depth >= MAX_DEPTH) return '…';
   if (Array.isArray(v)) return v.map((x) => sanitize(x, depth + 1));
   const out: Record<string, unknown> = {};
-  for (const [k, x] of Object.entries(v)) out[k.length > 64 ? k.slice(0, 64) : k] = sanitize(x, depth + 1);
+  for (const [k, x] of Object.entries(v)) {
+    // defineProperty: a "__proto__" key from the wire stays a plain own
+    // property and never becomes the object's prototype.
+    Object.defineProperty(out, k.length > 64 ? k.slice(0, 64) : k, { value: sanitize(x, depth + 1), enumerable: true, writable: true, configurable: true });
+  }
   return out;
 }
 
