@@ -40,6 +40,18 @@ never overwritten.
    - Sessions from before the restore may come back: **End all sessions** on
      the dashboard (`sessions-ended`).
 
+## Managed tokens after a restore
+
+A restore takes the token table back to the backup's time. A token revoked
+after that backup is active again in cams-admin, and the next `tokens.apply`
+would hand it back to the proxy. Right after a restore, compare each proxy's
+Tokens card with the proxy's own audit log (its `admin-command` records list
+the token sets it applied) and revoke again what was revoked after the
+backup; a proxy admin can also block a token id locally on the proxy. The token
+revision catches up by itself: the proxy answers the next `tokens.apply` as
+stale and cams-admin re-sends the set above the proxy's revision (once per
+10 minutes per proxy).
+
 ## The quarterly drill
 
 `AWS_PROFILE=<Klaus's profile> scripts/backup/restore-drill.sh` restores the

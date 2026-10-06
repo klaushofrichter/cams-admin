@@ -41,8 +41,28 @@ It will run at `cams-admin.skylar.technology`. Phase 1 is specified in
   **Backup now** for before a major change. The restore is tested on every
   PR ([docs/restore.md](docs/restore.md)).
 
+## Commands and managed tokens (migration phase 2)
+
+- **Signed commands:** cams-admin sends a proxy signed, versioned,
+  idempotent commands on the same channel (Ed25519 over RFC 8785 canonical
+  JSON, bound to the proxy and the connection, 60 s lifetime). It keeps one
+  in flight per proxy, re-sends with the same `cmdId` until the proxy
+  answers, and stores the proxy's signed result as evidence. In phase 2 the
+  only command is `tokens.apply`.
+- **The proxy decides:** commands are off by default on every proxy. Each
+  proxy's own allow-list (set locally with its admin token) says what
+  cams-admin may send, and it can pause them. cams-admin shows what the proxy
+  reports and never assumes more.
+- **Managed tokens:** on a proxy's page, *Issue client token* / *Issue admin
+  token* makes a 32-byte token, shows it **once**, and stores only its
+  SHA-256 hash. The proxy gets the full managed set (`tokens.apply`, with a
+  revision). Rotate by issuing a new token, switching cams to it, then
+  *Retire* (the proxy stops accepting it at the time you choose) or *Revoke*
+  the old one.
+
 There is no video: cams-admin is a control plane, not in any data path.
-Camera passwords and cam-proxy tokens never pass through it.
+Camera passwords never pass through it; a managed proxy token passes through
+it exactly once, in the answer that shows it.
 
 ## Running it
 
