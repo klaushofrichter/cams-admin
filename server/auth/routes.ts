@@ -7,7 +7,7 @@ import type { LiveHub } from '../live';
 import { authUrl, exchangeCode, verifyIdToken } from './google';
 import { SESSION_COOKIE, SESSION_MS, sysadminAllowed, type Sessions } from './session';
 import { normaliseEmail } from '../validate';
-import { Buckets } from '../channel/limits';
+import { limiter } from '../rateLimit';
 import { requireCsrf } from './middleware';
 import { log } from '../log';
 
@@ -19,18 +19,20 @@ const page = (title: string, body: string) => `<!doctype html><html lang="en"><h
 export function authRoutes(d: { cfg: Config; sessions: Sessions; audit: Audit; clock: Clock; live: LiveHub | null }): express.Router {
   const r = express.Router();
   const secure = true; // __Host- needs Secure; browsers accept it on http://localhost too
-  const signins = new Buckets({ capacity: d.cfg.limits.signinGlobal, windowMs: 15 * 60_000 });
+  // In total: before sign-in there is no identity to key on (spec §7).
+  const signinLimit = limiter({
+    windowMs: 15 * 60_000, limit: d.cfg.limits.signinGlobal, key: () => 'signin',
+    handler: (_req, res) => void res.status(429).type('html').send(page('Too many sign-ins', '<p>Try again in a few minutes.</p>')),
+  });
+  const loginLimit = limiter({ windowMs: 15 * 60_000, limit: d.cfg.limits.signinGlobal * 4, key: () => 'login' });
 
-  r.get('/auth/google/login', (_req, res) => {
+  r.get('/auth/google/login', loginLimit, (_req, res) => {
     const nonce = randomBytes(16).toString('hex');
     res.cookie(STATE_COOKIE, nonce, { httpOnly: true, secure, sameSite: 'lax', maxAge: STATE_MS, path: '/' });
     res.redirect(302, authUrl(d.cfg, nonce));
   });
 
-  r.get(CALLBACK_PATH, async (req, res) => {
-    // In total: before sign-in there is no identity to key on (spec §7).
-    const t = signins.take('global', d.clock.now());
-    if (!t.ok) return void res.status(429).set('Retry-After', String(t.retryAfterS)).type('html').send(page('Too many sign-ins', '<p>Try again in a few minutes.</p>'));
+  r.get(CALLBACK_PATH, signinLimit, async (req, res) => {
     const cookie = req.cookies?.[STATE_COOKIE];
     const state = req.query.state;
     res.clearCookie(STATE_COOKIE, { httpOnly: true, secure, sameSite: 'lax', path: '/' });

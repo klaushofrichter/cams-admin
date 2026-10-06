@@ -21,6 +21,7 @@ import { apiRouter, type BackupService } from './api/router';
 import { loadSigningKey } from './crypto/signingKey';
 import { createBackup } from './backup/service';
 import { log } from './log';
+import { limiter } from './rateLimit';
 import { version } from './version';
 
 export interface Built {
@@ -72,7 +73,7 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
   const web = [join(__dirname, '../web'), join(__dirname, '../../dist/web')].find((p) => existsSync(join(p, 'index.html')));
   if (web) {
     app.use(express.static(web, { index: false, maxAge: '1h', setHeaders: (res, path) => { if (path.endsWith('.html')) res.setHeader('Cache-Control', 'no-store'); } }));
-    app.get(/^\/(?!api\/|auth\/|proxy\/).*/, (_req, res) => res.set('Cache-Control', 'no-store').sendFile(join(web, 'index.html')));
+    app.get(/^\/(?!api\/|auth\/|proxy\/).*/, limiter({ windowMs: 60_000, limit: 3000, key: () => 'pages' }), (_req, res) => res.set('Cache-Control', 'no-store').sendFile(join(web, 'index.html')));
   }
   app.use(((err, _req, res, _next) => {
     log.error({ err }, 'request_failed');

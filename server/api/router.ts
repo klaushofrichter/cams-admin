@@ -14,6 +14,7 @@ import { requireCsrf, requireSysadmin, writeLimiter } from '../auth/middleware';
 import { reconcile } from '../status/derive';
 import { FieldError } from '../validate';
 import { Buckets } from '../channel/limits';
+import { limiter, sessionKey } from '../rateLimit';
 import { monitorEventLoopDelay } from 'perf_hooks';
 import { existsSync, statSync } from 'fs';
 import { readEpoch } from '../db/open';
@@ -34,6 +35,8 @@ const p = (req: Request, k: string) => String(req.params[k]);
 
 export function apiRouter(d: ApiDeps): express.Router {
   const r = express.Router();
+  // Every API request, per session (CodeQL-visible; the write limit below is tighter).
+  r.use(limiter({ windowMs: 60_000, limit: 1200, key: (req) => sessionKey(req.cookies?.[SESSION_COOKIE]) }));
   r.use(express.json({ limit: 64 * 1024 }));
   r.use(requireSysadmin(d.sessions), requireCsrf(d.cfg), writeLimiter(d.cfg, d.clock));
   const actor = (res: Response): string => res.locals.session.email;
