@@ -137,9 +137,14 @@ async function main() {
   const offlineSeen = streams[0].filter((e) => e.at - t0 > startedAt && e.state !== 'online').length;
   const settled = changes.filter((c) => Date.now() - c.at > 2000);
   const missedSse = streams.map((evs) => settled.filter((c) => !evs.some((e) => e.at >= c.at && e.proxyId === c.proxyId && e.cameras.some((k) => k.ref === c.ref && k.online === c.online))).length);
-  const second = samples.filter((x) => x.t >= DURATION / 2);
+  // Flat = the mean of the last quarter's samples against the second
+  // quarter's (single samples swing with GC: an hour's run ended 71.7 →
+  // 72.2 MiB yet two single samples differed by 40 %).
+  const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / Math.max(1, xs.length);
+  const q2 = samples.filter((x) => x.t >= DURATION / 4 && x.t < DURATION / 2).map((x) => x.rss);
+  const q4 = samples.filter((x) => x.t >= (DURATION * 3) / 4).map((x) => x.rss);
   const rssMax = Math.max(...samples.map((x) => x.rss));
-  const rssGrowth = second.length > 1 ? (second[second.length - 1].rss - second[0].rss) / second[0].rss : 0;
+  const rssGrowth = q2.length && q4.length ? (mean(q4) - mean(q2)) / mean(q2) : 0;
   const lagP99 = Math.max(...samples.slice(1).map((x) => x.lagP99));
   const db = samples[samples.length - 1].db;
   const writes = samples[samples.length - 1].writes - samples[0].writes;
@@ -151,14 +156,14 @@ async function main() {
     ['no proxy shown offline while sending', offlineSeen === 0 && online === PROXIES, `${offlineSeen} non-online events; ${online}/${PROXIES} online at the end`],
     ['p99 heartbeat→ack under 50 ms', pct(lat, 99) < 50, `p50 ${pct(lat, 50)} ms, p99 ${pct(lat, 99)} ms, max ${Math.max(...lat)} ms`],
     ['server RSS under 200 MiB', rssMax < 200 * MiB, `max ${(rssMax / MiB).toFixed(1)} MiB`],
-    ['RSS flat over the second half (< 10 % growth)', rssGrowth < 0.1, `${(rssGrowth * 100).toFixed(1)} %`],
+    ['RSS flat (last quarter vs second quarter, means, < 10 % growth)', rssGrowth < 0.1, `${(rssGrowth * 100).toFixed(1)} %`],
     ['database under 50 MiB', db < 50 * MiB, `${(db / MiB).toFixed(2)} MiB`],
     ['event loop lag p99 under 20 ms', lagP99 < 20, `${lagP99.toFixed(1)} ms`],
     ['SSE: both dashboards saw every camera change', missedSse.every((m) => m === 0), `${settled.length} changes; missed ${missedSse.join(', ')}`],
   ];
   const report = {
     proxies: PROXIES, cameras: CAMERAS, durationS: DURATION / 1000, heartbeatS: HB, heartbeatsSent: sent, acked, ackLatencyMs: { p50: pct(lat, 50), p99: pct(lat, 99), max: Math.max(...lat) },
-    rssMiB: { start: samples[0].rss / MiB, max: rssMax / MiB, end: samples[samples.length - 1].rss / MiB }, loopLagP99Ms: lagP99, dbMiB: db / MiB, dbWriteTransactions: writes,
+    rssMiB: { start: samples[0].rss / MiB, max: rssMax / MiB, end: samples[samples.length - 1].rss / MiB, growthPct: rssGrowth * 100 }, samples, loopLagP99Ms: lagP99, dbMiB: db / MiB, dbWriteTransactions: writes,
     cameraChanges: changes.length, sseEvents: streams.map((s) => s.length), checks: checks.map(([name, ok, detail]) => ({ name, ok, detail })),
   };
   for (const [name, ok, detail] of checks) say(`${ok ? 'PASS' : 'FAIL'}  ${name}: ${detail}`);
