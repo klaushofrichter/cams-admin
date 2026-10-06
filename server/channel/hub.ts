@@ -69,6 +69,8 @@ export class Hub implements ConnectionHost {
 
   handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
     socket.on('error', () => undefined);
+    // Shutting down: an upgrade now would outlive the HTTP server's close().
+    if (this.closing) return reject(socket, 503, 'Service Unavailable', { error: 'shutting_down' });
     // Browsers send Origin; Node's client doesn't. Refusing it closes off
     // cross-site WebSocket tricks outright.
     if (req.headers.origin !== undefined) return reject(socket, 403, 'Forbidden');
@@ -143,6 +145,8 @@ export class Hub implements ConnectionHost {
     }
     const t0 = Date.now();
     while (this.all.size > 0 && Date.now() - t0 < 1000) await new Promise((r) => setTimeout(r, 20));
+    // Whatever didn't finish its close handshake is cut.
+    for (const ws of this.wss.clients) ws.terminate();
     this.wss.close();
   }
 }
