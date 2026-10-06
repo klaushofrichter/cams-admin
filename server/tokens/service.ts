@@ -1,3 +1,4 @@
+import type { StatementSync } from 'node:sqlite';
 import { createHash, randomBytes } from 'crypto';
 import type { Clock } from '../clock';
 import { tx, type Db } from '../db/open';
@@ -53,6 +54,17 @@ function parseHours(h: unknown): number {
 type Row = Record<string, unknown>;
 
 export class Tokens {
+  // Prepared once: the tick and heartbeat paths run every second (each
+  // prepare holds native memory until a GC).
+  private stmts = new Map<string, StatementSync>();
+  private q(sql: string): StatementSync {
+    let st = this.stmts.get(sql);
+    if (!st) {
+      st = this.d.db.prepare(sql);
+      this.stmts.set(sql, st);
+    }
+    return st;
+  }
   private bumpedAt = new Map<string, number>();
 
   constructor(private d: TokensDeps) {
@@ -62,7 +74,7 @@ export class Tokens {
   }
 
   private state(proxyId: string): { revision: number; appliedRevision: number } {
-    const r = this.d.db.prepare('SELECT revision, applied_revision FROM proxy_token_state WHERE proxy_id = ?').get(proxyId) as { revision: number; applied_revision: number } | undefined;
+    const r = this.q('SELECT revision, applied_revision FROM proxy_token_state WHERE proxy_id = ?').get(proxyId) as { revision: number; applied_revision: number } | undefined;
     return { revision: r?.revision ?? 0, appliedRevision: r?.applied_revision ?? 0 };
   }
 
@@ -71,8 +83,8 @@ export class Tokens {
   // create (409 pre-checks) rolls the caller's change back too.
   private nextApply(actor: string, accountId: string, proxyId: string, reason?: string, atLeast = 0): string {
     const revision = Math.max(this.state(proxyId).revision + 1, atLeast);
-    this.d.db.prepare(`INSERT INTO proxy_token_state (proxy_id, revision) VALUES (?, ?) ON CONFLICT(proxy_id) DO UPDATE SET revision = excluded.revision`).run(proxyId, revision);
-    const rows = this.d.db.prepare(`SELECT id, kind, hash, label, retire_at FROM proxy_tokens WHERE proxy_id = ? AND state IN ${LIVE} ORDER BY created_at, rowid`).all(proxyId) as { id: string; kind: string; hash: string; label: string; retire_at: number | null }[];
+    this.q(`INSERT INTO proxy_token_state (proxy_id, revision) VALUES (?, ?) ON CONFLICT(proxy_id) DO UPDATE SET revision = excluded.revision`).run(proxyId, revision);
+    const rows = this.q(`SELECT id, kind, hash, label, retire_at FROM proxy_tokens WHERE proxy_id = ? AND state IN ${LIVE} ORDER BY created_at, rowid`).all(proxyId) as { id: string; kind: string; hash: string; label: string; retire_at: number | null }[];
     const args = { v: 1, revision, tokens: rows.map((t) => ({ id: t.id, kind: t.kind, hash: t.hash, label: t.label, retireAt: t.retire_at })) };
     return this.d.commands.create(actor, accountId, proxyId, 'tokens.apply', args, reason ? { reason } : undefined).id;
   }
@@ -80,14 +92,14 @@ export class Tokens {
   issue(actor: string, accountId: string, proxyId: string, input: unknown): { token: string; tokenId: string; commandId: string } {
     const { kind, label } = parseIssue(input);
     const px = this.d.registry.getProxy(accountId, proxyId);
-    const live = (this.d.db.prepare(`SELECT count(*) n FROM proxy_tokens WHERE proxy_id = ? AND state IN ${LIVE}`).get(proxyId) as { n: number }).n;
+    const live = (this.q(`SELECT count(*) n FROM proxy_tokens WHERE proxy_id = ? AND state IN ${LIVE}`).get(proxyId) as { n: number }).n;
     if (live >= MAX_TOKENS) throw new ApiError(409, 'too_many_tokens');
     const { token, hash } = generateToken();
     const tokenId = newId('tok');
     let commandId = '';
     tx(this.d.db, () => {
       const rev = this.state(proxyId).revision + 1;
-      this.d.db.prepare(`INSERT INTO proxy_tokens (id, account_id, proxy_id, kind, holder, label, hash, state, issued_revision, created_at, created_by) VALUES (?,?,?,?, 'manual', ?,?, 'pending', ?,?,?)`)
+      this.q(`INSERT INTO proxy_tokens (id, account_id, proxy_id, kind, holder, label, hash, state, issued_revision, created_at, created_by) VALUES (?,?,?,?, 'manual', ?,?, 'pending', ?,?,?)`)
         .run(tokenId, accountId, proxyId, kind, label, hash, rev, this.d.clock.now(), actor);
       this.d.audit.write({ actorType: 'sysadmin', actor, action: 'token-issue', accountId, targetType: 'proxy', targetId: proxyId, targetLabel: px.name, outcome: 'ok', detail: { tokenId, kind, label, hashPrefix: hash.slice(0, HASH_PREFIX) } });
       commandId = this.nextApply(actor, accountId, proxyId);
@@ -98,7 +110,7 @@ export class Tokens {
 
   private tokenRow(accountId: string, proxyId: string, tokenId: string): Row {
     this.d.registry.getProxy(accountId, proxyId);
-    const r = this.d.db.prepare('SELECT * FROM proxy_tokens WHERE id = ? AND account_id = ? AND proxy_id = ?').get(tokenId, accountId, proxyId) as Row | undefined;
+    const r = this.q('SELECT * FROM proxy_tokens WHERE id = ? AND account_id = ? AND proxy_id = ?').get(tokenId, accountId, proxyId) as Row | undefined;
     if (!r) throw new ApiError(404, 'not_found');
     return r;
   }
@@ -111,7 +123,7 @@ export class Tokens {
     if (t.state !== 'active') throw new ApiError(409, 'not_active');
     const retireAt = this.d.clock.now() + h * 3600_000;
     tx(this.d.db, () => {
-      this.d.db.prepare(`UPDATE proxy_tokens SET state = 'retiring', retire_at = ? WHERE id = ?`).run(retireAt, tokenId);
+      this.q(`UPDATE proxy_tokens SET state = 'retiring', retire_at = ? WHERE id = ?`).run(retireAt, tokenId);
       this.d.audit.write({ actorType: 'sysadmin', actor, action: 'token-retire', accountId, targetType: 'proxy', targetId: proxyId, outcome: 'ok', detail: { tokenId, label: t.label, hours: h, retireAt } });
       this.nextApply(actor, accountId, proxyId);
     });
@@ -123,7 +135,7 @@ export class Tokens {
     const t = this.tokenRow(accountId, proxyId, tokenId);
     if (t.state === 'revoked') throw new ApiError(409, 'already_revoked');
     tx(this.d.db, () => {
-      this.d.db.prepare(`UPDATE proxy_tokens SET state = 'revoked', revoked_at = ? WHERE id = ?`).run(this.d.clock.now(), tokenId);
+      this.q(`UPDATE proxy_tokens SET state = 'revoked', revoked_at = ? WHERE id = ?`).run(this.d.clock.now(), tokenId);
       this.d.audit.write({ actorType: 'sysadmin', actor, action: 'token-revoke', accountId, targetType: 'proxy', targetId: proxyId, outcome: 'ok', detail: { tokenId, label: t.label, reason: 'revoked' } });
       this.nextApply(actor, accountId, proxyId);
     });
@@ -142,7 +154,7 @@ export class Tokens {
   list(accountId: string, proxyId: string): { revision: number; appliedRevision: number; items: ProxyTokenView[] } {
     this.d.registry.getProxy(accountId, proxyId);
     const last = this.lastCommand(proxyId);
-    const rows = this.d.db.prepare('SELECT * FROM proxy_tokens WHERE account_id = ? AND proxy_id = ? ORDER BY created_at DESC, rowid DESC').all(accountId, proxyId) as Row[];
+    const rows = this.q('SELECT * FROM proxy_tokens WHERE account_id = ? AND proxy_id = ? ORDER BY created_at DESC, rowid DESC').all(accountId, proxyId) as Row[];
     return { ...this.state(proxyId), items: rows.map((r) => this.toView(r, last)) };
   }
 
@@ -151,7 +163,7 @@ export class Tokens {
   }
 
   private lastCommand(proxyId: string): ProxyTokenView['lastCommand'] {
-    const c = this.d.db.prepare(`SELECT id, state, outcome_code FROM commands WHERE proxy_id = ? AND command = 'tokens.apply' ORDER BY rowid DESC LIMIT 1`).get(proxyId) as { id: string; state: string; outcome_code: string | null } | undefined;
+    const c = this.q(`SELECT id, state, outcome_code FROM commands WHERE proxy_id = ? AND command = 'tokens.apply' ORDER BY rowid DESC LIMIT 1`).get(proxyId) as { id: string; state: string; outcome_code: string | null } | undefined;
     return c ? { id: c.id, state: c.state, outcomeCode: c.outcome_code } : null;
   }
 
@@ -193,8 +205,8 @@ export class Tokens {
     const st = this.state(proxyId);
     if (revision > st.revision || revision <= st.appliedRevision) return;
     tx(this.d.db, () => {
-      this.d.db.prepare(`UPDATE proxy_tokens SET state = 'active', applied_revision = ? WHERE proxy_id = ? AND state = 'pending' AND issued_revision <= ?`).run(revision, proxyId, revision);
-      this.d.db.prepare(`UPDATE proxy_token_state SET applied_revision = ? WHERE proxy_id = ?`).run(revision, proxyId);
+      this.q(`UPDATE proxy_tokens SET state = 'active', applied_revision = ? WHERE proxy_id = ? AND state = 'pending' AND issued_revision <= ?`).run(revision, proxyId, revision);
+      this.q(`UPDATE proxy_token_state SET applied_revision = ? WHERE proxy_id = ?`).run(revision, proxyId);
     });
     this.d.live.publishRegistry('proxy', proxyId);
   }
@@ -206,19 +218,19 @@ export class Tokens {
     if (!t || !Number.isSafeInteger(t.revision)) return;
     const st = this.state(proxyId);
     if (t.revision > st.revision || t.revision <= st.appliedRevision) return;
-    const sent = this.d.db.prepare(`SELECT 1 FROM commands WHERE proxy_id = ? AND command = 'tokens.apply' AND attempts > 0 AND json_extract(args, '$.revision') = ? AND state NOT IN ('refused','failed')`).get(proxyId, t.revision);
+    const sent = this.q(`SELECT 1 FROM commands WHERE proxy_id = ? AND command = 'tokens.apply' AND attempts > 0 AND json_extract(args, '$.revision') = ? AND state NOT IN ('refused','failed')`).get(proxyId, t.revision);
     if (sent) this.confirm(proxyId, t.revision);
   }
 
   // Retiring tokens past retireAt become revoked, with one cleanup set per proxy.
   tick(): void {
     const now = this.d.clock.now();
-    const due = this.d.db.prepare(`SELECT * FROM proxy_tokens WHERE state = 'retiring' AND retire_at <= ?`).all(now) as Row[];
+    const due = this.q(`SELECT * FROM proxy_tokens WHERE state = 'retiring' AND retire_at <= ?`).all(now) as Row[];
     if (!due.length) return;
     const proxies = new Map<string, string>();
     tx(this.d.db, () => {
       for (const t of due) {
-        this.d.db.prepare(`UPDATE proxy_tokens SET state = 'revoked', revoked_at = ? WHERE id = ?`).run(now, t.id as string);
+        this.q(`UPDATE proxy_tokens SET state = 'revoked', revoked_at = ? WHERE id = ?`).run(now, t.id as string);
         this.d.audit.write({ actorType: 'system', actor: 'system', action: 'token-revoke', accountId: t.account_id as string, targetType: 'proxy', targetId: t.proxy_id as string, outcome: 'ok', detail: { tokenId: t.id, label: t.label, reason: 'retired' } });
         proxies.set(t.proxy_id as string, t.account_id as string);
       }

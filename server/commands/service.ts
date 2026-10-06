@@ -1,3 +1,4 @@
+import type { StatementSync } from 'node:sqlite';
 import type { Clock } from '../clock';
 import type { Db } from '../db/open';
 import { tx } from '../db/open';
@@ -80,6 +81,17 @@ const view = (r: Raw): CommandRow => {
 };
 
 export class Commands {
+  // Prepared once: the tick and heartbeat paths run every second (each
+  // prepare holds native memory until a GC).
+  private stmts = new Map<string, StatementSync>();
+  private q(sql: string): StatementSync {
+    let st = this.stmts.get(sql);
+    if (!st) {
+      st = this.d.db.prepare(sql);
+      this.stmts.set(sql, st);
+    }
+    return st;
+  }
   // cmdId → the connection it was last sent on (memory: a restart re-sends a `received` command once).
   private inflightConn = new Map<string, string>();
   private dropped = new WeakMap<Connection, number>();
@@ -108,7 +120,7 @@ export class Commands {
     if (!this.budget.take(proxyId, now).ok) throw new ApiError(429, 'rate_limited');
     const id = newId('cmd');
     tx(this.d.db, () => {
-      this.d.db.prepare(`INSERT INTO commands (id, account_id, proxy_id, actor, command, args, state, created_at) VALUES (?,?,?,?,?,?,'queued',?)`)
+      this.q(`INSERT INTO commands (id, account_id, proxy_id, actor, command, args, state, created_at) VALUES (?,?,?,?,?,?,'queued',?)`)
         .run(id, accountId, proxyId, actor, command, JSON.stringify(args), now);
       this.d.audit.write({
         actorType: actor === 'system' ? 'system' : 'sysadmin', actor, action: 'command-create', accountId, targetType: 'proxy', targetId: proxyId, targetLabel: px.name, outcome: 'ok',
@@ -123,7 +135,7 @@ export class Commands {
     this.d.registry.getProxy(accountId, proxyId);
     const lim = Number.isFinite(o.limit) ? Math.min(Math.max(Math.floor(o.limit!), 1), 200) : 20;
     const cursor = typeof o.cursor === 'string' && /^cmd_[0-9A-Z]{20}$/.test(o.cursor) ? o.cursor : null;
-    const rows = this.d.db.prepare(`SELECT * FROM commands WHERE account_id = ? AND proxy_id = ? ${cursor ? 'AND rowid < (SELECT rowid FROM commands WHERE id = ?)' : ''} ORDER BY rowid DESC LIMIT ?`)
+    const rows = this.q(`SELECT * FROM commands WHERE account_id = ? AND proxy_id = ? ${cursor ? 'AND rowid < (SELECT rowid FROM commands WHERE id = ?)' : ''} ORDER BY rowid DESC LIMIT ?`)
       .all(...(cursor ? [accountId, proxyId, cursor, lim + 1] : [accountId, proxyId, lim + 1])) as DbRow[];
     const items = rows.slice(0, lim).map((r) => view(toRaw(r)));
     return { items, nextCursor: rows.length > lim ? items[items.length - 1].id : null };
@@ -131,22 +143,22 @@ export class Commands {
 
   get(accountId: string, proxyId: string, cmdId: string): CommandRow & { resultEnvelope: unknown } {
     this.d.registry.getProxy(accountId, proxyId);
-    const r = this.d.db.prepare('SELECT * FROM commands WHERE id = ? AND account_id = ? AND proxy_id = ?').get(cmdId, accountId, proxyId) as DbRow | undefined;
+    const r = this.q('SELECT * FROM commands WHERE id = ? AND account_id = ? AND proxy_id = ?').get(cmdId, accountId, proxyId) as DbRow | undefined;
     if (!r) throw new ApiError(404, 'not_found');
     const raw = toRaw(r);
     return { ...view(raw), resultEnvelope: raw.envelope };
   }
 
   private byId(id: string): Raw {
-    return toRaw(this.d.db.prepare('SELECT * FROM commands WHERE id = ?').get(id) as DbRow);
+    return toRaw(this.q('SELECT * FROM commands WHERE id = ?').get(id) as DbRow);
   }
 
   // Every proxy with open commands: give up the old ones, send what is due.
   tick(): void {
     const now = this.d.clock.now();
-    const old = this.d.db.prepare(`SELECT * FROM commands WHERE state IN ${OPEN} AND created_at <= ?`).all(now - GIVE_UP_AFTER_MS) as DbRow[];
+    const old = this.q(`SELECT * FROM commands WHERE state IN ${OPEN} AND created_at <= ?`).all(now - GIVE_UP_AFTER_MS) as DbRow[];
     for (const r of old) this.giveUp(toRaw(r), now);
-    const proxies = this.d.db.prepare(`SELECT DISTINCT proxy_id FROM commands WHERE state IN ${OPEN} AND proxy_id IS NOT NULL`).all() as { proxy_id: string }[];
+    const proxies = this.q(`SELECT DISTINCT proxy_id FROM commands WHERE state IN ${OPEN} AND proxy_id IS NOT NULL`).all() as { proxy_id: string }[];
     for (const p of proxies) this.safeDispatch(p.proxy_id);
   }
 
@@ -164,7 +176,7 @@ export class Commands {
 
   private dispatch(proxyId: string): void {
     const now = this.d.clock.now();
-    const open = (this.d.db.prepare(`SELECT * FROM commands WHERE proxy_id = ? AND state IN ${OPEN} ORDER BY created_at, rowid`).all(proxyId) as DbRow[]).map(toRaw);
+    const open = (this.q(`SELECT * FROM commands WHERE proxy_id = ? AND state IN ${OPEN} ORDER BY created_at, rowid`).all(proxyId) as DbRow[]).map(toRaw);
     for (const r of open) if (now - r.createdAt >= GIVE_UP_AFTER_MS) this.giveUp(r, now);
     const head = open.find((r) => now - r.createdAt < GIVE_UP_AFTER_MS);
     if (!head) return;
@@ -177,13 +189,13 @@ export class Commands {
     if (!sendCommand(c, { id: head.id, actor: head.actor, command: head.command, args: head.rawArgs, proxyId })) return;
     this.inflightConn.set(head.id, c.connId);
     // One write per send; a re-send while `received` keeps the state.
-    tx(this.d.db, () => this.d.db.prepare(`UPDATE commands SET state = ?, sent_at = ?, attempts = attempts + 1 WHERE id = ?`).run(head.state === 'received' ? 'received' : 'sent', now, head.id));
+    tx(this.d.db, () => this.q(`UPDATE commands SET state = ?, sent_at = ?, attempts = attempts + 1 WHERE id = ?`).run(head.state === 'received' ? 'received' : 'sent', now, head.id));
   }
 
   private giveUp(r: Raw, now: number): void {
     const state: CommandState = r.state === 'queued' && r.attempts === 0 ? 'expired' : 'unknown';
     tx(this.d.db, () => {
-      this.d.db.prepare(`UPDATE commands SET state = ?, finished_at = ? WHERE id = ? AND state IN ${OPEN}`).run(state, now, r.id);
+      this.q(`UPDATE commands SET state = ?, finished_at = ? WHERE id = ? AND state IN ${OPEN}`).run(state, now, r.id);
       this.d.audit.write({ actorType: 'system', actor: 'system', action: 'command-expired', accountId: r.accountId, targetType: 'proxy', targetId: r.proxyId, outcome: 'failed', detail: { cmdId: r.id, command: r.command, state } });
     });
     this.inflightConn.delete(r.id);
@@ -218,11 +230,11 @@ export class Commands {
     };
     if (!c.proxyKey || !verifyEnvelope(c.proxyKey, m as unknown as Record<string, unknown>)) return drop('bad_signature');
     if (b.proxyId !== c.proxyId || b.connId !== c.connId) return drop('wrong_target');
-    const row = this.d.db.prepare('SELECT * FROM commands WHERE id = ? AND proxy_id = ?').get(String(b.cmdId), c.proxyId!) as DbRow | undefined;
+    const row = this.q('SELECT * FROM commands WHERE id = ? AND proxy_id = ?').get(String(b.cmdId), c.proxyId!) as DbRow | undefined;
     if (!row) return drop('unknown_command');
     const r = toRaw(row);
     if (b.phase === 'received') {
-      if (r.state === 'sent') tx(this.d.db, () => this.d.db.prepare(`UPDATE commands SET state = 'received' WHERE id = ? AND state = 'sent'`).run(r.id));
+      if (r.state === 'sent') tx(this.d.db, () => this.q(`UPDATE commands SET state = 'received' WHERE id = ? AND state = 'sent'`).run(r.id));
       return;
     }
     if (b.phase !== 'done') return drop('bad_phase');
@@ -231,7 +243,7 @@ export class Commands {
     if (state === 'done' && !validateResultPayload(r.command, b.result)) this.d.log.warn({ cmdId: r.id, proxyId: c.proxyId }, 'command_result_unreadable');
     const text = JSON.stringify(m);
     tx(this.d.db, () => {
-      this.d.db.prepare(`UPDATE commands SET state = ?, outcome_code = ?, result = ?, result_sig = ?, finished_at = ? WHERE id = ?`)
+      this.q(`UPDATE commands SET state = ?, outcome_code = ?, result = ?, result_sig = ?, finished_at = ? WHERE id = ?`)
         .run(state, typeof b.code === 'string' ? b.code.slice(0, 64) : b.status === 'conflict' ? 'conflict' : null, text.length <= 98304 ? text : null, typeof m.sig === 'string' ? m.sig : null, this.d.clock.now(), r.id);
       this.d.audit.write({
         actorType: 'proxy', actor: c.proxyId!, action: 'command-result', accountId: r.accountId, targetType: 'proxy', targetId: c.proxyId,
