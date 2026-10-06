@@ -84,7 +84,8 @@ describe('the v1 contract', () => {
     for (const n of ['valid-command-tokens-apply', 'valid-result-received', 'valid-result-done-ok', 'valid-result-refused-paused', 'valid-event-command-done', 'valid-heartbeat-p2',
       'refused-command-bad-signature', 'refused-command-wrong-proxy', 'refused-command-wrong-conn', 'refused-command-replayed', 'refused-command-expired', 'refused-command-exp-too-far',
       'refused-command-paused', 'refused-command-not-allowed', 'refused-command-args-v2', 'refused-tokens-apply-bad-hash', 'refused-tokens-apply-admin-not-allowed',
-      'invalid-command-unsigned', 'invalid-command-unknown-name', 'invalid-type-command', 'drift-result-new-field']) expect(names, n).toContain(n);
+      'invalid-command-unsigned', 'invalid-command-unknown-name', 'invalid-type-command', 'drift-result-new-field',
+      'valid-command-revocation-while-paused', 'refused-command-revocation-mismatch', 'refused-command-revocation-env-off']) expect(names, n).toContain(n);
     for (const f of allFixtures()) {
       const ok = strictValidator(f.schema)(f.message);
       if (f.name.startsWith('valid-') || f.name.startsWith('refused-')) expect(ok, f.name).toBe(true);
@@ -94,7 +95,7 @@ describe('the v1 contract', () => {
   it('every proxy-receiver fixture has a $context and a runtime code from the nack list', () => {
     const NACKS = ['bad_signature', 'wrong_target', 'expired', 'replayed', 'not_allowed', 'paused', 'rate_limited', 'invalid_args', 'unsupported_version', 'busy'];
     const proxyFixtures = allFixtures().filter((x) => x.$expect?.receiver === 'proxy');
-    expect(proxyFixtures.length).toBe(13);
+    expect(proxyFixtures.length).toBe(15);
     for (const f of proxyFixtures) {
       expect(f.$context, f.name).toMatchObject({ now: expect.any(Number), proxyId: expect.stringMatching(/^prx_/), connId: expect.stringMatching(/^con_/), serverKeys: [vectors.keys.server.publicKey] });
       expect(NACKS, f.name).toContain(f.$expect.runtime);
@@ -105,6 +106,13 @@ describe('the v1 contract', () => {
     expect(verifyEnvelope(publicFromB64(vectors.keys.server.publicKey), cmd.message)).toBe(true);
     expect(verifyEnvelope(publicFromB64(vectors.keys.server.publicKey), fixture('refused-command-bad-signature').message)).toBe(false);
     for (const n of ['valid-result-received', 'valid-result-done-ok', 'valid-result-refused-paused', 'valid-event-command-done', 'drift-result-new-field']) expect(verifyEnvelope(publicFromB64(vectors.keys.proxy.publicKey), fixture(n).message), n).toBe(true);
+  });
+  it('revocationOnly is an optional boolean of the command body (strict too)', () => {
+    const m = fixture('valid-command-revocation-while-paused').message;
+    expect(m.body.revocationOnly).toBe(true);
+    expect(strictValidator('command')(m)).toBe(true);
+    expect(strictValidator('command')({ ...m, body: { ...m.body, revocationOnly: 'yes' } })).toBe(false);
+    expect(fixture('valid-command-revocation-while-paused').$context).toMatchObject({ paused: true, allow: [], tokens: expect.any(Array) });
   });
   it('a P1 heartbeat stays valid in strict (the new proxy fields are optional)', () => {
     expect(strictValidator('heartbeat')(fixture('valid-heartbeat-1cam-pi').message)).toBe(true);

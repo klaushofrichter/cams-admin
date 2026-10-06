@@ -16,7 +16,7 @@ const resign = (m: Record<string, any>) => { const { sig: _s, ...rest } = m; ret
 
 describe('the reference proxy check agrees with every proxy fixture', () => {
   const cases = all.filter((x) => x.$expect?.receiver === 'proxy' || (x.schema === 'command' && x.name.startsWith('valid-')));
-  it('covers 14 fixtures', () => expect(cases).toHaveLength(14));
+  it('covers 17 fixtures', () => expect(cases).toHaveLength(17));
   for (const f of cases) {
     it(f.name, () => {
       const c = f.$context;
@@ -57,6 +57,20 @@ describe('the reference proxy check agrees with every proxy fixture', () => {
       mut(m.body.args);
       expect(refCheck(resign(m), ctx())).toEqual({ kind: 'nack', code: 'invalid_args' });
     }
+  });
+  it('revocationOnly: skips pause, allow-list and the admin entry only for a true subset of the current set; env off still refuses', () => {
+    const f = all.find((x) => x.name === 'valid-command-revocation-while-paused')!;
+    const c = (o: object = {}) => ({ ...f.$context, seen: new Set<string>(), ...o });
+    expect(refCheck(f.message, c()).kind).toBe('run');
+    // The same set is not a revocation when a token changed (here its label).
+    const changed = structuredClone(f.message);
+    changed.body.args.tokens[0].label = 'renamed';
+    expect(refCheck(resign(changed), c())).toEqual({ kind: 'nack', code: 'invalid_args' });
+    // Without the claim, the paused proxy refuses as before.
+    const plain = structuredClone(f.message);
+    delete plain.body.revocationOnly;
+    expect(refCheck(resign(plain), c())).toEqual({ kind: 'nack', code: 'paused' });
+    expect(refCheck(f.message, c({ enabled: false }))).toEqual({ kind: 'nack', code: 'paused' });
   });
   it('another command running: busy', () => {
     expect(refCheck(valid.message, ctx({ running: true }))).toEqual({ kind: 'nack', code: 'busy' });

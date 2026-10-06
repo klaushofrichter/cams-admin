@@ -56,7 +56,7 @@ export interface ClientOptions {
   // P2: answer commands (the reference check of ./commands.ts), apply
   // tokens.apply to an in-memory set, announce the commands capability.
   // Without it the client is a P1 proxy.
-  commands?: { allow: string[]; paused?: boolean };
+  commands?: { allow: string[]; paused?: boolean; enabled?: boolean };
 }
 
 export interface ManagedToken { id: string; kind: 'client' | 'admin'; label: string; retireAt: number | null }
@@ -67,7 +67,7 @@ export class ProxyClient extends EventEmitter {
   stats = { sent: 0, acked: 0, reconnects: 0, connects: 0, ackLatencyMs: [] as number[], errors: 0 };
   debugDropAcks = false;
   // P2 (with the commands option): what the proxy holds and saw.
-  commands: { allow: string[]; paused?: boolean } | null;
+  commands: { allow: string[]; paused?: boolean; enabled?: boolean } | null;
   tokens = new Map<string, ManagedToken>(); // hash → token
   tokensRevision = 0;
   receivedCommands: { id: string; ts: number; body: Record<string, any>; [k: string]: unknown }[] = [];
@@ -273,6 +273,7 @@ export class ProxyClient extends EventEmitter {
     const verdict = refCheck(m, {
       now: this.now() + this.serverOffset, proxyId: k.proxyId, connId: this.connId ?? '', serverKeys: k.serverKeys,
       allow: this.commands!.allow, paused: this.commands!.paused === true, seen: this.seen, journal: this.journal,
+      enabled: this.commands!.enabled !== false, tokens: [...this.tokens].map(([hash, t]) => ({ ...t, hash })),
     });
     const head = { proxyId: k.proxyId, connId: this.connId, cmdId: b.cmdId };
     const done = (d: DoneBody, extra: object = {}) => this.sendSigned('result', { ...head, phase: 'done', ...d, ...extra }, { re: m.id });
@@ -366,7 +367,7 @@ export class ProxyClient extends EventEmitter {
       const info = (this.o.proxyInfo ? this.o.proxyInfo() : makeProxyInfo({ now: Date.now() })) as Record<string, unknown>;
       const proxy = this.commands ? {
         ...info,
-        commands: { enabled: true, paused: this.commands.paused === true, pauseReason: null, allow: [...this.commands.allow], seenWindow: 1000 },
+        commands: { enabled: this.commands.enabled !== false, paused: this.commands.paused === true, pauseReason: null, allow: [...this.commands.allow], seenWindow: 1000 },
         tokens: { revision: this.tokensRevision, ...this.tokenCounts() },
       } : info;
       const body = { summary, proxy, truncated: false };

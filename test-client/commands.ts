@@ -17,6 +17,8 @@ export interface CheckContext {
   seen: Set<string>;
   journal?: Map<string, object>;
   running?: boolean;
+  enabled?: boolean; // the env kill switch (default on)
+  tokens?: { id: string; kind: string; hash: string; label: string; retireAt: number | null }[]; // the current managed set
 }
 export type CheckVerdict = { kind: 'run' } | { kind: 'duplicate' } | { kind: 'bad_message' } | { kind: 'nack'; code: string };
 
@@ -52,6 +54,11 @@ export function tokensApplyArgsOk(a: unknown): boolean {
   return ids.size === a.tokens.length && hashes.size === a.tokens.length;
 }
 
+// Every entry of the new set is in the current set, unchanged.
+export function isRevocation(next: Record<string, unknown>[], current: { id: string; kind: string; hash: string; label: string; retireAt: number | null }[]): boolean {
+  return next.every((t) => current.some((c) => c.id === t.id && c.kind === t.kind && c.hash === t.hash && c.label === t.label && c.retireAt === t.retireAt));
+}
+
 export function refCheck(m: Record<string, any>, ctx: CheckContext): CheckVerdict {
   const nack = (code: string): CheckVerdict => ({ kind: 'nack', code });
   // 1. a readable cmdId
@@ -75,16 +82,21 @@ export function refCheck(m: Record<string, any>, ctx: CheckContext): CheckVerdic
   if (!isInt(b.exp) || !isInt(m.ts) || b.exp - m.ts < 1 || b.exp - m.ts > 60_000 || b.exp + 120_000 < ctx.now) return nack('expired');
   // 6. already journaled: the stored answer, nothing runs
   if (ctx.journal?.has(b.cmdId)) return { kind: 'duplicate' };
-  // 7. the env switch or a pause
-  if (ctx.paused) return nack('paused');
+  // A claimed revocation (tokens.apply only) skips the pause, the allow-list
+  // and the admin entry; the claim is verified at step 10.
+  const revocation = b.revocationOnly === true && b.command === 'tokens.apply';
+  // 7. the env switch, or a pause
+  if (ctx.enabled === false) return nack('paused');
+  if (ctx.paused && !revocation) return nack('paused');
   // 8. implemented and allowed
-  if (typeof b.command !== 'string' || !IMPLEMENTED.includes(b.command) || !ctx.allow.includes(b.command)) return nack('not_allowed');
+  if (typeof b.command !== 'string' || !IMPLEMENTED.includes(b.command) || (!revocation && !ctx.allow.includes(b.command))) return nack('not_allowed');
   // 9. rate limits: cam-proxy's (not in the reference)
-  // 10. args version, then the command's strict args
+  // 10. args version, then the command's strict args (and a revocation claim)
   if (!isObj(b.args) || b.args.v !== 1) return nack('unsupported_version');
   if (!tokensApplyArgsOk(b.args)) return nack('invalid_args');
+  if (revocation && !isRevocation(b.args.tokens, ctx.tokens ?? [])) return nack('invalid_args');
   // 11. allow entries the args need
-  if (b.args.tokens.some((t: { kind: string }) => t.kind === 'admin') && !ctx.allow.includes('tokens.apply.admin')) return nack('not_allowed');
+  if (!revocation && b.args.tokens.some((t: { kind: string }) => t.kind === 'admin') && !ctx.allow.includes('tokens.apply.admin')) return nack('not_allowed');
   // 12. one at a time
   if (ctx.running) return nack('busy');
   return { kind: 'run' };

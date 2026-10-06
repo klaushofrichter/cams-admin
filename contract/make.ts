@@ -43,13 +43,15 @@ export function fixtures(): Record<string, unknown> {
   const SERVER = privateFromB64(serverKey.privateKeyPkcs8B64);
   const PROXY = privateFromB64(proxyKey.privateKeyPkcs8B64);
   const OTHER = privateFromB64(keyFromSeed(vectors.keys.other.seedHex).privateKeyPkcs8B64);
-  const ctx = (o: Partial<{ allow: string[]; paused: boolean; seen: string[]; now: number }> = {}) => ({ now: NOW + 10, proxyId: PRX, connId: CON, serverKeys: [serverKey.publicKeySpkiB64], allow: ['tokens.apply'], paused: false, seen: [] as string[], ...o });
+  const ctx = (o: Partial<{ allow: string[]; paused: boolean; seen: string[]; now: number; enabled: boolean; tokens: object[] }> = {}) => ({ now: NOW + 10, proxyId: PRX, connId: CON, serverKeys: [serverKey.publicKeySpkiB64], allow: ['tokens.apply'], paused: false, seen: [] as string[], ...o });
   const signed = <T extends Record<string, unknown>>(m: T, key: KeyObject) => ({ ...m, sig: signEnvelope(key, m) });
-  const command = (seq: number, name: string, args: object, o: Partial<{ proxyId: string; connId: string; exp: number; key: KeyObject }> = {}) =>
-    signed(env('command', seq, { proxyId: o.proxyId ?? PRX, connId: o.connId ?? CON, cmdId: CMD, exp: o.exp ?? NOW + seq + 60_000, actor: 'admin@example.org', command: name, args }), o.key ?? SERVER);
+  const command = (seq: number, name: string, args: object, o: Partial<{ proxyId: string; connId: string; exp: number; key: KeyObject; revocationOnly: boolean }> = {}) =>
+    signed(env('command', seq, { proxyId: o.proxyId ?? PRX, connId: o.connId ?? CON, cmdId: CMD, exp: o.exp ?? NOW + seq + 60_000, actor: 'admin@example.org', command: name, args, ...(o.revocationOnly ? { revocationOnly: true } : {}) }), o.key ?? SERVER);
   const tokensArgs = (tokens: object[]) => ({ v: 1, revision: 1, tokens });
   const clientTok = { id: TOK(1), kind: 'client', hash: HASH(1), label: 'cams example', retireAt: null };
   const adminTok = { id: TOK(2), kind: 'admin', hash: HASH(2), label: 'cams example admin', retireAt: null };
+  const otherTok = { id: TOK(3), kind: 'client', hash: HASH(3), label: 'cams other', retireAt: null };
+  const revoke = (tokens: object[]) => command(3, 'tokens.apply', { v: 1, revision: 2, tokens }, { revocationOnly: true });
   const applyResult = { revision: 1, applied: true, stale: false, client: 1, admin: 0, blocked: [] };
   const goodCommand = command(3, 'tokens.apply', tokensArgs([clientTok]));
   const refused = (code: string, message: unknown, context: object, note: string) => ({ $note: note, schema: 'command', $context: context, $expect: { runtime: code, strict: 'valid', receiver: 'proxy' }, message });
@@ -105,6 +107,10 @@ export function fixtures(): Record<string, unknown> {
     'refused-command-args-v2': refused('unsupported_version', command(3, 'tokens.apply', { v: 2, revision: 1, tokens: [] }), ctx(), 'args v 2'),
     'refused-tokens-apply-bad-hash': refused('invalid_args', command(3, 'tokens.apply', tokensArgs([{ ...clientTok, hash: 'sha256:' + HASH(1).slice(7).replace(/0/g, 'A') }])), ctx(), 'upper-case hex in the hash (strict command schema accepts: args are checked by commands/tokens.apply.args)'),
     'refused-tokens-apply-admin-not-allowed': refused('not_allowed', command(3, 'tokens.apply', tokensArgs([clientTok, adminTok])), ctx({ allow: ['tokens.apply'] }), 'an admin entry needs tokens.apply.admin'),
+    // revocationOnly ($context.tokens: the proxy's current managed set; $context.enabled: the env switch).
+    'valid-command-revocation-while-paused': { $note: 'a true revocation (a subset of the current set): runs while paused and without an allow entry', schema: 'command', $context: ctx({ paused: true, allow: [], tokens: [clientTok, otherTok] }), message: revoke([clientTok]) },
+    'refused-command-revocation-mismatch': refused('invalid_args', revoke([clientTok, otherTok]), ctx({ paused: true, allow: [], tokens: [clientTok] }), 'claims revocationOnly but adds a token'),
+    'refused-command-revocation-env-off': refused('paused', revoke([clientTok]), ctx({ enabled: false, allow: ['tokens.apply'], tokens: [clientTok, otherTok] }), 'the env kill switch blocks even a revocation'),
     'invalid-command-unsigned': toProxyInvalid('bad_signature', unsignedCommand, 'no sig'),
     'invalid-command-unknown-name': toProxyInvalid('not_allowed', command(3, 'frobnicate', { v: 1 }), 'an unknown command name (strict: not in the enum)'),
     'invalid-hello-no-sig': invalid('hello', 'bad_message', env('hello', 1, { proxyId: PRX, keyId: KEY, connId: CON, nonce: NONCE, ts: NOW }), 'hello must be signed'),
