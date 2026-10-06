@@ -39,7 +39,8 @@ async function live(p: { key: { proxyId: string; keyId: string; privateKey: stri
 }
 
 describe('the contract fixtures over the wire', () => {
-  for (const f of fixtures.filter((x) => ['heartbeat', 'envelope', 'ack', 'bye', 'error'].includes(x.schema) && !x.file.startsWith('valid-ack'))) {
+  // What a proxy sends; commands (and their proxy-side fixtures) are the proxy's to judge.
+  for (const f of fixtures.filter((x) => ['heartbeat', 'envelope', 'bye', 'error', 'command'].includes(x.schema) && x.$expect?.receiver !== 'proxy' && !x.$context)) {
     const want: string = f.$expect?.runtime ?? 'accepted';
     it(`${f.file}: ${want}`, async () => {
       const p = await enrolled(s, `fx-${f.file.replace(/[^a-z0-9]/g, '').slice(0, 24)}`);
@@ -69,6 +70,19 @@ describe('the contract fixtures over the wire', () => {
       c.ws.terminate();
     });
   }
+});
+
+describe('server-to-proxy types from a proxy', () => {
+  it('challenge, welcome, ack, command from a proxy: error unsupported_type, the connection stays', async () => {
+    const p = await enrolled(s, 'fx-outbound');
+    const c = await live(p);
+    for (const t of ['challenge', 'welcome', 'ack', 'command']) {
+      c.send(t, {}, t === 'ack' ? { re: '01K6' + '0'.repeat(22) } : {});
+      expect(await c.next(), t).toMatchObject({ type: 'error', body: { code: 'unsupported_type' } });
+    }
+    expect(c.ws.readyState).toBe(WebSocket.OPEN);
+    c.ws.terminate();
+  });
 });
 
 describe('versioning', () => {

@@ -4,7 +4,9 @@ import { join } from 'path';
 import Ajv2020 from 'ajv/dist/2020';
 import { buildSchemas } from '../contract/build';
 import { fixtures } from '../contract/make';
-import { validateEnroll, validateMessage, validateSummary } from '../server/contract';
+import { validateCommandArgs, validateEnroll, validateMessage, validateSummary } from '../server/contract';
+import { publicFromB64, verifyEnvelope } from '../server/crypto/ed25519';
+import vectors from '../contract/v1/vectors.json';
 
 const V1 = join(__dirname, '../contract/v1');
 const read = (p: string) => JSON.parse(readFileSync(p, 'utf8'));
@@ -12,14 +14,27 @@ const fixtureFiles = readdirSync(join(V1, 'fixtures')).filter((f) => f.endsWith(
 
 function strictAjv() {
   const ajv = new Ajv2020({ strict: true, allErrors: false });
-  for (const f of readdirSync(join(V1, 'strict'))) ajv.addSchema(read(join(V1, 'strict', f)));
+  const add = (dir: string) => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      if (e.isDirectory()) add(join(dir, e.name));
+      else ajv.addSchema(read(join(dir, e.name)));
+    }
+  };
+  add(join(V1, 'strict'));
   return ajv;
 }
 const strictValidate = (ajv: Ajv2020, schema: string, m: unknown) => ajv.validate(`https://cams-admin.skylar.technology/contract/v1/strict/${schema}.schema.json`, m);
 
-// What the server does with one message, as a single verdict.
+// Server → proxy messages (challenge, welcome, ack) are the proxy's to judge:
+// their verdict is the lenient schema's (a proxy sending one gets unsupported_type).
+const lenientAjv = new Ajv2020({ strict: true, strictTypes: false });
+const OUTBOUND = ['challenge', 'welcome', 'ack'];
+for (const n of OUTBOUND) lenientAjv.addSchema(read(join(V1, `${n}.schema.json`)), n);
+
+// What the receiver does with one message, as a single verdict.
 function runtimeVerdict(schema: string, m: unknown): string {
   if (schema === 'enroll-response') return 'accepted'; // the server writes it; cam-proxy checks it
+  if (OUTBOUND.includes(schema)) return lenientAjv.validate(schema, m) ? 'accepted' : 'bad_message';
   if (schema.startsWith('enroll-request')) {
     const r = validateEnroll(m);
     return r.ok ? 'accepted' : r.code;
@@ -51,11 +66,73 @@ describe('the v1 contract', () => {
   const ajv = strictAjv();
   for (const file of fixtureFiles) {
     const f = read(join(V1, 'fixtures', file));
-    it(`${file}: strict ${f.$expect ? 'refuses' : 'accepts'}, the server ${f.$expect?.runtime ?? 'accepts'}`, () => {
-      expect(strictValidate(ajv, f.schema, f.message), JSON.stringify(ajv.errors)).toBe(!f.$expect);
-      expect(runtimeVerdict(f.schema, f.message)).toBe(f.$expect?.runtime ?? 'accepted');
+    const strictOk = (f.$expect?.strict ?? 'valid') === 'valid';
+    // A command is the proxy's to judge (test/contract-commands.test.ts); the server's verdict on the rest.
+    const toProxy = f.$expect?.receiver === 'proxy' || (f.schema === 'command' && !f.$expect);
+    it(`${file}: strict ${strictOk ? 'accepts' : 'refuses'}, the ${toProxy ? 'proxy' : 'server'} ${f.$expect?.runtime ?? 'accepts'}`, () => {
+      expect(strictValidate(ajv, f.schema, f.message), JSON.stringify(ajv.errors)).toBe(strictOk);
+      if (!toProxy) expect(runtimeVerdict(f.schema, f.message)).toBe(f.$expect?.runtime ?? 'accepted');
     });
   }
+
+  const allFixtures = () => fixtureFiles.map((file) => ({ name: file.replace(/\.json$/, ''), ...read(join(V1, 'fixtures', file)) }));
+  const fixture = (n: string) => read(join(V1, 'fixtures', `${n}.json`));
+  const strictValidator = (schema: string) => (m: unknown) => strictValidate(ajv, schema, m);
+
+  it('fixture classes: valid-* and refused-* pass strict; invalid-* and drift-* fail strict', () => {
+    const names = allFixtures().map((f) => f.name);
+    for (const n of ['valid-command-tokens-apply', 'valid-result-received', 'valid-result-done-ok', 'valid-result-refused-paused', 'valid-event-command-done', 'valid-heartbeat-p2',
+      'refused-command-bad-signature', 'refused-command-wrong-proxy', 'refused-command-wrong-conn', 'refused-command-replayed', 'refused-command-expired', 'refused-command-exp-too-far',
+      'refused-command-paused', 'refused-command-not-allowed', 'refused-command-args-v2', 'refused-tokens-apply-bad-hash', 'refused-tokens-apply-admin-not-allowed',
+      'invalid-command-unsigned', 'invalid-command-unknown-name', 'invalid-type-command', 'drift-result-new-field']) expect(names, n).toContain(n);
+    for (const f of allFixtures()) {
+      const ok = strictValidator(f.schema)(f.message);
+      if (f.name.startsWith('valid-') || f.name.startsWith('refused-')) expect(ok, f.name).toBe(true);
+      else expect(ok, f.name).toBe(false);
+    }
+  });
+  it('every proxy-receiver fixture has a $context and a runtime code from the nack list', () => {
+    const NACKS = ['bad_signature', 'wrong_target', 'expired', 'replayed', 'not_allowed', 'paused', 'rate_limited', 'invalid_args', 'unsupported_version', 'busy'];
+    const proxyFixtures = allFixtures().filter((x) => x.$expect?.receiver === 'proxy');
+    expect(proxyFixtures.length).toBe(13);
+    for (const f of proxyFixtures) {
+      expect(f.$context, f.name).toMatchObject({ now: expect.any(Number), proxyId: expect.stringMatching(/^prx_/), connId: expect.stringMatching(/^con_/), serverKeys: [vectors.keys.server.publicKey] });
+      expect(NACKS, f.name).toContain(f.$expect.runtime);
+    }
+  });
+  it('the signed fixtures verify (or fail) as their name says', () => {
+    const cmd = fixture('valid-command-tokens-apply');
+    expect(verifyEnvelope(publicFromB64(vectors.keys.server.publicKey), cmd.message)).toBe(true);
+    expect(verifyEnvelope(publicFromB64(vectors.keys.server.publicKey), fixture('refused-command-bad-signature').message)).toBe(false);
+    for (const n of ['valid-result-received', 'valid-result-done-ok', 'valid-result-refused-paused', 'valid-event-command-done', 'drift-result-new-field']) expect(verifyEnvelope(publicFromB64(vectors.keys.proxy.publicKey), fixture(n).message), n).toBe(true);
+  });
+  it('a P1 heartbeat stays valid in strict (the new proxy fields are optional)', () => {
+    expect(strictValidator('heartbeat')(fixture('valid-heartbeat-1cam-pi').message)).toBe(true);
+    expect(strictValidator('heartbeat')(fixture('valid-heartbeat-p2').message)).toBe(true);
+  });
+  it('run time: a proxy may send result and event; command from a proxy is unsupported_type', () => {
+    expect(validateMessage(fixture('valid-result-done-ok').message)).toMatchObject({ ok: true });
+    expect(validateMessage(fixture('valid-event-command-done').message)).toMatchObject({ ok: true });
+    expect(validateMessage(fixture('invalid-type-command').message)).toMatchObject({ ok: false, code: 'unsupported_type' });
+    expect(validateMessage(fixture('valid-command-tokens-apply').message)).toMatchObject({ ok: false, code: 'unsupported_type' });
+    for (const n of ['valid-challenge', 'valid-welcome', 'valid-ack']) expect(validateMessage(fixture(n).message), n).toMatchObject({ ok: false, code: 'unsupported_type' });
+    expect(validateMessage(fixture('drift-result-new-field').message)).toMatchObject({ ok: true });
+  });
+  it('a done result without a status is refused (both modes)', () => {
+    const m = structuredClone(fixture('valid-result-done-ok').message);
+    delete m.body.status;
+    expect(validateMessage(m)).toMatchObject({ ok: false, code: 'bad_message' });
+    expect(strictValidator('result')(m)).toBe(false);
+  });
+  it('what cams-admin sends: tokens.apply args pass the strict args schema', () => {
+    const args = fixture('valid-command-tokens-apply').message.body.args;
+    expect(validateCommandArgs('tokens.apply', args)).toEqual({ ok: true });
+    expect(validateCommandArgs('tokens.apply', fixture('refused-tokens-apply-bad-hash').message.body.args)).toMatchObject({ ok: false });
+    expect(validateCommandArgs('tokens.apply', { ...args, tokens: [args.tokens[0], { ...args.tokens[0], hash: 'sha256:' + 'b'.repeat(64) }] })).toEqual({ ok: false, detail: 'duplicate id or hash' });
+    expect(validateCommandArgs('tokens.apply', { ...args, tokens: [args.tokens[0], { ...args.tokens[0], id: 'tok_ZZZZZZZZZZZZZZZZZZZZ' }] })).toEqual({ ok: false, detail: 'duplicate id or hash' });
+    expect(validateCommandArgs('config.get', { v: 1 })).toMatchObject({ ok: false });
+    expect(strictValidator('commands/tokens.apply.result')(fixture('valid-result-done-ok').message.body.result)).toBe(true);
+  });
 
   it('the server clamps text over 200 characters', () => {
     const f = read(join(V1, 'fixtures', 'drift-heartbeat-long-label.json'));
