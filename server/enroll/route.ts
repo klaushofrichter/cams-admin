@@ -15,6 +15,12 @@ export function enrollRouter(enr: Enrollment): express.Router {
     }
     res.status(a.status).set('Cache-Control', 'no-store').json(a.body);
   });
+  // A plain GET (no upgrade) on the channel path says which subprotocols
+  // exist: a client that can't read the upgrade's status (Node's WebSocket
+  // can't) learns of a 426 this way (spec §8.1, §8.8).
+  r.get('/proxy/v1/connect', (_req, res) => {
+    res.status(426).set('Cache-Control', 'no-store').json({ error: 'unsupported_protocol', supported: ['cams-admin.v1'] });
+  });
   r.use('/proxy/v1/enroll', ((err, _req, res, next) => {
     const status = (err as { status?: number }).status;
     if (status === 413) return res.status(413).json({ error: 'too_large' });
