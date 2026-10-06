@@ -52,7 +52,8 @@ Order as always: **commit, push, then apply.**
       image pinned by digest, metrics on 9090;
     - `app`: port 8080; readiness and liveness on `/health`.
   - `terminationGracePeriodSeconds: 60`, so Litestream finishes its final
-    sync after the app stops.
+    sync after the app stops (it syncs only hourly otherwise:
+    `deploy/litestream.yml`, the source for the pod's Litestream ConfigMap).
   - An `emptyDir` `/tmp` (Memory, 16Mi, as cam-proxy) for the app, and for
     Litestream too if it needs one, because the root filesystem is read-only.
   - Pod annotations `k8s.grafana.com/scrape: "true"` and

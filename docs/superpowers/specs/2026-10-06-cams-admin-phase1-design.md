@@ -1251,20 +1251,26 @@ the CLI and the UI card.
   app's last writes; `terminationGracePeriodSeconds: 60` leaves time for its
   final sync. It replicates
   `/var/lib/cams-admin/cams-admin.db` to `s3://klaushofrichter-k3s-cams-admin-backups/cams-admin/prod/litestream`.
-- **The window of loss (RPO)** is 30 s: Litestream's `sync-interval: 30s`
-  (kube-setup 2026-10-06, S3 cost), compactions every 5 min and 1 h
-  (`deploy/litestream.yml`).
-- **S3 cost** (PUTs at $0.005 per 1000; the account alerts at $5/month):
+- **The window of loss (RPO)** is up to 1 h: Litestream's
+  `sync-interval: 1h` (Klaus 2026-10-06: not mission critical yet; S3 cost),
+  compactions every 1 h and 24 h (`deploy/litestream.yml`, configurable
+  there). That window applies only when the volume itself is lost: a
+  graceful stop (Recreate, a node drain) uploads everything, because the
+  native sidecar stops after the app and syncs on SIGTERM (checked with
+  0.5.17, 2026-10-06). The daily snapshot is independent of it.
+- **Writes and S3 cost** (PUTs at $0.005 per 1000; the account alerts at
+  $5/month; kube-setup 2026-10-06):
   - The live status (heartbeats, last seen, the current summary) is kept
     **in memory**. SQLite is written only for meaningful changes (a proxy or
     camera going online or offline, problems, version, pin, connect, stop,
     enrollment, registry and audit writes) and by a coarse snapshot of the
     status every 10 min (`STATUS_SNAPSHOT_S`) for the dashboard after a
     restart. A steady fleet writes about 6 transactions an hour.
-  - A test runs 20 proxies × 4 cameras for a simulated hour and asserts at
-    most 8 write transactions (`test/write-budget.test.ts`).
-  - Expected: 10,000–20,000 PUTs a month (about $0.05–0.10); worst case,
-    the database changing every 30 s all month: about 96,000 (about $0.48).
+  - `test/write-budget.test.ts` runs 20 proxies × 4 cameras for a simulated
+    hour and asserts at most 8 write transactions.
+  - Expected with the hourly sync: under 2,000 PUTs a month (Litestream at
+    most 24 syncs a day plus compactions, the daily snapshot and its
+    pruning), a few cents.
 - **An init container** runs
   `litestream restore -if-db-not-exists -if-replica-exists -o /var/lib/cams-admin/cams-admin.db s3://…`,
   so a fresh volume, such as a new node or a cloud move, comes up with the

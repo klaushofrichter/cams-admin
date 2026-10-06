@@ -51,6 +51,7 @@ export interface ClientOptions {
   subprotocols?: string[];
   random?: () => number;
   version?: string;
+  clockOffsetMs?: number; // a proxy clock that is off (tests)
 }
 
 export class ProxyClient extends EventEmitter {
@@ -119,9 +120,9 @@ export class ProxyClient extends EventEmitter {
     }
     this.ws = ws;
     const timeout = setTimeout(() => {
-      if (this.state === 'connecting') {
+      if (this.state === 'connecting' && this.ws === ws) {
         this.log('connect_timeout');
-        ws.close();
+        this.closeSocket();
       }
     }, this.o.connectTimeoutMs ?? 10_000);
     ws.onopen = () => (this.opened = true);
@@ -137,14 +138,14 @@ export class ProxyClient extends EventEmitter {
     ws.onerror = () => undefined;
     ws.onclose = (ev) => {
       clearTimeout(timeout);
-      if (this.ws === ws) this.afterClose(ev.code);
+      if (this.ws === ws) void this.afterClose(ev.code);
     };
   }
 
   private send(type: string, body: unknown, extra: Record<string, unknown> = {}): string {
     const id = ulid(Date.now());
     this.seqOut++;
-    this.ws?.send(JSON.stringify({ v: 1, type, id, seq: this.seqOut, ts: Date.now(), ...extra, body }));
+    this.ws?.send(JSON.stringify({ v: 1, type, id, seq: this.seqOut, ts: this.now(), ...extra, body }));
     return id;
   }
 
@@ -166,10 +167,10 @@ export class ProxyClient extends EventEmitter {
         if (!trusted) {
           this.log('admin_server_untrusted');
           this.rejectNext = true;
-          this.ws?.close(1000);
+          this.closeSocket();
           return;
         }
-        const ts = Date.now();
+        const ts = this.now();
         const k = this.o.key;
         this.send('hello', { proxyId: k.proxyId, keyId: k.keyId, connId: b.connId, nonce: b.nonce, ts, version: this.o.version ?? 'test-client', capabilities: ['status'] }, {
           sig: sign(privateFromB64(k.privateKey), signedText.hello(b.connId, b.nonce, k.proxyId, k.keyId, ts)),
@@ -208,13 +209,47 @@ export class ProxyClient extends EventEmitter {
 
   private rejectNext = false;
 
+  private now(): number {
+    return Date.now() + (this.o.clockOffsetMs ?? 0);
+  }
+
+  // Closes, and if the peer never answers the close handshake (a dead or
+  // blackholed link), treats the socket as closed after 2 s.
+  private closeSocket(code = 1000): void {
+    const ws = this.ws;
+    if (!ws) return;
+    try {
+      ws.close(code);
+    } catch {
+      /* already closing */
+    }
+    setTimeout(() => {
+      if (this.ws === ws) void this.afterClose(1006);
+    }, 2000).unref?.();
+  }
+
+  // Gone without a bye (a crash, a pulled cable): no reconnect.
+  abort(): void {
+    this.stopping = true;
+    if (this.timer) clearTimeout(this.timer);
+    if (this.hbTimer) clearTimeout(this.hbTimer);
+    const ws = this.ws;
+    this.ws = null;
+    try {
+      ws?.close(1000);
+    } catch {
+      /* closing */
+    }
+    this.setState('stopped');
+  }
+
   // Sends one heartbeat and plans the next.
   private async heartbeat(): Promise<void> {
     if (this.state !== 'connected' || !this.ws) return;
     if (this.unacked.size >= 3) {
       // Three heartbeats without an ack: a half-open connection.
       this.log('ack_missing');
-      this.ws.close(1000);
+      this.closeSocket();
       return;
     }
     try {
