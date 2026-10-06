@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ago, stateClass, stateLabel, when } from './format';
+import { ago, keyState, stateClass, stateLabel, when } from './format';
 
 describe('format', () => {
   it('ages', () => {
@@ -10,6 +10,12 @@ describe('format', () => {
     expect(ago(0, 3 * 3600_000)).toBe('3 h ago');
     expect(ago(0, 49 * 3600_000)).toBe('2 d ago');
     expect(ago(5000, 1000)).toBe('0 s ago'); // a clock that went back
+  });
+  it('key states: pending until the first hello', () => {
+    expect(keyState({ revokedAt: 5, revokedReason: 're-enrolled', pending: null })).toBe('revoked (re-enrolled)');
+    expect(keyState({ revokedAt: null, revokedReason: null, pending: 'waiting' })).toBe('pending: waiting for its first connection');
+    expect(keyState({ revokedAt: null, revokedReason: null, pending: 'expired' })).toBe('pending, expired: never connected (unused enroll answer)');
+    expect(keyState({ revokedAt: null, revokedReason: null, pending: null })).toBe('active');
   });
   it('state chips', () => {
     expect(stateClass('online')).toBe('ok');

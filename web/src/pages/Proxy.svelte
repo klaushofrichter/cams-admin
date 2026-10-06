@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { api, errorText } from '../lib/api';
   import { coalesced, live } from '../lib/live';
-  import { camClass, when } from '../lib/format';
+  import { camClass, keyState, when } from '../lib/format';
   import { summaryLeaves } from '../lib/summaryTree';
   import StateChip from '../components/StateChip.svelte';
   import Ago from '../components/Ago.svelte';
@@ -177,7 +177,7 @@
           {#each d.keys as k (k.id)}
             <tr data-testid="key-row-{k.id}">
               <td class="mono">{k.fingerprint}</td><td>{when(k.createdAt)}</td><td>{when(k.lastSeenAt)}</td>
-              <td>{k.revokedAt ? `revoked (${k.revokedReason})` : 'active'}</td>
+              <td data-testid="key-state-{k.id}" class:muted={!!k.pending}>{keyState(k)}</td>
               <td>{#if !k.revokedAt}<button class="btn danger" data-testid="key-revoke" onclick={() => (confirm = { kind: 'revoke', keyId: k.id })}>Revoke</button>{/if}</td>
             </tr>
           {/each}

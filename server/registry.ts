@@ -23,7 +23,13 @@ export interface Account { id: string; name: string; displayName: string; notes:
 export interface AccountListItem extends Account { users: number; admins: number; proxies: number; cameras: number }
 export interface User { id: string; accountId: string; email: string; displayName: string | null; role: 'admin' | 'viewer'; disabled: boolean; createdAt: number; updatedAt: number; version: number }
 export interface Proxy extends ProxyFields { id: string; accountId: string; state: 'pending' | 'enrolled' | 'revoked'; createdAt: number; updatedAt: number; version: number }
-export interface ProxyKey { id: string; proxyId: string; publicKey: string; fingerprint: string; createdAt: number; enrollmentId: string | null; lastSeenAt: number | null; revokedAt: number | null; revokedReason: string | null }
+// pending: redeemed, waiting for the key's first hello ('waiting'), or too
+// late for one ('expired', an enroll answer the proxy never used).
+export interface ProxyKey { id: string; proxyId: string; publicKey: string; fingerprint: string; createdAt: number; enrollmentId: string | null; lastSeenAt: number | null; confirmedAt: number | null; pending: 'waiting' | 'expired' | null; revokedAt: number | null; revokedReason: string | null }
+
+// How long a redeemed key may wait for its first hello.
+export const PENDING_KEY_MS = 24 * 3600_000;
+export const pendingExpired = (createdAt: number, now: number) => now - createdAt >= PENDING_KEY_MS;
 export interface Sim extends SimFields { cameraId: string }
 export interface Camera extends CameraFields { id: string; accountId: string; createdAt: number; updatedAt: number; version: number; sim: Sim | null }
 export interface Membership { accountId: string; accountName: string; displayName: string; role: 'admin' | 'viewer' }
@@ -36,7 +42,12 @@ const toProxy = (r: Row): Proxy => ({
   tlsSite: r.tls_site as string | null, tlsServername: r.tls_servername as string | null, caFingerprints: JSON.parse(r.ca_fingerprints as string),
   notes: r.notes as string | null, state: r.state as Proxy['state'], createdAt: r.created_at as number, updatedAt: r.updated_at as number, version: r.version as number,
 });
-export const toKey = (r: Row): ProxyKey => ({ id: r.id as string, proxyId: r.proxy_id as string, publicKey: r.public_key as string, fingerprint: r.fingerprint as string, createdAt: r.created_at as number, enrollmentId: r.enrollment_id as string | null, lastSeenAt: r.last_seen_at as number | null, revokedAt: r.revoked_at as number | null, revokedReason: r.revoked_reason as string | null });
+export const toKey = (r: Row, now: number): ProxyKey => ({
+  id: r.id as string, proxyId: r.proxy_id as string, publicKey: r.public_key as string, fingerprint: r.fingerprint as string, createdAt: r.created_at as number,
+  enrollmentId: r.enrollment_id as string | null, lastSeenAt: r.last_seen_at as number | null, confirmedAt: r.confirmed_at as number | null,
+  pending: r.revoked_at !== null || r.confirmed_at !== null ? null : pendingExpired(r.created_at as number, now) ? 'expired' : 'waiting',
+  revokedAt: r.revoked_at as number | null, revokedReason: r.revoked_reason as string | null,
+});
 const toSim = (r: Row): Sim => ({ cameraId: r.camera_id as string, runsOn: r.runs_on as string, controlUrl: r.control_url as string | null, uiUrl: r.ui_url as string | null, image: r.image as string | null, notes: r.notes as string | null });
 const toCamera = (r: Row, sim: Sim | null): Camera => ({
   id: r.id as string, accountId: r.account_id as string, proxyId: r.proxy_id as string | null, camsId: r.cams_id as string, proxyCameraId: r.proxy_camera_id as string | null,
@@ -289,11 +300,30 @@ export class Registry {
     }));
   }
 
-  // Inside the caller's transaction: the proxy's active key(s) revoked, their ids returned.
-  revokeActiveKeys(proxyId: string, reason: 'proxy-deleted' | 'blocked' | 're-enrolled', now: number): string[] {
-    const ids = (this.db.prepare('SELECT id FROM proxy_keys WHERE proxy_id = ? AND revoked_at IS NULL').all(proxyId) as Row[]).map((r) => r.id as string);
-    this.db.prepare('UPDATE proxy_keys SET revoked_at = ?, revoked_reason = ? WHERE proxy_id = ? AND revoked_at IS NULL').run(now, reason, proxyId);
+  // Inside the caller's transaction: the proxy's unrevoked keys (active and
+  // pending; only the confirmed ones with `confirmed`) revoked, their ids returned.
+  revokeActiveKeys(proxyId: string, reason: 'proxy-deleted' | 'blocked' | 're-enrolled', now: number, which: 'all' | 'confirmed' | 'pending' = 'all', except?: string): string[] {
+    const cond = which === 'confirmed' ? ' AND confirmed_at IS NOT NULL' : which === 'pending' ? ' AND confirmed_at IS NULL' : '';
+    const ids = (this.db.prepare(`SELECT id FROM proxy_keys WHERE proxy_id = ? AND revoked_at IS NULL${cond}`).all(proxyId) as Row[]).map((r) => r.id as string).filter((id) => id !== except);
+    const upd = this.db.prepare('UPDATE proxy_keys SET revoked_at = ?, revoked_reason = ? WHERE id = ?');
+    for (const id of ids) upd.run(now, reason, id);
     return ids;
+  }
+
+  // A pending key's first hello: it becomes the active key, the old active
+  // key goes ('re-enrolled'), a pending proxy is enrolled. null when the key
+  // is not pending or waited too long. Returns the replaced keys' ids.
+  confirmKey(proxyId: string, keyId: string): { revoked: string[] } | null {
+    return tx(this.db, () => {
+      const now = this.clock.now();
+      const k = this.db.prepare(`SELECT k.*, p.account_id, p.name proxy_name, p.state FROM proxy_keys k JOIN proxies p ON p.id = k.proxy_id WHERE k.id = ? AND k.proxy_id = ?`).get(keyId, proxyId) as Row | undefined;
+      if (!k || k.revoked_at !== null || k.confirmed_at !== null || k.state === 'revoked' || pendingExpired(k.created_at as number, now)) return null;
+      const revoked = this.revokeActiveKeys(proxyId, 're-enrolled', now, 'confirmed');
+      this.db.prepare('UPDATE proxy_keys SET confirmed_at = ? WHERE id = ?').run(now, keyId);
+      if (k.state === 'pending') this.db.prepare(`UPDATE proxies SET state = 'enrolled', updated_at = ?, version = version + 1 WHERE id = ?`).run(now, proxyId);
+      this.audit.write({ actorType: 'proxy', actor: proxyId, action: 'key-confirmed', accountId: k.account_id as string, targetType: 'proxy', targetId: proxyId, targetLabel: k.proxy_name as string, outcome: 'ok', detail: { keyId, fingerprint: k.fingerprint, replacedKeys: revoked } });
+      return { revoked };
+    });
   }
 
   // Inside the caller's transaction: every unused, uncancelled code of the proxy.
@@ -303,22 +333,23 @@ export class Registry {
 
   listKeys(accountId: string, proxyId: string): ProxyKey[] {
     this.getProxy(accountId, proxyId);
-    return (this.db.prepare('SELECT * FROM proxy_keys WHERE proxy_id = ? ORDER BY created_at DESC').all(proxyId) as Row[]).map(toKey);
+    const now = this.clock.now();
+    return (this.db.prepare('SELECT * FROM proxy_keys WHERE proxy_id = ? ORDER BY created_at DESC').all(proxyId) as Row[]).map((r) => toKey(r, now));
   }
 
   activeKey(proxyId: string): ProxyKey | null {
-    const r = this.db.prepare('SELECT * FROM proxy_keys WHERE proxy_id = ? AND revoked_at IS NULL').get(proxyId) as Row | undefined;
-    return r ? toKey(r) : null;
+    const r = this.db.prepare('SELECT * FROM proxy_keys WHERE proxy_id = ? AND revoked_at IS NULL AND confirmed_at IS NOT NULL').get(proxyId) as Row | undefined;
+    return r ? toKey(r, this.clock.now()) : null;
   }
 
   revokeKey(actor: { type: 'sysadmin' | 'proxy'; id: string }, accountId: string, proxyId: string, keyId: string, reason: 'admin' | 'unenrolled' = 'admin'): ProxyKey {
     return guard(() => tx(this.db, () => {
       const p = this.getProxy(accountId, proxyId);
-      const k = toKey(this.one('SELECT * FROM proxy_keys WHERE id = ? AND proxy_id = ?', keyId, proxyId));
+      const k = toKey(this.one('SELECT * FROM proxy_keys WHERE id = ? AND proxy_id = ?', keyId, proxyId), this.clock.now());
       if (k.revokedAt !== null) throw new ApiError(409, 'already_revoked');
       this.db.prepare('UPDATE proxy_keys SET revoked_at = ?, revoked_reason = ? WHERE id = ?').run(this.clock.now(), reason, keyId);
       this.audit.write({ actorType: actor.type, actor: actor.id, action: 'key-revoke', accountId, targetType: 'proxy', targetId: proxyId, targetLabel: p.name, outcome: 'ok', detail: { keyId, fingerprint: k.fingerprint, reason } });
-      return toKey(this.one('SELECT * FROM proxy_keys WHERE id = ?', keyId));
+      return toKey(this.one('SELECT * FROM proxy_keys WHERE id = ?', keyId), this.clock.now());
     }));
   }
 

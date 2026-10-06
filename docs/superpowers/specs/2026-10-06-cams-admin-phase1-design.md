@@ -277,9 +277,10 @@ phase 1 adds `display_name` and `disabled` and nothing else.
 | `created_at` | INTEGER NOT NULL | |
 | `enrollment_id` | TEXT | the code that created it |
 | `last_seen_at` | INTEGER | the last successful `hello` |
-| `revoked_at` | INTEGER | NULL while active |
+| `confirmed_at` | INTEGER | the key's first `hello` (migration 2); NULL = **pending**: redeemed, not yet used. A pending key may say its first `hello` within 24 h |
+| `revoked_at` | INTEGER | NULL while active or pending |
 | `revoked_reason` | TEXT | `admin`, `re-enrolled`, `proxy-deleted`, `unenrolled` |
-| | | at most **one active key per proxy**: a partial unique index `ON proxy_keys(proxy_id) WHERE revoked_at IS NULL` |
+| | | at most **one active key per proxy** (`WHERE revoked_at IS NULL AND confirmed_at IS NOT NULL`) and one pending key (`… AND confirmed_at IS NULL`) |
 
 **`enrollment_codes`**
 
@@ -484,8 +485,9 @@ nothing would use it and an unused authenticated endpoint is attack surface.
   - the proxy-side limits of §8.2 and §8.7: per code hash, per claimed
     `proxyId`, per connection, and global budgets.
 
-  `TRUST_PROXY=1` stays (Traefik), but only for `req.secure` and the
-  protocol; the client address is never a limiter key and is never logged. A
+  `TRUST_PROXY=1` stays (Traefik), but only for `req.secure`, the
+  protocol and the forwarded host (which picks an allowlisted enrollment
+  origin, never anything else); the client address is never a limiter key and is never logged. A
   test sends requests with rotating `X-Forwarded-For` values and asserts the
   same budget applies, and another asserts that two "addresses" share no
   budget split.
@@ -547,12 +549,21 @@ nothing would use it and an unused authenticated endpoint is attack surface.
 
    It then:
    - marks the code used;
-   - revokes any active key of that proxy (`re-enrolled`);
-   - stores the new key;
-   - sets the proxy to `enrolled`;
-   - closes the old key's live connection (4401);
+   - revokes an earlier **pending** key of that proxy (`re-enrolled`);
+   - stores the new key as **pending**;
    - writes the audit record (`proxy-enrolled`, actor `proxy`, with the key
      fingerprint).
+
+   The new key's first `hello` (§8.3) confirms it: the old active key is
+   revoked (`re-enrolled`) and its live connection closed (4401), the proxy
+   becomes `enrolled`, and `key-confirmed` is audited. So an answer the proxy
+   refused or lost leaves no active key nobody holds, and a working proxy
+   keeps its key until the new one connects (amended 2026-10-06).
+
+   The `connectUrl` is on the origin the request arrived on (scheme and Host,
+   forwarded ones only as `TRUST_PROXY` trusts them) when that origin is
+   `PUBLIC_URL`'s or in `INTERNAL_URLS`; otherwise the public one. A Host
+   header is never reflected (amended 2026-10-06, for the in-cluster proxy).
 4. The answer is `201`:
 
    ```json
@@ -1505,7 +1516,8 @@ request says so, so that kube-setup doesn't add it by habit.
 |---|---|---|
 | `PORT` | 8080 | |
 | `PUBLIC_URL` | required | origin for CSRF, OAuth and `connectUrl` |
-| `PROXY_CONNECT_URL` | from `PUBLIC_URL` | override (e.g. the cluster Service URL is given to the cluster proxy by hand) |
+| `PROXY_CONNECT_URL` | from `PUBLIC_URL` | override of the public `connectUrl` |
+| `INTERNAL_URLS` | unset | comma-separated origins besides `PUBLIC_URL` (e.g. `http://cams-admin.cams-admin.svc.cluster.local:8080`): an enrollment arriving on one gets its `connectUrl` on that origin; http only for `*.svc.cluster.local` and loopback; any other Host gets the public `connectUrl` |
 | `DB_FILE` | `/var/lib/cams-admin/cams-admin.db` | |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI` | required | |
 | `ALLOWED_EMAILS` | required | comma-separated |
@@ -1669,8 +1681,9 @@ protocol test client of §15.5).**
 - Enrollment: valid; used; expired (fake clock at exactly `expires_at`);
   cancelled; a code of a `revoked` proxy; a bad proof; a proof for another
   key; an oversize body (413); `v: 2`; two concurrent redemptions (exactly
-  one 201); re-enrollment revokes the old key and closes its live socket
-  (4401).
+  one 201); re-enrollment keeps the old key until the new key's first
+  `hello`, then revokes it and closes its live socket; a pending key that
+  never says `hello` expires; `connectUrl` per enrollment origin.
 - Key signature: a `hello` signed with the wrong key, a revoked key, another
   proxy's key, a key of a deleted proxy; a challenge signature the client
   must refuse (the test client checks it like cam-proxy will).

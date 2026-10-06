@@ -28,16 +28,22 @@ export async function startHub(dir: string, env: Record<string, string> = {}) {
   await new Promise<void>((r) => http.listen(0, '127.0.0.1', r));
   const port = (http.address() as { port: number }).port;
   const acc = registry.createAccount('a@example.com', { name: 'home', displayName: 'Home' });
-  const enrolled = (name = `p${n++}`) => {
-    const p = registry.createProxy('a@example.com', acc.id, { name, displayName: name, runsOn: 'cloud' });
+  // A key of the proxy: confirmed (it said hello before), or pending (redeemed, no hello yet).
+  const addKey = (proxyId: string, o: { pending?: boolean; createdAt?: number } = {}) => {
     const k = generateKeyPair();
     const keyId = `key_${String(n++).padStart(20, '0')}`;
-    db.prepare(`UPDATE proxies SET state='enrolled' WHERE id=?`).run(p.id);
-    db.prepare('INSERT INTO proxy_keys (id, proxy_id, public_key, fingerprint, created_at) VALUES (?,?,?,?,?)').run(keyId, p.id, k.publicKeySpkiB64, fingerprint(k.publicKeySpkiB64), Date.now());
-    return { proxyId: p.id, keyId, key: k };
+    const at = o.createdAt ?? Date.now();
+    db.prepare('INSERT INTO proxy_keys (id, proxy_id, public_key, fingerprint, created_at, confirmed_at) VALUES (?,?,?,?,?,?)').run(keyId, proxyId, k.publicKeySpkiB64, fingerprint(k.publicKeySpkiB64), at, o.pending ? null : at);
+    return { proxyId, keyId, key: k };
   };
+  const enrolled = (name = `p${n++}`) => {
+    const p = registry.createProxy('a@example.com', acc.id, { name, displayName: name, runsOn: 'cloud' });
+    db.prepare(`UPDATE proxies SET state='enrolled' WHERE id=?`).run(p.id);
+    return addKey(p.id);
+  };
+  const created = (name = `p${n++}`) => registry.createProxy('a@example.com', acc.id, { name, displayName: name, runsOn: 'cloud' });
   return {
-    db, audit, registry, status, hub, cfg, serverKey: server, port, acc, enrolled,
+    db, audit, registry, status, hub, cfg, serverKey: server, port, acc, enrolled, addKey, created,
     url: `ws://127.0.0.1:${port}/proxy/v1/connect`,
     async stop() { await hub.shutdown(); await new Promise((r) => http.close(r)); },
   };

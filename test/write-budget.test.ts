@@ -26,7 +26,7 @@ describe('database write budget', () => {
     for (let i = 0; i < 20; i++) {
       const p = r.reg.createProxy(ACTOR, acc.id, { name: `p${i}`, displayName: `P${i}`, runsOn: 'cloud' });
       r.db.prepare(`UPDATE proxies SET state='enrolled' WHERE id=?`).run(p.id);
-      r.db.prepare(`INSERT INTO proxy_keys (id, proxy_id, public_key, fingerprint, created_at) VALUES (?, ?, ?, 'fp', 1)`).run(`key_${i}`, p.id, `pk${i}`);
+      r.db.prepare(`INSERT INTO proxy_keys (id, proxy_id, public_key, fingerprint, created_at, confirmed_at) VALUES (?, ?, ?, 'fp', 1, 1)`).run(`key_${i}`, p.id, `pk${i}`);
       ids.push(p.id);
     }
     // Connect everyone and send the first heartbeat (meaningful: online).
@@ -88,7 +88,7 @@ describe('database write budget', () => {
     const acc = r.reg.createAccount(ACTOR, { name: 'rs', displayName: 'RS' });
     const p = r.reg.createProxy(ACTOR, acc.id, { name: 'p', displayName: 'P', runsOn: 'cloud' });
     r.db.prepare(`UPDATE proxies SET state='enrolled' WHERE id=?`).run(p.id);
-    r.db.prepare(`INSERT INTO proxy_keys (id, proxy_id, public_key, fingerprint, created_at) VALUES ('key_x', ?, 'pkx', 'fp', 1)`).run(p.id);
+    r.db.prepare(`INSERT INTO proxy_keys (id, proxy_id, public_key, fingerprint, created_at, confirmed_at) VALUES ('key_x', ?, 'pkx', 'fp', 1, 1)`).run(p.id);
     s1.hello(p.id, 'v2026.10.06.1', r.clock.now());
     s1.heartbeat(p.id, { summary: makeSummary({ cameras: 3, now: r.clock.now() }), truncated: false }, r.clock.now());
     s1.flush(true);
