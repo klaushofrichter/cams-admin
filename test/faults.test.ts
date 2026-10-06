@@ -131,6 +131,18 @@ describe('fault injection', () => {
     expect(s.built.db.prepare('SELECT count(*) n FROM proxy_status WHERE proxy_id IN (?, ?)').get(x.proxyId, y.proxyId)).toEqual({ n: 0 });
   });
 
+  it('a mistyped account name on delete disconnects nobody', async () => {
+    const s = await server();
+    const p = await enrolled(s, 'keep', 'kept');
+    const c = client(makeClient(p.key));
+    c.start();
+    await until(() => c.state === 'connected');
+    await expect(s.api('DELETE', `/accounts/${p.accountId}`, { confirmName: 'kpt' })).rejects.toMatchObject({ status: 400 });
+    await new Promise((r) => setTimeout(r, 300));
+    expect(c.state).toBe('connected');
+    expect(c.stats.reconnects).toBe(0);
+  });
+
   it('two proxies with one key: the newest wins, the other waits; bounded flapping, never offline', async () => {
     const s = await server();
     const p = await enrolled(s, 'twins');

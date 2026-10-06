@@ -98,8 +98,10 @@ export function apiRouter(d: ApiDeps): express.Router {
   r.patch('/accounts/:accountId', h((req, res) => { const a = d.registry.updateAccount(actor(res), p(req, 'accountId'), req.body); reg('account', a.id); return a; }));
   r.delete('/accounts/:accountId', h((req, res) => {
     const id = p(req, 'accountId');
+    // The typed name first: a mistake must disconnect nobody.
+    if (req.body?.confirmName !== d.registry.getAccount(id).name) throw new ApiError(400, 'confirm_mismatch', 'confirmName');
     // Every live connection of its proxies closes before the rows go (4403).
-    for (const px of d.registry.listProxies(d.registry.getAccount(id).id)) d.hub.closeProxy(px.id, 4403);
+    for (const px of d.registry.listProxies(id)) d.hub.closeProxy(px.id, 4403);
     d.registry.deleteAccount(actor(res), id, req.body?.confirmName);
     reg('account', id);
   }));
