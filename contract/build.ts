@@ -37,16 +37,22 @@ export function buildSchemas(mode: Mode): Record<string, S> {
   const fp: S = { type: 'string', pattern: '^SHA256:[0-9A-F]{64}$' };
 
   // --- the health summary (cam-proxy src/health/summary.ts, schema 1) ----------
+  // sd and warning (cam-proxy #199): the camera's SD card; warning (true) marks an item that needs a look but is no problem.
   const item = obj({
-    id: en(['camera', 'stream', 'events', 'ftp', 'storage', 'disk', 'archive', 'certificates', 'cpuTemp', 'underVoltage', 'inventory', 'version']),
-    label: str(), value: { anyOf: [bool, num, str(), { type: 'null' }] }, text: str(), problem: bool,
-  }, ['id', 'label', 'text', 'problem']);
+    id: en(['camera', 'stream', 'events', 'ftp', 'sd', 'storage', 'disk', 'archive', 'certificates', 'cpuTemp', 'underVoltage', 'inventory', 'version']),
+    label: str(), value: { anyOf: [bool, num, str(), { type: 'null' }] }, text: str(), problem: bool, warning: { const: true },
+  }, ['id', 'label', 'text', 'problem'], ['warning']);
   const items = arr(item, 64);
   const camera = obj({
     id: str(64), name: str(), address: str(), online: bool, since: int(), model: nullable(str()), firmware: nullable(str()),
     clockOffsetMs: nullable(num), error: nullable(str()), reboot: nullable(en(['power-cycling', 'rebooting', 'back', 'not-back'])),
     poeSwitch: nullable(obj({ model: str(64), port: nullable(int()) }, ['model'])),
-  }, ['id', 'online']);
+    // The SD card and the recording settings (cam-proxy #199): null before the first read.
+    sd: nullable(obj({
+      mounted: bool, formatted: bool, capacityMB: nullable(num), freeMB: nullable(num), overwrite: nullable(bool), recordingEnabled: nullable(bool),
+      checkedAt: int(), lastRecordingAt: nullable(int()), stalled: bool,
+    }, [])),
+  }, ['id', 'online'], ['sd']);
   const stream = obj({ enabled: bool, up: bool, lastFrameAt: nullable(int()) }, []);
   const events = obj({ onvif: en(['subscribed', 'connecting', 'down']), source: en(['onvif', 'poll', 'none']), since: int(), resubscribes: int() }, []);
   const ftp = obj({

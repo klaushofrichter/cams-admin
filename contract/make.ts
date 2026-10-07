@@ -37,6 +37,13 @@ export function fixtures(): Record<string, unknown> {
   longLabel.items[0].label = 'x'.repeat(201);
   const manyItems = structuredClone(pi);
   manyItems.items = Array.from({ length: 65 }, () => structuredClone(pi.items[0]));
+  // The Pi with its camera's SD card read (cam-proxy #199): overwrite off, a warning.
+  const withSd = structuredClone(pi) as unknown as { camera: Record<string, unknown>; items: Record<string, unknown>[]; cameras: { camera: Record<string, unknown>; items: Record<string, unknown>[] }[] };
+  const sd = { mounted: true, formatted: true, capacityMB: 30432, freeMB: 900, overwrite: false, recordingEnabled: true, checkedAt: NOW - 60_000, lastRecordingAt: NOW - 120_000, stalled: false };
+  const sdItem = { id: 'sd', label: 'SD card', value: 'overwrite_off', text: 'Overwrite is off: the camera stops recording to its SD card when it is full', problem: false, warning: true };
+  withSd.camera.sd = sd;
+  withSd.cameras[0].camera.sd = sd;
+  for (const list of [withSd.items, withSd.cameras[0].items]) list.splice(list.findIndex((i) => i.id === 'ftp') + 1, 0, sdItem);
   const extra = structuredClone(pi) as Record<string, unknown>;
   extra.newThing = 1;
 
@@ -133,6 +140,7 @@ export function fixtures(): Record<string, unknown> {
   return {
     'valid-heartbeat-4cam': valid('heartbeat', hb(four, false, makeProxyInfo({ now: NOW, site: 'garage', publicUrl: 'https://proxy.example.net' })), 'four cameras, site CA, cam3 offline'),
     'valid-heartbeat-1cam-pi': valid('heartbeat', hb(pi), 'the Pi: one camera, host stats'),
+    'valid-heartbeat-1cam-sd': valid('heartbeat', hb(withSd), "the Pi with its camera's SD card (cam-proxy #199): overwrite off, a warning item"),
     'valid-heartbeat-truncated': valid('heartbeat', hb(truncateSummary(four), true), 'over 192 KiB: header, items, cameras[].camera and .items'),
     'valid-challenge': valid('challenge', env('challenge', 1, { connId: CON, nonce: NONCE, serverTime: NOW, serverKeyId: vectors.keys.server.fingerprint },
       { sig: sign(privateFromB64(serverKey.privateKeyPkcs8B64), signedText.challenge(CON, NONCE, NOW)) }), 'signed by the vectors server key'),
