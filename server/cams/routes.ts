@@ -9,16 +9,28 @@ import { FieldError } from '../validate';
 import { validateCams } from '../contract';
 import { fieldOf } from '../tokens/service';
 import { log } from '../log';
-import { sendSigned, type CamsAuth, type CamsRequest } from './auth';
+import { NONCE_RE, sendSigned, type CamsAuth, type CamsRequest } from './auth';
+import { limiter } from '../rateLimit';
 import { requestOrigin } from '../enroll/route';
 import { bodyErrors } from '../bodyErrors';
 
 // The /cams/v1 service API (contract cams-v1). Mounted at the app root,
 // before the cookie parser: no cookie, session or CSRF rule applies here.
-export interface CamsRouterDeps { enrollment: CamsEnrollment; auth?: CamsAuth; signingKey?: KeyObject; testRoutes?: boolean; instances?: CamsInstances; snapshot?: SnapshotDeps; tokens?: Tokens }
+export interface CamsRouterDeps { globalPerMin?: number; enrollment: CamsEnrollment; auth?: CamsAuth; signingKey?: KeyObject; testRoutes?: boolean; instances?: CamsInstances; snapshot?: SnapshotDeps; tokens?: Tokens }
 
 export function camsRouter(d: CamsRouterDeps): express.Router {
   const r = express.Router();
+  // A ceiling for every /cams/v1 request in total, before anything is read
+  // (one budget, never the client address); far above what the instances
+  // send (60 a minute each). Signed when the nonce is well-formed.
+  r.use('/cams/v1', limiter({
+    windowMs: 60_000, limit: d.globalPerMin ?? 3000, key: () => 'cams',
+    handler: (req, res) => {
+      const nonce = typeof req.headers['x-cams-nonce'] === 'string' ? req.headers['x-cams-nonce'] : '';
+      if (d.signingKey && NONCE_RE.test(nonce)) return sendSigned(res, d.signingKey, nonce, 429, { error: 'rate_limited', retryAfterS: 60 });
+      res.status(429).set('Cache-Control', 'no-store').json({ error: 'rate_limited', retryAfterS: 60 });
+    },
+  }));
   // Unsigned request, unsigned answer (as P1 §8.2); at most 8 KiB.
   r.post('/cams/v1/enroll', express.json({ limit: 8 * 1024, type: () => true }), (req, res) => {
     const a = d.enrollment.redeem(req.body, requestOrigin(req));

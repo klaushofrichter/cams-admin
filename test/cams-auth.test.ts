@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { camsResponseText, generateKeyPair, publicFromB64, verify } from '../server/crypto/ed25519';
 import { readEpoch } from '../server/db/open';
+import { fieldOf } from '../server/tokens/service';
 import { tmpDir } from './helpers/tmp';
 import { fakeClock } from './helpers/clock';
 import { startServer, type Running } from './helpers/server';
@@ -170,5 +171,29 @@ describe('cams-v1 signed requests (CamsAuth)', () => {
     expect([r.status, (await r.json()).error]).toEqual([429, 'rate_limited']);
     clock.advance(600_001);
     expect((await call(b.key, 'GET', '/cams/v1/ping')).status).toBe(200);
+  });
+});
+
+describe('cams-v1: the global request ceiling (before the check) and safe error fields', () => {
+  const dir = tmpDir();
+  let s: Running;
+  afterAll(() => s.stop());
+  it('over LIMIT_CAMS_GLOBAL requests a minute in total → 429 rate_limited, signed when the nonce is well-formed', async () => {
+    s = await startServer(dir, { LIMIT_CAMS_GLOBAL: '5' });
+    const acc = await s.api('POST', '/accounts', { name: 'home', displayName: 'Home' });
+    const inst = await s.api('POST', '/cams-instances', { name: 'g', displayName: 'G', accounts: [acc.id] });
+    const key = await enrollCamsKey(s, inst.id); // the enroll counts too
+    const codes: number[] = [];
+    let last: Awaited<ReturnType<typeof signedFetch>> | null = null;
+    for (let i = 0; i < 6; i++) { last = await signedFetch(s, key, 'GET', '/cams/v1/ping'); codes.push(last.status); }
+    expect(codes.at(-1)).toBe(429);
+    const body = Buffer.from(await last!.arrayBuffer());
+    expect(JSON.parse(body.toString())).toMatchObject({ error: 'rate_limited' });
+    expect(verify(publicFromB64(s.built.signing.publicKeyB64), camsResponseText(429, last!.nonce, body), last!.headers.get('x-cams-admin-sig'))).toBe(true);
+  });
+  it('an invalid field name is never echoed as sent', () => {
+    expect(fieldOf('/shadow/items/0 must NOT have more than 200 characters')).toBe('shadow');
+    expect(fieldOf('/<img src=x> must be string')).toBe('body');
+    expect(fieldOf('/ must have required property \'mode\'')).toBe('body');
   });
 });

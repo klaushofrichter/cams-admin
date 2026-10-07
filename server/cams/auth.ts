@@ -29,8 +29,11 @@ const SIG_RE = /^[A-Za-z0-9+/]{86}==$/;
 export function sendSigned(res: express.Response, signingKey: KeyObject, nonce: string, status: number, body: unknown | null, headers: Record<string, string> = {}): void {
   const bytes = status === 304 || body === null ? Buffer.alloc(0) : Buffer.isBuffer(body) ? body : Buffer.from(JSON.stringify(body), 'utf8');
   res.status(status).set({ 'Cache-Control': 'no-store', ...headers, 'X-Cams-Admin-Sig': sign(signingKey, camsResponseText(status, nonce, bytes)) });
-  if (bytes.length) res.type('application/json').end(bytes);
-  else res.end();
+  if (!bytes.length) return void res.end();
+  // Always JSON (never HTML), whatever the bytes carry.
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.end(bytes);
 }
 
 export interface CamsAuthDeps { db: Db; clock: Clock; audit: Audit; instances: CamsInstances; signingKey: KeyObject; limits: Pick<Limits, 'camsPerInstancePerMin' | 'camsFailedSigPer10Min'>; log: Logger }

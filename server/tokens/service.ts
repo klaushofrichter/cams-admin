@@ -55,7 +55,11 @@ function parseHours(h: unknown): number {
 
 type Row = Record<string, unknown>;
 // ajv's "/hash must match …" → "hash" (the first path segment), else "body".
-export const fieldOf = (detail: string): string => detail.split(' ')[0].replace(/^\//, '').split('/')[0] || 'body';
+// Only a plain name is ever echoed back.
+export const fieldOf = (detail: string): string => {
+  const f = detail.split(' ')[0].replace(/^\//, '').split('/')[0];
+  return /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(f) ? f : 'body';
+};
 
 export class Tokens {
   // Prepared once: the tick and heartbeat paths run every second (each
