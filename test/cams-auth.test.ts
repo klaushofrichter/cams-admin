@@ -144,6 +144,14 @@ describe('cams-v1 signed requests (CamsAuth)', () => {
     expect(JSON.stringify(rows)).not.toContain(key.keyId);
   });
 
+  it('refusals for instance ids that do not exist share one audit window (no audit spam from made-up ids)', async () => {
+    const { key } = await fresh('ghosts');
+    const before = s.built.audit.list({ action: 'cams-auth-refused', limit: 200 }).items.length;
+    for (let i = 0; i < 5; i++) await call(key, 'GET', '/cams/v1/ping', undefined, { instanceId: `cms_${String(i).padStart(20, '0')}` });
+    const rows = s.built.audit.list({ action: 'cams-auth-refused', limit: 200 }).items;
+    expect(rows.length - before).toBeLessThanOrEqual(1);
+  });
+
   it('pulls and pings write nothing once the key is confirmed', async () => {
     const { key } = await fresh('quiet');
     await call(key, 'GET', '/cams/v1/ping');

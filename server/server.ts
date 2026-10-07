@@ -68,7 +68,7 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
   // P4: cams instances. R4-19: blocking or deleting one revokes the tokens it holds.
   const camsInstances = new CamsInstances({
     db, clock, audit, registry, cfg, serverKeys: [signing.publicKeyB64], serverKeyFingerprints: [signing.fingerprint],
-    onRevoke: (instanceId, actor) => { tokens.revokeHeldBy(actor, instanceId); },
+    onRevoke: (instanceId, actor, scope) => { tokens.revokeHeldBy(actor, instanceId, scope); },
   });
   const importer = new Importer({ db, clock, audit, registry, instances: camsInstances, status });
   const camsAuth = new CamsAuth({ db, clock, audit, instances: camsInstances, signingKey: signing.key, limits: cfg.limits, log });

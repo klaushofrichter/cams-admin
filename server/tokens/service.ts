@@ -246,8 +246,9 @@ export class Tokens {
 
   // R4-19: a blocked or deleted instance's tokens are revoked (one revision
   // and one tokens.apply per proxy); returns the count.
-  revokeHeldBy(actor: string, holder: string): number {
-    const rows = this.q(`SELECT id, account_id, proxy_id, label FROM proxy_tokens WHERE holder = ? AND state IN ${LIVE} ORDER BY proxy_id`).all(holder) as Row[];
+  revokeHeldBy(actor: string, holder: string, scope?: { accountIds?: string[]; proxyIds?: string[] }): number {
+    const rows = (this.q(`SELECT id, account_id, proxy_id, label FROM proxy_tokens WHERE holder = ? AND state IN ${LIVE} ORDER BY proxy_id`).all(holder) as Row[])
+      .filter((r) => (!scope?.accountIds || scope.accountIds.includes(r.account_id as string)) && (!scope?.proxyIds || scope.proxyIds.includes(r.proxy_id as string)));
     const byProxy = new Map<string, Row[]>();
     for (const r of rows) byProxy.set(r.proxy_id as string, [...(byProxy.get(r.proxy_id as string) ?? []), r]);
     for (const [proxyId, list] of byProxy) {

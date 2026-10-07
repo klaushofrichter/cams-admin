@@ -32,8 +32,9 @@ export interface CamsLive { lastSeenAt: number | null; lastPullAt: number | null
 export interface CamsInstancesDeps {
   db: Db; clock: Clock; audit: Audit; registry: Registry; cfg: Pick<Config, 'publicUrl' | 'enrollCodeDefaultH'>;
   serverKeys: string[]; serverKeyFingerprints: string[];
-  // R4-19: revokes every token the instance holds (Tokens.revokeHeldBy, Task 7).
-  onRevoke: (instanceId: string, actor: string) => void;
+  // R4-19: revokes the tokens the instance holds (Tokens.revokeHeldBy): all of
+  // them, or those on the given accounts' / proxies' (no longer served or hidden).
+  onRevoke: (instanceId: string, actor: string, scope?: { accountIds?: string[]; proxyIds?: string[] }) => void;
 }
 
 const NAME_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
@@ -164,7 +165,7 @@ export class CamsInstances {
     if (patch.displayName !== undefined) { sets.push('display_name = ?'); args.push(text(patch, 'displayName', 200, true)!); fields.push('displayName'); }
     if (patch.baseUrl !== undefined) { sets.push('base_url = ?'); args.push(urlOrNull(patch.baseUrl, 'baseUrl')); fields.push('baseUrl'); }
     if (patch.notes !== undefined) { sets.push('notes = ?'); args.push(text(patch, 'notes', 2000, false) ?? null); fields.push('notes'); }
-    return this.mapName(() => tx(this.d.db, () => {
+    const r = this.mapName(() => tx(this.d.db, () => {
       const old = this.get(id);
       const accounts = patch.accounts !== undefined ? this.accountsInput(patch.accounts) : null;
       const res = this.q(`UPDATE cams_instances SET ${[...sets, 'updated_at = ?', 'version = version + 1'].join(', ')} WHERE id = ? AND version = ?`)
@@ -172,8 +173,12 @@ export class CamsInstances {
       if (res.changes === 0) throw new ApiError(409, 'conflict');
       if (accounts) { this.setAccounts(id, accounts); fields.push('accounts'); }
       this.log(actor, 'cams-instance-update', { id, name: old.name }, { fields, ...(accounts ? { accounts } : {}) });
-      return this.get(id);
+      return { old, now: this.get(id) };
     }));
+    // An account it no longer serves keeps no token of it.
+    const removed = r.old.accounts.filter((a) => !r.now.accounts.includes(a));
+    if (removed.length) this.d.onRevoke(id, actor, { accountIds: removed });
+    return r.now;
   }
 
   // R4-19: the instance's tokens are revoked (onRevoke, each through
@@ -233,7 +238,7 @@ export class CamsInstances {
     const hidden = input.hidden;
     const url = urlOrNull(input.url, 'url');
     if (!hidden && url === null) throw new ApiError(400, 'invalid', 'url');
-    return tx(this.d.db, () => {
+    const route = tx(this.d.db, (): CamsRoute => {
       const i = this.get(id);
       const px = this.d.registry.proxyById(proxyId);
       if (!px || !i.accounts.includes(px.accountId)) throw notFound();
@@ -243,6 +248,9 @@ export class CamsInstances {
       this.d.audit.write({ actorType: 'sysadmin', actor, action: 'route-update', accountId: px.accountId, targetType: 'cams-instance', targetId: id, targetLabel: i.name, outcome: 'ok', detail: { proxyId, proxy: px.name, url, hidden } });
       return { instanceId: id, proxyId, accountId: px.accountId, url, hidden };
     });
+    // A proxy hidden for the instance keeps no token of it.
+    if (hidden) this.d.onRevoke(id, actor, { proxyIds: [proxyId] });
+    return route;
   }
 
   deleteRoute(actor: string, id: string, proxyId: string): void {

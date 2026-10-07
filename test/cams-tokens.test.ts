@@ -139,11 +139,28 @@ describe('cams-held tokens (POST /cams/v1/tokens, retire; R4-19)', () => {
     await until(async () => (await tokenOf(k, a.json.tokenId))?.state === 'active', 5000, 'active');
     const cur = s.built.camsInstances.get(i.id);
     await s.api('PATCH', `/cams-instances/${i.id}`, { accounts: [], version: cur.version });
-    const e = readEpoch(s.built.db);
+    // Its token there is revoked (no stale credential); the requests below write nothing.
+    expect(s.built.db.prepare('SELECT state FROM proxy_tokens WHERE id = ?').get(a.json.tokenId)).toEqual({ state: 'revoked' });
+    const count = () => s.built.db.prepare(`SELECT (SELECT count(*) FROM proxy_tokens) t, (SELECT count(*) FROM audit_log WHERE actor = ?) a`).get(i.id);
+    const before = count();
     expect((await post(k, `/cams/v1/tokens/${a.json.tokenId}/retire`, { v: 1 })).status).toBe(404);
     expect((await post(k, '/cams/v1/tokens', { v: 1, proxyId: px.proxyId, kind: 'client', hash: generateToken().hash })).status).toBe(404);
-    expect(readEpoch(s.built.db)).toBe(e);
+    expect(count()).toEqual(before);
     expect((await snapshot(k)).accounts).toEqual([]);
+  });
+
+  it('removing a served account or hiding a proxy revokes the tokens the instance holds there (no stale credential)', async () => {
+    const i = await s.api('POST', '/cams-instances', { name: 'narrow', displayName: 'Narrow', accounts: [home] });
+    const k = await enrollCamsKey(s, i.id);
+    const a = await post(k, '/cams/v1/tokens', { v: 1, proxyId: px.proxyId, kind: 'client', hash: generateToken().hash });
+    const b = await post(k, '/cams/v1/tokens', { v: 1, proxyId: pxNoAdmin.proxyId, kind: 'client', hash: generateToken().hash });
+    const state = (id: string) => (s.built.db.prepare('SELECT state FROM proxy_tokens WHERE id = ?').get(id) as { state: string }).state;
+    await s.api('PUT', `/cams-instances/${i.id}/routes/${pxNoAdmin.proxyId}`, { url: null, hidden: true });
+    expect(state(a.json.tokenId)).not.toBe('revoked');
+    expect(state(b.json.tokenId)).toBe('revoked');
+    const cur = s.built.camsInstances.get(i.id);
+    await s.api('PATCH', `/cams-instances/${i.id}`, { accounts: [], version: cur.version });
+    expect(state(a.json.tokenId)).toBe('revoked');
   });
 
   it('blocking the instance revokes every token it holds and the next tokens.apply removes them (R4-19)', async () => {

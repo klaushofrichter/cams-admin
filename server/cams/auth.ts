@@ -67,8 +67,11 @@ export class CamsAuth {
     }
   }
 
+  // Throttled per instance and reason; made-up instance ids share one window
+  // (a stream of random ids must not become a stream of audit writes).
   private refused(instanceId: string, reason: string): void {
-    this.d.audit.throttled(`cams-auth:${instanceId}:${reason}`, { actorType: 'cams', actor: instanceId, action: 'cams-auth-refused', targetType: 'cams-instance', targetId: instanceId, outcome: 'refused', detail: { reason } });
+    const id = this.d.instances.getRaw(instanceId) ? instanceId : 'unknown';
+    this.d.audit.throttled(`cams-auth:${id}:${reason}`, { actorType: 'cams', actor: id, action: 'cams-auth-refused', targetType: 'cams-instance', targetId: id === 'unknown' ? null : id, outcome: 'refused', detail: { reason } });
   }
 
   // The key if it may sign for this instance: not revoked, or revoked only
