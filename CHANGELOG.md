@@ -13,4 +13,16 @@ then empties it on `main`.
 - Audit actor type `cams`; the audit log's actor filter lists it.
 - Pages: *cams* (instances: served accounts, routes, enrollment code shown once with both commands and the server key fingerprint, keys, status from the reports, Rotate now, Block, Delete), an account's *Import* tab (dry run, mismatches to accept, Apply; Export per instance), and the cams instances on the dashboard.
 - Local stack: two cams instances enrolled by a reference cams client; `scripts/rehearse/` (localize real exports, the cams-admin side of the cut-over rehearsal).
+- Remote configuration (migration phase 3). The proxy page now has a
+  **Settings** card: the proxy's settings as it reports them, with changes
+  made through a dry-run diff and an explicit Apply. The card shows when the
+  settings were changed on the proxy, shows conflicts side by side, and offers
+  Roll back from the Commands card.
+- A **Camera actions** card: camera actions, renames and a proxy restart,
+  each one only if the proxy allows it. Disruptive actions need their name
+  typed. A camera row on the Account page links to its actions.
+- Retention periods and size caps can only be raised from cams-admin,
+  Google Vision limits only lowered, and storage settings are local only.
+- Contract: args and result schemas for the P3 commands,
+  `contract/v1/remote-settable.json`, and new fixtures and vectors.
 
