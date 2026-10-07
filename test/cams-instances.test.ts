@@ -11,6 +11,7 @@ describe('cams instances (P4)', () => {
   let r: ReturnType<typeof makeRegistry>;
   let inst: CamsInstances;
   let revoked: string[];
+  let scopes: unknown[];
   let home: { id: string }, beta: { id: string };
   let piProxy: { id: string }, clusterProxy: { id: string }, otherAccountProxy: { id: string };
   const auditActions = () => (r.db.prepare('SELECT action FROM audit_log ORDER BY id').all() as { action: string }[]).map((x) => x.action);
@@ -19,9 +20,10 @@ describe('cams instances (P4)', () => {
   beforeEach(() => {
     r = makeRegistry(dir);
     revoked = [];
+    scopes = [];
     inst = new CamsInstances({
       db: r.db, clock: r.clock, audit: r.audit, registry: r.reg, cfg: { publicUrl: 'https://admin.example.org', enrollCodeDefaultH: 24 },
-      serverKeys: ['pk'], serverKeyFingerprints: [FP], onRevoke: (id) => revoked.push(id),
+      serverKeys: ['pk'], serverKeyFingerprints: [FP], onRevoke: (id, _actor, scope) => { revoked.push(id); scopes.push(scope); },
     });
     home = r.reg.createAccount(ACTOR, { name: 'home', displayName: 'Home' });
     beta = r.reg.createAccount(ACTOR, { name: 'beta', displayName: 'Beta' });
@@ -124,5 +126,23 @@ describe('cams instances (P4)', () => {
     inst.touch(i.id, { lastPullAt: 1 });
     expect(readEpoch(r.db)).toBe(e);
     expect(inst.list()[0].live.lastPullAt).toBe(1);
+  });
+
+  it('revoking a key revokes every token the instance holds, at once (review I3)', () => {
+    const i = make();
+    r.db.prepare(`INSERT INTO cams_instance_keys (id, instance_id, public_key, fingerprint, created_at, confirmed_at) VALUES ('key_00000000000000000001', ?, 'pk1', 'fp', 1, 1)`).run(i.id);
+    inst.revokeKey(ACTOR, i.id, 'key_00000000000000000001');
+    expect(revoked).toEqual([i.id]);
+    expect(scopes).toEqual([undefined]); // all of them
+  });
+
+  it('a re-enrollment whose new key replaces the active one revokes the old key\'s tokens; a first enrollment revokes nothing (review I3)', () => {
+    const i = make();
+    r.db.prepare(`INSERT INTO cams_instance_keys (id, instance_id, public_key, fingerprint, created_at) VALUES ('key_00000000000000000001', ?, 'pk1', 'fp', 1)`).run(i.id);
+    expect(inst.confirmKey(i.id, 'key_00000000000000000001')).toBe(true);
+    expect(revoked).toEqual([]);
+    r.db.prepare(`INSERT INTO cams_instance_keys (id, instance_id, public_key, fingerprint, created_at) VALUES ('key_00000000000000000002', ?, 'pk2', 'fp', 2)`).run(i.id);
+    expect(inst.confirmKey(i.id, 'key_00000000000000000002')).toBe(true);
+    expect(revoked).toEqual([i.id]);
   });
 });

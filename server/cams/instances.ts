@@ -315,16 +315,20 @@ export class CamsInstances {
     return (this.q('SELECT * FROM cams_instance_keys WHERE instance_id = ? ORDER BY created_at DESC, id DESC').all(id) as Row[]).map(toKey);
   }
 
+  // A revoked key takes the instance's proxy tokens with it, at once (review
+  // I3: a stolen instance holds both); cams registers new ones after a re-enrollment.
   revokeKey(actor: string, id: string, keyId: string): CamsKey {
-    return tx(this.d.db, () => {
+    const k = tx(this.d.db, () => {
       const i = this.get(id);
       const k = this.q('SELECT * FROM cams_instance_keys WHERE id = ? AND instance_id = ?').get(keyId, id) as Row | undefined;
       if (!k) throw notFound();
       if (k.revoked_at !== null) throw new ApiError(409, 'already_revoked');
       this.q(`UPDATE cams_instance_keys SET revoked_at = ?, revoked_reason = 'admin' WHERE id = ?`).run(this.d.clock.now(), keyId);
-      this.log(actor, 'cams-key-revoke', i, { keyId, fingerprint: k.fingerprint });
+      this.log(actor, 'cams-key-revoke', i, { keyId, fingerprint: k.fingerprint, tokensRevoked: true });
       return toKey(this.q('SELECT * FROM cams_instance_keys WHERE id = ?').get(keyId) as Row);
     });
+    this.d.onRevoke(id, actor);
+    return k;
   }
 
   // Inside the caller's transaction: every unrevoked key of the instance.
@@ -340,16 +344,20 @@ export class CamsInstances {
   // active key, the older active key goes ('re-enrolled'), a pending instance
   // is enrolled. false when the instance is blocked or the key not pending.
   confirmKey(instanceId: string, keyId: string): boolean {
-    return tx(this.d.db, () => {
+    const r = tx(this.d.db, () => {
       const k = this.q('SELECT k.*, i.state, i.name FROM cams_instance_keys k JOIN cams_instances i ON i.id = k.instance_id WHERE k.id = ? AND k.instance_id = ?').get(keyId, instanceId) as Row | undefined;
-      if (!k || k.revoked_at !== null || k.confirmed_at !== null || k.state === 'revoked') return false;
+      if (!k || k.revoked_at !== null || k.confirmed_at !== null || k.state === 'revoked') return false as const;
       const now = this.d.clock.now();
       const replaced = this.revokeKeys(instanceId, 're-enrolled', now, 'confirmed');
       this.q('UPDATE cams_instance_keys SET confirmed_at = ? WHERE id = ?').run(now, keyId);
       if (k.state === 'pending') this.q(`UPDATE cams_instances SET state = 'enrolled', updated_at = ? WHERE id = ?`).run(now, instanceId);
       this.d.audit.write({ actorType: 'cams', actor: instanceId, action: 'cams-key-confirmed', targetType: 'cams-instance', targetId: instanceId, targetLabel: k.name as string, outcome: 'ok', detail: { keyId, fingerprint: k.fingerprint, replacedKeys: replaced } });
-      return true;
+      return { ok: true, replaced };
     });
+    if (r === false) return false;
+    // A re-enrollment replaced a working key: the tokens held under it go too (review I3).
+    if (r.replaced.length) this.d.onRevoke(instanceId, 'system');
+    return true;
   }
 
   // POST /cams/v1/report: kept in memory only (no write); answers whether the

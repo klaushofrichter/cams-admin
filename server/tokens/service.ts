@@ -261,7 +261,7 @@ export class Tokens {
         const revision = this.bump(proxyId);
         for (const t of list) {
           this.q(`UPDATE proxy_tokens SET state = 'revoked', revoked_at = ?, revoked_revision = ? WHERE id = ?`).run(this.d.clock.now(), revision, t.id as string);
-          this.d.audit.write({ actorType: 'sysadmin', actor, action: 'token-revoke', accountId, targetType: 'proxy', targetId: proxyId, outcome: 'ok', detail: { tokenId: t.id, label: t.label, reason: 'holder-removed', holder, revision } });
+          this.d.audit.write({ actorType: actor === 'system' ? 'system' : 'sysadmin', actor, action: 'token-revoke', accountId, targetType: 'proxy', targetId: proxyId, outcome: 'ok', detail: { tokenId: t.id, label: t.label, reason: 'holder-removed', holder, revision } });
         }
       });
       this.tryQueue(actor, accountId, proxyId);
