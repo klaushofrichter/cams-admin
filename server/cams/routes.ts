@@ -1,13 +1,17 @@
 import express from 'express';
 import type { KeyObject } from 'crypto';
 import type { CamsEnrollment } from './enroll';
+import type { CamsInstances } from './instances';
+import { buildSnapshot, encodeSnapshot, snapshotRevision, type SnapshotDeps } from './snapshot';
+import { ApiError } from '../registry';
+import { log } from '../log';
 import { sendSigned, type CamsAuth, type CamsRequest } from './auth';
 import { requestOrigin } from '../enroll/route';
 import { bodyErrors } from '../bodyErrors';
 
 // The /cams/v1 service API (contract cams-v1). Mounted at the app root,
 // before the cookie parser: no cookie, session or CSRF rule applies here.
-export interface CamsRouterDeps { enrollment: CamsEnrollment; auth?: CamsAuth; signingKey?: KeyObject; testRoutes?: boolean }
+export interface CamsRouterDeps { enrollment: CamsEnrollment; auth?: CamsAuth; signingKey?: KeyObject; testRoutes?: boolean; instances?: CamsInstances; snapshot?: SnapshotDeps }
 
 export function camsRouter(d: CamsRouterDeps): express.Router {
   const r = express.Router();
@@ -24,6 +28,33 @@ export function camsRouter(d: CamsRouterDeps): express.Router {
   // Everything else is signed: the raw bytes (≤ 64 KiB) are what the signature covers.
   r.use('/cams/v1', express.raw({ type: () => true, limit: 64 * 1024 }), d.auth.middleware());
   if (d.testRoutes) r.get('/cams/v1/ping', (_req, res) => sendSigned(res, key, cams(res).nonce, 200, { ok: true }));
+  // Step 9 errors (ApiError) as signed answers.
+  const route = (fn: (req: express.Request, res: express.Response, c: CamsRequest) => void): express.RequestHandler => (req, res) => {
+    const c = cams(res);
+    try {
+      fn(req, res, c);
+    } catch (e) {
+      if (!(e instanceof ApiError)) throw e;
+      if (e.status >= 500) log.error({ instanceId: c.instanceId, code: e.code }, 'cams_route_failed');
+      sendSigned(res, key, c.nonce, e.status, { error: e.code, ...(e.field ? { field: e.field } : {}), ...((e as ApiError & { extra?: object }).extra ?? {}) });
+    }
+  };
+  const inst = d.instances, snap = d.snapshot;
+  if (inst && snap) {
+    r.get('/cams/v1/config', route((req, res, c) => {
+      const rev = snapshotRevision(snap.db, c.instanceId, snap.signingFingerprint);
+      const now = snap.clock.now();
+      if (req.headers['if-none-match'] === `"${rev}"`) {
+        inst.touch(c.instanceId, { lastPullAt: now, lastPullStatus: 304 });
+        return sendSigned(res, key, c.nonce, 304, null, { ETag: `"${rev}"` });
+      }
+      // Same synchronous call: the body's revision equals the ETag.
+      const s = buildSnapshot(snap, c.instanceId);
+      const bytes = encodeSnapshot(s);
+      inst.touch(c.instanceId, { lastPullAt: now, lastPullStatus: 200 });
+      sendSigned(res, key, c.nonce, 200, bytes, { ETag: `"${s.revision}"` });
+    }));
+  }
   r.use('/cams/v1', (_req, res) => sendSigned(res, key, cams(res).nonce, 404, { error: 'not_found' }));
   r.use('/cams/v1', d.auth.errorHandler());
   return r;

@@ -24,9 +24,10 @@ const CMS_RE = ID_RE('cms'), KEY_RE = ID_RE('key');
 export const NONCE_RE = /^[A-Za-z0-9_-]{22}$/;
 const SIG_RE = /^[A-Za-z0-9+/]{86}==$/;
 
-// Serialises once, signs status + request nonce + the exact bytes, sends those bytes.
+// Serialises once (or takes the already encoded bytes), signs status +
+// request nonce + the exact bytes, sends those bytes.
 export function sendSigned(res: express.Response, signingKey: KeyObject, nonce: string, status: number, body: unknown | null, headers: Record<string, string> = {}): void {
-  const bytes = status === 304 || body === null ? Buffer.alloc(0) : Buffer.from(JSON.stringify(body), 'utf8');
+  const bytes = status === 304 || body === null ? Buffer.alloc(0) : Buffer.isBuffer(body) ? body : Buffer.from(JSON.stringify(body), 'utf8');
   res.status(status).set({ 'Cache-Control': 'no-store', ...headers, 'X-Cams-Admin-Sig': sign(signingKey, camsResponseText(status, nonce, bytes)) });
   if (bytes.length) res.type('application/json').end(bytes);
   else res.end();

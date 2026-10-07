@@ -87,7 +87,7 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
     } });
   });
   app.use(enrollRouter(enrollment));
-  app.use(camsRouter({ enrollment: camsEnrollment, auth: camsAuth, signingKey: signing.key, testRoutes: cfg.nodeEnv === 'test' }));
+  app.use(camsRouter({ enrollment: camsEnrollment, auth: camsAuth, signingKey: signing.key, testRoutes: cfg.nodeEnv === 'test', instances: camsInstances, snapshot: { db, clock, signingKey: signing.key, signingFingerprint: signing.fingerprint } }));
   app.use(cookieParser());
   app.use(authRoutes({ cfg, sessions, audit, clock, live }));
   const api = apiRouter({ db, clock, cfg, audit, registry, enrollment, hub, status, live, sessions, backup, commands, tokens, camsInstances, serverKeyFingerprints: [signing.fingerprint] });
