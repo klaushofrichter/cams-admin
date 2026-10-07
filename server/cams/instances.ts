@@ -4,10 +4,10 @@ import type { Config } from '../config';
 import { tx, type Db } from '../db/open';
 import { codeHash, newCamsEnrollmentCode, newId } from '../ids';
 import { ApiError, type Registry } from '../registry';
-import { checkUrl, FieldError } from '../validate';
+import { cameraOverrideInput, checkUrl, FieldError } from '../validate';
 import { validateCams } from '../contract';
 import { fieldOf } from '../tokens/service';
-import { snapshotRevision } from './snapshot';
+import { overridesOf, snapshotRevision } from './snapshot';
 import type { RevocationEntry } from './revocations';
 
 // The registry of cams instances (migration spec §5, §9.1, §9.6; plan P4
@@ -21,6 +21,12 @@ type Row = Record<string, unknown>;
 export interface CamsInstance { id: string; name: string; displayName: string; baseUrl: string | null; notes: string | null; state: 'pending' | 'enrolled' | 'revoked'; rotateBefore: number | null; accounts: string[]; createdAt: number; updatedAt: number; version: number }
 export interface CamsRoute { instanceId: string; proxyId: string; accountId: string; url: string | null; hidden: boolean }
 export interface CamsKey { id: string; instanceId: string; fingerprint: string; createdAt: number; confirmedAt: number | null; lastSeenAt: number | null; revokedAt: number | null; revokedReason: string | null }
+// A per-instance camera override (migration 7), with the camera's shared values beside it.
+export interface CameraOverride {
+  instanceId: string; cameraId: string; accountId: string; accountName: string; camsId: string; name: string;
+  host: string | null; cameraUser: string | null; sharedHost: string | null; sharedCameraUser: string | null;
+  createdAt: number; updatedAt: number; version: number;
+}
 export type TrustEntry = { accountId: string; camsId: string; fields: string[] };
 // The contract's report-request (contract/cams-v1, lenient: only v and mode are sure).
 export interface CamsReport {
@@ -50,6 +56,12 @@ const EMPTY_LIVE: CamsLive = { lastSeenAt: null, lastPullAt: null, lastPullStatu
 const toKey = (r: Row): CamsKey => ({
   id: r.id as string, instanceId: r.instance_id as string, fingerprint: r.fingerprint as string, createdAt: r.created_at as number,
   confirmedAt: r.confirmed_at as number | null, lastSeenAt: r.last_seen_at as number | null, revokedAt: r.revoked_at as number | null, revokedReason: r.revoked_reason as string | null,
+});
+
+const toOverride = (r: Row): CameraOverride => ({
+  instanceId: r.instance_id as string, cameraId: r.camera_id as string, accountId: r.account_id as string, accountName: r.account_name as string, camsId: r.cams_id as string, name: r.name as string,
+  host: r.host as string | null, cameraUser: r.camera_user as string | null, sharedHost: r.shared_host as string | null, sharedCameraUser: r.shared_user as string | null,
+  createdAt: r.created_at as number, updatedAt: r.updated_at as number, version: r.version as number,
 });
 
 function text(b: Row, key: string, max: number, required: boolean): string | null | undefined {
@@ -295,6 +307,67 @@ export class CamsInstances {
       this.bumpVersion(id);
       this.d.audit.write({ actorType: 'sysadmin', actor, action: 'route-update', accountId: px?.accountId ?? null, targetType: 'cams-instance', targetId: id, targetLabel: i.name, outcome: 'ok', detail: { proxyId, removed: true } });
     });
+  }
+
+  // --- camera overrides (migration 7) -----------------------------------------------------------
+
+  overrides(id: string): CameraOverride[] {
+    this.get(id);
+    return (this.q(`SELECT o.*, c.account_id, c.cams_id, c.name, c.host shared_host, c.camera_user shared_user, a.name account_name FROM cams_camera_overrides o
+      JOIN cameras c ON c.id = o.camera_id JOIN accounts a ON a.id = c.account_id WHERE o.instance_id = ? ORDER BY a.name, c.cams_id`).all(id) as Row[]).map(toOverride);
+  }
+
+  // The camera, when the instance serves its account; else 404 (no write, no hint).
+  private servedCamera(i: CamsInstance, cameraId: string): { id: string; accountId: string; camsId: string } {
+    const c = this.q('SELECT id, account_id, cams_id FROM cameras WHERE id = ?').get(cameraId) as Row | undefined;
+    if (!c || !i.accounts.includes(c.account_id as string)) throw notFound();
+    return { id: c.id as string, accountId: c.account_id as string, camsId: c.cams_id as string };
+  }
+
+  // Sets the instance's host and camera user for a camera (null = the
+  // camera's own value). Version-checked: a new override takes no version,
+  // a change the one read. Bumps the instance's version (its revision only).
+  setOverride(actor: string, id: string, cameraId: string, input: unknown): CameraOverride {
+    let f: ReturnType<typeof cameraOverrideInput>;
+    try {
+      f = cameraOverrideInput(input);
+    } catch (e) {
+      if (e instanceof FieldError) throw new ApiError(400, 'invalid', e.field);
+      throw e;
+    }
+    return tx(this.d.db, () => {
+      const i = this.get(id);
+      const cam = this.servedCamera(i, cameraId);
+      const old = this.q('SELECT host, camera_user, version FROM cams_camera_overrides WHERE instance_id = ? AND camera_id = ?').get(id, cameraId) as Row | undefined;
+      if (old ? f.version !== old.version : f.version !== undefined) throw new ApiError(409, 'conflict');
+      const now = this.d.clock.now();
+      this.q(`INSERT INTO cams_camera_overrides (instance_id, camera_id, host, camera_user, created_at, updated_at) VALUES (?,?,?,?,?,?)
+        ON CONFLICT(instance_id, camera_id) DO UPDATE SET host = excluded.host, camera_user = excluded.camera_user, updated_at = excluded.updated_at, version = version + 1`)
+        .run(id, cameraId, f.host, f.cameraUser, now, now);
+      this.bumpVersion(id);
+      const was = { host: (old?.host as string | null) ?? null, cameraUser: (old?.camera_user as string | null) ?? null };
+      const detail: Record<string, unknown> = { camera: cam.camsId };
+      for (const k of ['host', 'cameraUser'] as const) if (was[k] !== f[k]) detail[k] = { from: was[k], to: f[k] };
+      this.d.audit.write({ actorType: 'sysadmin', actor, action: 'camera-override-set', accountId: cam.accountId, targetType: 'cams-instance', targetId: id, targetLabel: i.name, outcome: 'ok', detail });
+      return this.overrides(id).find((o) => o.cameraId === cameraId)!;
+    });
+  }
+
+  clearOverride(actor: string, id: string, cameraId: string): void {
+    tx(this.d.db, () => {
+      const i = this.get(id);
+      const cam = this.servedCamera(i, cameraId);
+      const old = this.q('SELECT host, camera_user FROM cams_camera_overrides WHERE instance_id = ? AND camera_id = ?').get(id, cameraId) as Row | undefined;
+      if (!old) throw notFound();
+      this.q('DELETE FROM cams_camera_overrides WHERE instance_id = ? AND camera_id = ?').run(id, cameraId);
+      this.bumpVersion(id);
+      this.d.audit.write({ actorType: 'sysadmin', actor, action: 'camera-override-clear', accountId: cam.accountId, targetType: 'cams-instance', targetId: id, targetLabel: i.name, outcome: 'ok', detail: { camera: cam.camsId, host: old.host, cameraUser: old.camera_user } });
+    });
+  }
+
+  // camera id → this instance's override (the importer's and the Export's view).
+  overrideMap(id: string): Map<string, { host: string | null; cameraUser: string | null; version: number }> {
+    return overridesOf(this.d.db, id);
   }
 
   // The instance's own row is part of its snapshot revision (R4-1).

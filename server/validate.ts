@@ -193,3 +193,24 @@ export function simInput(raw: unknown): SimFields {
     notes: str(b, 'notes', { max: 2000 }),
   }, false, {}) as SimFields;
 }
+
+// A per-instance camera override (migration 7): only host and cameraUser.
+// The host as cams dials it: a hostname or IPv4 (an IPv6 address in
+// brackets) with an optional port, or "from-proxy"; the user as the camera's.
+const CAMERA_HOST_RE = /^(?:[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?|\[[0-9A-Fa-f:.]{2,45}\])(?::([0-9]{1,5}))?$/;
+export function checkCameraHost(v: string, field = 'host'): string {
+  const m = CAMERA_HOST_RE.exec(v);
+  if (!m || v.length > 253 || (m[1] !== undefined && (Number(m[1]) < 1 || Number(m[1]) > 65535))) throw new FieldError(field, 'format');
+  return v;
+}
+export interface CameraOverrideFields { host: string | null; cameraUser: string | null }
+export function cameraOverrideInput(raw: unknown): CameraOverrideFields & { version: number | undefined } {
+  const b = body(raw);
+  for (const k of Object.keys(b)) if (!['host', 'cameraUser', 'version'].includes(k)) throw new FieldError(k, 'unknown');
+  const host = str(b, 'host', { max: 253 }) ?? null;
+  if (host !== null) checkCameraHost(host);
+  const cameraUser = str(b, 'cameraUser', { min: 1, max: 64 }) ?? null;
+  if (host === null && cameraUser === null) throw new FieldError('host', 'required: host or cameraUser');
+  if (b.version !== undefined && !Number.isInteger(b.version)) throw new FieldError('version');
+  return { host, cameraUser, version: b.version as number | undefined };
+}

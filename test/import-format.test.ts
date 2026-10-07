@@ -4,11 +4,12 @@ import { formatImport } from '../scripts/import-format';
 describe('npm run import output', () => {
   it('lists changes, mismatch ids and the outcome; only hash prefixes', () => {
     const lines = formatImport({
-      dryRun: true, account: 'home', instance: 'cluster', blocked: true, applied: false, noChanges: false, blockers: ['unknown_proxy'],
+      dryRun: true, account: 'home', instance: 'cluster', blocked: true, applied: false, noChanges: false, blockers: ['unknown_proxy'], looksLike: ['pi'],
       changes: [
         { kind: 'proxy-matched', proxyId: 'prx_1', name: 'pi', by: 'token', fileUrl: 'https://proxy.example.net' },
         { kind: 'token-external', proxyId: 'prx_1', name: 'pi', tokenKind: 'client', hashPrefix: 'sha256:1a2b3c4d' },
         { kind: 'camera-change', cameraId: 'cam_1', camsId: 'cam1', fields: { name: { from: 'A', to: 'B' } } },
+        { kind: 'camera-override', cameraId: 'cam_1', camsId: 'cam1', instance: 'cluster', fields: { host: { from: '192.0.2.1', to: 'from-proxy', override: 'from-proxy' }, cameraUser: { from: 'proxy', to: 'cams', override: null } } },
       ],
       mismatches: [{ id: 'abcdef012345', what: 'pin-differs', proxyId: 'prx_1', detail: 'pi reports …' }],
     });
@@ -17,6 +18,8 @@ describe('npm run import output', () => {
       '  proxy pi: matched by token (https://proxy.example.net)',
       '  external client token on pi: sha256:1a2b3c4d',
       '  camera cam1: name "A" → "B"',
+      '  camera cam1: override for cluster: host "192.0.2.1" → "from-proxy", cameraUser "proxy" → "cams" (the camera\'s value)',
+      '  WARNING: this file looks like the export of cams instance pi, not cluster',
       '  MISMATCH abcdef012345 pin-differs: pi reports …',
       '  BLOCKED: unknown_proxy (--create-proxies)',
       'Not applied: accept the mismatches (--accept-mismatch) or fix them.',

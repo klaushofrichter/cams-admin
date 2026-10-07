@@ -9,10 +9,17 @@ import { LiveHub } from '../server/live';
 import { tmpDir } from './helpers/tmp';
 import { ACTOR, makeRegistry } from './helpers/registry';
 import { makeProxyInfo, makeSummary } from '../test-client/summaries';
+import { generateKeyPairSync } from 'crypto';
+import { buildSnapshot } from '../server/cams/snapshot';
 
 const load = (n: string) => JSON.parse(readFileSync(join(__dirname, 'fixtures/import', `${n}.json`), 'utf8'));
 const CLUSTER = load('cluster');
 const PI = load('pi');
+// Cut-over step 6, synthesized (RFC 5737 / RFC 2606 values, no real tokens): the cluster's cams
+// reaches cam1 at the camera's address with user "cams", the Pi's cams through its proxy.
+const CUT_CLUSTER = load('cutover-cluster');
+const CUT_PI = load('cutover-pi');
+const SIGNING = generateKeyPairSync('ed25519').privateKey;
 const PIN = 'SHA256:' + 'AB'.repeat(32);
 const H = (c: string) => 'sha256:' + c.repeat(64);
 const DRY = { apply: false, acceptMismatch: [] as string[], createProxies: false, hideUnlisted: false };
@@ -259,5 +266,123 @@ describe('the importer (M §11.2)', () => {
     const d5 = imp.run(ACTOR, home.id, cluster.id, CLUSTER, DRY);
     expect(imp.run(ACTOR, home.id, cluster.id, CLUSTER, { ...APPLY, planId: d5.planId }).applied).toBe(true);
     expect(() => imp.run(ACTOR, home.id, cluster.id, CLUSTER, { ...APPLY, planId: d5.planId })).toThrow(expect.objectContaining({ code: 'plan_expired' })); // once
+  });
+  describe('per-instance camera overrides (cut-over step 6)', () => {
+    const snap = (i: any) => buildSnapshot({ db: r.db, clock: r.clock, signingKey: SIGNING, signingFingerprint: 'SHA256:' + '00'.repeat(32) }, i.id).accounts.map(({ revision: _r, ...a }) => a);
+    const cam = (id: string) => snap({ id: pi.id }) && r.reg.listCameras(home.id).find((c) => c.camsId === id)!;
+    const route = (i: any, px: any) => inst.routes(i.id).find((x) => x.proxyId === px.id);
+    beforeEach(() => {
+      manual('tok_00000000000000000005', piProxy, H('5'));
+      manual('tok_00000000000000000006', piProxy, H('6'), 'admin');
+      manual('tok_00000000000000000007', clusterProxy, H('7'));
+      manual('tok_00000000000000000008', piProxy, H('8'));
+    });
+
+    it('the cluster file for cluster, then the Pi file for pi: the Pi\'s host and user become pi\'s overrides; the cluster\'s snapshot is unchanged; every second dry run is "No changes"', () => {
+      expect(applyRun(home.id, cluster.id, CUT_CLUSTER, APPLY).applied).toBe(true);
+      expect(cam('cam1')).toMatchObject({ name: 'Backyard Left', host: '192.0.2.164', cameraUser: 'cams' });
+      expect(route(cluster, clusterProxy)?.url).toBe('http://cam-proxy.cam-proxy.svc.cluster.test:8480');
+      const clusterBefore = snap(cluster);
+      const dry = imp.run(ACTOR, home.id, pi.id, CUT_PI, DRY);
+      expect(dry).toMatchObject({ blocked: false, mismatches: [], looksLike: [] });
+      expect(kinds(dry, 'camera-change')).toEqual([]);
+      expect(kinds(dry, 'camera-override')).toEqual([{
+        kind: 'camera-override', cameraId: cam('cam1').id, camsId: 'cam1', instance: 'pi',
+        fields: { host: { from: '192.0.2.164', to: 'from-proxy', override: 'from-proxy' }, cameraUser: { from: 'cams', to: 'proxy', override: 'proxy' } },
+      }]);
+      expect(applyRun(home.id, pi.id, CUT_PI, APPLY).applied).toBe(true);
+      expect(snap(cluster)).toEqual(clusterBefore);
+      expect(snap(pi)[0].cameras).toEqual([expect.objectContaining({ camsId: 'cam1', host: 'from-proxy', cameraUser: 'proxy', protocol: 'https' })]);
+      expect(snap(pi)[0].proxies.map((x: any) => [x.name, x.url])).toEqual([['pi', 'http://127.0.0.1:8480']]);
+      expect(cam('cam1')).toMatchObject({ host: '192.0.2.164', cameraUser: 'cams' }); // the shared camera is untouched
+      expect(r.audit.list({ action: 'camera-override-set' }).items).toHaveLength(1);
+      // Second dry runs, both instances; the cluster file again after the Pi import.
+      expect(imp.run(ACTOR, home.id, pi.id, CUT_PI, DRY).noChanges).toBe(true);
+      expect(imp.run(ACTOR, home.id, cluster.id, CUT_CLUSTER, DRY).noChanges).toBe(true);
+      expect(applyRun(home.id, cluster.id, CUT_CLUSTER, APPLY)).toMatchObject({ noChanges: true, applied: false });
+      expect(snap(cluster)).toEqual(clusterBefore);
+    });
+
+    it('the other order (the Pi file first): the cluster\'s values become the cluster\'s overrides; both second dry runs are "No changes"', () => {
+      expect(applyRun(home.id, pi.id, CUT_PI, APPLY).applied).toBe(true);
+      const piBefore = snap(pi);
+      const res = applyRun(home.id, cluster.id, CUT_CLUSTER, APPLY);
+      expect(res.applied).toBe(true);
+      expect(kinds(res, 'camera-override').map((c) => [c.camsId, c.instance, c.fields.host.to, c.fields.cameraUser.to])).toEqual([['cam1', 'cluster', '192.0.2.164', 'cams']]);
+      expect(kinds(res, 'camera-new').map((c) => c.camsId)).toEqual(['cam2']);
+      expect(snap(pi)).toEqual(piBefore);
+      expect(snap(cluster)[0].cameras.map((c: any) => [c.camsId, c.host, c.cameraUser])).toEqual([['cam1', '192.0.2.164', 'cams'], ['cam2', 'cam2.cam-sim.svc.cluster.test', 'cams']]);
+      expect(imp.run(ACTOR, home.id, pi.id, CUT_PI, DRY).noChanges).toBe(true);
+      expect(imp.run(ACTOR, home.id, cluster.id, CUT_CLUSTER, DRY).noChanges).toBe(true);
+    });
+
+    it('a file with the camera\'s shared values again clears the instance\'s override; a camera no other instance serves still changes the shared value', () => {
+      applyRun(home.id, cluster.id, CUT_CLUSTER, APPLY);
+      applyRun(home.id, pi.id, CUT_PI, APPLY);
+      const back = structuredClone(CUT_PI);
+      back.cameras[0].host = '192.0.2.164';
+      back.cameras[0].user = 'cams';
+      const res = applyRun(home.id, pi.id, back, APPLY);
+      expect(kinds(res, 'camera-override')[0].fields).toEqual({ host: { from: 'from-proxy', to: '192.0.2.164', override: null }, cameraUser: { from: 'proxy', to: 'cams', override: null } });
+      expect(inst.overrides(pi.id)).toEqual([]);
+      expect(r.audit.list({ action: 'camera-override-clear' }).items).toHaveLength(1);
+      // cam2 is only routed to the cluster: a new host there is the shared value.
+      const moved = structuredClone(CUT_CLUSTER);
+      moved.cameras[1].host = 'cam2b.cam-sim.svc.cluster.test';
+      const m = applyRun(home.id, cluster.id, moved, APPLY);
+      expect(kinds(m, 'camera-change').map((c) => [c.camsId, c.fields.host])).toEqual([['cam2', { from: 'cam2.cam-sim.svc.cluster.test', to: 'cam2b.cam-sim.svc.cluster.test' }]]);
+      expect(kinds(m, 'camera-override')).toEqual([]);
+    });
+
+    it('a shared value that is still empty is filled in, never made an override (nothing to keep for the other instance)', () => {
+      r.reg.createCamera(ACTOR, home.id, { camsId: 'cam1', name: 'Backyard Left', kind: 'camera', proxyId: piProxy.id, proxyCameraId: 'cam1' });
+      inst.setRoute(ACTOR, pi.id, piProxy.id, { url: 'http://127.0.0.1:8480', hidden: false });
+      const res = imp.run(ACTOR, home.id, cluster.id, CUT_CLUSTER, DRY);
+      expect(kinds(res, 'camera-override')).toEqual([]);
+      expect(kinds(res, 'camera-change')[0].fields).toMatchObject({ host: { from: null, to: '192.0.2.164' }, cameraUser: { from: null, to: 'cams' } });
+    });
+
+    it('an invalid host in the file for an override is refused at the dry run (never at apply)', () => {
+      applyRun(home.id, cluster.id, CUT_CLUSTER, APPLY);
+      const bad = structuredClone(CUT_PI);
+      bad.cameras[0].host = 'not a host';
+      expect(() => imp.run(ACTOR, home.id, pi.id, bad, DRY)).toThrow(expect.objectContaining({ status: 400, field: 'cameras[0].host' }));
+    });
+
+    describe('a file that looks like another instance\'s (the Import tab picked the wrong instance)', () => {
+      it('the Pi file for the cluster: it moves a visible route of the cluster → an other-instance mismatch blocks Apply until confirmed', () => {
+        applyRun(home.id, cluster.id, CUT_CLUSTER, APPLY);
+        const res = applyRun(home.id, cluster.id, CUT_PI, APPLY);
+        expect(res).toMatchObject({ applied: false, blocked: true });
+        expect(res.mismatches.map((m) => [m.what, m.proxyId])).toEqual([['other-instance', piProxy.id]]);
+        expect(res.mismatches[0].detail).toContain('http://127.0.0.1:8480');
+        expect(cam('cam1')).toMatchObject({ host: '192.0.2.164', cameraUser: 'cams' });
+        expect(route(cluster, piProxy)?.url).toBeNull();
+      });
+
+      it('the cluster file for the Pi after both imports: its URL is the cluster\'s route → looksLike names the cluster', () => {
+        applyRun(home.id, cluster.id, CUT_CLUSTER, APPLY);
+        applyRun(home.id, pi.id, CUT_PI, APPLY);
+        const res = imp.run(ACTOR, home.id, pi.id, CUT_CLUSTER, DRY);
+        expect(res.looksLike).toEqual(['cluster']);
+        expect(res.blocked).toBe(true);
+        expect(res.mismatches.filter((m) => m.what === 'other-instance').map((m) => m.proxyId).sort()).toEqual([piProxy.id, clusterProxy.id].sort());
+      });
+
+      it('a token in the file that another instance holds → looksLike names it', () => {
+        r.db.prepare(`UPDATE proxy_tokens SET holder = ? WHERE id = 'tok_00000000000000000008'`).run(pi.id);
+        const res = imp.run(ACTOR, home.id, cluster.id, CUT_PI, DRY);
+        expect(res.looksLike).toEqual(['pi']);
+        expect(res.mismatches.map((m) => m.what)).toContain('other-instance');
+        expect(applyRun(home.id, pi.id, CUT_PI, APPLY).applied).toBe(true); // its own instance: no warning
+      });
+
+      it('confirming (accepting the mismatch) applies it, as for any mismatch', () => {
+        applyRun(home.id, cluster.id, CUT_CLUSTER, APPLY);
+        const d = imp.run(ACTOR, home.id, cluster.id, CUT_PI, DRY);
+        const ok = applyRun(home.id, cluster.id, CUT_PI, { ...APPLY, acceptMismatch: d.mismatches.map((m) => m.id) });
+        expect(ok.applied).toBe(true);
+      });
+    });
   });
 });

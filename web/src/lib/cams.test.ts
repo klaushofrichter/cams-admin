@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { importSummary, instanceState, stateText } from './cams';
+import { describeChange, importSummary, instanceState, stateText } from './cams';
 
 const NOW = 1_791_273_600_000;
 const row = (o: object = {}) => ({ lastPullAt: NOW - 60_000, mode: 'cams-admin', held: 0, keptOld: 0, shadowDifferences: null, current: true, diverged: false, problems: 0, ...o });
@@ -31,5 +31,15 @@ describe('import summary', () => {
       { label: 'mismatches', count: 1 },
     ]);
     expect(importSummary({ changes: [], mismatches: [] })).toEqual([]);
+  });
+});
+
+describe('an import change as a line', () => {
+  it('an override for the instance: its values before and after; null = the camera\'s own value', () => {
+    expect(describeChange({ kind: 'camera-override', camsId: 'cam1', instance: 'pi', fields: { host: { from: '192.0.2.164', to: 'from-proxy', override: 'from-proxy' }, cameraUser: { from: 'proxy', to: 'cams', override: null } } }))
+      .toBe('camera cam1: override for pi: host "192.0.2.164" → "from-proxy", camera user "proxy" → "cams" (the camera\'s value)');
+    expect(describeChange({ kind: 'camera-change', camsId: 'cam2', fields: { host: { from: 'a', to: 'b' } } })).toBe('camera cam2: host "a" → "b"');
+    expect(describeChange({ kind: 'route-add', name: 'pi', url: null })).toBe('route pi → (registered URL)');
+    expect(importSummary({ changes: [{ kind: 'camera-override' }], mismatches: [] })).toEqual([{ label: 'camera overrides for this instance', count: 1 }]);
   });
 });

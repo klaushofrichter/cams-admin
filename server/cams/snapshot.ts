@@ -33,11 +33,18 @@ export function snapshotRevision(db: Db, instanceId: string, keyFp: string): str
   return 'r:' + sha256hex(jcs({ i: instanceId, iv: inst?.version ?? 0, a, k: keyFp })).slice(0, 16);
 }
 
+// camera id → the instance's override of host and camera user (migration 7; null = the camera's value).
+export function overridesOf(db: Db, instanceId: string): Map<string, { host: string | null; cameraUser: string | null; version: number }> {
+  return new Map((db.prepare('SELECT camera_id, host, camera_user, version FROM cams_camera_overrides WHERE instance_id = ?').all(instanceId) as Row[])
+    .map((r) => [r.camera_id as string, { host: r.host as string | null, cameraUser: r.camera_user as string | null, version: r.version as number }]));
+}
+
 export function buildSnapshot(d: SnapshotDeps, instanceId: string): Snapshot {
   const q = (sql: string) => d.db.prepare(sql);
   const inst = q('SELECT id, name, rotate_before FROM cams_instances WHERE id = ?').get(instanceId) as Row | undefined;
   if (!inst) throw new ApiError(404, 'not_found');
   const now = d.clock.now();
+  const overrides = overridesOf(d.db, instanceId);
   const accounts = (q(`SELECT a.id, a.name, a.display_name, c.revision FROM cams_instance_accounts s JOIN accounts a ON a.id = s.account_id
     JOIN config_revision c ON c.account_id = a.id WHERE s.instance_id = ? ORDER BY a.name`).all(instanceId) as Row[]).map((a): SnapAccount => {
     const accountId = a.id as string;
@@ -57,11 +64,15 @@ export function buildSnapshot(d: SnapshotDeps, instanceId: string): Snapshot {
     const cameras = (q(`SELECT id, cams_id, name, proxy_id, proxy_camera_id, host, protocol, tls_servername, camera_user, web_ui_url, web_ui_note FROM cameras
       WHERE account_id = ? ORDER BY cams_id`).all(accountId) as Row[])
       .filter((c) => c.proxy_id === null || listed.has(c.proxy_id as string))
-      .map((c): SnapCamera => ({
+      .map((c): SnapCamera => {
+        // This instance's own host and camera user, where it has one (the contract's fields, unchanged).
+        const o = overrides.get(c.id as string);
+        return {
         id: c.id as string, camsId: c.cams_id as string, name: c.name as string, proxyId: c.proxy_id as string | null, proxyCameraId: c.proxy_camera_id as string | null,
-        host: c.host as string | null, protocol: c.protocol as SnapCamera['protocol'], tlsServername: c.tls_servername as string | null, cameraUser: c.camera_user as string | null,
+        host: o?.host ?? (c.host as string | null), protocol: c.protocol as SnapCamera['protocol'], tlsServername: c.tls_servername as string | null, cameraUser: o?.cameraUser ?? (c.camera_user as string | null),
         webUiUrl: c.web_ui_url as string | null, webUiNote: c.web_ui_note as string | null,
-      }));
+        };
+      });
     return { id: accountId, name: a.name as string, displayName: a.display_name as string, revision: a.revision as number, users, proxies, cameras };
   });
   const unsigned = {

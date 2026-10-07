@@ -1,0 +1,49 @@
+{
+  "v": 1,
+  "kind": "cams-export",
+  "exportedAt": 1791360000000,
+  "camsVersion": "2026.10.07.1",
+  "source": "cameras-file",
+  "cameras": [
+    {
+      "id": "cam1",
+      "name": "Backyard Left",
+      "host": "192.0.2.164",
+      "protocol": "https",
+      "user": "cams",
+      "proxy": {
+        "url": "https://proxy.example.net:8480",
+        "token": {
+          "sha256": "5555555555555555555555555555555555555555555555555555555555555555"
+        },
+        "adminToken": {
+          "sha256": "6666666666666666666666666666666666666666666666666666666666666666"
+        },
+        "camera": "cam1",
+        "caFingerprint": [
+          "AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB"
+        ]
+      }
+    },
+    {
+      "id": "cam2",
+      "name": "Simulator",
+      "host": "cam2.cam-sim.svc.cluster.test",
+      "protocol": "http",
+      "user": "cams",
+      "proxy": {
+        "url": "http://cam-proxy.cam-proxy.svc.cluster.test:8480",
+        "token": {
+          "sha256": "7777777777777777777777777777777777777777777777777777777777777777"
+        },
+        "camera": "cam2"
+      }
+    }
+  ],
+  "counts": {
+    "preferencesUsers": 2,
+    "proxySwitchOff": 0,
+    "tlsCas": 1,
+    "tlsPins": 0
+  }
+}

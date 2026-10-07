@@ -112,6 +112,23 @@
   async function assign(c: any, proxyId: string) {
     try { await api('PATCH', `/accounts/${accountId}/cameras/${c.id}`, { proxyId: proxyId || null, proxyCameraId: proxyId ? (c.proxyCameraId ?? c.camsId) : null, version: c.version }); await load(); } catch (e) { cError = errorText(e); }
   }
+  // The registry fields of one camera (issue #25), version-checked.
+  const EDIT_FIELDS = ['name', 'host', 'protocol', 'tlsServername', 'cameraUser', 'webUiUrl', 'webUiNote', 'proxyCameraId'] as const;
+  let camEdit = $state<{ cam: any; f: Record<string, string> } | null>(null);
+  const editCamera = (c: any) => { cError = ''; camEdit = { cam: c, f: Object.fromEntries(EDIT_FIELDS.map((k) => [k, c[k] ?? ''])) }; };
+  async function saveCameraEdit() {
+    if (!camEdit) return;
+    const { cam, f } = camEdit;
+    const patch: Record<string, unknown> = { version: cam.version };
+    // Only what changed; an emptied optional field is cleared (null).
+    for (const k of EDIT_FIELDS) if ((f[k] ?? '').trim() !== (cam[k] ?? '')) patch[k] = f[k].trim() || null;
+    if (Object.keys(patch).length === 1) { camEdit = null; return; }
+    try {
+      await api('PATCH', `/accounts/${accountId}/cameras/${cam.id}`, patch);
+      camEdit = null;
+      await load();
+    } catch (e: any) { cError = e?.status === 409 ? 'Someone changed this camera meanwhile: cancel, and edit it again.' : errorText(e); }
+  }
   async function deleteCamera(c: any) {
     try { await api('DELETE', `/accounts/${accountId}/cameras/${c.id}`); await load(); } catch (e) { cError = errorText(e); }
   }
@@ -234,12 +251,30 @@
                     <button class="btn" data-testid="sim-save-{c.camsId}" onclick={() => saveSim(c)}>Save</button>
                   </td>
                 {/if}
-                <td><button class="btn danger" data-testid="camera-delete-{c.camsId}" onclick={() => deleteCamera(c)}>Delete</button></td>
+                <td class="row"><button class="btn" data-testid="camera-edit-{c.camsId}" onclick={() => editCamera(c)}>Edit</button><button class="btn danger" data-testid="camera-delete-{c.camsId}" onclick={() => deleteCamera(c)}>Delete</button></td>
               </tr>
             {/each}
           </tbody>
         </table>
       </div>
+      {#if camEdit}
+        {@const f = camEdit.f}
+        <div class="card grid" data-testid="camera-edit-form">
+          <b>Camera {camEdit.cam.camsId}</b>
+          <p class="muted">The registry's values: what cams shows and how it reaches the camera. The name here is the name in cams, not the camera's own (OSD) name: that is the proxy page's Rename, a command to the camera. A cams instance can override host and camera user for itself (its page, Camera overrides).</p>
+          <div class="grid two">
+            <label>Name (in cams)<input bind:value={f.name} data-testid="camera-edit-name" /></label>
+            <label>Host<input class="mono" bind:value={f.host} placeholder="192.0.2.10 or from-proxy" data-testid="camera-edit-host" /></label>
+            <label>Protocol<select bind:value={f.protocol} data-testid="camera-edit-protocol"><option value="">—</option><option>https</option><option>http</option></select></label>
+            <label>TLS name<input class="mono" bind:value={f.tlsServername} /></label>
+            <label>Camera user<input class="mono" bind:value={f.cameraUser} data-testid="camera-edit-user" /></label>
+            <label>Proxy's camera id<input class="mono" bind:value={f.proxyCameraId} /></label>
+            <label>Web UI URL<input class="mono" bind:value={f.webUiUrl} /></label>
+            <label>Web UI note<input bind:value={f.webUiNote} /></label>
+          </div>
+          <div class="row"><button class="btn primary" data-testid="camera-edit-save" onclick={saveCameraEdit}>Save</button><button class="btn" data-testid="camera-edit-cancel" onclick={() => (camEdit = null)}>Cancel</button></div>
+        </div>
+      {/if}
       <form class="row" onsubmit={addCamera}>
         <label>cams id<input data-testid="camera-cams-id" bind:value={cCamsId} required /></label>
         <label>Name<input data-testid="camera-name" bind:value={cName} required /></label>

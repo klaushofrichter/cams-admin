@@ -9,6 +9,7 @@ import { jcs } from '../crypto/jcs';
 import { randomBytes } from 'crypto';
 import { newId } from '../ids';
 import { groupKey, parseCamsExport, trimUrl, type ExportCamera, type ExportProxy } from './export-format';
+import { checkCameraHost, FieldError } from '../validate';
 export { parseCamsExport } from './export-format';
 
 // The importer of M §11.2 (plan Task 8, ruling R4-6): a cams export into one
@@ -26,13 +27,23 @@ export type ImportChange =
   | { kind: 'route-hide'; proxyId: string; name: string }
   | { kind: 'camera-new'; camsId: string; fields: Record<string, unknown> }
   | { kind: 'camera-change'; cameraId: string; camsId: string; fields: Record<string, { from: unknown; to: unknown }> }
+  // This instance's own host / camera user (migration 7): from/to are the values the
+  // instance sees; override is what is stored for it (null = the camera's shared value).
+  | { kind: 'camera-override'; cameraId: string; camsId: string; instance: string; fields: Partial<Record<OverrideField, { from: string | null; to: string | null; override: string | null }>> }
   | { kind: 'pins-set'; proxyId: string; name: string; from: string[]; to: string[] }
   | { kind: 'proxy-tls-name'; proxyId: string; name: string; from: string | null; to: string | null }
   | { kind: 'token-external'; proxyId: string; name: string; tokenKind: 'client' | 'admin'; hashPrefix: string }
   | { kind: 'registry-only'; camsId: string };
-export interface ImportMismatch { id: string; camsId?: string; proxyId?: string; what: 'camera-not-on-proxy' | 'pin-differs' | 'pin-unverified' | 'proxy-offline' | 'proxy-not-enrolled' | 'proxy-ambiguous' | 'token-in-other-account'; detail: string }
+export type OverrideField = 'host' | 'cameraUser';
+export interface ImportMismatch {
+  id: string; camsId?: string; proxyId?: string; detail: string;
+  // other-instance: the file looks like another cams instance's export (the wrong instance picked).
+  what: 'camera-not-on-proxy' | 'pin-differs' | 'pin-unverified' | 'proxy-offline' | 'proxy-not-enrolled' | 'proxy-ambiguous' | 'token-in-other-account' | 'other-instance';
+}
 export interface ImportResult {
   dryRun: boolean; account: string; instance: string; changes: ImportChange[]; mismatches: ImportMismatch[]; blockers: string[];
+  // The other instances this file looks like it belongs to (tokens they hold, their route URLs).
+  looksLike: string[];
   blocked: boolean; applied: boolean; noChanges: boolean;
   // A dry run's plan: Apply must name it (same plan, same sysadmin, once, 10 min; review M2).
   planId?: string;
@@ -178,6 +189,43 @@ export class Importer {
       }
     }
 
+    // --- a file of another instance? (the Import tab's instance picked wrong) -------------------
+    // Three signs, each an 'other-instance' mismatch that blocks Apply until confirmed:
+    // a token of the file held by another instance; a URL of the file that is another
+    // instance's own route URL and none of this instance's; a URL that would move a
+    // route this instance already uses. A registered URL alone is no sign (shared by design).
+    const looksLike = new Set<string>();
+    const others = this.d.instances.list().filter((i) => i.id !== instanceId && i.accounts.includes(accountId));
+    const holderOf = (hex: string) => (q('SELECT holder FROM proxy_tokens WHERE hash = ? AND account_id = ?').get(`sha256:${hex}`, accountId) as { holder: string } | undefined)?.holder;
+    const mine = new Set([...routes.values()].filter((r) => !r.hidden).map((r) => trimUrl(r.url ?? byId.get(r.proxyId)?.url)));
+    const otherRoutes = others.map((i) => ({ i, urls: new Set(this.d.instances.routes(i.id).filter((r) => !r.hidden && r.url && byId.has(r.proxyId)).map((r) => trimUrl(r.url))) }));
+    const flagged = new Set<string>();
+    const flag = (key: string, proxyId: string | undefined, detail: string) => {
+      if (flagged.has(key)) return;
+      flagged.add(key);
+      mismatches.push({ id: mismatchId('other-instance', proxyId ?? '', key), ...(proxyId ? { proxyId } : {}), what: 'other-instance', detail });
+    };
+    for (const g of groups.values()) {
+      const pid = g.target?.id;
+      for (const h of [g.proxy.token, g.proxy.adminToken]) {
+        const holder = h ? holderOf(h.sha256) : undefined;
+        const o = others.find((i) => i.id === holder);
+        if (o) {
+          looksLike.add(o.name);
+          flag(`token|${pid ?? g.url}`, pid, `the file's token ${prefix(h!.sha256)} is held by cams instance ${o.name}: is this ${o.name}'s export?`);
+        }
+      }
+      if (!mine.has(g.url)) {
+        const theirs = otherRoutes.filter((x) => x.urls.has(g.url)).map((x) => x.i.name);
+        for (const n of theirs) looksLike.add(n);
+        if (theirs.length) flag(`url|${pid ?? g.url}`, pid, `the file reaches ${g.target?.name ?? 'a proxy'} at ${g.url}, which is the route of cams instance ${theirs.join(', ')}, not of ${instance.name}: is this ${theirs.join(', ')}'s export?`);
+      }
+      const rt = pid ? routes.get(pid) : undefined;
+      if (g.target && rt && !rt.hidden && trimUrl(rt.url ?? g.target.url) !== g.url) {
+        flag(`url|${pid}`, pid, `${instance.name} reaches ${g.target.name} at ${trimUrl(rt.url ?? g.target.url)}, the file at ${g.url}: is this another cams instance's export?`);
+      }
+    }
+
     // --- hidden routes for the account's other proxies --------------------------------------
     if (o.hideUnlisted) {
       // Without a route a proxy is already invisible: only visible routes the file doesn't use are hidden.
@@ -218,27 +266,53 @@ export class Importer {
         proxyId: c.proxy ? g?.target?.id ?? (g?.newName ? `new:${g.newName}` : `unresolved:${g?.url ?? c.proxy.url}`) : null, proxyCameraId: c.proxy ? c.proxy.camera ?? c.id : null,
       };
     };
-    for (const c of file.cameras) {
+    // Host and camera user may differ per instance (migration 7). A file value that
+    // differs from what this instance sees becomes this instance's override when it
+    // already has one, or when another instance is served the camera with its shared
+    // value (it was imported or set up for that one); else it is the shared value
+    // (also when the shared value is still empty: there is nothing to keep).
+    const overrides = this.d.instances.overrideMap(instanceId);
+    const servedElsewhere = (cam: { id: string; proxyId: string | null }, k: OverrideField) => others.some((i) => {
+      if (cam.proxyId && !this.d.instances.routes(i.id).some((r) => r.proxyId === cam.proxyId && !r.hidden)) return false;
+      const o = this.d.instances.overrideMap(i.id).get(cam.id);
+      return (o?.[k] ?? null) === null;
+    });
+    file.cameras.forEach((c, idx) => {
       const f = fieldsOf(c);
       const old = registry.get(c.id);
       if (!old) {
         changes.push({ kind: 'camera-new', camsId: c.id, fields: f });
-        continue;
+        return;
       }
       const diff: Record<string, { from: unknown; to: unknown }> = {};
+      const odiff: Partial<Record<OverrideField, { from: string | null; to: string | null; override: string | null }>> = {};
       for (const [k, v] of Object.entries(f)) {
         const was = (old as unknown as Record<string, unknown>)[k] ?? null;
+        if (k === 'host' || k === 'cameraUser') {
+          const cur = overrides.get(old.id)?.[k] ?? null;
+          const seen = cur ?? (was as string | null);
+          if (seen === v) continue;
+          if (cur !== null || (was !== null && servedElsewhere(old, k))) {
+            const override = v === was ? null : (v as string);
+            if (k === 'host' && override !== null) {
+              try { checkCameraHost(override, `cameras[${idx}].host`); } catch (e) { if (e instanceof FieldError) throw new ApiError(400, 'invalid', e.field); throw e; }
+            }
+            odiff[k] = { from: seen, to: v as string, override };
+            continue;
+          }
+        }
         if (was !== v) diff[k] = { from: was, to: v };
       }
       if (Object.keys(diff).length) changes.push({ kind: 'camera-change', cameraId: old.id, camsId: c.id, fields: diff });
-    }
+      if (Object.keys(odiff).length) changes.push({ kind: 'camera-override', cameraId: old.id, camsId: c.id, instance: instance.name, fields: odiff });
+    });
     const inFile = new Set(file.cameras.map((c) => c.id));
     for (const c of registry.values()) if (!inFile.has(c.camsId)) changes.push({ kind: 'registry-only', camsId: c.camsId });
 
     const accepted = new Set(o.acceptMismatch);
     const blocked = blockers.length > 0 || mismatches.some((m) => !accepted.has(m.id));
     const noChanges = changes.every((c) => INFO.has(c.kind));
-    const result: ImportResult = { dryRun: !o.apply, account: account.name, instance: instance.name, changes, mismatches, blockers, blocked, applied: false, noChanges };
+    const result: ImportResult = { dryRun: !o.apply, account: account.name, instance: instance.name, changes, mismatches, blockers, blocked, applied: false, noChanges, looksLike: [...looksLike].sort() };
     // What the person saw: the changes, the mismatches and blockers, and the options that shape them.
     const planHash = sha256hex(jcs({ accountId, instanceId, changes: changes as unknown as object[], mismatches: mismatches.map((m) => m.id), blockers, createProxies: o.createProxies, hideUnlisted: o.hideUnlisted }));
     if (bound && bound.hash !== planHash) throw new ApiError(409, 'plan_changed');
@@ -297,6 +371,12 @@ export class Importer {
           const patch: Record<string, unknown> = { version: cam.version };
           for (const [k, v] of Object.entries(c.fields)) patch[k] = real(v.to);
           this.d.registry.updateCamera(actor, accountId, c.cameraId, patch);
+        } else if (c.kind === 'camera-override') {
+          const cur = this.d.instances.overrideMap(instanceId).get(c.cameraId);
+          const next = { host: cur?.host ?? null, cameraUser: cur?.cameraUser ?? null };
+          for (const [k, v] of Object.entries(c.fields) as [OverrideField, { override: string | null }][]) next[k] = v.override;
+          if (next.host === null && next.cameraUser === null) this.d.instances.clearOverride(actor, instanceId, c.cameraId);
+          else this.d.instances.setOverride(actor, instanceId, c.cameraId, { ...next, ...(cur ? { version: cur.version } : {}) });
         }
       }
       record('import-apply', { accepted: [...accepted].filter((id) => mismatches.some((m) => m.id === id)), externalTokens: externals.length });
