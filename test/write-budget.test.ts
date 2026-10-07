@@ -13,6 +13,9 @@ import { LiveHub } from '../server/live';
 import { readEpoch } from '../server/db/open';
 import { makeProxyInfo, makeSummary } from '../test-client/summaries';
 import { BackupHeartbeat } from '../server/backup/heartbeat';
+import { CamsInstances } from '../server/cams/instances';
+import { buildSnapshot, snapshotRevision } from '../server/cams/snapshot';
+import { generateKeyPair, fingerprint, privateFromB64 } from '../server/crypto/ed25519';
 
 describe('database write budget', () => {
   const dir = tmpDir();
@@ -123,5 +126,25 @@ describe('database write budget', () => {
     s1.flush(true);
     const s2 = mk();
     expect(s2.view(p.id)).toMatchObject({ state: 'online', stale: true, cameras: [{ ref: 'cam1', online: true }, { ref: 'cam2', online: true }, { ref: 'cam3', online: true }] });
+  });
+
+  it('P4: 100 snapshot pulls (200 and 304) and 10 reports from a cams instance → 0 write transactions', () => {
+    const r = makeRegistry(dir);
+    const kp = generateKeyPair();
+    const fp = fingerprint(kp.publicKeySpkiB64);
+    const inst = new CamsInstances({ db: r.db, clock: r.clock, audit: r.audit, registry: r.reg, cfg: { publicUrl: 'https://admin.example.org', enrollCodeDefaultH: 24 }, serverKeys: [kp.publicKeySpkiB64], serverKeyFingerprints: [fp], onRevoke: () => {} });
+    const acc = r.reg.createAccount(ACTOR, { name: 'home', displayName: 'Home' });
+    r.reg.createCamera(ACTOR, acc.id, { camsId: 'cam1', name: 'Yard', kind: 'camera' });
+    const i = inst.create(ACTOR, { name: 'cluster', displayName: 'Cluster', accounts: [acc.id] });
+    const d = { db: r.db, clock: r.clock, signingKey: privateFromB64(kp.privateKeyPkcs8B64), signingFingerprint: fp };
+    const start = readEpoch(r.db);
+    for (let n = 0; n < 100; n++) {
+      const rev = snapshotRevision(r.db, i.id, fp);
+      if (n % 2 === 0) buildSnapshot(d, i.id);
+      inst.touch(i.id, { lastPullAt: r.clock.now(), lastPullStatus: n % 2 === 0 ? 200 : 304 });
+      if (n % 10 === 0) inst.report(i.id, { v: 1, mode: 'shadow', appliedRevision: rev, shadow: { accountId: acc.id, differences: 0, items: [] } }, r.clock.now());
+      r.clock.advance(60_000);
+    }
+    expect(readEpoch(r.db)).toBe(start);
   });
 });

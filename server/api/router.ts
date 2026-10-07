@@ -11,6 +11,9 @@ import type { StatusStore } from '../status/store';
 import type { LiveHub } from '../live';
 import type { Commands } from '../commands/service';
 import type { Tokens } from '../tokens/service';
+import type { CamsInstances } from '../cams/instances';
+import type { Importer } from '../import/importer';
+import { exportForInstance } from '../import/export';
 import { SESSION_COOKIE, type Sessions } from '../auth/session';
 import { requireCsrf, requireSysadmin, writeLimiter } from '../auth/middleware';
 import { reconcile } from '../status/derive';
@@ -39,7 +42,7 @@ export interface BackupService { state(): BackupState; backupNow(actor: string):
 
 export interface ApiDeps {
   db: Db; clock: Clock; cfg: Config; audit: Audit; registry: Registry; enrollment: Enrollment; hub: Hub; status: StatusStore; live: LiveHub; sessions: Sessions; backup: BackupService;
-  commands: Commands; tokens: Tokens;
+  commands: Commands; tokens: Tokens; camsInstances: CamsInstances; serverKeyFingerprints: string[]; importer: Importer;
 }
 
 type H = (req: Request, res: Response) => unknown;
@@ -51,6 +54,8 @@ export function apiRouter(d: ApiDeps): express.Router {
   const r = express.Router();
   // Every API request, per session (CodeQL-visible; the write limit below is tighter).
   r.use(limiter({ windowMs: 60_000, limit: 1200, key: (req) => sessionKey(req.cookies?.[SESSION_COOKIE]) }));
+  // P4: an import carries a whole cams export (≤ 1 MiB); only a signed-in sysadmin's body is read that far.
+  r.use('/accounts/:accountId/import', requireSysadmin(d.sessions), express.json({ limit: 1024 * 1024 }));
   r.use(express.json({ limit: 64 * 1024 }));
   r.use(requireSysadmin(d.sessions), requireCsrf(d.cfg), writeLimiter(d.cfg, d.clock));
   const actor = (res: Response): string => res.locals.session.email;
@@ -224,6 +229,58 @@ export function apiRouter(d: ApiDeps): express.Router {
   r.delete(camBase, h((req, res) => { d.registry.deleteCamera(actor(res), p(req, 'accountId'), p(req, 'cameraId')); reg('camera', p(req, 'cameraId')); }));
   r.put(`${camBase}/sim`, h((req, res) => { const s = d.registry.setSim(actor(res), p(req, 'accountId'), p(req, 'cameraId'), req.body); reg('camera', p(req, 'cameraId')); return s; }));
   r.delete(`${camBase}/sim`, h((req, res) => { d.registry.deleteSim(actor(res), p(req, 'accountId'), p(req, 'cameraId')); reg('camera', p(req, 'cameraId')); }));
+
+  // --- P4: cams instances (migration spec §9.1, §9.6) -------------------------------------
+  const cmsBase = '/cams-instances/:instanceId';
+  const ci = d.camsInstances;
+  const cms = (req: Request) => p(req, 'instanceId');
+  r.get('/cams-instances', h(() => ({ items: ci.list(), serverKeyFingerprints: d.serverKeyFingerprints })));
+  r.post('/cams-instances', h((req, res) => { created(res); const i = ci.create(actor(res), req.body); reg('cams-instance', i.id); return i; }));
+  r.get(cmsBase, h((req) => {
+    const i = ci.get(cms(req));
+    return { ...i, live: ci.live(i.id), enrollment: ci.liveCode(i.id), serverKeyFingerprints: d.serverKeyFingerprints };
+  }));
+  r.patch(cmsBase, h((req, res) => { const i = ci.update(actor(res), cms(req), req.body); reg('cams-instance', i.id); return i; }));
+  r.delete(cmsBase, h((req, res) => { ci.remove(actor(res), cms(req), req.body?.confirmName); reg('cams-instance', cms(req)); }));
+  r.post(`${cmsBase}/block`, h((req, res) => { const i = ci.block(actor(res), cms(req)); reg('cams-instance', i.id); return i; }));
+  r.post(`${cmsBase}/rotate`, h((req, res) => { const i = ci.rotateNow(actor(res), cms(req)); reg('cams-instance', i.id); return i; }));
+  r.get(`${cmsBase}/routes`, h((req) => ({ items: ci.routes(cms(req)) })));
+  r.put(`${cmsBase}/routes/:proxyId`, h((req, res) => { const x = ci.setRoute(actor(res), cms(req), p(req, 'proxyId'), req.body); reg('cams-instance', cms(req)); return x; }));
+  r.delete(`${cmsBase}/routes/:proxyId`, h((req, res) => { ci.deleteRoute(actor(res), cms(req), p(req, 'proxyId')); reg('cams-instance', cms(req)); }));
+  r.post(`${cmsBase}/enrollment-codes`, h((req, res) => {
+    // The code's only appearance.
+    res.set('Cache-Control', 'no-store');
+    created(res);
+    const c = ci.createCode(actor(res), cms(req), req.body?.lifetimeH);
+    reg('cams-instance', cms(req));
+    return c;
+  }));
+  r.delete(`${cmsBase}/enrollment-codes/:codeId`, h((req, res) => { ci.cancelCode(actor(res), cms(req), p(req, 'codeId')); reg('cams-instance', cms(req)); }));
+  r.get(`${cmsBase}/keys`, h((req) => ({ items: ci.keys(cms(req)) })));
+  r.post(`${cmsBase}/keys/:keyId/revoke`, h((req, res) => { const k = ci.revokeKey(actor(res), cms(req), p(req, 'keyId')); reg('cams-instance', cms(req)); return k; }));
+
+  // --- P4: import a cams export, export a file-mode fallback (M §11.2, §11.6) ----------------
+  r.post('/accounts/:accountId/import', h((req, res) => {
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const accept = Array.isArray(b.acceptMismatch) ? b.acceptMismatch.filter((x): x is string => typeof x === 'string').slice(0, 500) : [];
+    if (typeof b.instanceId !== 'string') throw new ApiError(400, 'invalid', 'instanceId');
+    const out = d.importer.run(actor(res), p(req, 'accountId'), b.instanceId, b.file, {
+      apply: b.apply === true, acceptMismatch: accept, createProxies: b.createProxies === true, hideUnlisted: b.hideUnlisted === true,
+      planId: typeof b.planId === 'string' ? b.planId.slice(0, 64) : undefined,
+    });
+    if (out.applied) reg('account', p(req, 'accountId'));
+    return out;
+  }));
+  r.get('/accounts/:accountId/export', h((req, res) => {
+    const accountId = p(req, 'accountId');
+    const instanceId = String(req.query.instance ?? '');
+    const out = exportForInstance({ db: d.db, registry: d.registry, instances: d.camsInstances }, accountId, instanceId);
+    const a = d.registry.getAccount(accountId);
+    const i = d.camsInstances.get(instanceId);
+    d.audit.write({ actorType: 'sysadmin', actor: actor(res), action: 'export-run', accountId, targetType: 'cams-instance', targetId: instanceId, targetLabel: i.name, outcome: 'ok', detail: { cameras: out.cameras.length, tokens: out.tokens.length } });
+    res.set({ 'Cache-Control': 'no-store', 'Content-Disposition': `attachment; filename="cameras-${a.name}-${i.name}.json"` });
+    return out;
+  }));
 
   // --- audit -------------------------------------------------------------------------------
   r.get('/audit', h((req) => {

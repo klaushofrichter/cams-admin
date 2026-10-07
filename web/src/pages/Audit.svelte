@@ -29,7 +29,7 @@
   <h2>Audit log</h2>
   <div class="row">
     <label>Account<select bind:value={account} onchange={() => load()} data-testid="audit-filter-account"><option value="">all</option>{#each accounts as a}<option value={a.id}>{a.name}</option>{/each}</select></label>
-    <label>Actor<select bind:value={actorType} onchange={() => load()}><option value="">all</option><option>sysadmin</option><option>proxy</option><option>system</option></select></label>
+    <label>Actor<select bind:value={actorType} onchange={() => load()}><option value="">all</option><option>sysadmin</option><option>proxy</option><option>system</option><option>cams</option></select></label>
     <label>Action<select bind:value={action} onchange={() => load()} data-testid="audit-filter-action"><option value="">all</option>{#each ACTIONS as a}<option>{a}</option>{/each}</select></label>
   </div>
   {#if error}<p class="error">{error}</p>{/if}

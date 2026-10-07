@@ -64,6 +64,43 @@ It will run at `cams-admin.skylar.technology`. Phase 1 is specified in
   card says "not yet on proxy" until the proxy has it. A proxy that missed a
   set (offline, refused) gets the current one again from its next heartbeat.
 
+## cams instances and the service API (migration phase 4)
+
+- **A cams instance** (the cluster's cams, the Pi's) is registered in
+  cams-admin (*Instances*) with the accounts it serves. It enrolls once with
+  a one-time `CAC1-…` code and its own Ed25519 key (`admin-enroll` in cams;
+  compare the server key fingerprint it prints with the instance page).
+- **The service API** (`/cams/v1/*`, contract `contract/cams-v1/`): every
+  request is signed by the instance's key (method, path, time, nonce, body
+  hash) and checked in a fixed order (clock skew answered with the server
+  time, nonces remembered 10 minutes, 60 requests a minute per instance, a
+  global budget for failed signatures); every answer is signed by
+  cams-admin's key, errors included.
+- **The snapshot** (`GET /cams/v1/config`, with an ETag) carries the served
+  accounts' users and roles, proxies (at the instance's route URL) and
+  cameras, and the ids and states of the tokens the instance holds. It is
+  signed as a whole, so cams verifies its cached copy at every start. It
+  never carries a password, token, hash, code or key.
+- **Routes are default-deny:** an instance sees a proxy (and its cameras,
+  and may hold tokens for it) only through a route: the registered URL, or
+  its own URL (the Pi reaches its proxy over loopback). A proxy added later
+  reaches no instance until it is routed; an import routes the proxies its
+  file uses. Hiding a proxy or removing a served account revokes the tokens
+  the instance holds there.
+- **Tokens:** cams generates its own proxy tokens and registers only their
+  hashes (`POST /cams/v1/tokens`); cams-admin sends them to the proxy.
+  *Rotate now* on the instance page makes cams register new ones and retire
+  the old (with a grace period). Revoking its key, a re-enrollment, Block
+  and Delete revoke everything it holds at once; these revocations are
+  journaled outside the database, so a restore can't bring them back.
+- **Import and export:** an account's *Import* reads cams's redacted
+  `export-config` output (dry run first, idempotent, cross-checked against
+  what the live proxies report; it never deletes and never changes a
+  proxy's registered URL). *Export* writes a `cameras.json` without
+  passwords and tokens, for cams's file mode if cams-admin is ever lost
+  ([docs/restore.md](docs/restore.md)). The cut-over is
+  [docs/migration-p4-runbook.md](docs/migration-p4-runbook.md).
+
 There is no video: cams-admin is a control plane, not in any data path.
 Camera passwords never pass through it; a managed proxy token passes through
 it exactly once, in the answer that shows it.

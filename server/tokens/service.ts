@@ -9,6 +9,9 @@ import type { Logger } from '../log';
 import { FieldError } from '../validate';
 import { newId } from '../ids';
 import type { CommandRow, Commands } from '../commands/service';
+import { validateCams } from '../contract';
+import type { AuditEntry } from '../audit';
+type ActorType = Exclude<AuditEntry['actorType'], 'proxy'>;
 
 // Managed cams↔proxy tokens (migration spec §10.1–§10.2; plan Task 6). A
 // token exists in plain text only in the answer to its issue (shown once);
@@ -18,6 +21,8 @@ import type { CommandRow, Commands } from '../commands/service';
 // Issue, switch cams, then Retire or Revoke (R2-10).
 
 export const MAX_TOKENS = 64;
+// Live tokens one cams instance may hold per proxy and kind (contract cams-v1).
+export const MAX_HELD_PER_KIND = 3;
 const HASH_PREFIX = 15; // "sha256:" + 8 hex digits
 const RESYNC_MS = 5 * 60_000;
 interface SetEntry { id: string; kind: string; hash: string; label: string; retireAt: number | null }
@@ -29,7 +34,7 @@ export interface ProxyTokenView {
   retireAt: number | null; revokedAt: number | null; revokedRevision: number | null; onProxy: boolean; createdAt: number; createdBy: string; issuedRevision: number;
   lastCommand: { id: string; state: string; outcomeCode: string | null } | null;
 }
-export interface TokensDeps { db: Db; clock: Clock; audit: Audit; registry: Registry; commands: Commands; live: LiveHub; log: Logger }
+export interface TokensDeps { db: Db; clock: Clock; audit: Audit; registry: Registry; commands: Commands; live: LiveHub; log: Logger; journal?: (tokenIds: string[]) => void }
 
 // 32 random bytes, base64url without padding (43 characters).
 export function generateToken(): { token: string; hash: string } {
@@ -53,6 +58,12 @@ function parseHours(h: unknown): number {
 }
 
 type Row = Record<string, unknown>;
+// ajv's "/hash must match …" → "hash" (the first path segment), else "body".
+// Only a plain name is ever echoed back.
+export const fieldOf = (detail: string): string => {
+  const f = detail.split(' ')[0].replace(/^\//, '').split('/')[0];
+  return /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(f) ? f : 'body';
+};
 
 export class Tokens {
   // Prepared once: the tick and heartbeat paths run every second (each
@@ -106,19 +117,20 @@ export class Tokens {
   // The current set at our current revision, queued as one tokens.apply.
   // A set that only removes tokens from the one the proxy confirmed goes as
   // revocationOnly (the proxy takes it while paused / not allowed).
-  private queue(actor: string, accountId: string, proxyId: string, reason?: string, claim = true): string {
+  // actorType is said, never guessed from the actor text (review M7); 'system' is no email.
+  private queue(actor: string, accountId: string, proxyId: string, reason?: string, claim = true, actorType: ActorType = actor === 'system' ? 'system' : 'sysadmin'): string {
     const tokens = this.currentSet(proxyId);
     const base = claim ? this.appliedSet(proxyId) : [];
     const revocationOnly = claim && tokens.every((t) => base.some((b) => b.id === t.id && b.kind === t.kind && b.hash === t.hash && b.label === t.label && b.retireAt === t.retireAt));
     const args = { v: 1, revision: this.state(proxyId).revision, tokens };
-    return this.d.commands.create(actor, accountId, proxyId, 'tokens.apply', args, { ...(reason ? { reason } : {}), ...(revocationOnly ? { revocationOnly: true } : {}) }).id;
+    return this.d.commands.create(actor, accountId, proxyId, 'tokens.apply', args, { ...(reason ? { reason } : {}), ...(revocationOnly ? { revocationOnly: true } : {}), actorType }).id;
   }
 
   // The full managed set with the next revision. In the caller's
   // transaction: a refused create (409 pre-checks) rolls the change back too.
-  private nextApply(actor: string, accountId: string, proxyId: string, reason?: string, atLeast = 0, claim = true): string {
+  private nextApply(actor: string, accountId: string, proxyId: string, reason?: string, atLeast = 0, claim = true, actorType?: ActorType): string {
     this.bump(proxyId, atLeast);
-    return this.queue(actor, accountId, proxyId, reason, claim);
+    return this.queue(actor, accountId, proxyId, reason, claim, actorType);
   }
 
   // Queues the current set, never throwing: a revocation stands in the
@@ -164,7 +176,7 @@ export class Tokens {
 
   // Retiring: the proxy itself stops accepting it at retireAt (even with
   // cams-admin down); cams-admin marks it revoked then and cleans the set up.
-  retire(actor: string, accountId: string, proxyId: string, tokenId: string, hours: unknown): ProxyTokenView {
+  retire(actor: string, accountId: string, proxyId: string, tokenId: string, hours: unknown, actorType: 'sysadmin' | 'cams' = 'sysadmin'): ProxyTokenView {
     const h = parseHours(hours);
     const t = this.tokenRow(accountId, proxyId, tokenId);
     if (t.state !== 'active') throw new ApiError(409, 'not_active');
@@ -172,8 +184,8 @@ export class Tokens {
     const retireAt = this.d.clock.now() + h * 3600_000;
     tx(this.d.db, () => {
       this.q(`UPDATE proxy_tokens SET state = 'retiring', retire_at = ? WHERE id = ?`).run(retireAt, tokenId);
-      this.d.audit.write({ actorType: 'sysadmin', actor, action: 'token-retire', accountId, targetType: 'proxy', targetId: proxyId, outcome: 'ok', detail: { tokenId, label: t.label, hours: h, retireAt } });
-      this.nextApply(actor, accountId, proxyId);
+      this.d.audit.write({ actorType, actor, action: 'token-retire', accountId, targetType: 'proxy', targetId: proxyId, outcome: 'ok', detail: { tokenId, label: t.label, hours: h, retireAt } });
+      this.nextApply(actor, accountId, proxyId, undefined, 0, true, actorType);
     });
     this.d.live.publishRegistry('proxy', proxyId);
     return this.view(accountId, proxyId, tokenId);
@@ -189,11 +201,88 @@ export class Tokens {
     tx(this.d.db, () => {
       const revision = this.bump(proxyId);
       this.q(`UPDATE proxy_tokens SET state = 'revoked', revoked_at = ?, revoked_revision = ? WHERE id = ?`).run(this.d.clock.now(), revision, tokenId);
-      this.d.audit.write({ actorType: 'sysadmin', actor, action: 'token-revoke', accountId, targetType: 'proxy', targetId: proxyId, outcome: 'ok', detail: { tokenId, label: t.label, reason: 'revoked', revision } });
+      this.d.audit.write({ actorType: actor === 'system' ? 'system' : 'sysadmin', actor, action: 'token-revoke', accountId, targetType: 'proxy', targetId: proxyId, outcome: 'ok', detail: { tokenId, label: t.label, reason: 'revoked', revision } });
     });
     this.tryQueue(actor, accountId, proxyId);
     this.d.live.publishRegistry('proxy', proxyId);
     return this.view(accountId, proxyId, tokenId);
+  }
+
+  // --- P4: tokens held by a cams instance (migration spec §10.1, contract cams-v1) ---
+
+  // POST /cams/v1/tokens: cams generated the token and sends only its hash.
+  // Idempotent by hash; the proxy must be in an account the instance serves
+  // and not hidden for it (else 404, never 403). Label "cams <instance>".
+  registerForInstance(inst: { id: string; name: string }, served: string[], input: unknown): { status: 200 | 201; body: { tokenId: string; state: 'pending' | 'active' | 'retiring'; label: string } } {
+    const v = validateCams('tokens-request', input);
+    if (!v.ok) throw new ApiError(400, 'invalid', fieldOf(v.detail));
+    const { proxyId, kind, hash } = input as { proxyId: string; kind: 'client' | 'admin'; hash: string };
+    const px = this.d.registry.proxyById(proxyId);
+    const routed = px && this.q('SELECT 1 FROM cams_instance_routes WHERE instance_id = ? AND proxy_id = ? AND hidden = 0').get(inst.id, proxyId);
+    if (!px || !served.includes(px.accountId) || !routed) throw new ApiError(404, 'not_found');
+    const same = this.q('SELECT id, holder, proxy_id, kind, state, label FROM proxy_tokens WHERE hash = ?').get(hash) as Row | undefined;
+    if (same) {
+      if (same.holder === inst.id && same.proxy_id === proxyId && same.kind === kind && ['pending', 'active', 'retiring'].includes(same.state as string)) {
+        return { status: 200, body: { tokenId: same.id as string, state: same.state as 'pending', label: same.label as string } };
+      }
+      throw new ApiError(409, 'hash_in_use');
+    }
+    const pending = this.q(`SELECT id FROM proxy_tokens WHERE holder = ? AND proxy_id = ? AND kind = ? AND state = 'pending'`).get(inst.id, proxyId, kind) as { id: string } | undefined;
+    if (pending) throw Object.assign(new ApiError(409, 'pending_exists'), { extra: { tokenId: pending.id } });
+    const live = (this.q(`SELECT count(*) n FROM proxy_tokens WHERE proxy_id = ? AND state IN ${LIVE}`).get(proxyId) as { n: number }).n;
+    // Per holder, kind and proxy: enough for one rotation (review M3: one instance can't fill a shared proxy's 64 slots).
+    const mine = (this.q(`SELECT count(*) n FROM proxy_tokens WHERE proxy_id = ? AND holder = ? AND kind = ? AND state IN ${LIVE}`).get(proxyId, inst.id, kind) as { n: number }).n;
+    if (live >= MAX_TOKENS || mine >= MAX_HELD_PER_KIND) throw new ApiError(409, 'too_many_tokens');
+    this.notAhead(proxyId);
+    const tokenId = newId('tok');
+    const label = `cams ${inst.name}${kind === 'admin' ? ' admin' : ''}`;
+    tx(this.d.db, () => {
+      const rev = this.state(proxyId).revision + 1;
+      this.q(`INSERT INTO proxy_tokens (id, account_id, proxy_id, kind, holder, label, hash, state, issued_revision, created_at, created_by) VALUES (?,?,?,?,?,?,?, 'pending', ?,?,?)`)
+        .run(tokenId, px.accountId, proxyId, kind, inst.id, label, hash, rev, this.d.clock.now(), inst.id);
+      this.d.audit.write({ actorType: 'cams', actor: inst.id, action: 'token-issue', accountId: px.accountId, targetType: 'proxy', targetId: proxyId, targetLabel: px.name, outcome: 'ok', detail: { tokenId, kind, label, hashPrefix: hash.slice(0, HASH_PREFIX) } });
+      this.nextApply(inst.id, px.accountId, proxyId, undefined, 0, true, 'cams');
+    });
+    this.d.live.publishRegistry('proxy', proxyId);
+    return { status: 201, body: { tokenId, state: 'pending', label } };
+  }
+
+  // POST /cams/v1/tokens/:tokenId/retire: only a token this instance holds, in a served account.
+  retireForInstance(inst: { id: string }, served: string[], tokenId: string, hours: unknown): { tokenId: string; state: 'retiring'; retireAt: number } {
+    const t = this.q('SELECT account_id, proxy_id FROM proxy_tokens WHERE id = ? AND holder = ?').get(tokenId, inst.id) as Row | undefined;
+    if (!t || !served.includes(t.account_id as string)) throw new ApiError(404, 'not_found');
+    const v = this.retire(inst.id, t.account_id as string, t.proxy_id as string, tokenId, hours, 'cams');
+    return { tokenId, state: 'retiring', retireAt: v.retireAt! };
+  }
+
+  // R4-19: a blocked or deleted instance's tokens are revoked (one revision
+  // and one tokens.apply per proxy); returns the count.
+  revokeHeldBy(actor: string, holder: string, scope?: { accountIds?: string[]; proxyIds?: string[] }): number {
+    const rows = (this.q(`SELECT id, account_id, proxy_id, label FROM proxy_tokens WHERE holder = ? AND state IN ${LIVE} ORDER BY proxy_id`).all(holder) as Row[])
+      .filter((r) => (!scope?.accountIds || scope.accountIds.includes(r.account_id as string)) && (!scope?.proxyIds || scope.proxyIds.includes(r.proxy_id as string)));
+    const byProxy = new Map<string, Row[]>();
+    for (const r of rows) byProxy.set(r.proxy_id as string, [...(byProxy.get(r.proxy_id as string) ?? []), r]);
+    for (const [proxyId, list] of byProxy) {
+      const accountId = list[0].account_id as string;
+      tx(this.d.db, () => {
+        const revision = this.bump(proxyId);
+        for (const t of list) {
+          this.q(`UPDATE proxy_tokens SET state = 'revoked', revoked_at = ?, revoked_revision = ? WHERE id = ?`).run(this.d.clock.now(), revision, t.id as string);
+          this.d.audit.write({ actorType: actor === 'system' ? 'system' : 'sysadmin', actor, action: 'token-revoke', accountId, targetType: 'proxy', targetId: proxyId, outcome: 'ok', detail: { tokenId: t.id, label: t.label, reason: 'holder-removed', holder, revision } });
+        }
+      });
+      this.tryQueue(actor, accountId, proxyId);
+      this.d.live.publishRegistry('proxy', proxyId);
+    }
+    if (rows.length) this.d.journal?.(rows.map((r) => r.id as string));
+    return rows.length;
+  }
+
+  // A revocation journal replay: this token stays revoked (no-op when it is, or isn't there).
+  revokeReplayed(tokenId: string): void {
+    const t = this.q('SELECT account_id, proxy_id, state FROM proxy_tokens WHERE id = ?').get(tokenId) as Row | undefined;
+    if (!t || t.state === 'revoked') return;
+    this.revoke('system', t.account_id as string, t.proxy_id as string, tokenId);
   }
 
   // After a restore: the proxy is ahead. An admin confirms (having checked

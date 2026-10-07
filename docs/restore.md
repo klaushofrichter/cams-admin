@@ -57,6 +57,41 @@ cams-admin restored from a backup?" and Issue, Retire and Re-apply answer
 2. **Confirm** on the card: cams-admin sends its current set above the
    proxy's revision, and token changes work again.
 
+## cams instances after a restore
+
+A restore must not bring back a blocked cams instance, a revoked cams key
+or a revoked cams-held proxy token. cams-admin writes each of them to
+`cams-revocations.jsonl` in its data folder (next to the database, mode 600,
+not in the database and so not in its backups) and replays it at every
+start: what was revoked is revoked again, with `system` audit records
+marked `replayed`. Nothing newer is touched (the journal names exact ids).
+
+- **Same volume** (the usual restore): nothing to do; check the audit log
+  for `replayed` records.
+- **Fresh volume** (the journal is gone too): in the audit log of the old
+  volume or the S3 replica, find the `cams-instance-block`,
+  `cams-key-revoke` and `token-revoke` records after the restore point and
+  repeat them. Route changes aren't journaled: compare each instance's
+  routes with `route-update` records after the restore point (routes are
+  default-deny, so a proxy added since has none).
+
+## cams without cams-admin (the Export, M §11.6)
+
+If cams-admin is lost for good (no backup restores), cams goes back to its
+file mode:
+
+1. From the last cams-admin you can reach (or a restore on the Mac): account
+   → *Export* → the instance → `cameras-<account>-<instance>.json`. It has
+   every camera of the instance (its route URLs, pins and TLS names) but no
+   password and no token; `warnings` names a camera whose proxy has no URL.
+2. Put the camera passwords in from the credentials file and, per proxy, a
+   token the proxy accepts (its `CAMPROXY_TOKENS`, or a fresh token set
+   locally on the proxy with its admin token).
+3. On cams: `CAMERAS_FILE` = that file, `CONFIG_SOURCE=file`, restart. The
+   moved state files stay readable (ruling R4-10).
+4. The `tokens` list of the export names the managed tokens cams held: block
+   them on each proxy once cams uses the new ones.
+
 ## The quarterly drill
 
 `AWS_PROFILE=<Klaus's profile> scripts/backup/restore-drill.sh` restores the

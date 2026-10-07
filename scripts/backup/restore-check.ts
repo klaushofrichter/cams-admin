@@ -24,7 +24,8 @@ const opt = (n: string) => {
 };
 const env = (n: string) => process.env[n] ?? (() => { throw new Error(`${n} is required`); })();
 
-const TABLES = ['accounts', 'account_users', 'proxies', 'proxy_keys', 'enrollment_codes', 'cameras', 'sims', 'proxy_status', 'status_events', 'audit_log', 'sessions', 'jobs', 'meta', 'commands', 'proxy_tokens', 'proxy_token_state'];
+const TABLES = ['accounts', 'account_users', 'proxies', 'proxy_keys', 'enrollment_codes', 'cameras', 'sims', 'proxy_status', 'status_events', 'audit_log', 'sessions', 'jobs', 'meta', 'commands', 'proxy_tokens', 'proxy_token_state',
+  'cams_instances', 'cams_instance_keys', 'cams_enrollment_codes', 'cams_instance_accounts', 'cams_instance_routes', 'config_revision'];
 
 async function api(url: string, cookie: string, method: string, path: string, body?: unknown) {
   const r = await fetch(`${url}/api/v1${path}`, {
@@ -57,6 +58,10 @@ async function main() {
         const k = await enroll(url, c.code, { version: 'restore-test', cameraIds: ['cam1'] });
         writeKeyFile(opt('key'), k);
         await hello(k.connectUrl, opt('key'));
+        // P4: a cams instance serving alpha, with a route and a live code.
+        const inst = await api(url, cookie, 'POST', '/cams-instances', { name: 'restore', displayName: 'Restore', accounts: [a.id] });
+        await api(url, cookie, 'PUT', `/cams-instances/${inst.id}/routes/${p.id}`, { url: 'http://127.0.0.1:8480', hidden: false });
+        await api(url, cookie, 'POST', `/cams-instances/${inst.id}/enrollment-codes`, { lifetimeH: 1 });
       }
     }
     return;
