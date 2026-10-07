@@ -19,6 +19,8 @@ import { validateCams } from '../contract';
 // Issue, switch cams, then Retire or Revoke (R2-10).
 
 export const MAX_TOKENS = 64;
+// Live tokens one cams instance may hold per proxy and kind (contract cams-v1).
+export const MAX_HELD_PER_KIND = 3;
 const HASH_PREFIX = 15; // "sha256:" + 8 hex digits
 const RESYNC_MS = 5 * 60_000;
 interface SetEntry { id: string; kind: string; hash: string; label: string; retireAt: number | null }
@@ -225,7 +227,9 @@ export class Tokens {
     const pending = this.q(`SELECT id FROM proxy_tokens WHERE holder = ? AND proxy_id = ? AND kind = ? AND state = 'pending'`).get(inst.id, proxyId, kind) as { id: string } | undefined;
     if (pending) throw Object.assign(new ApiError(409, 'pending_exists'), { extra: { tokenId: pending.id } });
     const live = (this.q(`SELECT count(*) n FROM proxy_tokens WHERE proxy_id = ? AND state IN ${LIVE}`).get(proxyId) as { n: number }).n;
-    if (live >= MAX_TOKENS) throw new ApiError(409, 'too_many_tokens');
+    // Per holder, kind and proxy: enough for one rotation (review M3: one instance can't fill a shared proxy's 64 slots).
+    const mine = (this.q(`SELECT count(*) n FROM proxy_tokens WHERE proxy_id = ? AND holder = ? AND kind = ? AND state IN ${LIVE}`).get(proxyId, inst.id, kind) as { n: number }).n;
+    if (live >= MAX_TOKENS || mine >= MAX_HELD_PER_KIND) throw new ApiError(409, 'too_many_tokens');
     this.notAhead(proxyId);
     const tokenId = newId('tok');
     const label = `cams ${inst.name}${kind === 'admin' ? ' admin' : ''}`;

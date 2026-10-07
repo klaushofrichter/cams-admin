@@ -196,7 +196,7 @@ describe('cams tokens: write budget', () => {
     const px = await s.api('POST', `/accounts/${acc.id}/proxies`, { name: 'wb', displayName: 'WB', runsOn: 'cloud' });
     s.built.db.prepare(`UPDATE proxies SET state = 'enrolled' WHERE id = ?`).run(px.id);
     s.built.status.hello(px.id, 'v2', Date.now(), ['status', 'commands']);
-    s.built.status.heartbeat(px.id, { summary: makeSummary({ cameras: 1, now: Date.now() }), proxy: { ...makeProxyInfo({ now: Date.now() }), commands: { enabled: true, paused: false, pauseReason: null, allow: ['tokens.apply'], seenWindow: 1000 } }, truncated: false }, Date.now());
+    s.built.status.heartbeat(px.id, { summary: makeSummary({ cameras: 1, now: Date.now() }), proxy: { ...makeProxyInfo({ now: Date.now() }), commands: { enabled: true, paused: false, pauseReason: null, allow: ['tokens.apply', 'tokens.apply.admin'], seenWindow: 1000 } }, truncated: false }, Date.now());
     s.built.status.flush(true);
     const inst = await s.api('POST', '/cams-instances', { name: 'cluster', displayName: 'Cluster', accounts: [acc.id] });
     await s.api('PUT', `/cams-instances/${inst.id}/routes/${px.id}`, { url: null, hidden: false });
@@ -214,5 +214,22 @@ describe('cams tokens: write budget', () => {
       if (i % 10 === 9) await signedFetch(s, key, 'POST', '/cams/v1/report', { v: 1, mode: 'cams-admin', version: 't', appliedRevision: null, cacheVerifiedAt: null, lastPullAt: null, held: [], keptOld: [], shadow: null, tokens: { managed: 0, pending: 0, legacy: 0 }, problems: [] });
     }
     expect(readEpoch(s.built.db)).toBe(e2);
+  });
+
+  it('at most 3 live tokens per holder, kind and proxy (one rotation); the 4th is too_many_tokens for that holder only (review M3)', async () => {
+    const acc = (await s.api('GET', '/accounts')).items[0];
+    const px = (await s.api('GET', `/accounts/${acc.id}/proxies`)).items[0];
+    const inst = await s.api('POST', '/cams-instances', { name: 'capped', displayName: 'Capped', accounts: [acc.id] });
+    await s.api('PUT', `/cams-instances/${inst.id}/routes/${px.id}`, { url: null, hidden: false });
+    const key = await enrollCamsKey(s, inst.id);
+    const reg = (kind = 'client') => signedFetch(s, key, 'POST', '/cams/v1/tokens', { v: 1, proxyId: px.id, kind, hash: generateToken().hash });
+    for (let i = 0; i < 3; i++) {
+      const r = await reg();
+      expect(r.status).toBe(201);
+      s.built.db.prepare(`UPDATE proxy_tokens SET state = 'active' WHERE id = ?`).run((await r.json()).tokenId); // as if applied
+    }
+    const fourth = await reg();
+    expect([fourth.status, (await fourth.json()).error]).toEqual([409, 'too_many_tokens']);
+    expect((await reg('admin')).status).toBe(201);
   });
 });
