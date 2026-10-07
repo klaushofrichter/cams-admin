@@ -5,6 +5,9 @@ import { tx, type Db } from '../db/open';
 import { codeHash, newCamsEnrollmentCode, newId } from '../ids';
 import { ApiError, type Registry } from '../registry';
 import { checkUrl, FieldError } from '../validate';
+import { validateCams } from '../contract';
+import { fieldOf } from '../tokens/service';
+import { snapshotRevision } from './snapshot';
 
 // The registry of cams instances (migration spec §5, §9.1, §9.6; plan P4
 // Task 3): which accounts an instance serves, its per-proxy routes (a URL
@@ -338,6 +341,19 @@ export class CamsInstances {
       this.d.audit.write({ actorType: 'cams', actor: instanceId, action: 'cams-key-confirmed', targetType: 'cams-instance', targetId: instanceId, targetLabel: k.name as string, outcome: 'ok', detail: { keyId, fingerprint: k.fingerprint, replacedKeys: replaced } });
       return true;
     });
+  }
+
+  // POST /cams/v1/report: kept in memory only (no write); answers whether the
+  // instance's applied revision is the current one.
+  report(instanceId: string, report: unknown, now: number): { changed: boolean; revision: string } {
+    const v = validateCams('report-request', report);
+    if (!v.ok) throw new ApiError(400, 'invalid', fieldOf(v.detail));
+    const r = report as CamsReport;
+    const prev = this.live(instanceId);
+    const zero = r.mode === 'shadow' && !!r.shadow && r.shadow.differences === 0;
+    this.touch(instanceId, { report: r, reportAt: now, shadowZeroSince: zero ? prev.shadowZeroSince ?? now : null });
+    const revision = snapshotRevision(this.d.db, instanceId, this.d.serverKeyFingerprints[0] ?? '');
+    return { changed: r.appliedRevision !== revision, revision };
   }
 
   // --- in memory ------------------------------------------------------------------------------

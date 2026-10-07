@@ -2,8 +2,12 @@ import express from 'express';
 import type { KeyObject } from 'crypto';
 import type { CamsEnrollment } from './enroll';
 import type { CamsInstances } from './instances';
+import type { Tokens } from '../tokens/service';
 import { buildSnapshot, encodeSnapshot, snapshotRevision, type SnapshotDeps } from './snapshot';
 import { ApiError } from '../registry';
+import { FieldError } from '../validate';
+import { validateCams } from '../contract';
+import { fieldOf } from '../tokens/service';
 import { log } from '../log';
 import { sendSigned, type CamsAuth, type CamsRequest } from './auth';
 import { requestOrigin } from '../enroll/route';
@@ -11,7 +15,7 @@ import { bodyErrors } from '../bodyErrors';
 
 // The /cams/v1 service API (contract cams-v1). Mounted at the app root,
 // before the cookie parser: no cookie, session or CSRF rule applies here.
-export interface CamsRouterDeps { enrollment: CamsEnrollment; auth?: CamsAuth; signingKey?: KeyObject; testRoutes?: boolean; instances?: CamsInstances; snapshot?: SnapshotDeps }
+export interface CamsRouterDeps { enrollment: CamsEnrollment; auth?: CamsAuth; signingKey?: KeyObject; testRoutes?: boolean; instances?: CamsInstances; snapshot?: SnapshotDeps; tokens?: Tokens }
 
 export function camsRouter(d: CamsRouterDeps): express.Router {
   const r = express.Router();
@@ -33,7 +37,8 @@ export function camsRouter(d: CamsRouterDeps): express.Router {
     const c = cams(res);
     try {
       fn(req, res, c);
-    } catch (e) {
+    } catch (err) {
+      const e = err instanceof FieldError ? new ApiError(400, 'invalid', err.field) : err;
       if (!(e instanceof ApiError)) throw e;
       if (e.status >= 500) log.error({ instanceId: c.instanceId, code: e.code }, 'cams_route_failed');
       sendSigned(res, key, c.nonce, e.status, { error: e.code, ...(e.field ? { field: e.field } : {}), ...((e as ApiError & { extra?: object }).extra ?? {}) });
@@ -53,6 +58,21 @@ export function camsRouter(d: CamsRouterDeps): express.Router {
       const bytes = encodeSnapshot(s);
       inst.touch(c.instanceId, { lastPullAt: now, lastPullStatus: 200 });
       sendSigned(res, key, c.nonce, 200, bytes, { ETag: `"${s.revision}"` });
+    }));
+    r.post('/cams/v1/report', route((_req, res, c) => sendSigned(res, key, c.nonce, 200, inst.report(c.instanceId, c.json, snap.clock.now()))));
+  }
+  const tokens = d.tokens;
+  if (inst && tokens) {
+    const me = (c: CamsRequest) => inst.getRaw(c.instanceId)!;
+    r.post('/cams/v1/tokens', route((_req, res, c) => {
+      const out = tokens.registerForInstance(me(c), inst.servedAccountIds(c.instanceId), c.json);
+      sendSigned(res, key, c.nonce, out.status, out.body);
+    }));
+    r.post('/cams/v1/tokens/:tokenId/retire', route((req, res, c) => {
+      const v = validateCams('retire-request', c.json);
+      if (!v.ok) throw new ApiError(400, 'invalid', fieldOf(v.detail));
+      const out = tokens.retireForInstance(me(c), inst.servedAccountIds(c.instanceId), String(req.params.tokenId), (c.json as { hours?: unknown }).hours);
+      sendSigned(res, key, c.nonce, 200, out);
     }));
   }
   r.use('/cams/v1', (_req, res) => sendSigned(res, key, cams(res).nonce, 404, { error: 'not_found' }));

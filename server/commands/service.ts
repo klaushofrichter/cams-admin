@@ -129,7 +129,7 @@ export class Commands {
       this.q(`INSERT INTO commands (id, account_id, proxy_id, actor, command, args, revocation_only, state, created_at) VALUES (?,?,?,?,?,?,?,'queued',?)`)
         .run(id, accountId, proxyId, actor, command, JSON.stringify(args), revocation ? 1 : 0, now);
       this.d.audit.write({
-        actorType: actor === 'system' ? 'system' : 'sysadmin', actor, action: 'command-create', accountId, targetType: 'proxy', targetId: proxyId, targetLabel: px.name, outcome: 'ok',
+        actorType: actor === 'system' ? 'system' : actor.startsWith('cms_') ? 'cams' : 'sysadmin', actor, action: 'command-create', accountId, targetType: 'proxy', targetId: proxyId, targetLabel: px.name, outcome: 'ok',
         detail: { cmdId: id, command, ...(meta?.reason ? { reason: meta.reason } : {}), ...(revocation ? { revocationOnly: true } : {}), args: summariseArgs(command, args) },
       });
     });

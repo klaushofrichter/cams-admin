@@ -67,7 +67,7 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
   // P4: cams instances. R4-19: blocking or deleting one revokes the tokens it holds.
   const camsInstances = new CamsInstances({
     db, clock, audit, registry, cfg, serverKeys: [signing.publicKeyB64], serverKeyFingerprints: [signing.fingerprint],
-    onRevoke: () => {},
+    onRevoke: (instanceId, actor) => { tokens.revokeHeldBy(actor, instanceId); },
   });
   const camsAuth = new CamsAuth({ db, clock, audit, instances: camsInstances, signingKey: signing.key, limits: cfg.limits, log });
   const camsEnrollment = new CamsEnrollment({ db, clock, audit, instances: camsInstances, cfg, serverKeys: [signing.publicKeyB64], serverKeyFingerprints: [signing.fingerprint] });
@@ -87,7 +87,7 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
     } });
   });
   app.use(enrollRouter(enrollment));
-  app.use(camsRouter({ enrollment: camsEnrollment, auth: camsAuth, signingKey: signing.key, testRoutes: cfg.nodeEnv === 'test', instances: camsInstances, snapshot: { db, clock, signingKey: signing.key, signingFingerprint: signing.fingerprint } }));
+  app.use(camsRouter({ enrollment: camsEnrollment, auth: camsAuth, signingKey: signing.key, testRoutes: cfg.nodeEnv === 'test', instances: camsInstances, tokens, snapshot: { db, clock, signingKey: signing.key, signingFingerprint: signing.fingerprint } }));
   app.use(cookieParser());
   app.use(authRoutes({ cfg, sessions, audit, clock, live }));
   const api = apiRouter({ db, clock, cfg, audit, registry, enrollment, hub, status, live, sessions, backup, commands, tokens, camsInstances, serverKeyFingerprints: [signing.fingerprint] });

@@ -9,6 +9,7 @@ import type { Logger } from '../log';
 import { FieldError } from '../validate';
 import { newId } from '../ids';
 import type { CommandRow, Commands } from '../commands/service';
+import { validateCams } from '../contract';
 
 // Managed cams↔proxy tokens (migration spec §10.1–§10.2; plan Task 6). A
 // token exists in plain text only in the answer to its issue (shown once);
@@ -53,6 +54,8 @@ function parseHours(h: unknown): number {
 }
 
 type Row = Record<string, unknown>;
+// ajv's "/hash must match …" → "hash" (the first path segment), else "body".
+export const fieldOf = (detail: string): string => detail.split(' ')[0].replace(/^\//, '').split('/')[0] || 'body';
 
 export class Tokens {
   // Prepared once: the tick and heartbeat paths run every second (each
@@ -164,7 +167,7 @@ export class Tokens {
 
   // Retiring: the proxy itself stops accepting it at retireAt (even with
   // cams-admin down); cams-admin marks it revoked then and cleans the set up.
-  retire(actor: string, accountId: string, proxyId: string, tokenId: string, hours: unknown): ProxyTokenView {
+  retire(actor: string, accountId: string, proxyId: string, tokenId: string, hours: unknown, actorType: 'sysadmin' | 'cams' = 'sysadmin'): ProxyTokenView {
     const h = parseHours(hours);
     const t = this.tokenRow(accountId, proxyId, tokenId);
     if (t.state !== 'active') throw new ApiError(409, 'not_active');
@@ -172,7 +175,7 @@ export class Tokens {
     const retireAt = this.d.clock.now() + h * 3600_000;
     tx(this.d.db, () => {
       this.q(`UPDATE proxy_tokens SET state = 'retiring', retire_at = ? WHERE id = ?`).run(retireAt, tokenId);
-      this.d.audit.write({ actorType: 'sysadmin', actor, action: 'token-retire', accountId, targetType: 'proxy', targetId: proxyId, outcome: 'ok', detail: { tokenId, label: t.label, hours: h, retireAt } });
+      this.d.audit.write({ actorType, actor, action: 'token-retire', accountId, targetType: 'proxy', targetId: proxyId, outcome: 'ok', detail: { tokenId, label: t.label, hours: h, retireAt } });
       this.nextApply(actor, accountId, proxyId);
     });
     this.d.live.publishRegistry('proxy', proxyId);
@@ -194,6 +197,72 @@ export class Tokens {
     this.tryQueue(actor, accountId, proxyId);
     this.d.live.publishRegistry('proxy', proxyId);
     return this.view(accountId, proxyId, tokenId);
+  }
+
+  // --- P4: tokens held by a cams instance (migration spec §10.1, contract cams-v1) ---
+
+  // POST /cams/v1/tokens: cams generated the token and sends only its hash.
+  // Idempotent by hash; the proxy must be in an account the instance serves
+  // and not hidden for it (else 404, never 403). Label "cams <instance>".
+  registerForInstance(inst: { id: string; name: string }, served: string[], input: unknown): { status: 200 | 201; body: { tokenId: string; state: 'pending' | 'active' | 'retiring'; label: string } } {
+    const v = validateCams('tokens-request', input);
+    if (!v.ok) throw new ApiError(400, 'invalid', fieldOf(v.detail));
+    const { proxyId, kind, hash } = input as { proxyId: string; kind: 'client' | 'admin'; hash: string };
+    const px = this.d.registry.proxyById(proxyId);
+    const hidden = px && this.q('SELECT 1 FROM cams_instance_routes WHERE instance_id = ? AND proxy_id = ? AND hidden = 1').get(inst.id, proxyId);
+    if (!px || !served.includes(px.accountId) || hidden) throw new ApiError(404, 'not_found');
+    const same = this.q('SELECT id, holder, proxy_id, kind, state, label FROM proxy_tokens WHERE hash = ?').get(hash) as Row | undefined;
+    if (same) {
+      if (same.holder === inst.id && same.proxy_id === proxyId && same.kind === kind && ['pending', 'active', 'retiring'].includes(same.state as string)) {
+        return { status: 200, body: { tokenId: same.id as string, state: same.state as 'pending', label: same.label as string } };
+      }
+      throw new ApiError(409, 'hash_in_use');
+    }
+    const pending = this.q(`SELECT id FROM proxy_tokens WHERE holder = ? AND proxy_id = ? AND kind = ? AND state = 'pending'`).get(inst.id, proxyId, kind) as { id: string } | undefined;
+    if (pending) throw Object.assign(new ApiError(409, 'pending_exists'), { extra: { tokenId: pending.id } });
+    const live = (this.q(`SELECT count(*) n FROM proxy_tokens WHERE proxy_id = ? AND state IN ${LIVE}`).get(proxyId) as { n: number }).n;
+    if (live >= MAX_TOKENS) throw new ApiError(409, 'too_many_tokens');
+    this.notAhead(proxyId);
+    const tokenId = newId('tok');
+    const label = `cams ${inst.name}${kind === 'admin' ? ' admin' : ''}`;
+    tx(this.d.db, () => {
+      const rev = this.state(proxyId).revision + 1;
+      this.q(`INSERT INTO proxy_tokens (id, account_id, proxy_id, kind, holder, label, hash, state, issued_revision, created_at, created_by) VALUES (?,?,?,?,?,?,?, 'pending', ?,?,?)`)
+        .run(tokenId, px.accountId, proxyId, kind, inst.id, label, hash, rev, this.d.clock.now(), inst.id);
+      this.d.audit.write({ actorType: 'cams', actor: inst.id, action: 'token-issue', accountId: px.accountId, targetType: 'proxy', targetId: proxyId, targetLabel: px.name, outcome: 'ok', detail: { tokenId, kind, label, hashPrefix: hash.slice(0, HASH_PREFIX) } });
+      this.nextApply(inst.id, px.accountId, proxyId);
+    });
+    this.d.live.publishRegistry('proxy', proxyId);
+    return { status: 201, body: { tokenId, state: 'pending', label } };
+  }
+
+  // POST /cams/v1/tokens/:tokenId/retire: only a token this instance holds, in a served account.
+  retireForInstance(inst: { id: string }, served: string[], tokenId: string, hours: unknown): { tokenId: string; state: 'retiring'; retireAt: number } {
+    const t = this.q('SELECT account_id, proxy_id FROM proxy_tokens WHERE id = ? AND holder = ?').get(tokenId, inst.id) as Row | undefined;
+    if (!t || !served.includes(t.account_id as string)) throw new ApiError(404, 'not_found');
+    const v = this.retire(inst.id, t.account_id as string, t.proxy_id as string, tokenId, hours, 'cams');
+    return { tokenId, state: 'retiring', retireAt: v.retireAt! };
+  }
+
+  // R4-19: a blocked or deleted instance's tokens are revoked (one revision
+  // and one tokens.apply per proxy); returns the count.
+  revokeHeldBy(actor: string, holder: string): number {
+    const rows = this.q(`SELECT id, account_id, proxy_id, label FROM proxy_tokens WHERE holder = ? AND state IN ${LIVE} ORDER BY proxy_id`).all(holder) as Row[];
+    const byProxy = new Map<string, Row[]>();
+    for (const r of rows) byProxy.set(r.proxy_id as string, [...(byProxy.get(r.proxy_id as string) ?? []), r]);
+    for (const [proxyId, list] of byProxy) {
+      const accountId = list[0].account_id as string;
+      tx(this.d.db, () => {
+        const revision = this.bump(proxyId);
+        for (const t of list) {
+          this.q(`UPDATE proxy_tokens SET state = 'revoked', revoked_at = ?, revoked_revision = ? WHERE id = ?`).run(this.d.clock.now(), revision, t.id as string);
+          this.d.audit.write({ actorType: 'sysadmin', actor, action: 'token-revoke', accountId, targetType: 'proxy', targetId: proxyId, outcome: 'ok', detail: { tokenId: t.id, label: t.label, reason: 'holder-removed', holder, revision } });
+        }
+      });
+      this.tryQueue(actor, accountId, proxyId);
+      this.d.live.publishRegistry('proxy', proxyId);
+    }
+    return rows.length;
   }
 
   // After a restore: the proxy is ahead. An admin confirms (having checked
