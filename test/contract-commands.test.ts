@@ -16,7 +16,7 @@ const resign = (m: Record<string, any>) => { const { sig: _s, ...rest } = m; ret
 
 describe('the reference proxy check agrees with every proxy fixture', () => {
   const cases = all.filter((x) => x.$expect?.receiver === 'proxy' || (x.schema === 'command' && x.name.startsWith('valid-')));
-  it('covers 17 fixtures', () => expect(cases).toHaveLength(17));
+  it('covers 35 fixtures (P2 17, P3 18)', () => expect(cases).toHaveLength(35));
   for (const f of cases) {
     it(f.name, () => {
       const c = f.$context;
@@ -28,7 +28,7 @@ describe('the reference proxy check agrees with every proxy fixture', () => {
   const valid = all.find((x) => x.name === 'valid-command-tokens-apply')!;
   const ctx = (o: object = {}) => ({ ...valid.$context, seen: new Set<string>(), ...o });
   it('a journaled cmdId is answered as a duplicate before the pause check', () => {
-    expect(refCheck(valid.message, ctx({ paused: true, journal: new Map([[valid.message.body.cmdId, {}]]) })).kind).toBe('duplicate');
+    expect(refCheck(valid.message, ctx({ paused: true, answered: new Map([[valid.message.body.cmdId, {}]]) })).kind).toBe('duplicate');
   });
   it('the check records the envelope id: the same message twice is replayed', () => {
     const c = ctx();
@@ -71,6 +71,25 @@ describe('the reference proxy check agrees with every proxy fixture', () => {
     delete plain.body.revocationOnly;
     expect(refCheck(resign(plain), c())).toEqual({ kind: 'nack', code: 'paused' });
     expect(refCheck(f.message, c({ enabled: false }))).toEqual({ kind: 'nack', code: 'paused' });
+  });
+  it('P3 step 11: the journal budget answers rate_limited with retryAfterS until the oldest entry is an hour old', () => {
+    const f = all.find((x) => x.name === 'refused-proxy-restart-budget')!;
+    const c = f.$context;
+    expect(refCheck(f.message, { ...c, seen: new Set() })).toMatchObject({ kind: 'nack', code: 'rate_limited', retryAfterS: expect.any(Number) });
+    // The oldest of the two entries leaves the hour: one restart fits again.
+    const later = { ...c, seen: new Set<string>(), now: c.journal[1].at + 3_600_001 };
+    const m = structuredClone(f.message);
+    m.body.exp = later.now + 30_000;
+    m.ts = later.now;
+    expect(refCheck(resign(m), later).kind).toBe('run');
+    // Non-disruptive camera actions are never counted.
+    const t = all.find((x) => x.name === 'valid-command-camera-action')!;
+    expect(refCheck(t.message, { ...t.$context, seen: new Set(), journal: Array.from({ length: 20 }, (_, i) => ({ cmdId: `cmd_${String(i).padStart(20, '0')}`, command: 'camera.action', action: 'camera-reboot', at: t.$context.now - 1000 })) }).kind).toBe('run');
+  });
+  it('P3 step 8: camera.action passes with any camera.action entry; step 11 then needs its own', () => {
+    const f = all.find((x) => x.name === 'refused-camera-action-entry-missing')!;
+    expect(refCheck(f.message, { ...f.$context, seen: new Set(), allow: [] })).toEqual({ kind: 'nack', code: 'not_allowed' });
+    expect(refCheck(f.message, { ...f.$context, seen: new Set(), allow: ['camera.action:camera-reboot'] }).kind).toBe('run');
   });
   it('another command running: busy', () => {
     expect(refCheck(valid.message, ctx({ running: true }))).toEqual({ kind: 'nack', code: 'busy' });

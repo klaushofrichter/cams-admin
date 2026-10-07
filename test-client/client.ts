@@ -1,6 +1,7 @@
 import { EventEmitter } from 'events';
 import { generateKeyPair, privateFromB64, publicFromB64, sign, signEnvelope, signedText, verify } from '../server/crypto/ed25519';
-import { refCheck } from './commands';
+import { refCheck, type JournalEntry } from './commands';
+import type { RefProxyConfig } from './config';
 import { normaliseCode, ulid } from '../server/ids';
 import { makeProxyInfo } from './summaries';
 
@@ -56,7 +57,10 @@ export interface ClientOptions {
   // P2: answer commands (the reference check of ./commands.ts), apply
   // tokens.apply to an in-memory set, announce the commands capability.
   // Without it the client is a P1 proxy.
-  commands?: { allow: string[]; paused?: boolean; enabled?: boolean };
+  // P3: config answers the P3 commands through the reference proxy
+  // (test-client/config.ts) and reports its configRevision; without it a P3
+  // command that passes the check is answered failed not_implemented.
+  commands?: { allow: string[]; paused?: boolean; enabled?: boolean; config?: RefProxyConfig };
 }
 
 export interface ManagedToken { id: string; kind: 'client' | 'admin'; label: string; retireAt: number | null }
@@ -67,7 +71,7 @@ export class ProxyClient extends EventEmitter {
   stats = { sent: 0, acked: 0, reconnects: 0, connects: 0, ackLatencyMs: [] as number[], errors: 0 };
   debugDropAcks = false;
   // P2 (with the commands option): what the proxy holds and saw.
-  commands: { allow: string[]; paused?: boolean; enabled?: boolean } | null;
+  commands: { allow: string[]; paused?: boolean; enabled?: boolean; config?: RefProxyConfig } | null;
   tokens = new Map<string, ManagedToken>(); // hash → token
   tokensRevision = 0;
   receivedCommands: { id: string; ts: number; body: Record<string, any>; [k: string]: unknown }[] = [];
@@ -77,6 +81,8 @@ export class ProxyClient extends EventEmitter {
   connId: string | null = null;
   debugHoldEvents = false; // never send command.done events (tests: only the re-sent cmdId can finalise)
   executed: string[] = []; // cmdIds that ran (once each, whatever was re-sent)
+  overrideConfigGetResult: Record<string, unknown> | null = null; // tests: a hostile or newer proxy's view
+  journalEntries: JournalEntry[] = []; // what ran, for the P3 journal budget
   private journal = new Map<string, DoneBody>();
   private undelivered: string[] = []; // cmdIds whose done never went out (sent as events after the next welcome)
   private seen = new Set<string>();
@@ -99,6 +105,8 @@ export class ProxyClient extends EventEmitter {
   constructor(private o: ClientOptions) {
     super();
     this.commands = o.commands ? { paused: false, ...o.commands } : null;
+    // A configRevision change makes an early heartbeat (the 10 s floor applies).
+    if (o.commands?.config) o.commands.config.onChange = () => this.heartbeatNow();
   }
 
   private log(event: string, detail?: object): void {
@@ -251,7 +259,6 @@ export class ProxyClient extends EventEmitter {
         if (this.commands) return this.onCommand(m);
         break;
     }
-    // P3 commands and anything unknown: not supported here.
     this.send('error', { code: 'unsupported_type', message: `type ${m.type} is not supported` }, { re: m.id });
   }
 
@@ -273,7 +280,7 @@ export class ProxyClient extends EventEmitter {
     const b = m.body;
     const verdict = refCheck(m, {
       now: this.now() + this.serverOffset, proxyId: k.proxyId, connId: this.connId ?? '', serverKeys: k.serverKeys,
-      allow: this.commands!.allow, paused: this.commands!.paused === true, seen: this.seen, journal: this.journal,
+      allow: this.commands!.allow, paused: this.commands!.paused === true, seen: this.seen, answered: this.journal, journal: this.journalEntries,
       enabled: this.commands!.enabled !== false, tokens: [...this.tokens].map(([hash, t]) => ({ ...t, hash })),
     });
     const head = { proxyId: k.proxyId, connId: this.connId, cmdId: b.cmdId };
@@ -283,7 +290,7 @@ export class ProxyClient extends EventEmitter {
         this.send('error', { code: 'bad_message', message: 'no readable cmdId' }, { re: m.id });
         return;
       case 'nack':
-        return done({ status: 'refused', code: verdict.code });
+        return done({ status: 'refused', code: verdict.code }, verdict.retryAfterS !== undefined ? { retryAfterS: verdict.retryAfterS } : {});
       case 'duplicate':
         return done(this.journal.get(b.cmdId)!, { duplicate: true });
     }
@@ -294,13 +301,8 @@ export class ProxyClient extends EventEmitter {
     }
     this.sendSigned('result', { ...head, phase: 'received' }, { re: m.id });
     this.executed.push(b.cmdId);
-    const args = b.args as { revision: number; tokens: (ManagedToken & { hash: string })[] };
-    const stale = args.revision <= this.tokensRevision;
-    if (!stale) {
-      this.tokens = new Map(args.tokens.map((t) => [t.hash, { id: t.id, kind: t.kind, label: t.label, retireAt: t.retireAt }]));
-      this.tokensRevision = args.revision;
-    }
-    const d: DoneBody = { status: 'ok', result: { revision: this.tokensRevision, applied: !stale, stale, ...this.tokenCounts() } };
+    this.journalEntries.push({ cmdId: b.cmdId, command: b.command, at: this.now() + this.serverOffset, ...(b.command === 'camera.action' ? { action: b.args.action } : {}) });
+    const d: DoneBody = b.command === 'tokens.apply' ? this.applyTokens(b.args) : this.runP3(b);
     this.journal.set(b.cmdId, d);
     if (this.dropAfterReceived > 0) {
       this.dropAfterReceived--;
@@ -309,6 +311,23 @@ export class ProxyClient extends EventEmitter {
       return;
     }
     done(d);
+  }
+
+  private applyTokens(args: { revision: number; tokens: (ManagedToken & { hash: string })[] }): DoneBody {
+    const stale = args.revision <= this.tokensRevision;
+    if (!stale) {
+      this.tokens = new Map(args.tokens.map((t) => [t.hash, { id: t.id, kind: t.kind, label: t.label, retireAt: t.retireAt }]));
+      this.tokensRevision = args.revision;
+    }
+    return { status: 'ok', result: { revision: this.tokensRevision, applied: !stale, stale, ...this.tokenCounts() } };
+  }
+
+  private runP3(b: Record<string, any>): DoneBody {
+    const cfg = this.commands?.config;
+    if (!cfg) return { status: 'failed', code: 'not_implemented' };
+    if (b.command === 'config.get' && this.overrideConfigGetResult) return { status: 'ok', result: this.overrideConfigGetResult };
+    const r = cfg.handle(b.command, b.args, { cmdId: b.cmdId, actor: b.actor });
+    return { status: r.status, ...(r.code ? { code: r.code } : {}), ...(r.result ? { result: r.result } : {}) };
   }
 
   private tokenCounts(): { client: number; admin: number; blocked: string[] } {
@@ -375,6 +394,7 @@ export class ProxyClient extends EventEmitter {
         ...info,
         commands: { enabled: this.commands.enabled !== false, paused: this.commands.paused === true, pauseReason: null, allow: [...this.commands.allow], seenWindow: 1000 },
         tokens: { revision: this.tokensRevision, ...this.tokenCounts() },
+        ...(this.commands.config ? { configRevision: this.commands.config.revision() } : {}),
       } : info;
       const body = { summary, proxy, truncated: false };
       const id = this.send('heartbeat', body);

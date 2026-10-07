@@ -7,6 +7,7 @@ import { tmpDir } from './helpers/tmp';
 import { startHub } from './helpers/channel';
 import { until } from './helpers/server';
 import { backoffDelay, enroll, ProxyClient, type KeyFile } from '../test-client/client';
+import { RefProxyConfig } from '../test-client/config';
 import { readKeyFile, writeKeyFile } from '../test-client/keyfile';
 import { makeSummary } from '../test-client/summaries';
 import { Enrollment } from '../server/enroll/codes';
@@ -231,5 +232,106 @@ describe('the test client as a P2 proxy (commands option)', () => {
   it('without the option the client is a P1 proxy: status only, commands answered unsupported_type', async () => {
     const c = new ProxyClient({ key: { serverKeys: [] } as unknown as KeyFile, summary: () => ({}) });
     expect(c.commands).toBeNull();
+  });
+});
+
+describe('RefProxyConfig: the reference proxy for the P3 commands', () => {
+  const who = (n: number) => ({ cmdId: `cmd_${String(n).padStart(20, '0')}`, actor: 'admin@example.org' });
+  const set = (r: RefProxyConfig, s: Record<string, unknown>, dryRun = false, base = r.revision()) => ({ v: 1, dryRun, baseRevision: base, set: s });
+  it('config.get: values with sources, the env-held path, settable only within remote-settable.json', () => {
+    const r = new RefProxyConfig({ cameras: ['cam1'] });
+    const g = r.handle('config.get', { v: 1 }, who(1));
+    expect(g.status).toBe('ok');
+    const v = g.result as any;
+    expect(v.revision).toBe(r.revision());
+    expect(v.paths['sse.pingS']).toEqual({ v: 30, s: 'default' });
+    expect(v.paths['retention.clipsDays']).toMatchObject({ v: 90, s: 'override' });
+    expect(v.paths['ftp.publicHost'].s).toBe('env');
+    expect(v.paths['cameras.cam1.host']).toEqual({ v: '192.0.2.10', s: 'file' });
+    expect(v.settable['sse.pingS']).toMatchObject({ type: 'integer' });
+    expect(v.settable['retention.clipsDays'].dir).toBe('more');
+    expect(v.settable['analytics.googleVision.monthlyLimit'].dir).toBe('less');
+    expect(Object.keys(v.settable)).not.toContain('cameras.*.host');
+    expect(Object.keys(v.settable)).not.toContain('storage.maxPercent');
+    expect(v.cameras).toEqual(['cam1']);
+  });
+  it('a dry run writes nothing; an apply changes the value and the revision', () => {
+    const r = new RefProxyConfig();
+    const rev = r.revision();
+    const d = r.handle('config.set', set(r, { 'sse.pingS': 7 }, true), who(1));
+    expect(d).toMatchObject({ status: 'ok', result: { dryRun: true, baseRevision: rev, revision: rev, changes: [{ path: 'sse.pingS', from: 30, to: 7, sourceFrom: 'default', sourceTo: 'override' }] } });
+    expect(r.current('sse.pingS')).toBe(30);
+    expect(r.revision()).toBe(rev);
+    const a = r.handle('config.set', set(r, { 'sse.pingS': 7 }), who(2));
+    expect(a.status).toBe('ok');
+    expect(r.current('sse.pingS')).toBe(7);
+    expect(r.revision()).not.toBe(rev);
+    expect((a.result as any).revision).toBe(r.revision());
+    expect((r.handle('config.get', { v: 1 }, who(3)).result as any).paths['sse.pingS']).toMatchObject({ v: 7, s: 'override', by: { cmdId: who(2).cmdId, actor: 'admin@example.org' } });
+  });
+  it('a stale baseRevision → conflict with the current values', () => {
+    const r = new RefProxyConfig();
+    const stale = r.revision();
+    r.localEdit({ 'sse.pingS': 9 });
+    expect(r.handle('config.set', set(r, { 'sse.pingS': 7 }, true, stale), who(1))).toEqual({ status: 'conflict', result: { revision: r.revision(), current: { 'sse.pingS': { v: 9, s: 'override' } } } });
+  });
+  it('path checks: unknown camera, not remote-settable (denied first, also env-held denied paths), narrow, invalid value', () => {
+    const r = new RefProxyConfig({ cameras: ['cam1'] });
+    const code = (s: Record<string, unknown>) => { const x = r.handle('config.set', set(r, s, true), who(1)); return [x.status, x.code]; };
+    expect(code({ 'cameras.cam1.host': '192.0.2.9' })).toEqual(['failed', 'not_remote_settable']);
+    expect(code({ 'cameras.nosuch.name': 'x' })).toEqual(['failed', 'unknown_camera']);
+    expect(code({ 'ftp.publicHost': 'x.example.net' })).toEqual(['failed', 'not_remote_settable']);
+    expect(code({ 'storage.maxPercent': 50 })).toEqual(['failed', 'not_remote_settable']);
+    expect(code({ 'analytics.googleVision.monthlyLimit': 5000 })).toEqual(['failed', 'widening_local_only']);
+    expect(code({ 'analytics.googleVision.monthlyLimit': 500 })).toEqual(['ok', undefined]);
+    expect(code({ 'retention.clipsDays': 30 })).toEqual(['failed', 'widening_local_only']);
+    expect(code({ 'retention.clipsDays': 120 })).toEqual(['ok', undefined]);
+    expect(code({ 'sse.pingS': 'often' })).toEqual(['failed', 'invalid_value']);
+    expect(code({ 'sse.pingS': 1 })).toEqual(['failed', 'invalid_value']);
+    // any failure fails the whole command
+    const x = r.handle('config.set', set(r, { 'sse.pingS': 7, 'cameras.cam1.host': '192.0.2.9' }), who(2));
+    expect(x.status).toBe('failed');
+    expect(r.current('sse.pingS')).toBe(30);
+    expect((x.result as any).paths).toEqual([{ path: 'cameras.cam1.host', code: 'not_remote_settable' }]);
+    const w = r.handle('config.unset', { v: 1, dryRun: true, baseRevision: r.revision(), paths: ['retention.clipsDays'] }, who(3));
+    expect([w.status, w.code]).toEqual(['failed', 'widening_local_only']);
+    expect((w.result as any).paths[0].detail).toBe('a remote change may only keep data longer');
+  });
+  it('an env-held remote path is held_by_env', () => {
+    const r = new RefProxyConfig({ envHeld: ['sse.maxClients'] });
+    const x = r.handle('config.set', set(r, { 'sse.maxClients': 30 }, true), who(1));
+    expect([x.status, x.code]).toEqual(['failed', 'held_by_env']);
+  });
+  it('rollback restores; a second one is already_rolled_back; a local edit since → conflict naming the path', () => {
+    const r = new RefProxyConfig();
+    r.handle('config.set', set(r, { 'sse.pingS': 7 }), who(1));
+    const dry = r.handle('config.rollback', { v: 1, dryRun: true, cmdId: who(1).cmdId }, who(2));
+    expect(dry).toMatchObject({ status: 'ok', result: { dryRun: true, of: who(1).cmdId, changes: [{ path: 'sse.pingS', from: 7, to: 30, sourceFrom: 'override', sourceTo: 'default' }] } });
+    expect(r.current('sse.pingS')).toBe(7);
+    expect(r.handle('config.rollback', { v: 1, dryRun: false, cmdId: who(1).cmdId }, who(3)).status).toBe('ok');
+    expect(r.current('sse.pingS')).toBe(30);
+    expect(r.handle('config.rollback', { v: 1, dryRun: false, cmdId: who(1).cmdId }, who(4))).toMatchObject({ status: 'failed', code: 'already_rolled_back' });
+    expect(r.handle('config.rollback', { v: 1, dryRun: false, cmdId: who(9).cmdId }, who(5))).toMatchObject({ status: 'failed', code: 'no_backup' });
+    r.handle('config.set', set(r, { 'sse.pingS': 8 }), who(6));
+    r.localEdit({ 'sse.pingS': 11 });
+    expect(r.handle('config.rollback', { v: 1, dryRun: false, cmdId: who(6).cmdId }, who(7))).toEqual({ status: 'conflict', result: { revision: r.revision(), current: { 'sse.pingS': { v: 11, s: 'override' } } } });
+    expect(r.current('sse.pingS')).toBe(11);
+  });
+  it('a value equal to the one Reset restores drops the override; unset of a non-override is unchanged', () => {
+    const r = new RefProxyConfig();
+    r.handle('config.set', set(r, { 'sse.pingS': 7 }), who(1));
+    const x = r.handle('config.set', set(r, { 'sse.pingS': 30 }), who(2));
+    expect((x.result as any).changes).toEqual([{ path: 'sse.pingS', from: 7, to: 30, sourceFrom: 'override', sourceTo: 'default' }]);
+    const u = r.handle('config.unset', { v: 1, dryRun: false, baseRevision: r.revision(), paths: ['sse.maxClients'] }, who(3));
+    expect(u.result).toMatchObject({ changes: [], unchanged: ['sse.maxClients'] });
+  });
+  it('camera.action, camera.name.set and proxy.restart', () => {
+    const r = new RefProxyConfig({ cameras: ['cam1'] });
+    expect(r.handle('camera.action', { v: 1, camera: 'cam1', action: 'camera-test' }, who(1))).toEqual({ status: 'ok', result: { action: 'camera-test', camera: 'cam1', httpStatus: 200, answer: { ok: true } } });
+    expect(r.handle('camera.action', { v: 1, camera: 'cam1', action: 'camera-ntp-set' }, who(2)).result).toMatchObject({ verified: true, mismatch: [] });
+    expect(r.handle('camera.action', { v: 1, camera: 'nosuch', action: 'camera-test' }, who(3))).toMatchObject({ status: 'failed', code: 'unknown_camera' });
+    expect(r.actions.calls).toEqual([{ action: 'camera-test', camera: 'cam1' }, { action: 'camera-ntp-set', camera: 'cam1' }]);
+    expect(r.handle('camera.name.set', { v: 1, camera: 'cam1', name: 'Porch' }, who(4))).toEqual({ status: 'ok', result: { camera: 'cam1', requested: 'Porch', name: 'Porch', verified: true } });
+    expect(r.handle('proxy.restart', { v: 1 }, who(5))).toMatchObject({ status: 'ok', result: { restartAt: expect.any(Number) } });
   });
 });
