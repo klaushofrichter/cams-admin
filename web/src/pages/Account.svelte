@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { keepEdits } from '../lib/edits';
   import { onMount } from 'svelte';
   import { api, errorText } from '../lib/api';
   import { live } from '../lib/live';
@@ -122,10 +123,13 @@
   // --- sims -------------------------------------------------------------------------------
   let simEdit = $state<Record<string, { runsOn: string; controlUrl: string; uiUrl: string; image: string }>>({});
   // The edit buffers, filled when the cameras load (never while rendering).
+  // What the server said last: a reload keeps a buffer being edited (keepEdits).
+  let simSeen: typeof simEdit = {};
   function fillSims() {
     const next: typeof simEdit = {};
     for (const c of cameras) if (c.kind === 'sim') next[c.id] = { runsOn: c.sim?.runsOn ?? 'mac', controlUrl: c.sim?.controlUrl ?? '', uiUrl: c.sim?.uiUrl ?? '', image: c.sim?.image ?? '' };
-    simEdit = next;
+    simEdit = keepEdits(simEdit, simSeen, next);
+    simSeen = next;
   }
   async function saveSim(c: any) {
     const s = simEdit[c.id];
