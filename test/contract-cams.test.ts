@@ -85,5 +85,8 @@ describe('cams-v1 contract', () => {
   it('the vendored README carries the check order and the signed texts', () => {
     const md = readFileSync(join(ROOT, 'README.md'), 'utf8');
     for (const s of ['cams-admin/v1 request', 'cams-admin/v1 response', 'cams-admin cams-enroll v1', 'Check order on cams-admin', 'clock_skew']) expect(md).toContain(s);
+    // Security review 2026-10-07: routes default-deny (I1), per-instance failed-signature budgets (M1),
+    // a per-holder token cap (M3), and the ETag header is not signed (info).
+    for (const s of ['**only** the proxies with a route row for this instance', 'per named instance', 'held by this instance on this proxy', 'The `ETag` header is not covered by the signature']) expect(md).toContain(s);
   });
 });

@@ -53,7 +53,7 @@ Request text: `"cams-admin/v1 request\n" + METHOD + "\n" + pathAndQuery + "\n" +
 **Check order on cams-admin** (normative; the first failing step answers):
 
 1. The five headers are present and well-formed, the body ≤ 64 KiB → else `400 bad_request`.
-2. The global failed-signature budget (300 per 10 min, all instances together) is not used up → else `429 rate_limited`.
+2. The failed-signature budget is not used up → else `429 rate_limited`: 300 per 10 min **per named instance** (an `X-Cams-Instance` of an existing instance), and one shared budget of 300 per 10 min for instance ids that don't exist. (Before step 1 a ceiling of 3000 requests a minute per well-formed instance id, and one for everything else, answers `429 rate_limited`, signed when the nonce is well-formed.)
 3. The key exists, is not revoked, belongs to the named instance → else `401 unknown_key` (counts as a failed signature).
 4. The signature verifies → else `401 bad_signature` (counts).
 5. `|ts − serverNow| ≤ 300 000` → else `401 clock_skew` with `{"serverTime": <ms>}`.
@@ -72,7 +72,7 @@ A pending key that passes 1–7 becomes the instance's active key (any other act
 
 ## `GET /cams/v1/config` → the snapshot
 
-`If-None-Match: "<revision>"` → `304` (signed, empty) when unchanged; else `200` with `ETag: "<revision>"` and the snapshot:
+`If-None-Match: "<revision>"` → `304` (signed, empty) when unchanged; else `200` with `ETag: "<revision>"` and the snapshot. The `ETag` header is not covered by the signature: cams compares the body's `revision` and its own stored value, never the header.
 
 ```json
 { "v": 1, "type": "cams-config",
@@ -95,7 +95,7 @@ A pending key that passes 1–7 becomes the instance's active key (any other act
 - `revision` = `"r:" + first 16 hex of sha256hex(jcs({ i: <instance id>, iv: <instance version>, a: [[accountId, accountRevision], …] sorted by id, k: <signing key fingerprint> }))`. It changes when any served account's `config_revision` changes, when the instance's own row changes (served accounts, `rotateBefore`, routes), and when cams-admin's key changes. It is **not** ordered; cams compares it for equality only.
 - `accounts`: exactly the accounts in `cams_instance_accounts` for this instance, sorted by `name`. ≤ 64 accounts; per account ≤ 500 users, ≤ 64 proxies, ≤ 256 cameras.
 - `users`: every user row of the account (`email` lower case, `role` `admin` | `viewer`, `disabled`).
-- `proxies`: the account's proxies **except** those with a hidden route for this instance (§9.6 + ruling R4-3); `url` = this instance's route URL if one exists, else the proxy's registered `url` (may be `null`); `caFingerprints` as registered (`SHA256:` + 64 upper-case hex, no colons, as P1's `normaliseFingerprint` stores them; cams normalises with its own `normalizeFingerprint`); `tokens` = the `proxy_tokens` rows **held by this instance** (`holder` = the instance id) in states `pending`, `active`, `retiring` (and `revoked` ones for 7 days after `revoked_at`, so cams can drop its copy) — ids, kinds, states and `retireAt` only.
+- `proxies`: **only** the proxies with a route row for this instance that is not hidden (routes are default-deny: a proxy nobody routed to an instance never reaches it, security review 2026-10-07; §9.6 + ruling R4-3); `url` = the route's URL if it has one, else the proxy's registered `url` (may be `null`); `caFingerprints` as registered (`SHA256:` + 64 upper-case hex, no colons, as P1's `normaliseFingerprint` stores them; cams normalises with its own `normalizeFingerprint`); `tokens` = the `proxy_tokens` rows **held by this instance** (`holder` = the instance id) in states `pending`, `active`, `retiring` (and `revoked` ones for 7 days after `revoked_at`, so cams can drop its copy) — ids, kinds, states and `retireAt` only.
 - `cameras`: the account's cameras whose `proxyId` is null or a listed proxy; all P1 camera fields as registered (nulls kept).
 - **No secrets, ever:** no password, token, hash, enrollment code or private key. A guard test fills every text column with a marker and checks the snapshot never contains a marker from `proxy_tokens.hash`, `enrollment_codes`, `cams_enrollment_codes` or a key.
 
@@ -103,11 +103,11 @@ A pending key that passes 1–7 becomes the instance's active key (any other act
 
 Request `{ "v": 1, "proxyId": "prx_…", "kind": "client" | "admin", "hash": "sha256:<64 lower hex>" }`.
 
-- The proxy must belong to an account the instance serves and not be hidden for it → else `404 not_found`.
+- The proxy must belong to an account the instance serves and have a visible route row for it → else `404 not_found`.
 - Idempotent by hash: the same hash already held by this instance for this proxy and kind → `200` with that row.
 - The hash held by anything else → `409 hash_in_use` (no detail).
 - Another `pending` token of this instance for the same proxy and kind → `409 pending_exists` with `{"tokenId": "tok_…"}`.
-- 64 live tokens on the proxy → `409 too_many_tokens`; the P2 pre-checks (`409 unsupported_by_proxy`, `paused_on_proxy`, `not_allowed_on_proxy`, `proxy_ahead`) pass through unchanged.
+- 3 live tokens of this kind held by this instance on this proxy (enough for one rotation), or 64 live tokens on the proxy → `409 too_many_tokens`; the P2 pre-checks (`409 unsupported_by_proxy`, `paused_on_proxy`, `not_allowed_on_proxy`, `proxy_ahead`) pass through unchanged.
 - Else `201 { "tokenId": "tok_…", "state": "pending", "label": "cams <instance name>" }` (a `kind: admin` label is `"cams <instance name> admin"`), and a `tokens.apply` is queued with actor = the instance id.
 
 ## `POST /cams/v1/tokens/:tokenId/retire`
