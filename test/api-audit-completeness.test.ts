@@ -3,6 +3,9 @@ import { tmpDir } from './helpers/tmp';
 import { testApp } from './helpers/app';
 import { makeProxyInfo, makeSummary } from '../test-client/summaries';
 
+const REV = `sha256:${'a'.repeat(64)}`;
+const P3_ALLOW = ['config.get', 'config.set', 'config.unset', 'config.rollback', 'camera.action:camera-test', 'camera.name.set', 'proxy.restart'];
+
 // Spec §11.2: every write records exactly one audit entry. The table below
 // lists every write route; a write route missing from it fails the test.
 describe('audit completeness', () => {
@@ -44,6 +47,15 @@ describe('audit completeness', () => {
     ['post', '/accounts/:accountId/proxies/:proxyId/tokens/:tokenId/revoke', () => `/accounts/${ids.acc}/proxies/${ids.prx}/tokens/${ids.tok}/revoke`, () => ({}), ['token-revoke', 'command-create']],
     ['post', '/accounts/:accountId/proxies/:proxyId/tokens/confirm-restore', () => `/accounts/${ids.acc}/proxies/${ids.prx}/tokens/confirm-restore`, () => ({}), ['command-create']],
     ['post', '/accounts/:accountId/proxies/:proxyId/tokens/apply', () => `/accounts/${ids.acc}/proxies/${ids.prx}/tokens/apply`, () => ({}), ['command-create']],
+    // P3: every settings change, camera action and restart is one command-create (R3-19).
+    ['post', '/accounts/:accountId/proxies/:proxyId/config/refresh', () => `/accounts/${ids.acc}/proxies/${ids.prx}/config/refresh`, () => ({}), 'command-create'],
+    ['post', '/accounts/:accountId/proxies/:proxyId/config/preview', () => `/accounts/${ids.acc}/proxies/${ids.prx}/config/preview`, () => ({ set: { 'sse.pingS': 7 } }), 'command-create'],
+    ['post', '/accounts/:accountId/proxies/:proxyId/config/apply', () => `/accounts/${ids.acc}/proxies/${ids.prx}/config/apply`, () => ({ previewId: ids.preview }), 'command-create'],
+    ['post', '/accounts/:accountId/proxies/:proxyId/config/rollback/preview', () => `/accounts/${ids.acc}/proxies/${ids.prx}/config/rollback/preview`, () => ({ cmdId: ids.applied }), 'command-create'],
+    ['post', '/accounts/:accountId/proxies/:proxyId/config/rollback/apply', () => `/accounts/${ids.acc}/proxies/${ids.prx}/config/rollback/apply`, () => ({ previewId: ids.rbPreview }), 'command-create'],
+    ['post', '/accounts/:accountId/proxies/:proxyId/actions', () => `/accounts/${ids.acc}/proxies/${ids.prx}/actions`, () => ({ camera: 'cam1', action: 'camera-test' }), 'command-create'],
+    ['post', '/accounts/:accountId/proxies/:proxyId/cameras/:camera/name', () => `/accounts/${ids.acc}/proxies/${ids.prx}/cameras/cam1/name`, () => ({ name: 'Porch' }), 'command-create'],
+    ['post', '/accounts/:accountId/proxies/:proxyId/restart', () => `/accounts/${ids.acc}/proxies/${ids.prx}/restart`, () => ({ confirm: 'proxy.restart' }), 'command-create'],
     ['post', '/accounts/:accountId/cameras', () => `/accounts/${ids.acc}/cameras`, () => ({ camsId: 's1', name: 'S1', kind: 'sim' }), 'camera-create'],
     ['patch', '/accounts/:accountId/cameras/:cameraId', () => `/accounts/${ids.acc}/cameras/${ids.cam}`, () => ({ name: 'S one', version: 1 }), 'camera-update'],
     ['put', '/accounts/:accountId/cameras/:cameraId/sim', () => `/accounts/${ids.acc}/cameras/${ids.cam}/sim`, () => ({ runsOn: 'mac' }), 'sim-update'],
@@ -62,7 +74,7 @@ describe('audit completeness', () => {
     expect(a.writeRoutes().sort()).toEqual(table.map(([m, p]) => `${m.toUpperCase()} ${p}`).sort());
   });
 
-  it.each(table.map((r) => [`${r[0].toUpperCase()} ${r[1]}`, r] as const))('%s writes exactly its audit records', async (_n, [m, , path, body, action]) => {
+  it.each(table.map((r) => [`${r[0].toUpperCase()} ${r[1]}`, r] as const))('%s writes exactly its audit records', async (_n, [m, pattern, path, body, action]) => {
     const actions = Array.isArray(action) ? action : [action];
     const before = count();
     const r = await a.api(m, path(), body());
@@ -86,9 +98,17 @@ describe('audit completeness', () => {
       a.db.prepare(`INSERT INTO proxy_keys (id, proxy_id, public_key, fingerprint, created_at, confirmed_at) VALUES ('key_00000000000000000001', ?, 'pk', 'fp', 1, 1)`).run(ids.prx);
       ids.key = 'key_00000000000000000001';
       // A P2 proxy that allows tokens.apply (for the token rows).
+      // A stored settings view first, so the heartbeat below queues no read of its own.
+      a.config.storeView(ids.prx, 'cmd_0123456789ABCDEFGHJK', { revision: REV, cameras: ['cam1'], omittedCameras: [], paths: { 'sse.pingS': { v: 30, s: 'default' } }, settable: { 'sse.pingS': { type: 'integer' } } });
       a.status.hello(ids.prx, 'v2', Date.now(), ['status', 'commands']);
-      a.status.heartbeat(ids.prx, { summary: makeSummary({ cameras: 2, now: Date.now() }), proxy: { ...makeProxyInfo({ now: Date.now() }), commands: { enabled: true, paused: false, pauseReason: null, allow: ['tokens.apply'], seenWindow: 1000 } }, truncated: false }, Date.now());
+      a.status.heartbeat(ids.prx, { summary: makeSummary({ cameras: 2, now: Date.now() }), proxy: { ...makeProxyInfo({ now: Date.now() }), commands: { enabled: true, paused: false, pauseReason: null, allow: ['tokens.apply', ...P3_ALLOW], seenWindow: 1000 } }, truncated: false }, Date.now());
     }
+    // The proxy isn't connected: finish the P3 commands by hand, as the proxy would.
+    const finish = (id: string, result: object) => a.db.prepare(`UPDATE commands SET state = 'done', finished_at = ?, result = ? WHERE id = ?`).run(Date.now(), JSON.stringify({ body: { phase: 'done', status: 'ok', result } }), id);
+    const change = { dryRun: false, baseRevision: REV, revision: REV, changes: [{ path: 'sse.pingS', from: 30, to: 7, sourceFrom: 'default', sourceTo: 'override' }], unchanged: [] };
+    if (pattern.endsWith('/config/preview')) finish(ids.preview = r.body.commandId, { ...change, dryRun: true });
+    if (pattern.endsWith('/config/apply')) finish(ids.applied = r.body.commandId, change);
+    if (pattern.endsWith('/config/rollback/preview')) finish(ids.rbPreview = r.body.commandId, { ...change, dryRun: true, of: ids.applied });
     if (actions[0] === 'token-revoke') a.tokens.onHeartbeat(ids.prx, { revision: 99 }); // a proxy ahead (restored cams-admin), for the confirm-restore row
     if (actions[0] === 'token-issue') {
       ids.tok = r.body.tokenId;

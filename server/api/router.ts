@@ -15,6 +15,8 @@ import type { CamsInstances } from '../cams/instances';
 import type { Importer } from '../import/importer';
 import { exportForInstance } from '../import/export';
 import { snapshotRevision } from '../cams/snapshot';
+import type { ProxyConfig } from '../config/service';
+import type { RemoteActions } from '../actions/service';
 import { SESSION_COOKIE, type Sessions } from '../auth/session';
 import { requireCsrf, requireSysadmin, writeLimiter } from '../auth/middleware';
 import { reconcile } from '../status/derive';
@@ -43,7 +45,7 @@ export interface BackupService { state(): BackupState; backupNow(actor: string):
 
 export interface ApiDeps {
   db: Db; clock: Clock; cfg: Config; audit: Audit; registry: Registry; enrollment: Enrollment; hub: Hub; status: StatusStore; live: LiveHub; sessions: Sessions; backup: BackupService;
-  commands: Commands; tokens: Tokens; camsInstances: CamsInstances; serverKeyFingerprints: string[]; importer: Importer;
+  commands: Commands; tokens: Tokens; camsInstances: CamsInstances; serverKeyFingerprints: string[]; importer: Importer; config: ProxyConfig; actions: RemoteActions;
 }
 
 type H = (req: Request, res: Response) => unknown;
@@ -200,6 +202,26 @@ export function apiRouter(d: ApiDeps): express.Router {
   r.post(`${tokenBase}/confirm-restore`, h((req, res) => d.tokens.confirmRestore(actor(res), p(req, 'accountId'), p(req, 'proxyId'))));
   r.post(`${tokenBase}/:tokenId/retire`, h((req, res) => d.tokens.retire(actor(res), p(req, 'accountId'), p(req, 'proxyId'), p(req, 'tokenId'), req.body?.hours)));
   r.post(`${tokenBase}/:tokenId/revoke`, h((req, res) => d.tokens.revoke(actor(res), p(req, 'accountId'), p(req, 'proxyId'), p(req, 'tokenId'))));
+
+  // --- P3: remote configuration (migration spec §8). Writes answer 202 with the
+  // command id; a settings change exists only as a dry run, then an apply of
+  // that dry run (R3-15). Inputs come from the JSON body only.
+  const accepted = (res: Response, out: { commandId: string }) => {
+    res.locals.status = 202;
+    return out;
+  };
+  const cfgBase = `${proxyBase}/config`;
+  r.get(cfgBase, h((req) => d.config.state(p(req, 'accountId'), p(req, 'proxyId'))));
+  r.post(`${cfgBase}/refresh`, h((req, res) => accepted(res, d.config.refresh(actor(res), p(req, 'accountId'), p(req, 'proxyId')))));
+  r.post(`${cfgBase}/preview`, h((req, res) => accepted(res, d.config.preview(actor(res), p(req, 'accountId'), p(req, 'proxyId'), req.body))));
+  r.post(`${cfgBase}/apply`, h((req, res) => accepted(res, d.config.apply(actor(res), p(req, 'accountId'), p(req, 'proxyId'), req.body?.previewId))));
+  r.post(`${cfgBase}/rollback/preview`, h((req, res) => accepted(res, d.config.rollbackPreview(actor(res), p(req, 'accountId'), p(req, 'proxyId'), req.body?.cmdId))));
+  r.post(`${cfgBase}/rollback/apply`, h((req, res) => accepted(res, d.config.rollbackApply(actor(res), p(req, 'accountId'), p(req, 'proxyId'), req.body?.previewId))));
+  r.get(`${proxyBase}/actions`, h((req) => d.actions.available(p(req, 'accountId'), p(req, 'proxyId'))));
+  r.post(`${proxyBase}/actions`, h((req, res) => accepted(res, d.actions.cameraAction(actor(res), p(req, 'accountId'), p(req, 'proxyId'), req.body))));
+  r.post(`${proxyBase}/cameras/:camera/name`, h((req, res) => accepted(res, d.actions.rename(actor(res), p(req, 'accountId'), p(req, 'proxyId'), p(req, 'camera'), req.body))));
+  r.post(`${proxyBase}/restart`, h((req, res) => accepted(res, d.actions.restart(actor(res), p(req, 'accountId'), p(req, 'proxyId'), req.body))));
+
   r.get(`${proxyBase}/status-events`, h((req) => {
     d.registry.getProxy(p(req, 'accountId'), p(req, 'proxyId'));
     return d.status.events(p(req, 'proxyId'), limit(req), req.query.cursor ? Number(req.query.cursor) : undefined);

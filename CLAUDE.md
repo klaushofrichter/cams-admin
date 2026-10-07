@@ -31,6 +31,11 @@ cam-sim). Spec: `docs/superpowers/specs/2026-10-06-cams-admin-phase1-design.md`.
   (`npm run contract:make`) and cams vendors `contract/cams-v1/`. A snapshot,
   report, import diff or export never carries a password, token, hash, code
   or key (the guard tests fill columns with markers).
+- **P3 settings changes go through preview → apply by preview id;** never add
+  a route that writes proxy settings without a preview. A new remote-settable
+  setting goes into `contract/v1/remote-settable.json` (via
+  `contract/build.ts`) first. Remote writes may never make a proxy delete
+  data (retention and size caps only up, `storage.*` local only).
 - **Tokens are shown once and stored only as SHA-256 hashes** (8 hex digits
   in views and audit details). Never log, store, audit or test with a real
   token.

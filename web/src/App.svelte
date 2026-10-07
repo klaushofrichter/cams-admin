@@ -51,7 +51,7 @@
     {#if route.page === 'dashboard'}<Dashboard />
     {:else if route.page === 'accounts'}<Accounts />
     {:else if route.page === 'account'}{#key route.accountId}<Account accountId={route.accountId!} tab={route.tab ?? 'overview'} />{/key}
-    {:else if route.page === 'proxy'}{#key route.proxyId}<Proxy accountId={route.accountId!} proxyId={route.proxyId!} />{/key}
+    {:else if route.page === 'proxy'}{#key route.proxyId}<Proxy accountId={route.accountId!} proxyId={route.proxyId!} camera={route.camera} />{/key}
     {:else if route.page === 'cams-instances'}<CamsInstances />
     {:else if route.page === 'cams-instance'}{#key route.instanceId}<CamsInstance instanceId={route.instanceId!} />{/key}
     {:else if route.page === 'audit'}<Audit />

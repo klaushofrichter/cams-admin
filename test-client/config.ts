@@ -45,6 +45,8 @@ export class RefProxyConfig {
   private env = new Map<string, Leaf>();
   private by = new Map<string, { cmdId: string; actor: string; at: number }>();
   private backups = new Map<string, Backup>();
+  // Optional settings with no value (a size cap unset = no cap).
+  private optional = ['stills.maxGB', 'ftp.maxGB'];
   private settableBounds: Record<string, Partial<Settable>> = { 'sse.pingS': { min: 5, max: 300 }, 'sse.maxClients': { min: 1, max: 1000 }, 'stills.quality': { min: 1, max: 31 } };
 
   constructor(o: { cameras?: string[]; settings?: Record<string, Leaf>; envHeld?: string[] } = {}) {
@@ -94,6 +96,7 @@ export class RefProxyConfig {
 
   private settable(): Record<string, Settable> {
     const out: Record<string, Settable> = {};
+    for (const p of this.optional) out[p] = { type: 'integer', min: 1, max: 100_000, optional: true, ...(REMOTE_SETTABLE.narrow[p] ? { dir: REMOTE_SETTABLE.narrow[p] } : {}) };
     for (const [p, b] of this.base) {
       const pat = patternOf(p);
       if (!REMOTE_SETTABLE.remote.includes(pat) || out[pat]) continue;
@@ -103,9 +106,17 @@ export class RefProxyConfig {
     return out;
   }
 
+  // A proxy whose redaction regressed (tests, I2): CAMPROXY_TEST_SECRET leaks
+  // into secret-named settings and into action answers.
+  private leak(): string | undefined {
+    return process.env.CAMPROXY_TEST_SECRET;
+  }
+
   private view(): Record<string, unknown> {
     const paths: Record<string, unknown> = {};
-    const all = new Set([...this.base.keys(), ...this.overrides.keys(), ...this.env.keys()]);
+    const leak = this.leak();
+    if (leak) Object.assign(paths, { 'camsAdmin.token': { v: leak, s: 'env' }, 'ftp.password': { v: leak, s: 'env' } });
+    const all = new Set([...this.base.keys(), ...this.overrides.keys(), ...this.env.keys(), ...this.optional]);
     for (const p of [...all].sort()) paths[p] = { ...this.state(p), ...(this.by.has(p) && this.overrides.has(p) ? { by: this.by.get(p) } : {}) };
     return { revision: this.revision(), schema: 1, cameras: [...this.cameras], omittedCameras: [], paths, settable: this.settable() };
   }
@@ -121,7 +132,7 @@ export class RefProxyConfig {
   private remoteOk(path: string): boolean {
     const pat = patternOf(path);
     if (REMOTE_SETTABLE.denied.some((d) => under(pat, d))) return false;
-    return REMOTE_SETTABLE.remote.includes(pat) && this.base.has(path);
+    return REMOTE_SETTABLE.remote.includes(pat) && (this.base.has(path) || this.optional.includes(path));
   }
 
   private conflict(paths: string[]): RefOutcome {
@@ -226,7 +237,9 @@ export class RefProxyConfig {
         if (args.camera !== null && !this.cameras.includes(args.camera)) return { status: 'failed', code: 'unknown_camera' };
         this.actions.calls.push({ action: args.action, camera: args.camera });
         const writes = CAMERA_WRITES.includes(args.action);
-        return { status: 'ok', result: { action: args.action, camera: args.camera, httpStatus: 200, answer: { ok: true }, ...(writes ? { verified: true, mismatch: [] } : {}) } };
+        const leak = this.leak();
+        const answer = leak ? { ok: true, token: leak, nested: { apiKey: leak } } : { ok: true };
+        return { status: 'ok', result: { action: args.action, camera: args.camera, httpStatus: 200, answer, ...(writes ? { verified: true, mismatch: [] } : {}) } };
       }
       case 'camera.name.set': {
         if (!this.cameras.includes(args.camera)) return { status: 'failed', code: 'unknown_camera' };

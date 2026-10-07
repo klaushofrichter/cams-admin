@@ -304,4 +304,18 @@ CREATE INDEX audit_at ON audit_log(at);
 CREATE INDEX audit_account_at ON audit_log(account_id, at);
 CREATE INDEX audit_action_at ON audit_log(action, at);
 `),
+  // 6: phase 3, the last reported configuration per proxy (migration spec §5,
+  // §8.1). R3-15: a real write names the dry run it was made from (preview_of);
+  // the unique index makes each dry run usable once, across restarts and races.
+  (db) => db.exec(`
+CREATE TABLE proxy_config (
+  proxy_id TEXT PRIMARY KEY REFERENCES proxies(id) ON DELETE CASCADE,
+  revision TEXT NOT NULL CHECK (revision GLOB 'sha256:*' AND length(revision) = 71),
+  view TEXT NOT NULL CHECK (length(view) <= 262144),
+  cmd_id TEXT NOT NULL,
+  fetched_at INTEGER NOT NULL
+) STRICT;
+ALTER TABLE commands ADD COLUMN preview_of TEXT;
+CREATE UNIQUE INDEX commands_preview_of ON commands(preview_of) WHERE preview_of IS NOT NULL;
+`),
 ];

@@ -1,8 +1,12 @@
 // The local stack's registry (start.sh): accounts, users, proxies, cameras
-// and sims through the API, an enrollment code per proxy, and the test
-// client's enrollment (key files, mode 600). Prints nothing secret.
-//   tsx setup.ts --url U --cookie-file F --plan PLAN.json --keys DIR
-import { readFileSync } from 'fs';
+// and sims through the API, an enrollment code per proxy, and either the
+// test client's enrollment (--keys: key files, mode 600; the bridge) or the
+// codes as files for the proxies' own admin-enroll (--codes: mode 600, read
+// on stdin, deleted after use). --wait-live waits until the named proxies
+// are connected. Prints nothing secret.
+//   tsx setup.ts --url U --cookie-file F --plan PLAN.json (--keys DIR | --codes DIR)
+//   tsx setup.ts --url U --cookie-file F --wait-live a,b
+import { mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { enroll } from '../../test-client/client';
 import { writeKeyFile } from '../../test-client/keyfile';
@@ -13,7 +17,7 @@ const args = process.argv.slice(2);
 const opt = (n: string) => args[args.indexOf(`--${n}`) + 1];
 const url = opt('url');
 const cookie = readFileSync(opt('cookie-file'), 'utf8').trim();
-const plan = JSON.parse(readFileSync(opt('plan'), 'utf8')) as Plan;
+const has = (n: string) => args.includes(`--${n}`);
 
 async function api(method: string, path: string, body?: unknown) {
   const r = await fetch(`${url}/api/v1${path}`, { method, headers: { Cookie: `__Host-cams_admin=${cookie}`, 'X-Cams-Admin': '1', 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
@@ -22,7 +26,21 @@ async function api(method: string, path: string, body?: unknown) {
   return j;
 }
 
+async function waitLive(names: string[]) {
+  const end = Date.now() + 90_000;
+  for (;;) {
+    const live = new Set<string>();
+    for (const a of (await api('GET', '/accounts')).items) for (const p of (await api('GET', `/accounts/${a.id}/proxies`)).items) if (p.status?.connected) live.add(p.name);
+    const missing = names.filter((n) => !live.has(n));
+    if (!missing.length) return console.log(`connected: ${names.join(', ')}`);
+    if (Date.now() > end) throw new Error(`not connected after 90 s: ${missing.join(', ')}`);
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+}
+
 (async () => {
+  if (has('wait-live')) return waitLive(opt('wait-live').split(','));
+  const plan = JSON.parse(readFileSync(opt('plan'), 'utf8')) as Plan;
   for (const a of plan.accounts) {
     const acc = await api('POST', '/accounts', { name: a.name, displayName: a.displayName });
     for (const u of a.users) await api('POST', `/accounts/${acc.id}/users`, u);
@@ -33,6 +51,12 @@ async function api(method: string, path: string, body?: unknown) {
         await api('PUT', `/accounts/${acc.id}/cameras/${cam.id}/sim`, { runsOn: 'mac', controlUrl: `http://127.0.0.1:${c.controlPort}`, uiUrl: `http://127.0.0.1:${c.controlPort}`, image: 'cam-sim origin/main' });
       }
       const code = (await api('POST', `/accounts/${acc.id}/proxies/${px.id}/enrollment-codes`, { lifetimeH: 1 })).code;
+      if (has('codes')) {
+        mkdirSync(opt('codes'), { recursive: true, mode: 0o700 });
+        writeFileSync(join(opt('codes'), `${a.name}-${p.name}`), `${code}\n`, { mode: 0o600 });
+        console.log(`code for ${a.name}/${p.name} (${px.id}) written`);
+        continue;
+      }
       const key = await enroll(url, code, { version: 'localstack-bridge', cameraIds: p.cameras.map((c) => c.id) });
       writeKeyFile(join(opt('keys'), `${a.name}-${p.name}.json`), key);
       console.log(`enrolled ${a.name}/${p.name} (${px.id})`);

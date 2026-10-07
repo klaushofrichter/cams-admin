@@ -21,10 +21,20 @@ cam-proxies and cam-sims, everything on 127.0.0.1 (spec §15.3):
   on 29500 + 10·n (+0 http, +2 control and web UI, +3 RTSP, +4 ONVIF,
   +5 Baichuan). Stills and FTP are off in the proxies (not what this stack
   tests).
-- **The bridge:** cam-proxy has no cams-admin client yet. Each proxy is
-  enrolled by the protocol test client (`test-client/cli.ts bridge`), which
-  sends that proxy's real `GET /api/local/health` as its heartbeat. When
-  cam-proxy's client is released, `admin-enroll` replaces the bridge.
+- **Enrollment:** each proxy enrolls itself with its real `admin-enroll`
+  (the code on stdin, from a mode-600 file deleted after use), with
+  `CAMPROXY_ADMIN_COMMANDS=on`. `start.sh` then allows `tokens.apply` and
+  `tokens.apply.admin` locally on each proxy (the P4 rehearsal issues
+  tokens), and nothing of P3. `LOCALSTACK_BRIDGE=1`, or a cam-proxy without
+  `src/fleet/commands.ts`, uses the old bridge instead: the protocol test
+  client (`test-client/cli.ts bridge`) sends the proxy's
+  `GET /api/local/health` as its heartbeat.
+- **cam-proxy branch:** `LOCALSTACK_CAM_PROXY_REF` (default `origin/main`),
+  for example `origin/feat/migration-p3` before it is merged.
+- **Restarts:** every proxy except gamma-1 runs under
+  `scripts/localstack/supervise.sh`, which starts it again when it ends by
+  itself with code 0 (cam-proxy's `proxy.restart`), as systemd or Docker
+  would. beta-2 has `ntp.server` `192.0.2.123` set locally.
 - **Heartbeats** every 10 s, offline after 30 s
   (`LOCALSTACK_HEARTBEAT_S`).
 - **Work dir:** `${TMPDIR}/cams-admin-localstack` (`LOCALSTACK_DIR`), never
@@ -37,6 +47,38 @@ cam-proxies and cam-sims, everything on 127.0.0.1 (spec §15.3):
 
 Prerequisites: Docker (unless `--no-s3`), `jq`, `openssl`, cam-proxy's
 `tools/go2rtc` and cam-sim's `tools/mediamtx` (their install scripts).
+
+## The P3 check
+
+With the stack up (real enrollment, a cam-proxy with P3):
+
+```
+npx tsx scripts/localstack/p3-check.ts [--only <part of a check's name>]
+```
+
+It drives cams-admin's remote configuration against the real proxies
+alpha-1 and beta-2 and their cam-sims, and prints one line per check. It
+exits 1 at the first failure, and 2 if the cam-proxy build has no P3. It
+allows entries with each proxy's **local** admin token, then checks:
+
+- the views equal the proxies' own `/control/config`;
+- preview and apply, with the "set by cams-admin" marker and the audit
+  record on both sides (same cmdId, old → new);
+- a local edit between preview and apply (`preview_stale` or `conflict`);
+- rollback: refused while the setting has changed since, done once it is
+  back, then `already_rolled_back`;
+- denied and local-only paths, and a narrow path lowered, all refused by
+  cams-admin before any command;
+- `camera.name.set` read back from the cam-sim, and `camera-ntp-set` with
+  its typed confirmation (the cam-sim then has `192.0.2.123`);
+- `proxy.restart` twice through the supervisor; a third is refused by the
+  fleet limit;
+- a local pause and resume;
+- the client tokens still work on both proxies.
+
+It takes about 2 minutes, one of which is a wait for the proxy's settings
+window (6 a minute, dry runs count). It changes only the local cam-sims and
+proxies; run it on a fresh stack (`stop.sh`, `start.sh`).
 
 ## Two cams instances (P4)
 
@@ -51,10 +93,9 @@ contract independent of the server's code); their key files are in
 | `cms-main` | alpha, beta | every proxy at its registered URL (routes are default-deny) |
 | `cms-pi` | alpha | alpha-1 → `http://localhost:29100` (the loopback form) only |
 
-The bridges answer `tokens.apply` and `tokens.apply.admin` (`--allow`), so
-managed and cams-held tokens become `active` like on a real proxy (the
-tokens live in the bridge's memory; the real cam-proxy behind it doesn't see
-them).
+The proxies allow `tokens.apply` and `tokens.apply.admin`, so managed and
+cams-held tokens become `active` (with the bridge, through `--allow`; the
+tokens then live in the bridge's memory).
 
 Real cams processes are not started here: cams's own livestack admin
 scenario (cams `docs/livestack.md`, cams P4 plan Task 15) runs cams against

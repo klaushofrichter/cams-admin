@@ -64,6 +64,48 @@ It will run at `cams-admin.skylar.technology`. Phase 1 is specified in
   card says "not yet on proxy" until the proxy has it. A proxy that missed a
   set (offline, refused) gets the current one again from its next heartbeat.
 
+## Remote configuration (migration phase 3)
+
+- **What cams-admin can do to a proxy:** read its settings (`config.get`),
+  change the remote-settable ones (`config.set`, `config.unset`), roll a
+  change back (`config.rollback`), run the remote camera actions, rename a
+  camera on the camera (`camera.name.set`) and restart the proxy
+  (`proxy.restart`). Each one is a signed command, and **each must be allowed
+  on the proxy itself** (off by default, set with the proxy's own admin
+  token). cams-admin offers only what the proxy reports as allowed.
+- **Which settings:** only those in
+  [`contract/v1/remote-settable.json`](contract/v1/remote-settable.json)
+  that the proxy also reports as settable. Addresses, ports, files, trust,
+  users and `camsAdmin.*` are never remote. Capture and listener switches
+  (`*.enabled`) and health thresholds are local only in this phase, so
+  cams-admin can't silently blind a proxy or open its FTP ports. Settings held
+  in the proxy's environment are read only.
+- **Dry run first:** *Review changes* asks the proxy for a dry run and shows
+  the diff. *Apply* then sends exactly that dry run (apply by preview id);
+  there is no other way to write a proxy's settings. If the settings change
+  on the proxy in between, the card shows "changed on the proxy" and a table
+  of "on the proxy now" next to "your change". From there you can *Use mine*
+  (a new dry run) or *Keep the proxy's*.
+- **Roll back:** a real settings change in the Commands card has *Roll back*:
+  first a dry run of the rollback, then *Apply rollback*. The proxy refuses
+  the rollback for any setting that changed since.
+- **Camera actions:** each camera on the proxy page gets the allowed actions
+  as buttons. The disruptive ones (reboot, power-cycle, worker restart, FTP
+  setup, NTP set, cert push, proxy restart) are grouped, and each asks
+  you to type the action's name. The proxy runs the action, re-reads what it
+  wrote, and limits disruptive actions per hour. cams-admin also limits them
+  across the fleet: one proxy at a time, at most 3 in any 10 minutes.
+- **Nothing secret-shaped is kept:** a setting or answer key that looks
+  secret (key, token, password, secret, pem, cookie) is redacted before it is
+  stored or shown, whatever the proxy sent.
+- **Threat model:** a compromised cams-admin can only change remote-settable
+  settings and run allowed actions. It can never touch addresses, trust,
+  users or `camsAdmin.*`. It can never raise Google Vision spending, shorten
+  a retention period, lower a size cap or touch `storage.*`, so it can't make
+  a proxy delete stills, clips, events or audit records. Every change is in
+  the proxy's audit log and on its card with Undo, and a local pause on the
+  proxy stops all of it.
+
 ## cams instances and the service API (migration phase 4)
 
 - **A cams instance** (the cluster's cams, the Pi's) is registered in

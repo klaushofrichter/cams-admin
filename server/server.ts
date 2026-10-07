@@ -14,6 +14,8 @@ import { StatusStore } from './status/store';
 import { Hub, CONNECT_PATH } from './channel/hub';
 import { Commands } from './commands/service';
 import { Tokens } from './tokens/service';
+import { ProxyConfig } from './config/service';
+import { RemoteActions } from './actions/service';
 import { Enrollment } from './enroll/codes';
 import { enrollRouter } from './enroll/route';
 import { CamsInstances } from './cams/instances';
@@ -33,7 +35,7 @@ import { limiter } from './rateLimit';
 import { version } from './version';
 
 export interface Built {
-  cfg: Config; clock: Clock; db: Db; audit: Audit; registry: Registry; live: LiveHub; status: StatusStore; hub: Hub; commands: Commands; tokens: Tokens; enrollment: Enrollment; sessions: Sessions; backup: BackupService;
+  cfg: Config; clock: Clock; db: Db; audit: Audit; registry: Registry; live: LiveHub; status: StatusStore; hub: Hub; commands: Commands; tokens: Tokens; actions: RemoteActions; config: ProxyConfig; enrollment: Enrollment; sessions: Sessions; backup: BackupService;
   camsInstances: CamsInstances; camsAuth: CamsAuth; importer: Importer; signing: SigningKey;
   app: express.Express; http: Server; epochFile: string;
   tick(): void;
@@ -65,6 +67,9 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
   const journal = new RevocationJournal(join(cfg.dataDir, 'cams-revocations.jsonl'), log);
   const tokens = new Tokens({ db, clock, audit, registry, commands, live, log, journal: (tokenIds) => journal.append({ kind: 'tokens', tokenIds }, clock.now()) });
   status.onTokens = (proxyId, t) => tokens.onHeartbeat(proxyId, t);
+  const config = new ProxyConfig({ db, clock, registry, commands, status, live, log });
+  status.onConfig = (proxyId) => config.onHeartbeat(proxyId);
+  const actions = new RemoteActions({ db, audit, registry, commands, status, clock, config });
   const enrollment = new Enrollment({ db, clock, audit, registry, cfg, serverKeys: [signing.publicKeyB64], onKeyRevoked: (k) => hub.closeKey(k, 4401), onProxyChanged: (p) => live.publishRegistry('proxy', p) });
   const backup = createBackup({ db, clock, cfg, audit, env: merged });
   // P4: cams instances. R4-19: blocking or deleting one revokes the tokens it holds.
@@ -99,7 +104,7 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
   app.use(camsRouter({ globalPerMin: cfg.limits.camsGlobalPerMin, enrollment: camsEnrollment, auth: camsAuth, signingKey: signing.key, testRoutes: cfg.nodeEnv === 'test', instances: camsInstances, tokens, snapshot: { db, clock, signingKey: signing.key, signingFingerprint: signing.fingerprint } }));
   app.use(cookieParser());
   app.use(authRoutes({ cfg, sessions, audit, clock, live }));
-  const api = apiRouter({ db, clock, cfg, audit, registry, enrollment, hub, status, live, sessions, backup, commands, tokens, camsInstances, serverKeyFingerprints: [signing.fingerprint], importer });
+  const api = apiRouter({ db, clock, cfg, audit, registry, enrollment, hub, status, live, sessions, backup, commands, tokens, config, actions, camsInstances, serverKeyFingerprints: [signing.fingerprint], importer });
   app.use('/api/v1', api);
   app.use('/api', (_req, res) => void res.status(404).json({ error: 'not_found' }));
   // The Svelte build (npm run build:web); every other GET is the SPA.
@@ -126,6 +131,7 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
       commands.tick();
       tokens.tick();
       camsAuth.sweep();
+      config.tick();
       audit.flushThrottled();
       writeEpochFile(db, epochFile);
       if (clock.now() - lastDaily > 86400_000) {
@@ -142,7 +148,7 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
   let closed = false;
 
   return {
-    cfg, clock, db, audit, registry, live, status, hub, commands, tokens, enrollment, sessions, backup, camsInstances, camsAuth, importer, signing, app, http, epochFile, tick,
+    cfg, clock, db, audit, registry, live, status, hub, commands, tokens, actions, config, enrollment, sessions, backup, camsInstances, camsAuth, importer, signing, app, http, epochFile, tick,
     writeRoutes() {
       const out: string[] = [];
       for (const layer of (api as unknown as { stack: { route?: { path: string; methods: Record<string, boolean> } }[] }).stack) {

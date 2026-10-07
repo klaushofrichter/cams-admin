@@ -9,8 +9,10 @@
   import Confirm from '../components/Confirm.svelte';
   import ProxyCommands from '../components/ProxyCommands.svelte';
   import ProxyTokens from '../components/ProxyTokens.svelte';
+  import ProxySettings from '../components/ProxySettings.svelte';
+  import ProxyCameraActions from '../components/ProxyCameraActions.svelte';
 
-  let { accountId, proxyId }: { accountId: string; proxyId: string } = $props();
+  let { accountId, proxyId, camera = undefined }: { accountId: string; proxyId: string; camera?: string } = $props();
 
   let d = $state<any>(null);
   let events = $state<any[]>([]);
@@ -144,6 +146,8 @@
     {/if}
   </section>
 
+  <ProxyCameraActions {accountId} {proxyId} {refresh} {camera} />
+  <ProxySettings {accountId} {proxyId} policy={d.view.commands} {refresh} />
   <ProxyCommands {accountId} {proxyId} policy={d.view.commands} allow={d.view.allow} {refresh} />
   <ProxyTokens {accountId} {proxyId} proxyName={d.proxy.name} policy={d.view.commands} allow={d.view.allow} {refresh} />
 
