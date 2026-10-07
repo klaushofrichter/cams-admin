@@ -270,6 +270,10 @@ export function apiRouter(d: ApiDeps): express.Router {
   r.get(`${cmsBase}/routes`, h((req) => ({ items: ci.routes(cms(req)) })));
   r.put(`${cmsBase}/routes/:proxyId`, h((req, res) => { const x = ci.setRoute(actor(res), cms(req), p(req, 'proxyId'), req.body); reg('cams-instance', cms(req)); return x; }));
   r.delete(`${cmsBase}/routes/:proxyId`, h((req, res) => { ci.deleteRoute(actor(res), cms(req), p(req, 'proxyId')); reg('cams-instance', cms(req)); }));
+  // Per-instance camera overrides (migration 7): host and camera user for this instance only.
+  r.get(`${cmsBase}/camera-overrides`, h((req) => ({ items: ci.overrides(cms(req)) })));
+  r.put(`${cmsBase}/camera-overrides/:cameraId`, h((req, res) => { const o = ci.setOverride(actor(res), cms(req), p(req, 'cameraId'), req.body); reg('cams-instance', cms(req)); return o; }));
+  r.delete(`${cmsBase}/camera-overrides/:cameraId`, h((req, res) => { ci.clearOverride(actor(res), cms(req), p(req, 'cameraId')); reg('cams-instance', cms(req)); }));
   r.post(`${cmsBase}/enrollment-codes`, h((req, res) => {
     // The code's only appearance.
     res.set('Cache-Control', 'no-store');

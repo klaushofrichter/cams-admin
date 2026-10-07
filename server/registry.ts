@@ -3,7 +3,7 @@ import type { Audit, AuditAction } from './audit';
 import { tx, type Db } from './db/open';
 import { newId } from './ids';
 import {
-  accountInput, cameraInput, checkCameraProxy, FieldError, normaliseEmail, proxyInput, simInput, userInput,
+  accountInput, cameraInput, checkCameraHost, checkCameraProxy, FieldError, normaliseEmail, proxyInput, simInput, userInput,
   type CameraFields, type ProxyFields, type SimFields,
 } from './validate';
 
@@ -390,6 +390,8 @@ export class Registry {
       const f = cameraInput(patch, true);
       const old = this.getCamera(accountId, id);
       checkCameraProxy({ proxyId: f.proxyId !== undefined ? f.proxyId : old.proxyId, proxyCameraId: f.proxyCameraId !== undefined ? f.proxyCameraId : old.proxyCameraId });
+      // A changed host is checked like an override host; an old free-form one doesn't block other edits.
+      if (f.host && f.host !== old.host) checkCameraHost(f.host);
       const keys = this.updateRow('cameras', { id, accountId }, f, versionOf(patch as Row));
       const c = this.getCamera(accountId, id);
       this.log(actor, 'camera-update', accountId, 'camera', id, c.camsId, { fields: keys });

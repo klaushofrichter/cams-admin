@@ -3,7 +3,7 @@
   // export a cameras.json for cams's file mode, per cams instance.
   import { onMount } from 'svelte';
   import { api, errorText } from '../lib/api';
-  import { importSummary } from '../lib/cams';
+  import { describeChange, importSummary } from '../lib/cams';
   import { bytes } from '../lib/format';
   import Confirm from './Confirm.svelte';
 
@@ -24,7 +24,8 @@
   onMount(async () => {
     try {
       instances = (await api('GET', '/cams-instances')).items.filter((i: any) => i.accounts.includes(accountId));
-      instanceId = instances[0]?.id ?? '';
+      // No default: the instance is always picked (a Pi export once nearly went to the cluster).
+      instanceId = '';
     } catch (e) { error = errorText(e); }
   });
 
@@ -73,24 +74,13 @@
     } catch (e) { error = String(e); }
   }
 
-  const describe = (c: any): string => {
-    switch (c.kind) {
-      case 'proxy-matched': return `proxy ${c.name}: matched by ${c.by}`;
-      case 'proxy-new': return `new proxy ${c.name} (${c.url})`;
-      case 'route-add': return `route ${c.name} → ${c.url ?? '(registered URL)'}`;
-      case 'route-change': return `route ${c.name}: ${c.was ?? '(hidden)'} → ${c.url ?? '(registered URL)'}`;
-      case 'route-hide': return `hide ${c.name} for this instance`;
-      case 'camera-new': return `new camera ${c.camsId}`;
-      case 'camera-change': return `camera ${c.camsId}: ${Object.entries(c.fields).map(([k, v]: [string, any]) => `${k} ${JSON.stringify(v.from)} → ${JSON.stringify(v.to)}`).join(', ')}`;
-      case 'pins-set': return `pins of ${c.name}: ${c.to.join(', ')}`;
-      case 'proxy-tls-name': return `TLS name of ${c.name}: ${c.to}`;
-      case 'token-external': return `external ${c.tokenKind} token on ${c.name} (${c.hashPrefix})`;
-      case 'registry-only': return `camera ${c.camsId}: in the registry, not in the file (kept)`;
-      default: return c.kind;
-    }
-  };
   const summary = $derived(result ? importSummary(result) : []);
   const allAccepted = $derived(!!result && result.mismatches.every((m: any) => accepted[m.id]));
+  const instanceName = $derived(instances.find((i) => i.id === instanceId)?.name ?? '');
+  // The file looks like another instance's export: shown on its own, confirmed on its own.
+  const otherInstance = $derived(result ? result.mismatches.filter((m: any) => m.what === 'other-instance') : []);
+  const liveMismatches = $derived(result ? result.mismatches.filter((m: any) => m.what !== 'other-instance') : []);
+  const confirmInstance = (on: boolean) => { for (const m of otherInstance) accepted[m.id] = on; };
 </script>
 
 <div class="grid" data-testid="import-panel">
@@ -98,7 +88,7 @@
     <p class="muted">No cams instance serves this account yet (<a href="#/cams-instances">cams instances</a>).</p>
   {:else}
     <div class="row">
-      <label>cams instance<select bind:value={instanceId} data-testid="import-instance" onchange={() => (result = null)}>{#each instances as i (i.id)}<option value={i.id}>{i.name}</option>{/each}</select></label>
+      <label>cams instance<select bind:value={instanceId} data-testid="import-instance" onchange={() => (result = null)}><option value="" disabled>— pick the instance this export is from —</option>{#each instances as i (i.id)}<option value={i.id}>{i.name}</option>{/each}</select></label>
       <label>Export of cams (<code>export-config</code>)<input type="file" accept="application/json,.json" onchange={pick} data-testid="import-file" /></label>
       {#if fileInfo}<span class="muted" data-testid="import-file-info">{fileInfo}</span>{/if}
     </div>
@@ -107,18 +97,25 @@
       <label class="check"><input type="checkbox" bind:checked={hideUnlisted} onchange={reset} data-testid="import-hide-unlisted" /> hide proxies this file doesn't use (for this instance)</label>
     </div>
     <div class="row">
-      <button class="btn" data-testid="import-dry-run" disabled={!file || busy} onclick={() => run(false)}>Dry run</button>
+      <button class="btn" data-testid="import-dry-run" disabled={!file || !instanceId || busy} onclick={() => run(false)}>Dry run</button>
       {#if result && !result.noChanges}<button class="btn primary" data-testid="import-apply" disabled={busy || result.blockers.some((b: string) => b !== 'unknown_proxy' || !createProxies) || !allAccepted} onclick={() => (confirmApply = true)}>Apply</button>{/if}
     </div>
     {#if result}
       <div class="grid" data-testid="import-result">
+        {#if otherInstance.length}
+          <div class="other" role="alert" data-testid="import-other-instance">
+            <b>Is this {result.looksLike?.length ? `${result.looksLike.join(', ')}'s` : "another instance's"} export? You picked {result.instance}.</b>
+            {#each otherInstance as m (m.id)}<div>{m.detail}</div>{/each}
+            <label class="check"><input type="checkbox" checked={otherInstance.every((m: any) => accepted[m.id])} onchange={(e) => confirmInstance((e.target as HTMLInputElement).checked)} data-testid="import-confirm-instance" /> Yes, this file is the export of {result.instance}'s cams</label>
+          </div>
+        {/if}
         {#if result.noChanges}<p data-testid="import-no-changes"><b>No changes.</b> The registry already matches this file.</p>
         {:else if result.applied}<p data-testid="import-applied"><b>Applied.</b></p>{/if}
         <div class="row">{#each summary as s}<span class="badge" data-testid="import-count">{s.count} {s.label}</span>{/each}</div>
-        <ul class="changes">{#each result.changes as c}<li class="mono" data-testid="import-change">{describe(c)}</li>{/each}</ul>
-        {#if result.mismatches.length}
-          <div data-testid="import-mismatches"><b>Mismatches with the live proxies</b> (each blocks Apply until accepted):
-            {#each result.mismatches as m (m.id)}<label class="check"><input type="checkbox" bind:checked={accepted[m.id]} data-testid="import-accept-{m.id}" /> <span class="mono">{m.what}</span> {m.detail}</label>{/each}
+        <ul class="changes">{#each result.changes as c}<li class="mono" data-testid="import-change">{describeChange(c)}</li>{/each}</ul>
+        {#if liveMismatches.length}
+          <div data-testid="import-mismatches"><b>Mismatches</b> (with the live proxies, or a change another instance sees too; each blocks Apply until accepted):
+            {#each liveMismatches as m (m.id)}<label class="check"><input type="checkbox" bind:checked={accepted[m.id]} data-testid="import-accept-{m.id}" /> <span class="mono">{m.what}</span> {m.detail}</label>{/each}
           </div>
         {/if}
         {#if result.blockers.includes('unknown_proxy')}<p class="badge warn" data-testid="import-unknown-proxy">The file uses a proxy the registry doesn't know: tick "create proxies" or register it first.</p>{/if}
@@ -131,11 +128,12 @@
   {#if error}<p class="error" data-testid="import-error">{error}</p>{/if}
 </div>
 {#if confirmApply && result}
-  <Confirm title="Apply the import" body={`Into ${accountName}: ${summary.filter((s) => s.label !== 'proxies matched' && !s.label.startsWith('in the registry')).map((s) => `${s.count} ${s.label}`).join(', ')}. Nothing is deleted.`} ok="Apply" onconfirm={() => { confirmApply = false; run(true); }} oncancel={() => (confirmApply = false)} />
+  <Confirm title="Apply the import" body={`Into ${accountName}, for cams instance ${instanceName}: ${summary.filter((s) => s.label !== 'proxies matched' && !s.label.startsWith('in the registry') && !s.label.startsWith('cameras with values kept')).map((s) => `${s.count} ${s.label}`).join(', ')}. Nothing is deleted.`} ok="Apply" onconfirm={() => { confirmApply = false; run(true); }} oncancel={() => (confirmApply = false)} />
 {/if}
 
 <style>
   h3 { margin: 8px 0 0; font-size: 16px; }
   .check { display: flex; flex-direction: row; align-items: center; gap: 4px; color: var(--text); }
+  .other { border: 2px solid var(--danger); border-radius: 8px; padding: 8px 10px; display: grid; gap: 4px; }
   .changes { margin: 0; padding-left: 18px; display: grid; gap: 2px; }
 </style>

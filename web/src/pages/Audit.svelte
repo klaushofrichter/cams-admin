@@ -11,7 +11,7 @@
   let action = $state('');
   let open = $state<Record<string, boolean>>({});
   let error = $state('');
-  const ACTIONS = ['signin', 'signin-refused', 'signout', 'sessions-ended', 'account-create', 'account-update', 'account-delete', 'user-create', 'user-update', 'user-delete', 'proxy-create', 'proxy-update', 'proxy-delete', 'proxy-block', 'camera-create', 'camera-update', 'camera-delete', 'camera-adopt', 'sim-update', 'sim-delete', 'enrollment-code-create', 'enrollment-code-cancel', 'proxy-enrolled', 'key-confirmed', 'enroll-refused', 'key-revoke', 'proxy-auth-refused', 'backup-snapshot', 'backup-now', 'restore-detected', 'audit-throttled'];
+  const ACTIONS = ['signin', 'signin-refused', 'signout', 'sessions-ended', 'account-create', 'account-update', 'account-delete', 'user-create', 'user-update', 'user-delete', 'proxy-create', 'proxy-update', 'proxy-delete', 'proxy-block', 'camera-create', 'camera-update', 'camera-delete', 'camera-adopt', 'sim-update', 'sim-delete', 'enrollment-code-create', 'enrollment-code-cancel', 'proxy-enrolled', 'key-confirmed', 'enroll-refused', 'key-revoke', 'proxy-auth-refused', 'backup-snapshot', 'backup-now', 'restore-detected', 'audit-throttled', 'camera-override-set', 'camera-override-clear'];
 
   const q = (cursor?: string) => '/audit?' + new URLSearchParams({ limit: '50', ...(account && { account }), ...(actorType && { actorType }), ...(action && { action }), ...(cursor && { cursor }) }).toString();
   async function load(more = false) {
