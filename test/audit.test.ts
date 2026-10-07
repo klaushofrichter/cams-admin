@@ -19,7 +19,11 @@ describe('audit log', () => {
     expect(AUDIT_ACTIONS).toContain('proxy-enrolled');
     expect(AUDIT_ACTIONS).toContain('audit-throttled');
     for (const a of ['command-create', 'command-result', 'command-expired', 'token-issue', 'token-retire', 'token-revoke']) expect(AUDIT_ACTIONS).toContain(a);
-    expect(AUDIT_ACTIONS).toHaveLength(37);
+    const P4 = ['cams-instance-create', 'cams-instance-update', 'cams-instance-delete', 'cams-instance-block', 'cams-enrollment-code-create', 'cams-enrollment-code-cancel',
+      'cams-enrolled', 'cams-enroll-refused', 'cams-key-confirmed', 'cams-key-revoke', 'cams-auth-refused', 'route-update', 'cams-rotate', 'import-run', 'import-apply', 'export-run'];
+    for (const a of P4) expect(AUDIT_ACTIONS).toContain(a);
+    expect(AUDIT_ACTIONS).toHaveLength(37 + P4.length);
+    expect(new Set(AUDIT_ACTIONS).size).toBe(AUDIT_ACTIONS.length);
   });
 
   it('refuses an unknown action', () => {

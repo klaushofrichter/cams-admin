@@ -12,6 +12,8 @@ import { enrolled, makeClient, resetAccounts, startServer, until, type Running }
 import { keyFromSeed, privateFromB64, publicFromB64, sign, signEnvelope, signedText, verifyEnvelope } from '../server/crypto/ed25519';
 import { readEpoch } from '../server/db/open';
 import type { ProxyClient, KeyFile } from '../test-client/client';
+import { RefProxyConfig } from '../test-client/config';
+import { summariseArgs, requiredEntries } from '../server/commands/service';
 import vectors from '../contract/v1/vectors.json';
 
 const V1 = join(__dirname, '../contract/v1/strict');
@@ -42,7 +44,7 @@ afterEach(async () => {
 });
 
 // An enrolled proxy and its test client; ready when cams-admin has its command report.
-async function proxy(o: { commands?: { allow: string[]; paused?: boolean } | null; start?: boolean } = {}) {
+async function proxy(o: { commands?: { allow: string[]; paused?: boolean; config?: RefProxyConfig } | null; start?: boolean } = {}) {
   const p = await enrolled(s, `cmd${n++}`);
   const commands = o.commands === undefined ? { allow: ['tokens.apply'] } : o.commands;
   const client = makeClient(p.key, commands ? { commands } : {});
@@ -294,5 +296,68 @@ describe('commands', () => {
     await until(() => stateOf(acc, prx, row.id) === 'done');
     await new Promise((r) => setTimeout(r, 300)); // heartbeats meanwhile write nothing
     expect(readEpoch(s.built.db) - before).toBeLessThanOrEqual(4);
+  });
+});
+
+describe('commands: the P3 wire commands through the same service', () => {
+  const REV = `sha256:${'a'.repeat(64)}`;
+  const p3 = () => proxy({ commands: { allow: ['config.get', 'config.set', 'camera.action:camera-test'], config: new RefProxyConfig() } });
+  const final = async (acc: string, prx: string, id: string) => {
+    await until(() => ['done', 'refused', 'failed'].includes(stateOf(acc, prx, id)), 5000, 'final');
+    return cmds().get(acc, prx, id);
+  };
+  it('config.get ends done with the view in result', async () => {
+    const p = await p3();
+    const r = cmds().create(ACTOR, p.acc, p.prx, 'config.get', { v: 1 });
+    expect(r.dryRun).toBe(false);
+    const f = await final(p.acc, p.prx, r.id);
+    expect(f.state).toBe('done');
+    expect((f.result as any).paths['sse.pingS']).toEqual({ v: 30, s: 'default' });
+  });
+  it('camera.action needs its own entry: camera-reboot → 409 not_allowed_on_proxy; camera-test → done', async () => {
+    const p = await p3();
+    expect(() => cmds().create(ACTOR, p.acc, p.prx, 'camera.action', { v: 1, camera: 'cam1', action: 'camera-reboot' })).toThrow(/not_allowed_on_proxy/);
+    const r = cmds().create(ACTOR, p.acc, p.prx, 'camera.action', { v: 1, camera: 'cam1', action: 'camera-test' });
+    expect((await final(p.acc, p.prx, r.id)).state).toBe('done');
+    expect(r.args).toEqual({ v: 1, camera: 'cam1', action: 'camera-test' });
+  });
+  it('a config.set dry run row has dryRun true; previewOf is stored and used once (409 preview_used)', async () => {
+    const p = await p3();
+    const view = (await final(p.acc, p.prx, cmds().create(ACTOR, p.acc, p.prx, 'config.get', { v: 1 }).id)).result as any;
+    const pv = cmds().create(ACTOR, p.acc, p.prx, 'config.set', { v: 1, dryRun: true, baseRevision: view.revision, set: { 'sse.pingS': 7 } });
+    expect(pv.dryRun).toBe(true);
+    expect(pv.previewOf).toBeNull();
+    await final(p.acc, p.prx, pv.id);
+    expect(cmds().usedPreview(pv.id)).toBe(false);
+    expect(cmds().getRaw(p.acc, p.prx, pv.id).rawArgs).toEqual({ v: 1, dryRun: true, baseRevision: view.revision, set: { 'sse.pingS': 7 } });
+    const a = cmds().create(ACTOR, p.acc, p.prx, 'config.set', { v: 1, dryRun: false, baseRevision: view.revision, set: { 'sse.pingS': 7 } }, { previewOf: pv.id });
+    expect(a).toMatchObject({ dryRun: false, previewOf: pv.id });
+    expect(cmds().usedPreview(pv.id)).toBe(true);
+    const before = (s.built.db.prepare('SELECT count(*) n FROM commands').get() as { n: number }).n;
+    expect(() => cmds().create(ACTOR, p.acc, p.prx, 'config.set', { v: 1, dryRun: false, baseRevision: view.revision, set: { 'sse.pingS': 7 } }, { previewOf: pv.id })).toThrow(/preview_used/);
+    expect((s.built.db.prepare('SELECT count(*) n FROM commands').get() as { n: number }).n).toBe(before);
+    expect(cmds().hasOpen(p.prx, 'config.set')).toBe(true);
+    await final(p.acc, p.prx, a.id);
+    expect(cmds().hasOpen(p.prx, 'config.set')).toBe(false);
+    expect(() => cmds().getRaw(p.acc, 'prx_ZZZZZZZZZZZZZZZZZZZZ', pv.id)).toThrow();
+  });
+  it('a conflict answer keeps its name: state failed, outcomeCode conflict', async () => {
+    const p = await p3();
+    const r = cmds().create(ACTOR, p.acc, p.prx, 'config.set', { v: 1, dryRun: true, baseRevision: REV, set: { 'sse.pingS': 7 } });
+    const f = await final(p.acc, p.prx, r.id);
+    expect([f.state, f.outcomeCode]).toEqual(['failed', 'conflict']);
+    expect((f.result as any).current['sse.pingS']).toEqual({ v: 30, s: 'default' });
+  });
+  it('the args summary: config values clamped to 200 characters; camera actions name camera and action', () => {
+    const long = 'x'.repeat(512);
+    const sum = summariseArgs('config.set', { v: 1, dryRun: true, baseRevision: REV, set: { 'cameras.cam1.name': long, 'sse.pingS': 7 } });
+    expect(sum).toEqual({ v: 1, dryRun: true, baseRevision: REV.slice(0, 15), set: { 'cameras.cam1.name': long.slice(0, 200), 'sse.pingS': 7 } });
+    expect(summariseArgs('config.unset', { v: 1, dryRun: false, baseRevision: REV, paths: ['sse.pingS'] })).toEqual({ v: 1, dryRun: false, paths: ['sse.pingS'] });
+    expect(summariseArgs('config.rollback', { v: 1, dryRun: true, cmdId: 'cmd_0123456789ABCDEFGHJK' })).toEqual({ v: 1, dryRun: true, cmdId: 'cmd_0123456789ABCDEFGHJK' });
+    expect(summariseArgs('camera.action', { v: 1, camera: null, action: 'retention-run' })).toEqual({ v: 1, camera: null, action: 'retention-run' });
+    expect(summariseArgs('camera.name.set', { v: 1, camera: 'cam1', name: 'Porch' })).toEqual({ v: 1, camera: 'cam1', name: 'Porch' });
+    expect(summariseArgs('proxy.restart', { v: 1 })).toEqual({ v: 1 });
+    expect(requiredEntries('camera.action', { action: 'camera-reboot' })).toEqual(['camera.action:camera-reboot']);
+    expect(requiredEntries('config.set', {})).toEqual(['config.set']);
   });
 });

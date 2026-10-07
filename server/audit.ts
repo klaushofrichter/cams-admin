@@ -11,12 +11,16 @@ export const AUDIT_ACTIONS = [
   'backup-snapshot', 'backup-now', 'restore-detected',
   'command-create', 'command-result', 'command-expired', 'token-issue', 'token-retire', 'token-revoke',
   'audit-throttled',
+  // P4: cams instances, the service API, import and export.
+  'cams-instance-create', 'cams-instance-update', 'cams-instance-delete', 'cams-instance-block', 'cams-enrollment-code-create', 'cams-enrollment-code-cancel',
+  'cams-enrolled', 'cams-enroll-refused', 'cams-key-confirmed', 'cams-key-revoke', 'cams-auth-refused', 'route-update', 'cams-rotate',
+  'import-run', 'import-apply', 'export-run',
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 const KNOWN = new Set<string>(AUDIT_ACTIONS);
 
 export interface AuditEntry {
-  actorType: 'sysadmin' | 'proxy' | 'system';
+  actorType: 'sysadmin' | 'proxy' | 'system' | 'cams';
   actor: string;
   action: AuditAction;
   accountId?: string | null;

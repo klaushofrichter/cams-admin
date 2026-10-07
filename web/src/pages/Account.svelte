@@ -1,10 +1,12 @@
 <script lang="ts">
+  import { keepEdits } from '../lib/edits';
   import { onMount } from 'svelte';
   import { api, errorText } from '../lib/api';
   import { live } from '../lib/live';
   import { camClass } from '../lib/format';
   import StateChip from '../components/StateChip.svelte';
   import Confirm from '../components/Confirm.svelte';
+  import ImportPanel from '../components/ImportPanel.svelte';
 
   let { accountId, tab }: { accountId: string; tab: string } = $props();
 
@@ -121,10 +123,13 @@
   // --- sims -------------------------------------------------------------------------------
   let simEdit = $state<Record<string, { runsOn: string; controlUrl: string; uiUrl: string; image: string }>>({});
   // The edit buffers, filled when the cameras load (never while rendering).
+  // What the server said last: a reload keeps a buffer being edited (keepEdits).
+  let simSeen: typeof simEdit = {};
   function fillSims() {
     const next: typeof simEdit = {};
     for (const c of cameras) if (c.kind === 'sim') next[c.id] = { runsOn: c.sim?.runsOn ?? 'mac', controlUrl: c.sim?.controlUrl ?? '', uiUrl: c.sim?.uiUrl ?? '', image: c.sim?.image ?? '' };
-    simEdit = next;
+    simEdit = keepEdits(simEdit, simSeen, next);
+    simSeen = next;
   }
   async function saveSim(c: any) {
     const s = simEdit[c.id];
@@ -139,7 +144,7 @@
     <div class="row"><a href="#/accounts" class="muted">Accounts</a><span class="muted">/</span><h2 data-testid="account-title">{account.displayName}</h2><span class="mono muted">{account.name}</span></div>
     {#if admins === 0}<p class="badge warn" data-testid="no-admin-warning">This account has no admin user.</p>{/if}
     <nav class="tabs row">
-      {#each ['overview', 'users', 'proxies', 'cameras', 'sims'] as t}
+      {#each ['overview', 'users', 'proxies', 'cameras', 'sims', 'import'] as t}
         <button class="btn" class:on={tab === t} data-testid="tab-{t}" onclick={() => go(t)}>{t[0].toUpperCase() + t.slice(1)}</button>
       {/each}
     </nav>
@@ -218,7 +223,7 @@
                 <td>{c.name}</td>
                 <td>{c.kind}</td>
                 <td><select value={c.proxyId ?? ''} data-testid="camera-proxy-{c.camsId}" onchange={(e) => assign(c, (e.target as HTMLSelectElement).value)}><option value="">— none —</option>{#each proxies as p}<option value={p.id}>{p.name}</option>{/each}</select></td>
-                <td class="hide-phone mono">{c.proxyCameraId ?? ''}</td>
+                <td class="hide-phone mono">{#if c.proxyId && c.proxyCameraId}<a href="#/accounts/{accountId}/proxies/{c.proxyId}?camera={encodeURIComponent(c.proxyCameraId)}" data-testid="camera-actions-link-{c.camsId}" title="camera actions on the proxy">{c.proxyCameraId}</a>{:else}{c.proxyCameraId ?? ''}{/if}</td>
                 <td><span class="chip {camClass(liveOf(c))}" data-testid="camera-live-{c.camsId}">{liveOf(c) === true ? 'online' : liveOf(c) === false ? 'offline' : 'unknown'}</span></td>
                 {#if tab === 'sims' && simEdit[c.id]}
                   {@const s = simEdit[c.id]}
@@ -244,6 +249,8 @@
         <button class="btn primary" data-testid="camera-add">Add camera</button>
       </form>
       {#if cError}<p class="error" data-testid="camera-error">{cError}</p>{/if}
+    {:else if tab === 'import'}
+      <ImportPanel accountId={accountId} accountName={account.name} />
     {/if}
   </section>
   {#if confirmDelete}

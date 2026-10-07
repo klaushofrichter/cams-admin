@@ -1,0 +1,32 @@
+{
+  "v": 1,
+  "kind": "cams-export",
+  "exportedAt": 1791273600000,
+  "camsVersion": "2026.10.07.1",
+  "source": "cameras-file",
+  "cameras": [
+    {
+      "id": "cam1",
+      "name": "Backyard",
+      "host": "from-proxy",
+      "protocol": "https",
+      "user": "cams",
+      "proxy": {
+        "url": "http://127.0.0.1:8480",
+        "token": {
+          "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+        },
+        "camera": "cam1",
+        "caFingerprint": [
+          "AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB"
+        ]
+      }
+    }
+  ],
+  "counts": {
+    "preferencesUsers": 1,
+    "proxySwitchOff": 0,
+    "tlsCas": 0,
+    "tlsPins": 0
+  }
+}

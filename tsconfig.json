@@ -12,5 +12,5 @@
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true
   },
-  "include": ["server", "test-client", "contract/v1/**/*.json"]
+  "include": ["server", "test-client", "contract/v1/**/*.json", "contract/cams-v1/**/*.json"]
 }

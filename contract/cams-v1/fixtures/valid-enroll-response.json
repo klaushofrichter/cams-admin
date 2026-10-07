@@ -1,0 +1,20 @@
+{
+  "$note": "",
+  "schema": "enroll-response",
+  "message": {
+    "v": 1,
+    "instanceId": "cms_00000000000000000001",
+    "instanceName": "cluster",
+    "keyId": "key_00000000000000000001",
+    "accounts": [
+      "home"
+    ],
+    "serverKeys": [
+      "MCowBQYDK2VwAyEAgTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q="
+    ],
+    "serverKeyFingerprints": [
+      "SHA256:47DEA58EA00FAE9417EE19D76755BFEF690899021132EFFB04FE1F9E4F0C8059"
+    ],
+    "apiUrl": "https://cams-admin.example.net"
+  }
+}

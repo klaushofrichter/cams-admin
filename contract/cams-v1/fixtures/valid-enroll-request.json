@@ -1,0 +1,11 @@
+{
+  "$note": "proof signed by the vectors cams key",
+  "schema": "enroll-request",
+  "message": {
+    "v": 1,
+    "code": "CAC1-7Q2M-K9XD-4HPA-W3ZT-RN6B",
+    "publicKey": "MCowBQYDK2VwAyEA3FF/9SfnvPqwZ/LMYbvvjnX5uo4TMq09QviTjgBF7Yk=",
+    "proof": "zGgtXQluX6p78MSKGJ3+D9wftlj1mzEsOvCRpFUhZcnCPA8eUNzK173TSXNZ7e0E4mxApbBkYjoDQ/oeRoF4CA==",
+    "camsVersion": "2026.10.07.1"
+  }
+}

@@ -15,6 +15,7 @@ import { Buckets } from '../channel/limits';
 import { CLOSE, type Connection } from '../channel/connection';
 import type { Hub } from '../channel/hub';
 import { sendCommand } from './envelope';
+import { redactSecrets } from '../config/redact';
 
 // Signed commands to the connected proxies (migration spec §7; plan Task 5):
 // a queue in the database, one command in flight per proxy, re-sent with the
@@ -31,11 +32,11 @@ const OPEN = `('queued','sent','received')`;
 const FINAL = ['done', 'refused', 'failed', 'expired'];
 
 export type CommandState = 'queued' | 'sent' | 'received' | 'done' | 'refused' | 'failed' | 'expired' | 'unknown';
-export type WireCommand = 'tokens.apply';
+export type WireCommand = 'tokens.apply' | 'config.get' | 'config.set' | 'config.unset' | 'config.rollback' | 'camera.action' | 'camera.name.set' | 'proxy.restart';
 export interface CommandRow {
   id: string; accountId: string; proxyId: string | null; actor: string; command: string; args: Record<string, unknown>; state: CommandState;
   outcomeCode: string | null; result: Record<string, unknown> | null; createdAt: number; sentAt: number | null; finishedAt: number | null; attempts: number;
-  revocationOnly: boolean; retryAfterS: number | null;
+  revocationOnly: boolean; retryAfterS: number | null; dryRun: boolean; previewOf: string | null;
 }
 interface Raw extends CommandRow { rawArgs: Record<string, unknown>; envelope: Record<string, unknown> | null }
 
@@ -45,8 +46,23 @@ export interface CommandsDeps {
 
 type DbRow = Record<string, unknown>;
 
-// What a person may see of a command's args: never a full hash (8 hex digits).
+const VALUE_MAX = 200;
+const clampValue = (x: unknown) => (typeof x === 'string' && x.length > VALUE_MAX ? x.slice(0, VALUE_MAX) : x);
+const pick = (args: Record<string, unknown>, keys: string[]) => Object.fromEntries(keys.filter((k) => k in args).map((k) => [k, args[k]]));
+
+// What a person may see of a command's args: never a full hash (8 hex
+// digits), never a setting value over 200 characters (R3-19).
 export function summariseArgs(command: string, args: Record<string, unknown>): Record<string, unknown> {
+  switch (command) {
+    case 'config.set': {
+      const set = args.set && typeof args.set === 'object' ? (args.set as Record<string, unknown>) : {};
+      return { v: args.v, dryRun: args.dryRun, baseRevision: typeof args.baseRevision === 'string' ? args.baseRevision.slice(0, 15) : null, set: Object.fromEntries(Object.entries(set).map(([p, x]) => [p, clampValue(x)])) };
+    }
+    case 'config.unset': return pick(args, ['v', 'dryRun', 'paths']);
+    case 'config.rollback': return pick(args, ['v', 'dryRun', 'cmdId']);
+    case 'camera.action': return pick(args, ['v', 'camera', 'action', 'input']);
+    case 'camera.name.set': return { v: args.v, camera: args.camera, name: clampValue(args.name) };
+  }
   if (command !== 'tokens.apply') return { v: args.v };
   const tokens = Array.isArray(args.tokens) ? (args.tokens as Record<string, unknown>[]) : [];
   return {
@@ -61,7 +77,21 @@ export function requiredEntries(command: string, args: Record<string, unknown>):
     const tokens = Array.isArray(args.tokens) ? (args.tokens as { kind?: unknown }[]) : [];
     return ['tokens.apply', ...(tokens.some((t) => t?.kind === 'admin') ? ['tokens.apply.admin'] : [])];
   }
+  if (command === 'camera.action') return [`camera.action:${String(args.action)}`];
   return [command];
+}
+
+// I1 (R3-19): a real settings write or rollback names each changed setting, old → new (clamped, redacted).
+function auditChanges(r: { command: string; rawArgs: Record<string, unknown> }, state: CommandState, result: unknown): { changes?: { path: unknown; from?: unknown; to?: unknown }[] } {
+  if (state !== 'done' || !['config.set', 'config.unset', 'config.rollback'].includes(r.command) || r.rawArgs.dryRun !== false) return {};
+  const changes = (result as { changes?: unknown } | null)?.changes;
+  if (!Array.isArray(changes)) return {};
+  return {
+    changes: changes.slice(0, 64).map((c: Record<string, unknown>) => ({
+      path: typeof c?.path === 'string' ? c.path.slice(0, 200) : null,
+      ...('from' in (c ?? {}) ? { from: clampValue(c.from) } : {}), ...('to' in (c ?? {}) ? { to: clampValue(c.to) } : {}),
+    })),
+  };
 }
 
 function toRaw(r: DbRow): Raw {
@@ -74,6 +104,7 @@ function toRaw(r: DbRow): Raw {
     args: summariseArgs(r.command as string, rawArgs), state: r.state as CommandState, outcomeCode: r.outcome_code as string | null, result,
     createdAt: r.created_at as number, sentAt: r.sent_at as number | null, finishedAt: r.finished_at as number | null, attempts: r.attempts as number,
     revocationOnly: r.revocation_only === 1, retryAfterS: Number.isSafeInteger(body?.retryAfterS) ? (body!.retryAfterS as number) : null,
+    dryRun: r.dry_run === 1, previewOf: (r.preview_of as string | null) ?? null,
     rawArgs, envelope,
   };
 }
@@ -112,7 +143,8 @@ export class Commands {
   // revocationOnly (tokens.apply): the set only removes tokens; the proxy
   // accepts it while paused and without an allow entry (never with its env
   // switch off), so the pause and allow pre-checks don't apply.
-  create(actor: string, accountId: string, proxyId: string, command: WireCommand, args: Record<string, unknown>, meta?: { reason?: string; revocationOnly?: boolean }): CommandRow {
+  // previewOf (R3-15): the dry run this real write was made from; each is used once.
+  create(actor: string, accountId: string, proxyId: string, command: WireCommand, args: Record<string, unknown>, meta?: { reason?: string; revocationOnly?: boolean; actorType?: 'sysadmin' | 'system' | 'cams'; previewOf?: string }): CommandRow {
     const revocation = meta?.revocationOnly === true && command === 'tokens.apply';
     const px = this.d.registry.getProxy(accountId, proxyId); // 404 for another account's proxy
     if (px.state !== 'enrolled') throw new ApiError(409, 'not_enrolled');
@@ -123,14 +155,22 @@ export class Commands {
     if (!v.ok) throw new ApiError(400, 'invalid_args');
     if (!revocation) for (const need of requiredEntries(command, args)) if (!rep.commands.allow.includes(need)) throw new ApiError(409, 'not_allowed_on_proxy');
     const now = this.d.clock.now();
+    const previewOf = meta?.previewOf ?? null;
+    if (previewOf && this.usedPreview(previewOf)) throw new ApiError(409, 'preview_used');
     if (!this.budget.take(proxyId, now).ok) throw new ApiError(429, 'rate_limited');
     const id = newId('cmd');
     tx(this.d.db, () => {
-      this.q(`INSERT INTO commands (id, account_id, proxy_id, actor, command, args, revocation_only, state, created_at) VALUES (?,?,?,?,?,?,?,'queued',?)`)
-        .run(id, accountId, proxyId, actor, command, JSON.stringify(args), revocation ? 1 : 0, now);
+      try {
+        this.q(`INSERT INTO commands (id, account_id, proxy_id, actor, command, args, dry_run, revocation_only, preview_of, state, created_at) VALUES (?,?,?,?,?,?,?,?,?,'queued',?)`)
+          .run(id, accountId, proxyId, actor, command, JSON.stringify(args), args.dryRun === true ? 1 : 0, revocation ? 1 : 0, previewOf, now);
+      } catch (e) {
+        // Two applies of one preview racing: the unique index decides.
+        if (previewOf && /UNIQUE/.test((e as Error).message)) throw new ApiError(409, 'preview_used');
+        throw e;
+      }
       this.d.audit.write({
-        actorType: actor === 'system' ? 'system' : 'sysadmin', actor, action: 'command-create', accountId, targetType: 'proxy', targetId: proxyId, targetLabel: px.name, outcome: 'ok',
-        detail: { cmdId: id, command, ...(meta?.reason ? { reason: meta.reason } : {}), ...(revocation ? { revocationOnly: true } : {}), args: summariseArgs(command, args) },
+        actorType: meta?.actorType ?? (actor === 'system' ? 'system' : 'sysadmin'), actor, action: 'command-create', accountId, targetType: 'proxy', targetId: proxyId, targetLabel: px.name, outcome: 'ok',
+        detail: { cmdId: id, command, ...(meta?.reason ? { reason: meta.reason } : {}), ...(previewOf ? { previewOf } : {}), ...(revocation ? { revocationOnly: true } : {}), args: summariseArgs(command, args) },
       });
     });
     queueMicrotask(() => this.safeDispatch(proxyId));
@@ -153,6 +193,29 @@ export class Commands {
     if (!r) throw new ApiError(404, 'not_found');
     const raw = toRaw(r);
     return { ...view(raw), resultEnvelope: raw.envelope };
+  }
+
+  // The row with its full args (the preview copy for an apply; never served).
+  getRaw(accountId: string, proxyId: string, cmdId: string): CommandRow & { rawArgs: Record<string, unknown> } {
+    this.d.registry.getProxy(accountId, proxyId);
+    const r = this.q('SELECT * FROM commands WHERE id = ? AND account_id = ? AND proxy_id = ?').get(cmdId, accountId, proxyId) as DbRow | undefined;
+    if (!r) throw new ApiError(404, 'not_found');
+    const raw = toRaw(r);
+    return { ...view(raw), rawArgs: raw.rawArgs };
+  }
+
+  // Has a real write already been made from this dry run?
+  usedPreview(previewId: string): boolean {
+    return !!this.q('SELECT 1 FROM commands WHERE preview_of = ?').get(previewId);
+  }
+
+  // An open (queued, sent or received) command of this name for this proxy.
+  hasOpen(proxyId: string, command: WireCommand): boolean {
+    return this.openId(proxyId, command) !== null;
+  }
+  openId(proxyId: string, command: WireCommand): string | null {
+    const r = this.q(`SELECT id FROM commands WHERE proxy_id = ? AND command = ? AND state IN ${OPEN} ORDER BY rowid LIMIT 1`).get(proxyId, command) as { id: string } | undefined;
+    return r?.id ?? null;
   }
 
   private byId(id: string): Raw {
@@ -202,6 +265,8 @@ export class Commands {
     const state: CommandState = r.state === 'queued' && r.attempts === 0 ? 'expired' : 'unknown';
     tx(this.d.db, () => {
       this.q(`UPDATE commands SET state = ?, finished_at = ? WHERE id = ? AND state IN ${OPEN}`).run(state, now, r.id);
+      // Never sent: its dry run may be applied again (#20).
+      if (state === 'expired') this.q(`UPDATE commands SET preview_of = NULL WHERE id = ?`).run(r.id);
       this.d.audit.write({ actorType: 'system', actor: 'system', action: 'command-expired', accountId: r.accountId, targetType: 'proxy', targetId: r.proxyId, outcome: 'failed', detail: { cmdId: r.id, command: r.command, state } });
     });
     this.inflightConn.delete(r.id);
@@ -247,14 +312,31 @@ export class Commands {
     if (FINAL.includes(r.state)) return; // already final (a duplicate answer)
     const state: CommandState = b.status === 'ok' ? 'done' : b.status === 'refused' ? 'refused' : 'failed';
     if (state === 'done' && !validateResultPayload(r.command, b.result)) this.d.log.warn({ cmdId: r.id, proxyId: c.proxyId }, 'command_result_unreadable');
-    const text = JSON.stringify(m);
+    // I2: nothing secret-shaped from a proxy is stored or served. A redacted
+    // result loses its signature (the signed bytes held the secret).
+    let stored: Record<string, unknown> = m as unknown as Record<string, unknown>;
+    if (r.command !== 'tokens.apply' && b.result !== undefined) {
+      const red = redactSecrets(b.result);
+      if (red.changed) {
+        const { sig: _sig, ...rest } = stored;
+        stored = { ...rest, body: { ...b, result: red.value }, redacted: true };
+        this.d.log.warn({ cmdId: r.id, proxyId: c.proxyId }, 'command_result_redacted');
+      }
+    }
+    const text = JSON.stringify(stored);
+    const body = stored.body as Record<string, unknown>;
     tx(this.d.db, () => {
       this.q(`UPDATE commands SET state = ?, outcome_code = ?, result = ?, result_sig = ?, finished_at = ? WHERE id = ?`)
-        .run(state, typeof b.code === 'string' ? b.code.slice(0, 64) : b.status === 'conflict' ? 'conflict' : null, text.length <= 98304 ? text : null, typeof m.sig === 'string' ? m.sig : null, this.d.clock.now(), r.id);
+        .run(state, typeof b.code === 'string' ? b.code.slice(0, 64) : b.status === 'conflict' ? 'conflict' : null, text.length <= 98304 ? text : null, typeof stored.sig === 'string' ? stored.sig : null, this.d.clock.now(), r.id);
+      // A refused apply never ran: its dry run may be applied again (#20).
+      if (state === 'refused') this.q(`UPDATE commands SET preview_of = NULL WHERE id = ? AND preview_of IS NOT NULL`).run(r.id);
       this.d.audit.write({
         actorType: 'proxy', actor: c.proxyId!, action: 'command-result', accountId: r.accountId, targetType: 'proxy', targetId: c.proxyId,
         outcome: state === 'done' ? 'ok' : state === 'refused' ? 'refused' : 'failed',
-        detail: { cmdId: r.id, command: r.command, status: typeof b.status === 'string' ? b.status.slice(0, 16) : null, code: typeof b.code === 'string' ? b.code.slice(0, 64) : null, duplicate: b.duplicate === true, late: r.state === 'unknown' },
+        detail: {
+          cmdId: r.id, command: r.command, status: typeof b.status === 'string' ? b.status.slice(0, 16) : null, code: typeof b.code === 'string' ? b.code.slice(0, 64) : null, duplicate: b.duplicate === true, late: r.state === 'unknown',
+          ...auditChanges(r, state, body.result),
+        },
       });
     });
     this.inflightConn.delete(r.id);

@@ -1,0 +1,35 @@
+{
+  "$note": "cams-admin mode, one held change and one problem",
+  "schema": "report-request",
+  "message": {
+    "v": 1,
+    "mode": "cams-admin",
+    "version": "2026.10.07.1",
+    "appliedRevision": "r:0123456789abcdef",
+    "cacheVerifiedAt": 1791273600000,
+    "lastPullAt": 1791273600000,
+    "held": [
+      {
+        "accountId": "acc_00000000000000000001",
+        "camsId": "cam1",
+        "fields": [
+          "host"
+        ]
+      }
+    ],
+    "keptOld": [],
+    "shadow": null,
+    "tokens": {
+      "managed": 2,
+      "pending": 0,
+      "legacy": 0
+    },
+    "problems": [
+      {
+        "code": "snapshot_invalid",
+        "accountId": "acc_00000000000000000002",
+        "detail": "camera 3: protocol"
+      }
+    ]
+  }
+}

@@ -58,7 +58,18 @@ export const signedText = {
   enroll: (code: string, publicKey: string) => `cams-admin enroll v1\n${code}\n${publicKey}`,
   challenge: (connId: string, nonce: string, serverTime: number) => `cams-admin/v1 challenge\n${connId}\n${nonce}\n${serverTime}`,
   hello: (connId: string, nonce: string, proxyId: string, keyId: string, ts: number) => `cams-admin/v1 hello\n${connId}\n${nonce}\n${proxyId}\n${keyId}\n${ts}`,
+  // cams-v1 (contract/cams-v1): a cams instance's enrollment proof. Its own
+  // text, so a proof can never be replayed between the two enroll endpoints.
+  camsEnroll: (code: string, publicKey: string) => `cams-admin cams-enroll v1\n${code}\n${publicKey}`,
 };
+
+// cams-v1: lower-case hex SHA-256 over the exact bytes ("" for an empty body).
+export const sha256hex = (b: Buffer | string): string => createHash('sha256').update(b).digest('hex');
+// cams-v1: what a cams instance signs per request, and cams-admin per answer.
+export const camsRequestText = (method: string, pathAndQuery: string, ts: number, nonce: string, body: Buffer): string =>
+  `cams-admin/v1 request\n${method.toUpperCase()}\n${pathAndQuery}\n${ts}\n${nonce}\n${sha256hex(body)}`;
+export const camsResponseText = (status: number, nonce: string, body: Buffer): string =>
+  `cams-admin/v1 response\n${status}\n${nonce}\n${sha256hex(body)}`;
 
 // Contract P2: a signed envelope (command, result, event) carries
 // sig = base64(Ed25519(UTF-8(jcs(envelope without sig)))), computed over the

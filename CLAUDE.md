@@ -26,6 +26,16 @@ cam-sim). Spec: `docs/superpowers/specs/2026-10-06-cams-admin-phase1-design.md`.
   normative; a change to a command, a result or an event goes into
   `contract/` first, and `scripts/contract/cam-proxy-check.sh` must stay
   green against cam-proxy `main`.
+- **The cams service API:** its check order (`contract/cams-v1/README.md`)
+  is normative; a change goes into `contract/cams-build.ts` first
+  (`npm run contract:make`) and cams vendors `contract/cams-v1/`. A snapshot,
+  report, import diff or export never carries a password, token, hash, code
+  or key (the guard tests fill columns with markers).
+- **P3 settings changes go through preview → apply by preview id;** never add
+  a route that writes proxy settings without a preview. A new remote-settable
+  setting goes into `contract/v1/remote-settable.json` (via
+  `contract/build.ts`) first. Remote writes may never make a proxy delete
+  data (retention and size caps only up, `storage.*` local only).
 - **Tokens are shown once and stored only as SHA-256 hashes** (8 hex digits
   in views and audit details). Never log, store, audit or test with a real
   token.
@@ -39,4 +49,5 @@ cam-sim). Spec: `docs/superpowers/specs/2026-10-06-cams-admin-phase1-design.md`.
 ## Ports (local)
 
 cams-admin 29000, fake Google 29001, local S3 29010, local-stack proxies
-29100–29400, cam-sims 29500+, restore test 29012–29031, e2e 29190–29195.
+29100–29400, cam-sims 29500+, local-stack cams instances 29600–29619,
+restore test 29012–29031, e2e 29190–29195.

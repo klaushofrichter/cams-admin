@@ -1,0 +1,8 @@
+{
+  "$note": "signed like every answer past the header check",
+  "schema": "error",
+  "message": {
+    "error": "clock_skew",
+    "serverTime": 1791273600000
+  }
+}

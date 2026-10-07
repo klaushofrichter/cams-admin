@@ -18,6 +18,9 @@ export interface Limits {
   signinGlobal: number; // per 15 min
   writesPerSessionPerMin: number;
   sseStreamsPerSession: number;
+  camsPerInstancePerMin: number; // signed /cams/v1 requests per instance
+  camsFailedSigPer10Min: number; // per named instance, and once for unknown ids (unknown key, bad signature)
+  camsGlobalPerMin: number; // /cams/v1 requests per well-formed instance id, and once for the rest (a ceiling before the check)
 }
 
 export interface Config {
@@ -174,6 +177,9 @@ export function loadConfig(env: Env = process.env): Config {
       signinGlobal: num(env, 'LIMIT_SIGNIN_GLOBAL', 60, 1, 100_000),
       writesPerSessionPerMin: num(env, 'LIMIT_WRITES_PER_SESSION', 120, 1, 100_000),
       sseStreamsPerSession: 5,
+      camsPerInstancePerMin: num(env, 'LIMIT_CAMS_PER_INSTANCE', 60, 1, 100_000),
+      camsFailedSigPer10Min: num(env, 'LIMIT_CAMS_FAILED_SIG', 300, 1, 100_000),
+      camsGlobalPerMin: num(env, 'LIMIT_CAMS_GLOBAL', 3000, 1, 1_000_000),
     },
   };
 }

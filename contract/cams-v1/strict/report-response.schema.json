@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cams-admin.skylar.technology/contract/cams-v1/strict/report-response.schema.json",
+  "title": "POST /cams/v1/report 200 answer",
+  "type": "object",
+  "properties": {
+    "changed": {
+      "type": "boolean"
+    },
+    "revision": {
+      "type": "string",
+      "pattern": "^r:[0-9a-f]{16}$"
+    }
+  },
+  "required": [
+    "changed",
+    "revision"
+  ],
+  "additionalProperties": false
+}

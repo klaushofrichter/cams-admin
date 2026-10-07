@@ -12,10 +12,15 @@
 # (SeaweedFS in Docker, :29010) for its backups unless --no-s3. Never the
 # real bucket, the real camera, the Pi or the cluster.
 #
-# cam-proxy (origin/main) has no cams-admin client yet: each proxy is
-# enrolled by the protocol test client in bridge mode, which forwards that
-# proxy's real GET /api/local/health as its heartbeat. Once cam-proxy ships
-# its client, `admin-enroll` replaces the bridge.
+# Enrollment: each proxy enrolls itself with its real `admin-enroll` (the
+# code on stdin), with commands possible (CAMPROXY_ADMIN_COMMANDS=on) and
+# nothing allowed: the P3 check allows entries with each proxy's LOCAL admin
+# token. LOCALSTACK_BRIDGE=1 (or a cam-proxy without src/fleet/commands.ts)
+# uses the protocol test client in bridge mode instead, forwarding the
+# proxy's GET /api/local/health as its heartbeat.
+# LOCALSTACK_CAM_PROXY_REF picks the cam-proxy branch (default origin/main).
+# Each proxy runs under supervise.sh, which starts it again after a
+# requested restart (exit 0), as systemd or docker would.
 #
 # cam-sims: 29500 + 10·n (+0 http, +1 https, +2 control/UI, +3 rtsp, +4 onvif, +5 baichuan).
 # Stop with stop.sh; secrets are per run, mode 600, never printed. Every
@@ -50,7 +55,10 @@ for p in "${PROXIES[@]}"; do
 done
 require_ports_free "${ports[@]}"
 
-prepare_repo cam-proxy "$CAM_PROXY_REPO"
+prepare_repo cam-proxy "$CAM_PROXY_REPO" "${LOCALSTACK_CAM_PROXY_REF:-origin/main}"
+BRIDGE="${LOCALSTACK_BRIDGE:-0}"
+[ -f "$WORK/src-cam-proxy/src/fleet/commands.ts" ] || BRIDGE=1
+note "enrollment: $([ "$BRIDGE" = 1 ] && echo 'bridge (test client)' || echo "real admin-enroll (cam-proxy $(git -C "$WORK/src-cam-proxy" rev-parse --short HEAD))")"
 prepare_repo cam-sim "$CAM_SIM_REPO"
 note "cams-admin: build of $(git -C "$REPO" rev-parse --short HEAD) (log $LOGS/build-cams-admin.log)"
 ( cd "$REPO" && npm run build ) > "$LOGS/build-cams-admin.log" 2>&1 || die "cams-admin build failed"
@@ -115,17 +123,22 @@ for p in "${PROXIES[@]}"; do
       '. + [{ id: $id, name: $nm, host: ("127.0.0.1:" + ($http|tostring)), protocol: "http", user: "proxy", webUiUrl: "none", onvifPort: $onvif, rtspPort: $rtsp, baichuanPort: $bc, statusPollS: 5 }]' <<<"$cams_json")"
     plan_cams="$(jq -c --arg id "cam$i" --arg cid "$name-cam$i" --arg nm "$simname" --argjson cp "$(sim_port $n 2)" '. + [{ id: $id, camsId: $cid, name: $nm, controlPort: $cp }]' <<<"$plan_cams")"
   done
-  jq -n --arg data "$d/data" --arg go2rtc "$GO2RTC_BIN" --argjson port "$port" --argjson cams "$cams_json" '{
+  # beta-2 has an NTP server set locally (RFC 5737): the P3 check pushes it to a cam-sim.
+  ntp='null'; [ "$name" = beta-2 ] && ntp='{"server":"192.0.2.123"}'
+  jq -n --arg data "$d/data" --arg go2rtc "$GO2RTC_BIN" --argjson port "$port" --argjson cams "$cams_json" --argjson ntp "$ntp" '{
     server: { port: $port, dataDir: $data, logLevel: "warn" },
     go2rtc: { binary: $go2rtc, rtspPort: ($port + 1), apiPort: ($port + 2) },
     stills: { enabled: false, stream: "sub" },
     storage: { maxBytes: 1073741824, minFreeBytes: 1073741824 },
     analytics: { googleVision: { enabled: false } },
     ftp: { enabled: false },
-    cameras: $cams }' > "$d/config.json"
-  start_bg "$name" env -C "$WORK/src-cam-proxy" -u CAMPROXY_GOOGLE_VISION_KEY -u CAMPROXY_ENV_FILE \
-    CAMPROXY_CONFIG="$d/config.json" CAMPROXY_TOKENS_FILE="$s/proxy_tokens" CAMPROXY_ADMIN_TOKEN_FILE="$s/proxy_admin_token" CAMPROXY_CAMERA_PASSWORD_FILE="$s/camera_password" \
-    LIVESTACK_BIND=127.0.0.1 node --require "$HERE/bind-local.cjs" dist/src/cli.js
+    cameras: $cams } + (if $ntp == null then {} else { ntp: $ntp } end)' > "$d/config.json"
+  PXENV=(-u CAMPROXY_GOOGLE_VISION_KEY -u CAMPROXY_ENV_FILE CAMPROXY_CONFIG="$d/config.json" CAMPROXY_TOKENS_FILE="$s/proxy_tokens" CAMPROXY_ADMIN_TOKEN_FILE="$s/proxy_admin_token"
+    CAMPROXY_CAMERA_PASSWORD_FILE="$s/camera_password" CAMPROXY_ADMIN_COMMANDS=on LIVESTACK_BIND=127.0.0.1)
+  # gamma-1 is cut later (an outage): it runs without the supervisor.
+  sup=("$HERE/supervise.sh"); [ "$name" = gamma-1 ] && sup=()
+  start_bg "$name" env -C "$WORK/src-cam-proxy" "${PXENV[@]}" ${sup[@]+"${sup[@]}"} node --require "$HERE/bind-local.cjs" "$WORK/src-cam-proxy/dist/src/cli.js"
+  printf '%s\n' "${PXENV[@]}" > "$d/env" && chmod 600 "$d/env"
   wait_http "http://127.0.0.1:$port/health" 60 "cam-proxy $name"
   PLAN="$(jq -c --arg acc "$acc" --arg name "$name" --argjson port "$port" --argjson cams "$plan_cams" '
     (if any(.accounts[]; .name == $acc) then . else .accounts += [{ name: $acc, displayName: ($acc | ascii_upcase), users: [{ email: ("admin@" + $acc + ".example.com"), role: "admin" }, { email: "viewer@example.com", role: "viewer" }], proxies: [] }] end)
@@ -136,24 +149,53 @@ done
 # --- the registry and the enrollments; the bridges --------------------------------------
 printf '%s' "$PLAN" > "$RUN/plan.json"
 mkdir -p "$RUN/keys" && chmod 700 "$RUN/keys"
-( cd "$REPO" && npx tsx scripts/localstack/setup.ts --url "http://localhost:$ADMIN_PORT" --cookie-file "$RUN/cams-admin/cookie" --plan "$RUN/plan.json" --keys "$RUN/keys" )
-for p in "${PROXIES[@]}"; do
-  read -r acc name port _ <<<"$p"
-  start_bg "bridge-$name" env -C "$REPO" node --import tsx "$REPO/test-client/cli.ts" bridge --key "$RUN/keys/$acc-$name.json" --health "http://127.0.0.1:$port/api/local/health"
-done
-# gamma-1: wait for its first heartbeat, then cut it: the bridge is killed
-# without a bye (an outage, not a deliberate stop, which would show
-# "stopped"), the proxy stopped. Offline after OFFLINE_AFTER_S.
-for _ in $(seq 1 60); do grep -q 'admin_connected' "$LOGS/bridge-gamma-1.log" 2>/dev/null && break; sleep 1; done
-sleep 2
-while read -r pid pname; do
-  case "$pname" in
-    bridge-gamma-1) ours "$pid" && kill -KILL "$pid" 2>/dev/null || true ;;
-    gamma-1) ours "$pid" && kill -TERM "$pid" 2>/dev/null || true ;;
-  esac
-done < "$PIDS"
-awk '$2 != "gamma-1" && $2 != "bridge-gamma-1"' "$PIDS" > "$PIDS.tmp" && mv "$PIDS.tmp" "$PIDS"
+if [ "$BRIDGE" = 1 ]; then
+  ( cd "$REPO" && npx tsx scripts/localstack/setup.ts --url "http://localhost:$ADMIN_PORT" --cookie-file "$RUN/cams-admin/cookie" --plan "$RUN/plan.json" --keys "$RUN/keys" )
+  for p in "${PROXIES[@]}"; do
+    read -r acc name port _ <<<"$p"
+    start_bg "bridge-$name" env -C "$REPO" node --import tsx "$REPO/test-client/cli.ts" bridge --key "$RUN/keys/$acc-$name.json" --health "http://127.0.0.1:$port/api/local/health" --allow tokens.apply,tokens.apply.admin
+  done
+  # gamma-1: wait for its first heartbeat, then cut it: the bridge is killed
+  # without a bye (an outage, not a deliberate stop, which would show
+  # "stopped"), the proxy stopped. Offline after OFFLINE_AFTER_S.
+  for _ in $(seq 1 60); do grep -q 'admin_connected' "$LOGS/bridge-gamma-1.log" 2>/dev/null && break; sleep 1; done
+  sleep 2
+  while read -r pid pname; do
+    case "$pname" in
+      bridge-gamma-1) ours "$pid" && kill -KILL "$pid" 2>/dev/null || true ;;
+      gamma-1) ours "$pid" && kill -TERM "$pid" 2>/dev/null || true ;;
+    esac
+  done < "$PIDS"
+  awk '$2 != "gamma-1" && $2 != "bridge-gamma-1"' "$PIDS" > "$PIDS.tmp" && mv "$PIDS.tmp" "$PIDS"
+else
+  # The registry and a code per proxy (files, mode 600); each proxy enrolls itself.
+  ( cd "$REPO" && npx tsx scripts/localstack/setup.ts --url "http://localhost:$ADMIN_PORT" --cookie-file "$RUN/cams-admin/cookie" --plan "$RUN/plan.json" --codes "$RUN/codes" )
+  for p in "${PROXIES[@]}"; do
+    read -r acc name port _ <<<"$p"
+    env -C "$WORK/src-cam-proxy" $(cat "$RUN/$name/env") node "$WORK/src-cam-proxy/dist/src/cli.js" admin-enroll --url "http://localhost:$ADMIN_PORT" < "$RUN/codes/$acc-$name" > "$LOGS/enroll-$name.log" 2>&1 \
+      || die "admin-enroll of $name failed (see $LOGS/enroll-$name.log)"
+    rm -f "$RUN/codes/$acc-$name"
+    # As the bridges did: tokens.apply allowed locally (the P4 rehearsal issues tokens); nothing of P3.
+    put_secret "$RUN/$name/secrets/admin_header" "Authorization: Bearer $(cat "$RUN/$name/secrets/proxy_admin_token")"
+    curl -fsS -o /dev/null -X PUT -H @"$RUN/$name/secrets/admin_header" -H 'Content-Type: application/json' \
+      --data '{"allow":["tokens.apply","tokens.apply.admin"]}' "http://127.0.0.1:$port/control/admin/commands" || die "$name: could not allow tokens.apply"
+    note "$name enrolled itself (admin-enroll); tokens.apply allowed locally"
+  done
+  ( cd "$REPO" && npx tsx scripts/localstack/setup.ts --url "http://localhost:$ADMIN_PORT" --cookie-file "$RUN/cams-admin/cookie" --wait-live alpha-1,beta-1,beta-2,gamma-1 )
+  # gamma-1: connected, then cut without a bye (SIGKILL: an outage, not a stop). Offline after OFFLINE_AFTER_S.
+  while read -r pid pname; do [ "$pname" = gamma-1 ] && ours "$pid" && kill -KILL "$pid" 2>/dev/null || true; done < "$PIDS"
+  awk '$2 != "gamma-1"' "$PIDS" > "$PIDS.tmp" && mv "$PIDS.tmp" "$PIDS"
+fi
 runenv_put ADMIN_URL "http://localhost:$ADMIN_PORT"
+
+# --- P4: two cams instances, enrolled by the reference cams client -------------------------
+( cd "$REPO" && npx tsx scripts/localstack/cams-setup.ts --url "http://localhost:$ADMIN_PORT" --cookie-file "$RUN/cams-admin/cookie" --keys "$RUN/cams" )
+CAMS_REPO="${LOCALSTACK_CAMS_REPO:-$DEV_DIR/cams}"
+if git -C "$CAMS_REPO" fetch -q origin main 2>/dev/null && git -C "$CAMS_REPO" show origin/main:server/cli.ts 2>/dev/null | grep -q admin-enroll; then
+  note "cams main has a cams-admin client: run cams against this stack with its livestack admin scenario (cams docs/livestack.md)"
+else
+  note "cams main has no cams-admin client yet: cams instances skipped (the reference client holds their keys in $RUN/cams)"
+fi
 
 cat <<EOF
 
@@ -162,5 +204,6 @@ Local stack up (work dir $WORK):
   accounts    alpha (alpha-1: 2 sims), beta (beta-1: 1, beta-2: 3), gamma (gamma-1: stopped, offline after $((HB * 3)) s)
   proxies     http://127.0.0.1:29100 / 29200 / 29300 (cam-proxy admin UIs)
   backups     $([ "$S3" = 1 ] && echo "local S3 :$S3_PORT, bucket localstack" || echo "local folder (no S3)")
+  cams        instances cms-main (alpha, beta) and cms-pi (alpha, loopback route), keys in $RUN/cams
 Stop: $HERE/stop.sh
 EOF

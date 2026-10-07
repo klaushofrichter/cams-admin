@@ -1,0 +1,376 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cams-admin.skylar.technology/contract/cams-v1/strict/snapshot.schema.json",
+  "title": "GET /cams/v1/config 200 answer: the signed snapshot",
+  "type": "object",
+  "properties": {
+    "v": {
+      "const": 1
+    },
+    "type": {
+      "const": "cams-config"
+    },
+    "instance": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^cms_[0-9A-HJKMNP-TV-Z]{20}$"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "rotateBefore": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "rotateBefore"
+      ],
+      "additionalProperties": false
+    },
+    "revision": {
+      "type": "string",
+      "pattern": "^r:[0-9a-f]{16}$"
+    },
+    "generatedAt": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "accounts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^acc_[0-9A-HJKMNP-TV-Z]{20}$"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 32
+          },
+          "displayName": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "users": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "email": {
+                  "type": "string",
+                  "maxLength": 254
+                },
+                "role": {
+                  "type": "string",
+                  "enum": [
+                    "admin",
+                    "viewer"
+                  ]
+                },
+                "disabled": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "email",
+                "role",
+                "disabled"
+              ],
+              "additionalProperties": false
+            },
+            "maxItems": 500
+          },
+          "proxies": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^prx_[0-9A-HJKMNP-TV-Z]{20}$"
+                },
+                "name": {
+                  "type": "string",
+                  "maxLength": 32
+                },
+                "displayName": {
+                  "type": "string",
+                  "maxLength": 200
+                },
+                "url": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 512
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "adminUiUrl": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 512
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "tlsServername": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 253
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "caFingerprints": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^SHA256:[0-9A-F]{64}$"
+                  },
+                  "maxItems": 2
+                },
+                "tokens": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "pattern": "^tok_[0-9A-HJKMNP-TV-Z]{20}$"
+                      },
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "client",
+                          "admin"
+                        ]
+                      },
+                      "state": {
+                        "type": "string",
+                        "enum": [
+                          "pending",
+                          "active",
+                          "retiring",
+                          "revoked"
+                        ]
+                      },
+                      "retireAt": {
+                        "anyOf": [
+                          {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "kind",
+                      "state",
+                      "retireAt"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "maxItems": 64
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "displayName",
+                "url",
+                "adminUiUrl",
+                "tlsServername",
+                "caFingerprints",
+                "tokens"
+              ],
+              "additionalProperties": false
+            },
+            "maxItems": 64
+          },
+          "cameras": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^cam_[0-9A-HJKMNP-TV-Z]{20}$"
+                },
+                "camsId": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+                },
+                "name": {
+                  "type": "string",
+                  "maxLength": 200
+                },
+                "proxyId": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "pattern": "^prx_[0-9A-HJKMNP-TV-Z]{20}$"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "proxyCameraId": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 32
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "host": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 255
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "protocol": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "enum": [
+                        "https",
+                        "http"
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "tlsServername": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 253
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "cameraUser": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 64
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "webUiUrl": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 512
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "webUiNote": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 120
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "camsId",
+                "name",
+                "proxyId",
+                "proxyCameraId",
+                "host",
+                "protocol",
+                "tlsServername",
+                "cameraUser",
+                "webUiUrl",
+                "webUiNote"
+              ],
+              "additionalProperties": false
+            },
+            "maxItems": 256
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "displayName",
+          "revision",
+          "users",
+          "proxies",
+          "cameras"
+        ],
+        "additionalProperties": false
+      },
+      "maxItems": 64
+    },
+    "sig": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9+/]{86}==$"
+    }
+  },
+  "required": [
+    "v",
+    "type",
+    "instance",
+    "revision",
+    "generatedAt",
+    "accounts",
+    "sig"
+  ],
+  "additionalProperties": false
+}

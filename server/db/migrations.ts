@@ -227,4 +227,95 @@ CREATE TABLE proxy_token_state (
   applied_revision INTEGER NOT NULL DEFAULT 0
 ) STRICT;
 `),
+  // 5: P4 (migration spec §5, plan rulings R4-1…R4-4): cams instances, their
+  // keys, codes, served accounts and routes; one config_revision per account,
+  // bumped by triggers inside the writer's transaction (so no registry path
+  // can forget it); audit actor type 'cams' (the table is rebuilt for its CHECK).
+  (db) => db.exec(`
+CREATE TABLE cams_instances (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE CHECK (length(name) BETWEEN 1 AND 32),
+  display_name TEXT NOT NULL,
+  base_url TEXT, notes TEXT,
+  state TEXT NOT NULL CHECK (state IN ('pending','enrolled','revoked')),
+  rotate_before INTEGER,
+  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, version INTEGER NOT NULL DEFAULT 1
+) STRICT;
+CREATE TABLE cams_instance_keys (
+  id TEXT PRIMARY KEY,
+  instance_id TEXT NOT NULL REFERENCES cams_instances(id) ON DELETE CASCADE,
+  public_key TEXT NOT NULL UNIQUE, fingerprint TEXT NOT NULL,
+  created_at INTEGER NOT NULL, enrollment_id TEXT, confirmed_at INTEGER, last_seen_at INTEGER,
+  revoked_at INTEGER, revoked_reason TEXT CHECK (revoked_reason IN ('admin','re-enrolled','instance-deleted','blocked'))
+) STRICT;
+CREATE UNIQUE INDEX cams_keys_one_active ON cams_instance_keys(instance_id) WHERE revoked_at IS NULL AND confirmed_at IS NOT NULL;
+CREATE UNIQUE INDEX cams_keys_one_pending ON cams_instance_keys(instance_id) WHERE revoked_at IS NULL AND confirmed_at IS NULL;
+CREATE TABLE cams_enrollment_codes (
+  id TEXT PRIMARY KEY,
+  instance_id TEXT NOT NULL REFERENCES cams_instances(id) ON DELETE CASCADE,
+  code_hash TEXT NOT NULL UNIQUE, created_by TEXT NOT NULL,
+  created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, used_at INTEGER, cancelled_at INTEGER
+) STRICT;
+CREATE UNIQUE INDEX cams_codes_one_live ON cams_enrollment_codes(instance_id) WHERE used_at IS NULL AND cancelled_at IS NULL;
+CREATE TABLE cams_instance_accounts (
+  instance_id TEXT NOT NULL REFERENCES cams_instances(id) ON DELETE CASCADE,
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  PRIMARY KEY (instance_id, account_id)
+) STRICT;
+CREATE TABLE cams_instance_routes (
+  instance_id TEXT NOT NULL REFERENCES cams_instances(id) ON DELETE CASCADE,
+  proxy_id TEXT NOT NULL REFERENCES proxies(id) ON DELETE CASCADE,
+  url TEXT, hidden INTEGER NOT NULL DEFAULT 0 CHECK (hidden IN (0,1)),
+  PRIMARY KEY (instance_id, proxy_id)
+) STRICT;
+CREATE INDEX cams_routes_proxy ON cams_instance_routes(proxy_id);
+CREATE TABLE config_revision (
+  account_id TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+  revision INTEGER NOT NULL DEFAULT 1
+) STRICT;
+INSERT INTO config_revision (account_id) SELECT id FROM accounts;
+CREATE TRIGGER rev_account_ins AFTER INSERT ON accounts BEGIN INSERT INTO config_revision (account_id) VALUES (NEW.id); END;
+CREATE TRIGGER rev_account_upd AFTER UPDATE ON accounts BEGIN UPDATE config_revision SET revision = revision + 1 WHERE account_id = NEW.id; END;
+${['account_users', 'proxies', 'cameras', 'proxy_tokens'].map((t) => `
+CREATE TRIGGER rev_${t}_ins AFTER INSERT ON ${t} BEGIN UPDATE config_revision SET revision = revision + 1 WHERE account_id = NEW.account_id; END;
+CREATE TRIGGER rev_${t}_upd AFTER UPDATE ON ${t} BEGIN UPDATE config_revision SET revision = revision + 1 WHERE account_id IN (NEW.account_id, OLD.account_id); END;
+CREATE TRIGGER rev_${t}_del AFTER DELETE ON ${t} BEGIN UPDATE config_revision SET revision = revision + 1 WHERE account_id = OLD.account_id; END;`).join('')}
+${['INSERT', 'UPDATE', 'DELETE'].map((op) => `
+CREATE TRIGGER rev_routes_${op.toLowerCase()} AFTER ${op} ON cams_instance_routes BEGIN
+  UPDATE config_revision SET revision = revision + 1 WHERE account_id IN (SELECT account_id FROM proxies WHERE id IN (${op === 'DELETE' ? 'OLD.proxy_id' : op === 'INSERT' ? 'NEW.proxy_id' : 'NEW.proxy_id, OLD.proxy_id'}));
+END;`).join('')}
+
+CREATE TABLE audit_log_p4 (
+  id TEXT PRIMARY KEY,
+  at INTEGER NOT NULL,
+  actor_type TEXT NOT NULL CHECK (actor_type IN ('sysadmin','proxy','system','cams')),
+  actor TEXT NOT NULL,
+  action TEXT NOT NULL,
+  account_id TEXT,
+  target_type TEXT, target_id TEXT, target_label TEXT,
+  outcome TEXT NOT NULL CHECK (outcome IN ('ok','refused','failed')),
+  detail TEXT
+) STRICT;
+INSERT INTO audit_log_p4 (id, at, actor_type, actor, action, account_id, target_type, target_id, target_label, outcome, detail)
+  SELECT id, at, actor_type, actor, action, account_id, target_type, target_id, target_label, outcome, detail FROM audit_log;
+DROP TABLE audit_log;
+ALTER TABLE audit_log_p4 RENAME TO audit_log;
+CREATE INDEX audit_at ON audit_log(at);
+CREATE INDEX audit_account_at ON audit_log(account_id, at);
+CREATE INDEX audit_action_at ON audit_log(action, at);
+`),
+  // 6: phase 3, the last reported configuration per proxy (migration spec §5,
+  // §8.1). R3-15: a real write names the dry run it was made from (preview_of);
+  // the unique index makes each dry run usable once, across restarts and races.
+  (db) => db.exec(`
+CREATE TABLE proxy_config (
+  proxy_id TEXT PRIMARY KEY REFERENCES proxies(id) ON DELETE CASCADE,
+  revision TEXT NOT NULL CHECK (revision GLOB 'sha256:*' AND length(revision) = 71),
+  view TEXT NOT NULL CHECK (length(view) <= 262144),
+  cmd_id TEXT NOT NULL,
+  fetched_at INTEGER NOT NULL
+) STRICT;
+ALTER TABLE commands ADD COLUMN preview_of TEXT;
+CREATE UNIQUE INDEX commands_preview_of ON commands(preview_of) WHERE preview_of IS NOT NULL;
+`),
 ];

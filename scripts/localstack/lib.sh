@@ -44,13 +44,14 @@ wait_http() { # URL SECONDS NAME
   die "$3 did not answer $1 within $2 s (see $LOGS/)"
 }
 
-# prepare_repo NAME SRC [REF]: a detached worktree of REF (origin/main) in
+# prepare_repo NAME SRC [REF]: a detached worktree of REF (origin/main, or
+# another origin branch such as origin/feat/migration-p3) in
 # the work dir, npm ci + build once per commit. The repo's own checkout is
 # never touched (fetch and worktree add only).
 prepare_repo() {
   local name="$1" src="$2" ref="${3:-origin/main}" dir="$WORK/src-$1" sha
   [ -e "$src/.git" ] || die "$name: no git repo at $src"
-  git -C "$src" fetch -q origin main || die "$name: git fetch failed"
+  git -C "$src" fetch -q origin || die "$name: git fetch failed"
   if [ -d "$dir" ]; then git -C "$dir" checkout -q --detach "$ref"; else git -C "$src" worktree prune; git -C "$src" worktree add -q --detach "$dir" "$ref" || die "$name: worktree add failed"; fi
   sha="$(git -C "$dir" rev-parse HEAD)"
   if [ "$(cat "$dir/.localstack-built" 2>/dev/null)" != "$sha" ]; then
