@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cams-admin.skylar.technology/contract/cams-v1/enroll-response.schema.json",
+  "title": "POST /cams/v1/enroll 201 answer",
+  "type": "object",
+  "properties": {
+    "v": {
+      "const": 1
+    },
+    "instanceId": {
+      "type": "string",
+      "pattern": "^cms_[0-9A-HJKMNP-TV-Z]{20}$"
+    },
+    "instanceName": {
+      "type": "string",
+      "maxLength": 32
+    },
+    "keyId": {
+      "type": "string",
+      "pattern": "^key_[0-9A-HJKMNP-TV-Z]{20}$"
+    },
+    "accounts": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "maxLength": 32
+      },
+      "maxItems": 64
+    },
+    "serverKeys": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "maxLength": 100,
+        "pattern": "^[A-Za-z0-9+/]+={0,2}$"
+      },
+      "maxItems": 4,
+      "minItems": 1
+    },
+    "serverKeyFingerprints": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^SHA256:[0-9A-F]{64}$"
+      },
+      "maxItems": 4,
+      "minItems": 1
+    },
+    "apiUrl": {
+      "type": "string",
+      "maxLength": 512,
+      "pattern": "^https?://"
+    }
+  },
+  "required": [
+    "v",
+    "instanceId",
+    "instanceName",
+    "keyId",
+    "accounts",
+    "serverKeys",
+    "serverKeyFingerprints",
+    "apiUrl"
+  ]
+}

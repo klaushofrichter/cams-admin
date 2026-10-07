@@ -1,0 +1,8 @@
+{
+  "$note": "",
+  "schema": "error",
+  "message": {
+    "error": "pending_exists",
+    "tokenId": "tok_00000000000000000001"
+  }
+}

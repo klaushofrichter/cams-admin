@@ -1,0 +1,8 @@
+{
+  "$note": "",
+  "schema": "retire-request",
+  "message": {
+    "v": 1,
+    "hours": 24
+  }
+}

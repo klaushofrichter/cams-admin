@@ -1,0 +1,13 @@
+{
+  "$note": "the hash is lower-case hex",
+  "schema": "tokens-request",
+  "$expect": {
+    "strict": "invalid"
+  },
+  "message": {
+    "v": 1,
+    "proxyId": "prx_00000000000000000001",
+    "kind": "client",
+    "hash": "sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+  }
+}

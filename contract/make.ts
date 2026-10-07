@@ -6,6 +6,7 @@ import { mkdirSync, rmSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 import type { KeyObject } from 'crypto';
 import { ALLOW_ENTRIES, buildSchemas, DISRUPTIVE_ACTIONS, REMOTE_SETTABLE } from './build';
+import { buildCamsSchemas, camsFixtures, camsVectors } from './cams-build';
 import { keyFromSeed, privateFromB64, sign, signEnvelope, signedText } from '../server/crypto/ed25519';
 import { makeProxyInfo, makeSummary, truncateSummary } from '../test-client/summaries';
 import vectors from './v1/vectors.json';
@@ -206,4 +207,18 @@ if (require.main === module) {
   for (const [name, f] of Object.entries(fixtures())) writeFileSync(join(OUT, 'fixtures', `${name}.json`), JSON.stringify(f, null, 2) + '\n');
   writeFileSync(join(OUT, 'remote-settable.json'), JSON.stringify(REMOTE_SETTABLE, null, 2) + '\n');
   console.log('contract/v1 written');
+
+  // cams-v1 (the cams service API). README.md is hand-written (the plans'
+  // contract section) and left alone.
+  const CAMS = join(__dirname, 'cams-v1');
+  for (const mode of ['lenient', 'strict'] as const) {
+    const dir = mode === 'strict' ? join(CAMS, 'strict') : CAMS;
+    mkdirSync(dir, { recursive: true });
+    for (const [name, s] of Object.entries(buildCamsSchemas(mode))) writeFileSync(join(dir, `${name}.schema.json`), JSON.stringify(s, null, 2) + '\n');
+  }
+  rmSync(join(CAMS, 'fixtures'), { recursive: true, force: true });
+  mkdirSync(join(CAMS, 'fixtures'));
+  for (const [name, f] of Object.entries(camsFixtures())) writeFileSync(join(CAMS, 'fixtures', `${name}.json`), JSON.stringify(f, null, 2) + '\n');
+  writeFileSync(join(CAMS, 'vectors.json'), JSON.stringify(camsVectors(), null, 2) + '\n');
+  console.log('contract/cams-v1 written');
 }

@@ -1,0 +1,142 @@
+{
+  "$note": "two accounts sorted by name; the same camsId in both; signed by the vectors server key",
+  "schema": "snapshot",
+  "message": {
+    "v": 1,
+    "type": "cams-config",
+    "instance": {
+      "id": "cms_00000000000000000001",
+      "name": "cluster",
+      "rotateBefore": null
+    },
+    "revision": "r:0123456789abcdef",
+    "generatedAt": 1791273600000,
+    "accounts": [
+      {
+        "id": "acc_00000000000000000002",
+        "name": "beta",
+        "displayName": "Beta",
+        "revision": 3,
+        "users": [
+          {
+            "email": "klaus@example.org",
+            "role": "viewer",
+            "disabled": false
+          }
+        ],
+        "proxies": [
+          {
+            "id": "prx_00000000000000000003",
+            "name": "b1",
+            "displayName": "Beta proxy",
+            "url": "https://beta.example.net:8480",
+            "adminUiUrl": null,
+            "tlsServername": null,
+            "caFingerprints": [],
+            "tokens": []
+          }
+        ],
+        "cameras": [
+          {
+            "id": "cam_00000000000000000003",
+            "camsId": "cam1",
+            "name": "Gate",
+            "proxyId": "prx_00000000000000000003",
+            "proxyCameraId": "cam1",
+            "host": "from-proxy",
+            "protocol": "https",
+            "tlsServername": null,
+            "cameraUser": "cams",
+            "webUiUrl": null,
+            "webUiNote": null
+          }
+        ]
+      },
+      {
+        "id": "acc_00000000000000000001",
+        "name": "home",
+        "displayName": "Home",
+        "revision": 17,
+        "users": [
+          {
+            "email": "klaus@example.org",
+            "role": "admin",
+            "disabled": false
+          },
+          {
+            "email": "viewer@example.org",
+            "role": "viewer",
+            "disabled": false
+          }
+        ],
+        "proxies": [
+          {
+            "id": "prx_00000000000000000002",
+            "name": "cluster",
+            "displayName": "Cluster",
+            "url": "https://proxy.example.net:8480",
+            "adminUiUrl": null,
+            "tlsServername": "proxy.example.net",
+            "caFingerprints": [
+              "SHA256:A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1"
+            ],
+            "tokens": [
+              {
+                "id": "tok_00000000000000000002",
+                "kind": "admin",
+                "state": "retiring",
+                "retireAt": 1791360000000
+              }
+            ]
+          },
+          {
+            "id": "prx_00000000000000000001",
+            "name": "pi",
+            "displayName": "Pi",
+            "url": "http://127.0.0.1:8480",
+            "adminUiUrl": "http://192.0.2.20:8480",
+            "tlsServername": null,
+            "caFingerprints": [],
+            "tokens": [
+              {
+                "id": "tok_00000000000000000001",
+                "kind": "client",
+                "state": "active",
+                "retireAt": null
+              }
+            ]
+          }
+        ],
+        "cameras": [
+          {
+            "id": "cam_00000000000000000001",
+            "camsId": "cam1",
+            "name": "Backyard",
+            "proxyId": "prx_00000000000000000001",
+            "proxyCameraId": "cam1",
+            "host": "from-proxy",
+            "protocol": "https",
+            "tlsServername": "cam1.example.net",
+            "cameraUser": "cams",
+            "webUiUrl": null,
+            "webUiNote": null
+          },
+          {
+            "id": "cam_00000000000000000002",
+            "camsId": "cam2",
+            "name": "Driveway",
+            "proxyId": "prx_00000000000000000002",
+            "proxyCameraId": "cam2",
+            "host": "192.0.2.31",
+            "protocol": "https",
+            "tlsServername": null,
+            "cameraUser": "cams",
+            "webUiUrl": "https://192.0.2.31",
+            "webUiNote": "LAN only"
+          }
+        ]
+      }
+    ],
+    "sig": "WmiHkf8UBwhBdtg0en4W6BeEs2eisBgQ13JquHPTPqwUqBekcRbdLB3vpej+klre/4j+4PmXnwup5Sc1xr5fCQ=="
+  }
+}

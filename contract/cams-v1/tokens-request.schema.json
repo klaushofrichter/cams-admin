@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cams-admin.skylar.technology/contract/cams-v1/tokens-request.schema.json",
+  "title": "POST /cams/v1/tokens request",
+  "type": "object",
+  "properties": {
+    "v": {
+      "const": 1
+    },
+    "proxyId": {
+      "type": "string",
+      "pattern": "^prx_[0-9A-HJKMNP-TV-Z]{20}$"
+    },
+    "kind": {
+      "type": "string",
+      "maxLength": 64
+    },
+    "hash": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  },
+  "required": [
+    "v",
+    "proxyId",
+    "kind",
+    "hash"
+  ]
+}

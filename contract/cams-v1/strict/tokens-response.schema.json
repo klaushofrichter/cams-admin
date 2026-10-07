@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cams-admin.skylar.technology/contract/cams-v1/strict/tokens-response.schema.json",
+  "title": "POST /cams/v1/tokens 200/201 answer",
+  "type": "object",
+  "properties": {
+    "tokenId": {
+      "type": "string",
+      "pattern": "^tok_[0-9A-HJKMNP-TV-Z]{20}$"
+    },
+    "state": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "active",
+        "retiring"
+      ]
+    },
+    "label": {
+      "type": "string",
+      "maxLength": 64
+    }
+  },
+  "required": [
+    "tokenId",
+    "state",
+    "label"
+  ],
+  "additionalProperties": false
+}

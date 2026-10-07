@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cams-admin.skylar.technology/contract/cams-v1/error.schema.json",
+  "title": "any /cams/v1 error answer",
+  "type": "object",
+  "properties": {
+    "error": {
+      "type": "string",
+      "maxLength": 64
+    },
+    "field": {
+      "type": "string",
+      "maxLength": 64
+    },
+    "retryAfterS": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "serverTime": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "tokenId": {
+      "type": "string",
+      "pattern": "^tok_[0-9A-HJKMNP-TV-Z]{20}$"
+    }
+  },
+  "required": [
+    "error"
+  ]
+}

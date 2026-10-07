@@ -1,0 +1,9 @@
+{
+  "$note": "",
+  "schema": "retire-response",
+  "message": {
+    "tokenId": "tok_00000000000000000001",
+    "state": "retiring",
+    "retireAt": 1791360000000
+  }
+}
