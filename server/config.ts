@@ -19,8 +19,8 @@ export interface Limits {
   writesPerSessionPerMin: number;
   sseStreamsPerSession: number;
   camsPerInstancePerMin: number; // signed /cams/v1 requests per instance
-  camsFailedSigPer10Min: number; // in total (unknown key, bad signature)
-  camsGlobalPerMin: number; // every /cams/v1 request, in total (a ceiling before the check)
+  camsFailedSigPer10Min: number; // per named instance, and once for unknown ids (unknown key, bad signature)
+  camsGlobalPerMin: number; // /cams/v1 requests per well-formed instance id, and once for the rest (a ceiling before the check)
 }
 
 export interface Config {

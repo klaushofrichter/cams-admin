@@ -161,17 +161,24 @@ describe('cams-v1 signed requests (CamsAuth)', () => {
     expect(readEpoch(s.built.db)).toBe(e);
   });
 
-  it('300 failed signatures in 10 min (all instances) → 429 for everyone until the window ends; never keyed on the address', async () => {
+  it('failed signatures are budgeted per named instance (300 / 10 min), unknown ids share one budget: nobody can lock out the others (review M1)', async () => {
     clock.advance(600_001);
     const a = await fresh('fail-a');
     const b = await fresh('fail-b');
     await call(b.key, 'GET', '/cams/v1/ping');
     for (let i = 0; i < 300; i++) await call(a.key, 'GET', '/cams/v1/ping', undefined, { sigWith: other, headers: { 'X-Forwarded-For': `198.51.100.${i % 250}` } });
-    const r = await call(b.key, 'GET', '/cams/v1/ping');
-    expect([r.status, (await r.json()).error]).toEqual([429, 'rate_limited']);
-    clock.advance(600_001);
+    const ra = await call(a.key, 'GET', '/cams/v1/ping');
+    expect([ra.status, (await ra.json()).error]).toEqual([429, 'rate_limited']);
     expect((await call(b.key, 'GET', '/cams/v1/ping')).status).toBe(200);
+    // Made-up instance ids: their own budget, the real instances unaffected.
+    for (let i = 0; i < 300; i++) await call(b.key, 'GET', '/cams/v1/ping', undefined, { instanceId: `cms_${String(i).padStart(20, '0')}` });
+    const ghost = await call(b.key, 'GET', '/cams/v1/ping', undefined, { instanceId: 'cms_ZZZZZZZZZZZZZZZZZZZZ' });
+    expect(ghost.status).toBe(429);
+    expect((await call(b.key, 'GET', '/cams/v1/ping')).status).toBe(200);
+    clock.advance(600_001);
+    expect((await call(a.key, 'GET', '/cams/v1/ping')).status).toBe(200);
   });
+
 });
 
 describe('cams-v1: the global request ceiling (before the check) and safe error fields', () => {

@@ -24,7 +24,10 @@ export function camsRouter(d: CamsRouterDeps): express.Router {
   // (one budget, never the client address); far above what the instances
   // send (60 a minute each). Signed when the nonce is well-formed.
   r.use('/cams/v1', limiter({
-    windowMs: 60_000, limit: d.globalPerMin ?? 3000, key: () => 'cams',
+    // Per well-formed instance id (one bucket for the rest): a flood naming
+    // made-up ids can't starve the real instances (review M1).
+    windowMs: 60_000, limit: d.globalPerMin ?? 3000,
+    key: (req) => { const h = req.headers['x-cams-instance']; return typeof h === 'string' && /^cms_[0-9A-HJKMNP-TV-Z]{20}$/.test(h) ? `cams:${h}` : 'cams:anon'; },
     handler: (req, res) => {
       const nonce = typeof req.headers['x-cams-nonce'] === 'string' ? req.headers['x-cams-nonce'] : '';
       if (d.signingKey && NONCE_RE.test(nonce)) return sendSigned(res, d.signingKey, nonce, 429, { error: 'rate_limited', retryAfterS: 60 });

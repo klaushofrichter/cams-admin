@@ -108,10 +108,12 @@ export class CamsAuth {
         okNonce ? sendSigned(res, this.d.signingKey, nonce, status, b) : void res.status(status).set('Cache-Control', 'no-store').json(b);
       // 1. headers
       if (!CMS_RE.test(instanceId) || !KEY_RE.test(keyId) || !/^\d{1,16}$/.test(tsRaw) || !okNonce || !SIG_RE.test(sig)) return answer(400, { error: 'bad_request' });
-      // 2. the global failed-signature budget
-      if (this.failed.full('global', now)) return answer(429, { error: 'rate_limited', retryAfterS: 60 });
+      // 2. the failed-signature budget: per named instance, one shared budget
+      // for ids that don't exist (review M1: no one can lock out the others)
+      const budget = this.d.instances.getRaw(instanceId) ? `i:${instanceId}` : 'unknown';
+      if (this.failed.full(budget, now)) return answer(429, { error: 'rate_limited', retryAfterS: 60 });
       const fail = (reason: 'unknown_key' | 'bad_signature') => {
-        this.failed.take('global', now);
+        this.failed.take(budget, now);
         this.refused(instanceId, reason);
         answer(401, { error: reason });
       };
