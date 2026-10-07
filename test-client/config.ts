@@ -45,6 +45,8 @@ export class RefProxyConfig {
   private env = new Map<string, Leaf>();
   private by = new Map<string, { cmdId: string; actor: string; at: number }>();
   private backups = new Map<string, Backup>();
+  // Optional settings with no value (a size cap unset = no cap).
+  private optional = ['stills.maxGB', 'ftp.maxGB'];
   private settableBounds: Record<string, Partial<Settable>> = { 'sse.pingS': { min: 5, max: 300 }, 'sse.maxClients': { min: 1, max: 1000 }, 'stills.quality': { min: 1, max: 31 } };
 
   constructor(o: { cameras?: string[]; settings?: Record<string, Leaf>; envHeld?: string[] } = {}) {
@@ -94,6 +96,7 @@ export class RefProxyConfig {
 
   private settable(): Record<string, Settable> {
     const out: Record<string, Settable> = {};
+    for (const p of this.optional) out[p] = { type: 'integer', min: 1, max: 100_000, optional: true, ...(REMOTE_SETTABLE.narrow[p] ? { dir: REMOTE_SETTABLE.narrow[p] } : {}) };
     for (const [p, b] of this.base) {
       const pat = patternOf(p);
       if (!REMOTE_SETTABLE.remote.includes(pat) || out[pat]) continue;
@@ -105,7 +108,7 @@ export class RefProxyConfig {
 
   private view(): Record<string, unknown> {
     const paths: Record<string, unknown> = {};
-    const all = new Set([...this.base.keys(), ...this.overrides.keys(), ...this.env.keys()]);
+    const all = new Set([...this.base.keys(), ...this.overrides.keys(), ...this.env.keys(), ...this.optional]);
     for (const p of [...all].sort()) paths[p] = { ...this.state(p), ...(this.by.has(p) && this.overrides.has(p) ? { by: this.by.get(p) } : {}) };
     return { revision: this.revision(), schema: 1, cameras: [...this.cameras], omittedCameras: [], paths, settable: this.settable() };
   }
@@ -121,7 +124,7 @@ export class RefProxyConfig {
   private remoteOk(path: string): boolean {
     const pat = patternOf(path);
     if (REMOTE_SETTABLE.denied.some((d) => under(pat, d))) return false;
-    return REMOTE_SETTABLE.remote.includes(pat) && this.base.has(path);
+    return REMOTE_SETTABLE.remote.includes(pat) && (this.base.has(path) || this.optional.includes(path));
   }
 
   private conflict(paths: string[]): RefOutcome {

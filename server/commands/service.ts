@@ -197,7 +197,11 @@ export class Commands {
 
   // An open (queued, sent or received) command of this name for this proxy.
   hasOpen(proxyId: string, command: WireCommand): boolean {
-    return !!this.q(`SELECT 1 FROM commands WHERE proxy_id = ? AND command = ? AND state IN ${OPEN} LIMIT 1`).get(proxyId, command);
+    return this.openId(proxyId, command) !== null;
+  }
+  openId(proxyId: string, command: WireCommand): string | null {
+    const r = this.q(`SELECT id FROM commands WHERE proxy_id = ? AND command = ? AND state IN ${OPEN} ORDER BY rowid LIMIT 1`).get(proxyId, command) as { id: string } | undefined;
+    return r?.id ?? null;
   }
 
   private byId(id: string): Raw {
