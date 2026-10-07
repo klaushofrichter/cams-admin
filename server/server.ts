@@ -21,6 +21,7 @@ import { CamsEnrollment } from './cams/enroll';
 import { camsRouter } from './cams/routes';
 import { CamsAuth } from './cams/auth';
 import { Importer } from './import/importer';
+import { RevocationJournal } from './cams/revocations';
 import { Sessions } from './auth/session';
 import { authRoutes } from './auth/routes';
 import { securityHeaders } from './auth/middleware';
@@ -61,7 +62,8 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
   const hub = new Hub({ db, clock, cfg, registry, audit, status, log, signingKey: signing.key, serverKeyFingerprint: signing.fingerprint });
   const commands = new Commands({ db, clock, audit, registry, status, live, log, hub: () => hub });
   hub.deps.commands = commands;
-  const tokens = new Tokens({ db, clock, audit, registry, commands, live, log });
+  const journal = new RevocationJournal(join(cfg.dataDir, 'cams-revocations.jsonl'), log);
+  const tokens = new Tokens({ db, clock, audit, registry, commands, live, log, journal: (tokenIds) => journal.append({ kind: 'tokens', tokenIds }, clock.now()) });
   status.onTokens = (proxyId, t) => tokens.onHeartbeat(proxyId, t);
   const enrollment = new Enrollment({ db, clock, audit, registry, cfg, serverKeys: [signing.publicKeyB64], onKeyRevoked: (k) => hub.closeKey(k, 4401), onProxyChanged: (p) => live.publishRegistry('proxy', p) });
   const backup = createBackup({ db, clock, cfg, audit, env: merged });
@@ -69,7 +71,12 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
   const camsInstances = new CamsInstances({
     db, clock, audit, registry, cfg, serverKeys: [signing.publicKeyB64], serverKeyFingerprints: [signing.fingerprint],
     onRevoke: (instanceId, actor, scope) => { tokens.revokeHeldBy(actor, instanceId, scope); },
+    journal: (r) => journal.append(r, clock.now()),
   });
+  // What was revoked stays revoked, whatever a restore brought back (review M5).
+  for (const r of journal.read()) {
+    try { camsInstances.replay(r, (t) => tokens.revokeReplayed(t)); } catch (e) { log.error({ err: e }, 'cams_revocation_replay_failed'); }
+  }
   const importer = new Importer({ db, clock, audit, registry, instances: camsInstances, status });
   const camsAuth = new CamsAuth({ db, clock, audit, instances: camsInstances, signingKey: signing.key, limits: cfg.limits, log });
   const camsEnrollment = new CamsEnrollment({ db, clock, audit, instances: camsInstances, cfg, serverKeys: [signing.publicKeyB64], serverKeyFingerprints: [signing.fingerprint] });

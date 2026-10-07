@@ -34,7 +34,7 @@ export interface ProxyTokenView {
   retireAt: number | null; revokedAt: number | null; revokedRevision: number | null; onProxy: boolean; createdAt: number; createdBy: string; issuedRevision: number;
   lastCommand: { id: string; state: string; outcomeCode: string | null } | null;
 }
-export interface TokensDeps { db: Db; clock: Clock; audit: Audit; registry: Registry; commands: Commands; live: LiveHub; log: Logger }
+export interface TokensDeps { db: Db; clock: Clock; audit: Audit; registry: Registry; commands: Commands; live: LiveHub; log: Logger; journal?: (tokenIds: string[]) => void }
 
 // 32 random bytes, base64url without padding (43 characters).
 export function generateToken(): { token: string; hash: string } {
@@ -201,7 +201,7 @@ export class Tokens {
     tx(this.d.db, () => {
       const revision = this.bump(proxyId);
       this.q(`UPDATE proxy_tokens SET state = 'revoked', revoked_at = ?, revoked_revision = ? WHERE id = ?`).run(this.d.clock.now(), revision, tokenId);
-      this.d.audit.write({ actorType: 'sysadmin', actor, action: 'token-revoke', accountId, targetType: 'proxy', targetId: proxyId, outcome: 'ok', detail: { tokenId, label: t.label, reason: 'revoked', revision } });
+      this.d.audit.write({ actorType: actor === 'system' ? 'system' : 'sysadmin', actor, action: 'token-revoke', accountId, targetType: 'proxy', targetId: proxyId, outcome: 'ok', detail: { tokenId, label: t.label, reason: 'revoked', revision } });
     });
     this.tryQueue(actor, accountId, proxyId);
     this.d.live.publishRegistry('proxy', proxyId);
@@ -274,7 +274,15 @@ export class Tokens {
       this.tryQueue(actor, accountId, proxyId);
       this.d.live.publishRegistry('proxy', proxyId);
     }
+    if (rows.length) this.d.journal?.(rows.map((r) => r.id as string));
     return rows.length;
+  }
+
+  // A revocation journal replay: this token stays revoked (no-op when it is, or isn't there).
+  revokeReplayed(tokenId: string): void {
+    const t = this.q('SELECT account_id, proxy_id, state FROM proxy_tokens WHERE id = ?').get(tokenId) as Row | undefined;
+    if (!t || t.state === 'revoked') return;
+    this.revoke('system', t.account_id as string, t.proxy_id as string, tokenId);
   }
 
   // After a restore: the proxy is ahead. An admin confirms (having checked

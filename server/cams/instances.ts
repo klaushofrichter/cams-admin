@@ -8,6 +8,7 @@ import { checkUrl, FieldError } from '../validate';
 import { validateCams } from '../contract';
 import { fieldOf } from '../tokens/service';
 import { snapshotRevision } from './snapshot';
+import type { RevocationEntry } from './revocations';
 
 // The registry of cams instances (migration spec §5, §9.1, §9.6; plan P4
 // Task 3): which accounts an instance serves, its per-proxy routes (a URL
@@ -35,6 +36,8 @@ export interface CamsInstancesDeps {
   // R4-19: revokes the tokens the instance holds (Tokens.revokeHeldBy): all of
   // them, or those on the given accounts' / proxies' (no longer served or hidden).
   onRevoke: (instanceId: string, actor: string, scope?: { accountIds?: string[]; proxyIds?: string[] }) => void;
+  // The revocation journal (restores can't undo a revocation, review M5).
+  journal?: (r: RevocationEntry) => void;
 }
 
 const NAME_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
@@ -205,8 +208,37 @@ export class CamsInstances {
       this.log(actor, 'cams-instance-block', i, { revokedKeys: keys });
       return this.get(id);
     });
+    this.d.journal?.({ kind: 'block', instanceId: id });
     this.d.onRevoke(id, actor);
     return out;
+  }
+
+  // A journal replay (buildServer): what was revoked stays revoked after a restore.
+  replay(r: RevocationEntry, revokeToken: (tokenId: string) => void): void {
+    const now = this.d.clock.now();
+    const sys = (action: AuditAction, i: { id: string; name: string }, detail: Record<string, unknown>) =>
+      this.d.audit.write({ actorType: 'system', actor: 'system', action, targetType: 'cams-instance', targetId: i.id, targetLabel: i.name, outcome: 'ok', detail: { ...detail, replayed: true } });
+    if (r.kind === 'block') {
+      const i = this.getRaw(r.instanceId);
+      if (!i || i.state === 'revoked') return;
+      tx(this.d.db, () => {
+        const keys = this.revokeKeys(i.id, 'blocked', now);
+        this.q('UPDATE cams_enrollment_codes SET cancelled_at = ? WHERE instance_id = ? AND used_at IS NULL AND cancelled_at IS NULL').run(now, i.id);
+        this.q(`UPDATE cams_instances SET state = 'revoked', updated_at = ?, version = version + 1 WHERE id = ?`).run(now, i.id);
+        sys('cams-instance-block', i, { revokedKeys: keys });
+      });
+      this.d.onRevoke(i.id, 'system');
+    } else if (r.kind === 'key') {
+      const i = this.getRaw(r.instanceId);
+      const k = this.q('SELECT revoked_at, fingerprint FROM cams_instance_keys WHERE id = ? AND instance_id = ?').get(r.keyId, r.instanceId) as Row | undefined;
+      if (!i || !k || k.revoked_at !== null) return;
+      tx(this.d.db, () => {
+        this.q(`UPDATE cams_instance_keys SET revoked_at = ?, revoked_reason = 'admin' WHERE id = ?`).run(now, r.keyId);
+        sys('cams-key-revoke', i, { keyId: r.keyId, fingerprint: k.fingerprint });
+      });
+    } else {
+      for (const t of r.tokenIds) revokeToken(t);
+    }
   }
 
   // The next pull carries rotateBefore = now: cams registers new tokens and retires the old ones (M §10.1).
@@ -327,6 +359,7 @@ export class CamsInstances {
       this.log(actor, 'cams-key-revoke', i, { keyId, fingerprint: k.fingerprint, tokensRevoked: true });
       return toKey(this.q('SELECT * FROM cams_instance_keys WHERE id = ?').get(keyId) as Row);
     });
+    this.d.journal?.({ kind: 'key', instanceId: id, keyId });
     this.d.onRevoke(id, actor);
     return k;
   }
@@ -355,6 +388,7 @@ export class CamsInstances {
       return { ok: true, replaced };
     });
     if (r === false) return false;
+    for (const k of r.replaced) this.d.journal?.({ kind: 'key', instanceId, keyId: k });
     // A re-enrollment replaced a working key: the tokens held under it go too (review I3).
     if (r.replaced.length) this.d.onRevoke(instanceId, 'system');
     return true;
