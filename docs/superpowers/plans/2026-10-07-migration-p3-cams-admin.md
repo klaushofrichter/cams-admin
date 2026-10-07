@@ -55,6 +55,8 @@ Klaus pre-approved spec, plan, implementation and deployment, and answered M §1
 
 ## The P3 contract (identical in both plans; binding)
 
+> **Amended after the security review (coordinator ruling I4, and M3):** capture/feature on-off switches and health thresholds (`LOCAL_ONLY` in `contract/build.ts`: `stills.enabled`, `events.poll.enabled`, `ftp.enabled`, `ftp.stalledHours`, `archive.*`, `health.*`, `host.stats`, `analytics.kinds.*`, `analytics.googleVision.enabled` and their `cameras.*` forms) are removed from `remote` and listed in `denied`; `remote` has 37 paths and `narrow` 13. Camera names follow `CAMERA_NAME_PATTERN`. `SECRET_KEY_PATTERN` names what cams-admin redacts. Where the lists below differ, `contract/README.md` and `contract/v1/remote-settable.json` are binding.
+
 Additive to "The P2 contract" (cams-admin `docs/superpowers/plans/2026-10-06-migration-p2-cams-admin.md`, as amended by `revocationOnly`, cams-admin `contract/README.md`). The envelope stays **v1**, the subprotocol `cams-admin.v1`, signatures and JCS unchanged. Everything new is in cams-admin `contract/v1/` (made by `contract/build.ts` / `contract/make.ts` / `scripts/contract/make-vectors.ts`); cam-proxy vendors it into `test/contract/cams-admin-v1/`.
 
 **Commands P3 implements:** `config.get`, `config.set`, `config.unset`, `config.rollback`, `camera.action`, `camera.name.set`, `proxy.restart` (all already in the strict `command` enum since P2). No new wire command, no new message type, no new heartbeat field.

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { existsSync, readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
 import Ajv2020 from 'ajv/dist/2020';
-import { buildSchemas, DISRUPTIVE_ACTIONS, NEVER_REMOTE_ACTIONS, P3_COMMANDS, PATH_PATTERN, REMOTE_ACTIONS, REMOTE_SETTABLE } from '../contract/build';
+import { buildSchemas, DISRUPTIVE_ACTIONS, LOCAL_ONLY, NEVER_REMOTE_ACTIONS, P3_COMMANDS, PATH_PATTERN, REMOTE_ACTIONS, REMOTE_SETTABLE, SECRET_KEY_PATTERN, CAMERA_NAME_PATTERN } from '../contract/build';
 import { fixtures } from '../contract/make';
 import { validateCommandArgs, validateEnroll, validateMessage, validateResultPayload, validateSummary } from '../server/contract';
 import { publicFromB64, verifyEnvelope } from '../server/crypto/ed25519';
@@ -95,7 +95,7 @@ describe('the v1 contract', () => {
   it('every proxy-receiver fixture has a $context and a runtime code from the nack list', () => {
     const NACKS = ['bad_signature', 'wrong_target', 'expired', 'replayed', 'not_allowed', 'paused', 'rate_limited', 'invalid_args', 'unsupported_version', 'busy'];
     const proxyFixtures = allFixtures().filter((x) => x.$expect?.receiver === 'proxy');
-    expect(proxyFixtures.length).toBe(26);
+    expect(proxyFixtures.length).toBe(27);
     for (const f of proxyFixtures) {
       expect(f.$context, f.name).toMatchObject({ now: expect.any(Number), proxyId: expect.stringMatching(/^prx_/), connId: expect.stringMatching(/^con_/), serverKeys: [vectors.keys.server.publicKey] });
       expect(NACKS, f.name).toContain(f.$expect.runtime);
@@ -157,7 +157,7 @@ describe('the v1 contract', () => {
     }
   });
   it('the starred refused fixtures fail their strict args schema (the contract table)', () => {
-    for (const n of ['refused-camera-action-never-remote', 'refused-camera-action-no-camera', 'refused-config-set-bad-path', 'refused-config-set-object-value', 'refused-config-set-65-paths']) {
+    for (const n of ['refused-camera-action-never-remote', 'refused-camera-action-no-camera', 'refused-config-set-bad-path', 'refused-config-set-object-value', 'refused-config-set-65-paths', 'refused-camera-name-set-bidi']) {
       const m = fixture(n).message;
       expect(strictValidator('command')(m), n).toBe(true);
       expect(strictValidator(`commands/${m.body.command}.args`)(m.body.args), n).toBe(false);
@@ -168,7 +168,7 @@ describe('the v1 contract', () => {
       'refused-config-set-not-allowed': 'not_allowed', 'refused-camera-action-entry-missing': 'not_allowed', 'refused-camera-action-never-remote': 'not_allowed',
       'refused-camera-action-no-camera': 'invalid_args', 'refused-config-set-bad-path': 'invalid_args', 'refused-config-set-object-value': 'invalid_args',
       'refused-config-set-65-paths': 'invalid_args', 'refused-config-set-args-v2': 'unsupported_version', 'refused-proxy-restart-budget': 'rate_limited',
-      'refused-camera-action-budget': 'rate_limited', 'refused-proxy-restart-paused': 'paused',
+      'refused-camera-action-budget': 'rate_limited', 'refused-proxy-restart-paused': 'paused', 'refused-camera-name-set-bidi': 'invalid_args',
     };
     for (const [n, code] of Object.entries(want)) expect(fixture(n).$expect, n).toEqual({ runtime: code, strict: 'valid', receiver: 'proxy' });
     expect(fixture('refused-config-set-not-allowed').$context.allow).toEqual(['config.get']);
@@ -191,11 +191,25 @@ describe('the v1 contract', () => {
     for (const p of r.remote) expect(r.denied.some((d: string) => under(p, d)), p).toBe(false);
     for (const p of Object.keys(r.narrow)) expect(r.remote, p).toContain(p);
     for (const p of r.remote) expect(p).toMatch(new RegExp(PATH_PATTERN.replace('[a-z0-9][A-Za-z0-9-]{0,31}', '(\\*|[a-z0-9][A-Za-z0-9-]{0,31})')));
-    expect(r.remote).toHaveLength(56);
+    expect(r.remote).toHaveLength(37);
     // The coordinator's ruling: no remote write may make a proxy delete data.
     for (const p of ['retention.stillsDays', 'retention.previewsDays', 'retention.clipsDays', 'retention.eventsDays', 'retention.auditDays', 'retention.streamLogDays', 'stills.maxGB', 'previews.maxGB', 'ftp.maxGB']) expect(r.narrow[p], p).toBe('more');
-    for (const p of ['analytics.googleVision.enabled', 'analytics.googleVision.monthlyLimit', 'analytics.googleVision.dailyCap', 'analytics.googleVision.checksPerDay', 'analytics.googleVision.perCameraDailyCap']) expect(r.narrow[p], p).toBe('less');
-    expect(Object.keys(r.narrow)).toHaveLength(14);
+    for (const p of ['analytics.googleVision.monthlyLimit', 'analytics.googleVision.dailyCap', 'analytics.googleVision.checksPerDay', 'analytics.googleVision.perCameraDailyCap']) expect(r.narrow[p], p).toBe('less');
+    expect(Object.keys(r.narrow)).toHaveLength(13);
+    // Coordinator ruling (security review I4): capture and listener switches and health thresholds are local only in P3.
+    const localOnly = ['stills.enabled', 'events.poll.enabled', 'ftp.enabled', 'ftp.stalledHours', 'archive.enabled', 'archive.warnPercent', 'health.diskPercent', 'health.tempC', 'host.stats',
+      'analytics.kinds.person', 'analytics.kinds.vehicle', 'analytics.kinds.pet', 'analytics.googleVision.enabled',
+      'cameras.*.stills.enabled', 'cameras.*.ftp.enabled', 'cameras.*.events.poll.enabled', 'cameras.*.analytics.kinds.person', 'cameras.*.analytics.kinds.vehicle', 'cameras.*.analytics.kinds.pet'];
+    expect([...LOCAL_ONLY].sort()).toEqual([...localOnly].sort());
+    for (const p of localOnly) {
+      expect(r.remote, p).not.toContain(p);
+      expect(r.denied.some((d: string) => under(p, d)), p).toBe(true);
+    }
+    for (const p of r.remote) expect(p.endsWith('.enabled'), p).toBe(false);
+    // No remote path looks secret; the secret pattern catches the usual names.
+    const secret = new RegExp(SECRET_KEY_PATTERN, 'i');
+    for (const p of r.remote) expect(secret.test(p), p).toBe(false);
+    for (const p of ['camsAdmin.token', 'ftp.password', 'analytics.googleVision.apiKey', 'tls.keyFile', 'x.clientSecret', 'cookie', 'certPem']) expect(secret.test(p), p).toBe(true);
     expect(r.remote.some((p: string) => p.startsWith('storage.') || /^cameras\.\*\.storage\./.test(p))).toBe(false);
     for (const d of ['storage', 'cameras.*.storage', 'camsAdmin', 'cameras.*.host', 'server']) expect(r.denied, d).toContain(d);
   });
@@ -215,6 +229,14 @@ describe('the v1 contract', () => {
     expect(validateResultPayload('config.get', { paths: {} })).toBe(false);
     expect(validateResultPayload('config.set', 'nope')).toBe(false);
   });
+  it('deny fixtures: a capture switch and a health threshold are refused remotely (not_remote_settable)', () => {
+    for (const [n, path] of [['valid-result-config-set-failed-ftp-enabled', 'ftp.enabled'], ['valid-result-config-set-failed-health', 'health.diskPercent']]) {
+      const f = fixture(n);
+      expect(f.$command).toBe('config.set');
+      expect(f.message.body).toMatchObject({ status: 'failed', code: 'not_remote_settable', result: { paths: [{ path, code: 'not_remote_settable' }] } });
+      expect(strictValidator('commands/config.set.result')(f.message.body.result)).toBe(true);
+    }
+  });
   it('validateCommandArgs: what cams-admin sends for every P3 command', () => {
     const REV = `sha256:${'a'.repeat(64)}`;
     expect(validateCommandArgs('config.get', { v: 1 })).toEqual({ ok: true });
@@ -231,6 +253,10 @@ describe('the v1 contract', () => {
     expect(validateCommandArgs('camera.action', { v: 1, camera: 'cam1', action: 'retention-run' })).toMatchObject({ ok: false });
     expect(validateCommandArgs('camera.action', { v: 1, camera: 'cam1', action: 'inventory', input: { kind: 'clips' } })).toEqual({ ok: true });
     expect(validateCommandArgs('camera.name.set', { v: 1, camera: 'cam1', name: 'a\nb' })).toMatchObject({ ok: false });
+    // One name rule (security review M3): no C0/C1, no bidi controls, no line separators, no zero-width characters; ≤ 64.
+    for (const bad of ['a\u0085b', 'evil\u202Egnp.exe', 'a\u2066b', 'a\u2028b', 'a\u200Bb', '\uFEFFa', 'x'.repeat(65)]) expect(validateCommandArgs('camera.name.set', { v: 1, camera: 'cam1', name: bad }), JSON.stringify(bad)).toMatchObject({ ok: false });
+    expect(validateCommandArgs('camera.name.set', { v: 1, camera: 'cam1', name: 'Café 😀 Ost' })).toEqual({ ok: true });
+    expect(new RegExp(CAMERA_NAME_PATTERN, 'u').test('evil\u202Egnp')).toBe(false);
     expect(validateCommandArgs('proxy.restart', { v: 1 })).toEqual({ ok: true });
     expect(validateCommandArgs('proxy.restart', { v: 1, now: true })).toMatchObject({ ok: false });
     // 64 entries of 512 characters: within the schema, over the 16 KiB args bound.

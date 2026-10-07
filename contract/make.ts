@@ -105,6 +105,8 @@ export function fixtures(): Record<string, unknown> {
     'valid-result-config-set-conflict': p3Result('config.set', 'baseRevision is not the current revision: the current values of the named paths', { status: 'conflict', result: { revision: REV2, current: { 'sse.pingS': { v: 9, s: 'override' } } } }),
     'valid-result-config-set-failed': p3Result('config.set', 'a denied path fails the whole command', { status: 'failed', code: 'not_remote_settable', result: { paths: [{ path: 'cameras.cam1.host', code: 'not_remote_settable' }] } }),
     'valid-result-config-set-failed-retention': p3Result('config.set', 'a retention period lowered remotely', { status: 'failed', code: 'widening_local_only', result: { paths: [{ path: 'retention.clipsDays', code: 'widening_local_only', detail: 'a remote change may only keep data longer' }] } }),
+    'valid-result-config-set-failed-ftp-enabled': p3Result('config.set', 'capture switches are local only (ruling I4)', { status: 'failed', code: 'not_remote_settable', result: { paths: [{ path: 'ftp.enabled', code: 'not_remote_settable' }] } }),
+    'valid-result-config-set-failed-health': p3Result('config.set', 'health thresholds are local only (ruling I4)', { status: 'failed', code: 'not_remote_settable', result: { paths: [{ path: 'health.diskPercent', code: 'not_remote_settable' }] } }),
     'valid-result-config-set-failed-storage': p3Result('config.set', 'storage settings are local only', { status: 'failed', code: 'not_remote_settable', result: { paths: [{ path: 'storage.maxPercent', code: 'not_remote_settable' }] } }),
     'valid-result-camera-action-verified': p3Result('camera.action', 'a camera write, re-read and compared', { status: 'ok', result: { action: 'camera-ntp-set', camera: 'cam1', httpStatus: 200, answer: { ok: true }, verified: true, mismatch: [] } }),
     'refused-config-set-not-allowed': p3Refused('not_allowed', 'config.set', setArgs({ 'sse.pingS': 5 }), ['config.get'], 'config.set is not in the allow-list'),
@@ -117,6 +119,7 @@ export function fixtures(): Record<string, unknown> {
     'refused-config-set-args-v2': p3Refused('unsupported_version', 'config.set', { ...setArgs({ 'sse.pingS': 5 }), v: 2 }, ['config.set'], 'args v 2'),
     'refused-proxy-restart-budget': p3Refused('rate_limited', 'proxy.restart', { v: 1 }, ['proxy.restart'], 'two restarts within the hour (the journal budget)', { journal: journal(2, 'proxy.restart') }),
     'refused-camera-action-budget': p3Refused('rate_limited', 'camera.action', { v: 1, camera: 'cam1', action: 'camera-reboot' }, ['camera.action:camera-reboot'], 'six disruptive actions within the hour', { journal: journal(6, 'camera.action', (i) => DISRUPTIVE_ACTIONS[i % DISRUPTIVE_ACTIONS.length]) }),
+    'refused-camera-name-set-bidi': p3Refused('invalid_args', 'camera.name.set', { v: 1, camera: 'cam1', name: 'evil\u202Egnp.exe' }, ['camera.name.set'], 'a bidi override in a camera name (strict args refuse)'),
     'refused-proxy-restart-paused': p3Refused('paused', 'proxy.restart', { v: 1 }, ['proxy.restart'], 'commands paused on the proxy', { paused: true }),
   };
 

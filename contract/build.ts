@@ -192,7 +192,7 @@ export function buildSchemas(mode: Mode): Record<string, S> {
         { if: { properties: { input: { type: 'object' } }, required: ['input'] }, then: { properties: { action: { const: 'inventory' } } } },
       ],
     },
-    'camera.name.set': obj({ v: { const: 1 }, camera: camId, name: label }, ['v', 'camera', 'name']),
+    'camera.name.set': obj({ v: { const: 1 }, camera: camId, name: { type: 'string', minLength: 1, maxLength: 64, pattern: CAMERA_NAME_PATTERN } }, ['v', 'camera', 'name']),
     'proxy.restart': obj({ v: { const: 1 } }, ['v']),
   };
   const p3Results: Record<(typeof P3_COMMANDS)[number], S> = {
@@ -292,28 +292,40 @@ export const NEVER_REMOTE_ACTIONS = [
 export const DISRUPTIVE_ACTIONS = ['restart', 'camera-reboot', 'camera-powercycle', 'camera-ftp-setup', 'camera-ftp-off', 'camera-ntp-set', 'camera-cert-push'] as const;
 // A setting's dotted path, as GET /control/config names it (no "_": never __proto__).
 export const PATH_PATTERN = '^[a-z][A-Za-z0-9]{0,31}(\\.[a-z0-9][A-Za-z0-9-]{0,31}){0,5}$';
+// Coordinator ruling (security review I4): capture/feature on-off switches
+// and health thresholds are local only in P3 — a compromised cams-admin must
+// not be able to blind a proxy silently, and ftp.enabled=true opens ports
+// (network exposure needs Klaus). In `denied`, never in `remote`.
+export const LOCAL_ONLY = [
+  'stills.enabled', 'events.poll.enabled', 'ftp.enabled', 'ftp.stalledHours', 'archive.enabled', 'archive.warnPercent', 'health.diskPercent', 'health.tempC', 'host.stats',
+  'analytics.kinds.person', 'analytics.kinds.vehicle', 'analytics.kinds.pet', 'analytics.googleVision.enabled',
+  'cameras.*.stills.enabled', 'cameras.*.ftp.enabled', 'cameras.*.events.poll.enabled', 'cameras.*.analytics.kinds.person', 'cameras.*.analytics.kinds.vehicle', 'cameras.*.analytics.kinds.pet',
+] as const;
+// A key or dotted path that looks secret: cams-admin drops such paths from a
+// stored view and such keys from an action's answer (the proxy scrubs too).
+// A camera name (camera.name.set, and cameras.*.name from cams-admin):
+// 1–64 characters, no C0/C1 controls, no bidi controls, no line or paragraph
+// separators, no zero-width characters (security review M3). A `u` regex.
+export const CAMERA_NAME_PATTERN = '^[^\\u0000-\\u001f\\u007f-\\u009f\\u200b-\\u200f\\u2028-\\u202e\\u2060-\\u206f\\ufeff]{1,64}$';
+export const SECRET_KEY_PATTERN = 'pem|key|password|passwd|secret|token|cookie';
 // contract/v1/remote-settable.json: `remote` is the upper bound of what any
 // proxy may let cams-admin set; `narrow` the paths that may only move one way
 // (less spending, more data kept); `denied` documents what is never remote.
 export const REMOTE_SETTABLE: { v: 1; remote: string[]; narrow: Record<string, 'less' | 'more'>; denied: string[] } = {
   v: 1,
   remote: [
-    'stills.enabled', 'stills.stream', 'stills.intervalS', 'stills.size', 'stills.quality', 'stills.maxGB',
+    'stills.stream', 'stills.intervalS', 'stills.size', 'stills.quality', 'stills.maxGB',
     'previews.tileSize', 'previews.grid', 'previews.quality', 'previews.maxGB',
-    'events.onvif.subscribeMin', 'events.onvif.pullTimeoutS', 'events.poll.enabled', 'events.poll.intervalS', 'events.poll.afterOnvifDownS', 'events.maxOpenMin',
+    'events.onvif.subscribeMin', 'events.onvif.pullTimeoutS', 'events.poll.intervalS', 'events.poll.afterOnvifDownS', 'events.maxOpenMin',
     'retention.stillsDays', 'retention.previewsDays', 'retention.clipsDays', 'retention.eventsDays', 'retention.auditDays', 'retention.streamLogDays', 'retention.intervalMin',
     'composition.concurrent', 'sse.maxClients', 'sse.queuePerClient', 'sse.pingS', 'recordings.cacheMB',
-    'health.diskPercent', 'health.tempC', 'host.stats',
-    'ftp.enabled', 'ftp.stream', 'ftp.stalledHours', 'ftp.maxGB',
-    'archive.enabled', 'archive.warnPercent',
-    'analytics.kinds.person', 'analytics.kinds.vehicle', 'analytics.kinds.pet',
-    'analytics.googleVision.enabled', 'analytics.googleVision.monthlyLimit', 'analytics.googleVision.dailyCap', 'analytics.googleVision.checksPerDay', 'analytics.googleVision.perCameraDailyCap',
-    'cameras.*.name', 'cameras.*.statusPollS', 'cameras.*.stills.enabled', 'cameras.*.stills.stream', 'cameras.*.stills.intervalS',
-    'cameras.*.ftp.enabled', 'cameras.*.ftp.stream',
-    'cameras.*.analytics.kinds.person', 'cameras.*.analytics.kinds.vehicle', 'cameras.*.analytics.kinds.pet', 'cameras.*.events.poll.enabled',
+    'ftp.stream', 'ftp.maxGB',
+    'analytics.googleVision.monthlyLimit', 'analytics.googleVision.dailyCap', 'analytics.googleVision.checksPerDay', 'analytics.googleVision.perCameraDailyCap',
+    'cameras.*.name', 'cameras.*.statusPollS', 'cameras.*.stills.stream', 'cameras.*.stills.intervalS',
+    'cameras.*.ftp.stream',
   ],
   narrow: {
-    'analytics.googleVision.enabled': 'less', 'analytics.googleVision.monthlyLimit': 'less', 'analytics.googleVision.dailyCap': 'less',
+    'analytics.googleVision.monthlyLimit': 'less', 'analytics.googleVision.dailyCap': 'less',
     'analytics.googleVision.checksPerDay': 'less', 'analytics.googleVision.perCameraDailyCap': 'less',
     'retention.stillsDays': 'more', 'retention.previewsDays': 'more', 'retention.clipsDays': 'more', 'retention.eventsDays': 'more',
     'retention.auditDays': 'more', 'retention.streamLogDays': 'more',
@@ -323,5 +335,7 @@ export const REMOTE_SETTABLE: { v: 1; remote: string[]; narrow: Record<string, '
     'server', 'go2rtc', 'storage', 'ftp.port', 'ftp.passive', 'ftp.tls', 'ftp.publicHost', 'ftp.certFile', 'ftp.keyFile', 'tls', 'composition.font', 'ntp.server',
     'poeSwitch', 'camsAdmin', 'cameras.*.id', 'cameras.*.host', 'cameras.*.protocol', 'cameras.*.tlsName', 'cameras.*.user', 'cameras.*.onvifPort', 'cameras.*.rtspPort',
     'cameras.*.baichuanPort', 'cameras.*.poeSwitch', 'cameras.*.ftp.user', 'cameras.*.webUiUrl', 'cameras.*.storage',
+    // Local only in P3 (coordinator ruling, security review I4): capture and listener switches, health thresholds.
+    ...LOCAL_ONLY,
   ],
 };

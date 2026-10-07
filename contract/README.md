@@ -148,6 +148,26 @@ proxy delete data. `storage.*` and `cameras.*.storage.*` are local only.
 A `config.rollback` is exempt from `narrow` (it restores what a local person
 set).
 
+**Local only in P3** (`LOCAL_ONLY` in `build.ts`, listed in `denied`). Ruling:
+capture/feature on-off switches (`ftp.enabled`, `stills.enabled`,
+`archive.enabled`, events/analytics enable flags and any other `*.enabled`
+that turns capture or a listener on/off) and health thresholds
+(`health.*`, `host.stats`, `ftp.stalledHours`, `archive.warnPercent`) are
+LOCAL ONLY in P3. A compromised cams-admin must not be able to blind a proxy
+silently, and `ftp.enabled=true` opens ports (network exposure needs Klaus).
+Cost if wrong: these stay local; adding them later is a contract change.
+
+**Camera names** (`CAMERA_NAME_PATTERN`, a `u` regex): 1–64 characters, no
+C0/C1 controls, no bidi controls (U+202A–202E, U+2066–2069), no line or
+paragraph separators, no zero-width characters. It applies to
+`camera.name.set` (args schema) and, on the proxy, to `config.set` of
+`cameras.*.name` (`invalid_value`).
+
+**Secret-shaped names** (`SECRET_KEY_PATTERN`, case-insensitive:
+`pem|key|password|passwd|secret|token|cookie`): no remote path matches it.
+cams-admin drops matching paths from a stored view and matching keys from an
+action's answer, and the proxy scrubs them as well.
+
 Fixtures: a P3 proxy fixture's `$context` may carry `journal`, a list of
 `{cmdId, command, at, action?}` the journal budget counts. Result fixtures
 name their command in `$command`. The starred refused fixtures (bad path,
@@ -157,5 +177,6 @@ schema and fail their `commands/<name>.args` schema.
 **Cross-check while the repos are out of step:** a command fixture whose
 `body.command` cam-proxy `main` does not implement yet, and whose verdict
 differs, is reported `pending` (not a failure) by
-`scripts/contract/cam-proxy-commands.ts`; once cam-proxy implements P3,
-nothing may be `pending`.
+`scripts/contract/cam-proxy-commands.ts`, but only while cam-proxy implements
+**no** P3 command. Once one is in its `IMPLEMENTED`, every P3 fixture must
+match (nothing pending).

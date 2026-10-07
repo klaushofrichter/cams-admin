@@ -46,6 +46,8 @@ const countSince = (entries: JournalEntry[]) => (pred: (e: JournalEntry) => bool
   const hits = entries.filter((e) => e.at >= sinceMs && pred(e));
   return { n: hits.length, oldest: hits.length ? Math.min(...hits.map((e) => e.at)) : null };
 };
+const P3 = ['config.get', 'config.set', 'config.unset', 'config.rollback', 'camera.action', 'camera.name.set', 'proxy.restart'];
+const P3_STARTED = P3.some(implemented);
 const DIR = join(__dirname, '../../contract/v1/fixtures');
 const ctxOf = (c: Ctx, journal: (id: string) => unknown = () => undefined) => {
   const seen = new SeenIds();
@@ -65,7 +67,9 @@ for (const f of cmds) {
   } catch (e) {
     got = `threw ${(e as Error).message}`;
   }
-  if (got !== want && !implemented(f.message.body.command)) {
+  // pending only while cam-proxy implements no P3 command at all: once it has
+  // one, every P3 fixture must match (a forgotten IMPLEMENTED entry is drift).
+  if (got !== want && !implemented(f.message.body.command) && !P3_STARTED) {
     pending++;
     console.log(`pending ${f.name} (cam-proxy does not implement ${f.message.body.command} yet)`);
     continue;

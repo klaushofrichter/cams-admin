@@ -7,7 +7,7 @@
 // cam-proxy's and is left out here.
 import { createHash } from 'crypto';
 import { publicFromB64, verifyEnvelope } from '../server/crypto/ed25519';
-import { DISRUPTIVE_ACTIONS, NEVER_REMOTE_ACTIONS, P3_COMMANDS, PATH_PATTERN, REMOTE_ACTIONS } from '../contract/build';
+import { CAMERA_NAME_PATTERN, DISRUPTIVE_ACTIONS, NEVER_REMOTE_ACTIONS, P3_COMMANDS, PATH_PATTERN, REMOTE_ACTIONS } from '../contract/build';
 
 export interface CheckContext {
   now: number; // cams-admin time: Date.now() + the offset learned from the challenge
@@ -37,6 +37,7 @@ export const IMPLEMENTED: readonly string[] = ['tokens.apply', ...P3_COMMANDS];
 const PATH_RE = new RegExp(PATH_PATTERN);
 const REV_RE = /^sha256:[0-9a-f]{64}$/;
 const CAM_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
+const NAME_RE = new RegExp(CAMERA_NAME_PATTERN, 'u');
 const HOUR = 3_600_000;
 
 const isObj = (x: unknown): x is Record<string, any> => typeof x === 'object' && x !== null && !Array.isArray(x);
@@ -91,7 +92,7 @@ export function p3ArgsOk(command: string, a: Record<string, any>): boolean {
         && (a.input.camera === undefined || typeof a.input.camera === 'boolean');
     }
     case 'camera.name.set':
-      return only(a, ['v', 'camera', 'name']) && typeof a.camera === 'string' && CAM_RE.test(a.camera) && typeof a.name === 'string' && LABEL_RE.test(a.name);
+      return only(a, ['v', 'camera', 'name']) && typeof a.camera === 'string' && CAM_RE.test(a.camera) && typeof a.name === 'string' && NAME_RE.test(a.name);
   }
   return false;
 }
