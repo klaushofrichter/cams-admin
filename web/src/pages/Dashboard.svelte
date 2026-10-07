@@ -7,6 +7,7 @@
   import StateChip from '../components/StateChip.svelte';
   import Ago from '../components/Ago.svelte';
   import { clock } from '../lib/clock.svelte';
+  import { instanceState, stateClass as camsClass, stateText as camsText } from '../lib/cams';
 
   let d = $state<any>(null);
   let onlyProblems = $state(false);
@@ -58,6 +59,24 @@
       {#each d.backup.alerts as a}<span class="badge bad">{a}</span>{/each}
     </a>
   </section>
+  {#if d.cams?.length}
+    <section class="card cams-list" data-testid="dash-cams">
+      <b>cams instances</b>
+      {#each d.cams as c (c.id)}
+        {@const st = instanceState(c, clock.now)}
+        <div class="row" data-testid="dash-cms-{c.name}">
+          <a href="#/cams-instances/{c.id}"><b>{c.displayName}</b></a>
+          <span class="chip {camsClass(st)}" data-testid="dash-cms-state-{c.name}">{camsText(st)}</span>
+          <span class="muted">pull <Ago t={c.lastPullAt} /></span>
+          {#if c.mode}<span class="badge">{c.mode}</span>{/if}
+          {#if c.mode && !c.current}<span class="badge warn">not on the current revision</span>{/if}
+          {#if c.shadowDifferences !== null}<span class="badge" class:warn={c.shadowDifferences > 0}>{c.shadowDifferences} shadow differences</span>{/if}
+          {#if c.held}<span class="badge warn">{c.held} held</span>{/if}
+          {#if c.problems}<span class="badge bad">{c.problems} problems</span>{/if}
+        </div>
+      {/each}
+    </section>
+  {/if}
   <label class="row filter"><input type="checkbox" bind:checked={onlyProblems} data-testid="filter-problems" /> Only problems</label>
   {#if d.refusedProxyIds.length}
     <section class="card" data-testid="refused">
@@ -111,4 +130,5 @@
   .head { gap: 10px; }
   .proxy { border-top: 1px solid var(--border); padding-top: 8px; display: grid; gap: 6px; }
   .cams { gap: 6px; }
+  .cams-list { display: grid; gap: 6px; }
 </style>

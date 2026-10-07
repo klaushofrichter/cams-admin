@@ -7,6 +7,8 @@
   import Accounts from './pages/Accounts.svelte';
   import Account from './pages/Account.svelte';
   import Proxy from './pages/Proxy.svelte';
+  import CamsInstances from './pages/CamsInstances.svelte';
+  import CamsInstance from './pages/CamsInstance.svelte';
   import Audit from './pages/Audit.svelte';
   import Backup from './pages/Backup.svelte';
 
@@ -38,6 +40,7 @@
     <nav class="row">
       <a href="#/" data-testid="nav-dashboard" class:on={route.page === 'dashboard'}>Dashboard</a>
       <a href="#/accounts" data-testid="nav-accounts" class:on={route.page === 'accounts' || route.page === 'account' || route.page === 'proxy'}>Accounts</a>
+      <a href="#/cams-instances" data-testid="nav-cams" class:on={route.page === 'cams-instances' || route.page === 'cams-instance'}>cams</a>
       <a href="#/audit" data-testid="nav-audit" class:on={route.page === 'audit'}>Audit</a>
       <a href="#/backup" data-testid="nav-backup" class:on={route.page === 'backup'}>Backup</a>
     </nav>
@@ -49,6 +52,8 @@
     {:else if route.page === 'accounts'}<Accounts />
     {:else if route.page === 'account'}{#key route.accountId}<Account accountId={route.accountId!} tab={route.tab ?? 'overview'} />{/key}
     {:else if route.page === 'proxy'}{#key route.proxyId}<Proxy accountId={route.accountId!} proxyId={route.proxyId!} />{/key}
+    {:else if route.page === 'cams-instances'}<CamsInstances />
+    {:else if route.page === 'cams-instance'}{#key route.instanceId}<CamsInstance instanceId={route.instanceId!} />{/key}
     {:else if route.page === 'audit'}<Audit />
     {:else if route.page === 'backup'}<Backup />
     {/if}

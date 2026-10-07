@@ -14,6 +14,7 @@ import type { Tokens } from '../tokens/service';
 import type { CamsInstances } from '../cams/instances';
 import type { Importer } from '../import/importer';
 import { exportForInstance } from '../import/export';
+import { snapshotRevision } from '../cams/snapshot';
 import { SESSION_COOKIE, type Sessions } from '../auth/session';
 import { requireCsrf, requireSysadmin, writeLimiter } from '../auth/middleware';
 import { reconcile } from '../status/derive';
@@ -238,7 +239,7 @@ export function apiRouter(d: ApiDeps): express.Router {
   r.post('/cams-instances', h((req, res) => { created(res); const i = ci.create(actor(res), req.body); reg('cams-instance', i.id); return i; }));
   r.get(cmsBase, h((req) => {
     const i = ci.get(cms(req));
-    return { ...i, live: ci.live(i.id), enrollment: ci.liveCode(i.id), serverKeyFingerprints: d.serverKeyFingerprints };
+    return { ...i, live: ci.live(i.id), enrollment: ci.liveCode(i.id), serverKeyFingerprints: d.serverKeyFingerprints, revision: snapshotRevision(d.db, i.id, d.serverKeyFingerprints[0] ?? '') };
   }));
   r.patch(cmsBase, h((req, res) => { const i = ci.update(actor(res), cms(req), req.body); reg('cams-instance', i.id); return i; }));
   r.delete(cmsBase, h((req, res) => { ci.remove(actor(res), cms(req), req.body?.confirmName); reg('cams-instance', cms(req)); }));
@@ -340,8 +341,22 @@ export function dashboard(d: ApiDeps) {
     });
     return { id: a.id, name: a.name, displayName: a.displayName, users: a.users, proxies: pxs, cameras: camRows, warnings: a.admins === 0 ? ['no-admin'] : [] };
   });
+  // P4: one row per cams instance (its pulls and reports live in memory).
+  const fp = d.serverKeyFingerprints[0] ?? '';
+  const cams = d.camsInstances.list().map((i) => {
+    const rep = i.live.report;
+    const current = snapshotRevision(d.db, i.id, fp);
+    return {
+      id: i.id, name: i.name, displayName: i.displayName, state: i.state, lastSeenAt: i.live.lastSeenAt, lastPullAt: i.live.lastPullAt, lastPullStatus: i.live.lastPullStatus,
+      mode: rep?.mode ?? null, version: rep?.version ?? null, appliedRevision: rep?.appliedRevision ?? null, current: !!rep && rep.appliedRevision === current,
+      held: rep?.held?.length ?? 0, keptOld: rep?.keptOld?.length ?? 0, diverged: (rep?.keptOld?.length ?? 0) > 0,
+      shadowDifferences: rep?.shadow ? rep.shadow.differences : null, shadowZeroSince: i.live.shadowZeroSince, problems: rep?.problems?.length ?? 0,
+      tokens: rep?.tokens ?? null,
+    };
+  });
   return {
     accounts: out,
+    cams,
     summary: { accounts: accounts.length, proxies, proxiesOnline, cameras, camerasOnline, problems },
     backup: d.backup.state(),
     refusedProxyIds: [...d.hub.refusedIds.entries()].map(([id, v]) => ({ id, ...v })),

@@ -50,4 +50,13 @@ describe('cams status reports (POST /cams/v1/report)', () => {
     expect(long).toEqual({ status: 400, json: { error: 'invalid', field: 'shadow' } });
     expect(await post({ v: 2, mode: 'file' })).toEqual({ status: 400, json: { error: 'invalid', field: 'v' } });
   });
+
+  it('the dashboard lists each instance with its pull, mode, revision, held/kept-old counts, shadow and problems', async () => {
+    await post({ ...REPORT, mode: 'shadow', appliedRevision: null, held: [{ accountId: acc.id, camsId: 'cam1', fields: ['host'] }], shadow: { accountId: acc.id, differences: 2, items: ['cam1: host', 'cam2: protocol'] }, problems: [{ code: 'snapshot_invalid', detail: 'x' }] });
+    const d = await s.api('GET', '/dashboard');
+    expect(d.cams).toEqual([expect.objectContaining({
+      id: inst.id, name: 'cluster', state: 'enrolled', lastSeenAt: expect.any(Number), lastPullAt: expect.any(Number), mode: 'shadow', appliedRevision: null, current: false,
+      held: 1, keptOld: 0, diverged: false, shadowDifferences: 2, shadowZeroSince: null, problems: 1,
+    })]);
+  });
 });
