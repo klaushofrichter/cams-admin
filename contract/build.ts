@@ -273,7 +273,7 @@ export const WIRE_COMMANDS = ['tokens.apply', 'config.get', 'config.set', 'confi
 // The camera actions a proxy may allow for remote use (camera.action:<a>).
 export const REMOTE_ACTIONS = [
   'camera-test', 'onvif-resubscribe', 'camera-ftp-test', 'poe-switch-read', 'inventory', 'inventory-cancel', 'retention-run', 'restart',
-  'camera-reboot', 'camera-powercycle', 'camera-ftp-setup', 'camera-ftp-off', 'camera-ntp-set', 'camera-cert-push',
+  'camera-reboot', 'camera-powercycle', 'camera-ftp-setup', 'camera-ntp-set', 'camera-cert-push',
 ] as const;
 // The proxy's allow-list entries (camsAdmin.allowCommands); anything else is a load error on the proxy.
 export const ALLOW_ENTRIES: readonly string[] = [
@@ -287,9 +287,14 @@ export const P3_COMMANDS = ['config.get', 'config.set', 'config.unset', 'config.
 // Actions a proxy never runs for cams-admin, whatever its allow-list says.
 export const NEVER_REMOTE_ACTIONS = [
   'find-camera', 'camera-address', 'camera-trust-clear', 'tls-ca-rotate', 'tls-ca-drop-previous', 'archive-clear', 'inventory-repair', 'camera-poe-on', 'restart-proxy',
+  // cam-proxy #196 security fixes: turning the camera's FTP upload off remotely would stop clip capture silently.
+  'camera-ftp-off',
 ] as const;
 // Remote actions the UIs group and warn about (with proxy.restart); the journal budget counts them.
-export const DISRUPTIVE_ACTIONS = ['restart', 'camera-reboot', 'camera-powercycle', 'camera-ftp-setup', 'camera-ftp-off', 'camera-ntp-set', 'camera-cert-push'] as const;
+export const DISRUPTIVE_ACTIONS = ['restart', 'camera-reboot', 'camera-powercycle', 'camera-ftp-setup', 'camera-ntp-set', 'camera-cert-push'] as const;
+// What the journal budget counts: the disruptive actions, and camera-ftp-off
+// entries journaled before it became never-remote.
+export const JOURNAL_BUDGET_ACTIONS = [...DISRUPTIVE_ACTIONS, 'camera-ftp-off'] as const;
 // A setting's dotted path, as GET /control/config names it (no "_": never __proto__).
 export const PATH_PATTERN = '^[a-z][A-Za-z0-9]{0,31}(\\.[a-z0-9][A-Za-z0-9-]{0,31}){0,5}$';
 // Coordinator ruling (security review I4): capture/feature on-off switches
@@ -303,10 +308,12 @@ export const LOCAL_ONLY = [
 ] as const;
 // A key or dotted path that looks secret: cams-admin drops such paths from a
 // stored view and such keys from an action's answer (the proxy scrubs too).
-// A camera name (camera.name.set, and cameras.*.name from cams-admin):
-// 1–64 characters, no C0/C1 controls, no bidi controls, no line or paragraph
-// separators, no zero-width characters (security review M3). A `u` regex.
-export const CAMERA_NAME_PATTERN = '^[^\\u0000-\\u001f\\u007f-\\u009f\\u200b-\\u200f\\u2028-\\u202e\\u2060-\\u206f\\ufeff]{1,64}$';
+// A camera name (camera.name.set, and cameras.*.name from cams-admin), a `u`
+// regex: 1–64 assigned characters, none of them a control (Cc), a format
+// character (Cf: bidi controls, U+061C, zero-width, tag characters), a
+// surrogate (Cs: a lone one), a private-use character (Co) or a line or
+// paragraph separator (Zl, Zp). From cam-proxy #196's security fixes.
+export const CAMERA_NAME_PATTERN = '^(?:(?![\\p{Cc}\\p{Cf}\\p{Cs}\\p{Co}\\p{Zl}\\p{Zp}])\\P{Cn}){1,64}$';
 export const SECRET_KEY_PATTERN = 'pem|key|password|passwd|secret|token|cookie';
 // contract/v1/remote-settable.json: `remote` is the upper bound of what any
 // proxy may let cams-admin set; `narrow` the paths that may only move one way

@@ -21,7 +21,9 @@ describe('JCS (RFC 8785)', () => {
   it('the committed vectors: every jcs case, every envelope signature', () => {
     const v = vectors as unknown as { jcs: { name: string; input: unknown; text: string }[]; envelopes: { key: string; envelope: Record<string, unknown>; text: string; sig: string }[] };
     expect(v.jcs.length).toBeGreaterThanOrEqual(4);
-    expect(v.envelopes.map((e) => (e.envelope as { type: string }).type)).toEqual(['command', 'result', 'event', 'command', 'command', 'result', 'command', 'result', 'command', 'command', 'command', 'command']);
+    expect(v.envelopes.map((e) => (e.envelope as { type: string }).type)).toEqual(['command', 'result', 'event', 'command', 'command', 'result', 'command', 'result', 'command', 'command', 'command', 'command', 'command']);
+    // A name the proxy refuses (U+061C), signed byte for byte (JCS keeps it as UTF-8).
+    expect((v.envelopes[12].envelope as { body: Record<string, any> }).body.args.name).toBe('evil\u061Cname');
     const p3 = v.envelopes.slice(4) as unknown as { envelope: { body: Record<string, any> } }[];
     expect(p3[0].envelope.body).toMatchObject({ command: 'config.set', args: { v: 1, dryRun: false, set: { 'sse.pingS': 5 } } });
     // Deny vector: a local-only capture switch, refused by the proxy.

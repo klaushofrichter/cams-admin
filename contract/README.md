@@ -133,7 +133,7 @@ Changed steps of the check order:
 |---|---|---|---|
 | `config.get` | the view | — | `store_error` |
 | `config.set`, `config.unset` | the change list (also for a dry run) | `baseRevision` ≠ the current `configRevision` | `not_remote_settable`, `held_by_env`, `unknown_camera`, `widening_local_only`, `invalid_value`, `store_error` |
-| `config.rollback` | the change list | a path the command changed has changed since | `no_backup`, `already_rolled_back`, `not_remote_settable`, `invalid_value`, `store_error` |
+| `config.rollback` | the change list | a path the command changed has changed since | `no_backup`, `already_rolled_back`, `not_remote_settable`, `widening_local_only`, `invalid_value`, `store_error` |
 | `camera.action` | the action answered 2xx | — | the action's error code |
 | `camera.name.set` | the name as read back | — | `invalid_name`, `camera_offline`, `camera_error`, `unknown_camera` |
 | `proxy.restart` | `{restartAt}`; the restart follows the result | — | — |
@@ -145,8 +145,9 @@ only from cams-admin: Google Vision spending only down (`less`; 0 = no cap
 for `dailyCap` and `perCameraDailyCap`), every retention period and size cap
 only up (`more`; an unset size cap = no cap), so cams-admin can never make a
 proxy delete data. `storage.*` and `cameras.*.storage.*` are local only.
-A `config.rollback` is exempt from `narrow` (it restores what a local person
-set).
+A `config.rollback` that would lower a raise-only value, raise spending, or
+touch a local-only path fails `widening_local_only` (cam-proxy #196: no
+longer exempt from `narrow`).
 
 **Local only in P3** (`LOCAL_ONLY` in `build.ts`, listed in `denied`). Ruling:
 capture/feature on-off switches (`ftp.enabled`, `stills.enabled`,
@@ -157,11 +158,19 @@ LOCAL ONLY in P3. A compromised cams-admin must not be able to blind a proxy
 silently, and `ftp.enabled=true` opens ports (network exposure needs Klaus).
 Cost if wrong: these stay local; adding them later is a contract change.
 
-**Camera names** (`CAMERA_NAME_PATTERN`, a `u` regex): 1–64 characters, no
-C0/C1 controls, no bidi controls (U+202A–202E, U+2066–2069), no line or
-paragraph separators, no zero-width characters. It applies to
-`camera.name.set` (args schema) and, on the proxy, to `config.set` of
-`cameras.*.name` (`invalid_value`).
+**Camera names** (`CAMERA_NAME_PATTERN`, a `u` regex, from cam-proxy #196):
+1–64 assigned characters (no `Cn`), none of them a control (`Cc`), a format
+character (`Cf`: bidi controls, U+061C, zero-width and tag characters), a
+surrogate (`Cs`, so no lone one), a private-use character (`Co`) or a line or
+paragraph separator (`Zl`, `Zp`). It applies to `camera.name.set` (args
+schema) and, on the proxy, to `config.set` of `cameras.*.name`
+(`invalid_value`).
+
+**`camera-ftp-off` is never remote** (cam-proxy #196): it is in
+`NEVER_REMOTE_ACTIONS`, not in `REMOTE_ACTIONS`, and so not an allow entry or
+heartbeat value. Turning the camera's FTP upload off would silently stop clip
+capture. The journal budget still counts `camera-ftp-off` entries already
+journaled (`JOURNAL_BUDGET_ACTIONS`).
 
 **Secret-shaped names** (`SECRET_KEY_PATTERN`, case-insensitive:
 `pem|key|password|passwd|secret|token|cookie`): no remote path matches it.

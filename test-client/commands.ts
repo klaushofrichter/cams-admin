@@ -7,7 +7,7 @@
 // cam-proxy's and is left out here.
 import { createHash } from 'crypto';
 import { publicFromB64, verifyEnvelope } from '../server/crypto/ed25519';
-import { CAMERA_NAME_PATTERN, DISRUPTIVE_ACTIONS, NEVER_REMOTE_ACTIONS, P3_COMMANDS, PATH_PATTERN, REMOTE_ACTIONS } from '../contract/build';
+import { CAMERA_NAME_PATTERN, DISRUPTIVE_ACTIONS, JOURNAL_BUDGET_ACTIONS, NEVER_REMOTE_ACTIONS, P3_COMMANDS, PATH_PATTERN, REMOTE_ACTIONS } from '../contract/build';
 
 export interface CheckContext {
   now: number; // cams-admin time: Date.now() + the offset learned from the challenge
@@ -100,7 +100,7 @@ export function p3ArgsOk(command: string, a: Record<string, any>): boolean {
 const isDisruptive = (a: string | undefined) => (DISRUPTIVE_ACTIONS as readonly string[]).includes(a ?? '');
 // Step 11's journal budget: proxy.restart ≤ 2 an hour, disruptive camera actions ≤ 6 an hour (any status).
 export function journalBudget(journal: JournalEntry[], now: number, command: string, action?: string): { ok: true } | { ok: false; retryAfterS: number } {
-  const counted = journal.filter((e) => e.at > now - HOUR && (command === 'proxy.restart' ? e.command === 'proxy.restart' : e.command === 'camera.action' && isDisruptive(e.action)));
+  const counted = journal.filter((e) => e.at > now - HOUR && (command === 'proxy.restart' ? e.command === 'proxy.restart' : e.command === 'camera.action' && (JOURNAL_BUDGET_ACTIONS as readonly string[]).includes(e.action ?? '')));
   const cap = command === 'proxy.restart' ? 2 : 6;
   if (counted.length < cap) return { ok: true };
   const oldest = Math.min(...counted.map((e) => e.at));

@@ -52,6 +52,8 @@ const envelopeCases = [
   { kind: 'command', key: 'server', envelope: env('command', 11, { proxyId: PRX, connId: CON, cmdId: 'cmd_5123456789ABCDEFGHJK', exp: 1791273600011 + 60000, actor: 'admin@example.org', command: 'camera.action', args: { v: 1, camera: null, action: 'retention-run' } }) },
   { kind: 'command', key: 'server', envelope: env('command', 12, { proxyId: PRX, connId: CON, cmdId: 'cmd_6123456789ABCDEFGHJK', exp: 1791273600012 + 60000, actor: 'admin@example.org', command: 'config.rollback', args: { v: 1, dryRun: false, cmdId: 'cmd_2123456789ABCDEFGHJK' } }) },
   { kind: 'command', key: 'server', envelope: env('command', 13, { proxyId: PRX, connId: CON, cmdId: 'cmd_7123456789ABCDEFGHJK', exp: 1791273600013 + 60000, actor: 'admin@example.org', command: 'config.unset', args: { v: 1, dryRun: true, baseRevision: 'sha256:' + 'a'.repeat(64), paths: ['sse.pingS', 'cameras.cam1.name'] } }) },
+  // A camera name the proxy refuses (U+061C): JCS writes it as UTF-8, both sides must sign the same bytes.
+  { kind: 'command', key: 'server', envelope: env('command', 14, { proxyId: PRX, connId: CON, cmdId: 'cmd_8123456789ABCDEFGHJK', exp: 1791273600014 + 60000, actor: 'admin@example.org', command: 'camera.name.set', args: { v: 1, camera: 'cam1', name: 'evil\u061Cname' } }) },
 ].map((c) => ({ ...c, text: jcs(c.envelope), sig: signEnvelope(privateFromB64(keys[c.key].privateKey), c.envelope) }));
 const out = {
   $comment: 'Fixed Ed25519 test keys (PKCS#8 = 302e020100300506032b657004220420 + seed) and the signed strings of spec 8.2/8.3. Test keys only: never use them for a real proxy.',
