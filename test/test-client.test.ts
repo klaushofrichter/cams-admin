@@ -317,6 +317,12 @@ describe('RefProxyConfig: the reference proxy for the P3 commands', () => {
     expect(r.handle('config.rollback', { v: 1, dryRun: false, cmdId: who(6).cmdId }, who(7))).toEqual({ status: 'conflict', result: { revision: r.revision(), current: { 'sse.pingS': { v: 11, s: 'override' } } } });
     expect(r.current('sse.pingS')).toBe(11);
   });
+  it('a rollback that would lower a raise-only value fails widening_local_only (cam-proxy #196)', () => {
+    const r = new RefProxyConfig();
+    r.handle('config.set', set(r, { 'retention.clipsDays': 120 }), who(1));
+    expect(r.handle('config.rollback', { v: 1, dryRun: true, cmdId: who(1).cmdId }, who(2))).toMatchObject({ status: 'failed', code: 'widening_local_only', result: { paths: [{ path: 'retention.clipsDays', code: 'widening_local_only' }] } });
+    expect(r.current('retention.clipsDays')).toBe(120);
+  });
   it('a value equal to the one Reset restores drops the override; unset of a non-override is unchanged', () => {
     const r = new RefProxyConfig();
     r.handle('config.set', set(r, { 'sse.pingS': 7 }), who(1));

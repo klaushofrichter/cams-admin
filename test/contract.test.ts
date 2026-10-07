@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { existsSync, readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
 import Ajv2020 from 'ajv/dist/2020';
-import { buildSchemas, DISRUPTIVE_ACTIONS, LOCAL_ONLY, NEVER_REMOTE_ACTIONS, P3_COMMANDS, PATH_PATTERN, REMOTE_ACTIONS, REMOTE_SETTABLE, SECRET_KEY_PATTERN, CAMERA_NAME_PATTERN } from '../contract/build';
+import { ALLOW_ENTRIES, JOURNAL_BUDGET_ACTIONS, buildSchemas, DISRUPTIVE_ACTIONS, LOCAL_ONLY, NEVER_REMOTE_ACTIONS, P3_COMMANDS, PATH_PATTERN, REMOTE_ACTIONS, REMOTE_SETTABLE, SECRET_KEY_PATTERN, CAMERA_NAME_PATTERN } from '../contract/build';
 import { fixtures } from '../contract/make';
 import { validateCommandArgs, validateEnroll, validateMessage, validateResultPayload, validateSummary } from '../server/contract';
 import { publicFromB64, verifyEnvelope } from '../server/crypto/ed25519';
@@ -95,7 +95,7 @@ describe('the v1 contract', () => {
   it('every proxy-receiver fixture has a $context and a runtime code from the nack list', () => {
     const NACKS = ['bad_signature', 'wrong_target', 'expired', 'replayed', 'not_allowed', 'paused', 'rate_limited', 'invalid_args', 'unsupported_version', 'busy'];
     const proxyFixtures = allFixtures().filter((x) => x.$expect?.receiver === 'proxy');
-    expect(proxyFixtures.length).toBe(27);
+    expect(proxyFixtures.length).toBe(31);
     for (const f of proxyFixtures) {
       expect(f.$context, f.name).toMatchObject({ now: expect.any(Number), proxyId: expect.stringMatching(/^prx_/), connId: expect.stringMatching(/^con_/), serverKeys: [vectors.keys.server.publicKey] });
       expect(NACKS, f.name).toContain(f.$expect.runtime);
@@ -157,7 +157,7 @@ describe('the v1 contract', () => {
     }
   });
   it('the starred refused fixtures fail their strict args schema (the contract table)', () => {
-    for (const n of ['refused-camera-action-never-remote', 'refused-camera-action-no-camera', 'refused-config-set-bad-path', 'refused-config-set-object-value', 'refused-config-set-65-paths', 'refused-camera-name-set-bidi']) {
+    for (const n of ['refused-camera-action-never-remote', 'refused-camera-action-no-camera', 'refused-config-set-bad-path', 'refused-config-set-object-value', 'refused-config-set-65-paths', 'refused-camera-name-set-bidi', 'refused-camera-name-set-alm', 'refused-camera-name-set-tag', 'refused-camera-name-set-surrogate']) {
       const m = fixture(n).message;
       expect(strictValidator('command')(m), n).toBe(true);
       expect(strictValidator(`commands/${m.body.command}.args`)(m.body.args), n).toBe(false);
@@ -168,7 +168,7 @@ describe('the v1 contract', () => {
       'refused-config-set-not-allowed': 'not_allowed', 'refused-camera-action-entry-missing': 'not_allowed', 'refused-camera-action-never-remote': 'not_allowed',
       'refused-camera-action-no-camera': 'invalid_args', 'refused-config-set-bad-path': 'invalid_args', 'refused-config-set-object-value': 'invalid_args',
       'refused-config-set-65-paths': 'invalid_args', 'refused-config-set-args-v2': 'unsupported_version', 'refused-proxy-restart-budget': 'rate_limited',
-      'refused-camera-action-budget': 'rate_limited', 'refused-proxy-restart-paused': 'paused', 'refused-camera-name-set-bidi': 'invalid_args',
+      'refused-camera-action-budget': 'rate_limited', 'refused-proxy-restart-paused': 'paused', 'refused-camera-name-set-bidi': 'invalid_args', 'refused-camera-name-set-alm': 'invalid_args', 'refused-camera-name-set-tag': 'invalid_args', 'refused-camera-name-set-surrogate': 'invalid_args', 'refused-camera-action-ftp-off': 'not_allowed',
     };
     for (const [n, code] of Object.entries(want)) expect(fixture(n).$expect, n).toEqual({ runtime: code, strict: 'valid', receiver: 'proxy' });
     expect(fixture('refused-config-set-not-allowed').$context.allow).toEqual(['config.get']);
@@ -182,7 +182,14 @@ describe('the v1 contract', () => {
   it('action lists: never-remote and remote are disjoint; disruptive ⊂ remote', () => {
     for (const a of NEVER_REMOTE_ACTIONS) expect(REMOTE_ACTIONS as readonly string[], a).not.toContain(a);
     for (const a of DISRUPTIVE_ACTIONS) expect(REMOTE_ACTIONS as readonly string[], a).toContain(a);
-    expect([...DISRUPTIVE_ACTIONS]).toEqual(['restart', 'camera-reboot', 'camera-powercycle', 'camera-ftp-setup', 'camera-ftp-off', 'camera-ntp-set', 'camera-cert-push']);
+    expect([...DISRUPTIVE_ACTIONS]).toEqual(['restart', 'camera-reboot', 'camera-powercycle', 'camera-ftp-setup', 'camera-ntp-set', 'camera-cert-push']);
+    // Contract change (cam-proxy #196): camera-ftp-off is never remote; the journal budget still counts it.
+    expect(NEVER_REMOTE_ACTIONS as readonly string[]).toContain('camera-ftp-off');
+    expect(REMOTE_ACTIONS as readonly string[]).not.toContain('camera-ftp-off');
+    expect(ALLOW_ENTRIES).not.toContain('camera.action:camera-ftp-off');
+    expect([...JOURNAL_BUDGET_ACTIONS].sort()).toEqual([...DISRUPTIVE_ACTIONS, 'camera-ftp-off'].sort());
+    const hb = JSON.parse(readFileSync(join(V1, 'strict/heartbeat.schema.json'), 'utf8'));
+    expect(JSON.stringify(hb)).not.toContain('camera.action:camera-ftp-off');
   });
   it('remote-settable.json is the contract text; no remote path is denied; narrow ⊂ remote', () => {
     const r = JSON.parse(readFileSync(join(V1, 'remote-settable.json'), 'utf8'));
@@ -229,6 +236,13 @@ describe('the v1 contract', () => {
     expect(validateResultPayload('config.get', { paths: {} })).toBe(false);
     expect(validateResultPayload('config.set', 'nope')).toBe(false);
   });
+  it('config.rollback can fail widening_local_only (a fixture; the README outcomes table)', () => {
+    const f = fixture('valid-result-config-rollback-failed-widening');
+    expect(f.$command).toBe('config.rollback');
+    expect(f.message.body).toMatchObject({ status: 'failed', code: 'widening_local_only', result: { paths: [{ path: 'retention.clipsDays', code: 'widening_local_only' }] } });
+    expect(strictValidator('commands/config.rollback.result')(f.message.body.result)).toBe(true);
+    expect(readFileSync(join(__dirname, '../contract/README.md'), 'utf8')).toMatch(/`config.rollback` \| the change list \| [^|]+\| `no_backup`, `already_rolled_back`, `not_remote_settable`, `widening_local_only`/);
+  });
   it('deny fixtures: a capture switch and a health threshold are refused remotely (not_remote_settable)', () => {
     for (const [n, path] of [['valid-result-config-set-failed-ftp-enabled', 'ftp.enabled'], ['valid-result-config-set-failed-health', 'health.diskPercent']]) {
       const f = fixture(n);
@@ -254,8 +268,10 @@ describe('the v1 contract', () => {
     expect(validateCommandArgs('camera.action', { v: 1, camera: 'cam1', action: 'inventory', input: { kind: 'clips' } })).toEqual({ ok: true });
     expect(validateCommandArgs('camera.name.set', { v: 1, camera: 'cam1', name: 'a\nb' })).toMatchObject({ ok: false });
     // One name rule (security review M3): no C0/C1, no bidi controls, no line separators, no zero-width characters; ≤ 64.
-    for (const bad of ['a\u0085b', 'evil\u202Egnp.exe', 'a\u2066b', 'a\u2028b', 'a\u200Bb', '\uFEFFa', 'x'.repeat(65)]) expect(validateCommandArgs('camera.name.set', { v: 1, camera: 'cam1', name: bad }), JSON.stringify(bad)).toMatchObject({ ok: false });
+    for (const bad of ['a\u0085b', 'evil\u202Egnp.exe', 'a\u2066b', 'a\u2028b', 'a\u200Bb', '\uFEFFa', 'x'.repeat(65), 'a\u061Cb', 'a\u{E0041}b', 'a\uD800b', 'a\uE000b', 'a\u0378b']) expect(validateCommandArgs('camera.name.set', { v: 1, camera: 'cam1', name: bad }), JSON.stringify(bad)).toMatchObject({ ok: false });
     expect(validateCommandArgs('camera.name.set', { v: 1, camera: 'cam1', name: 'Café 😀 Ost' })).toEqual({ ok: true });
+    expect(validateCommandArgs('camera.name.set', fixture('valid-command-camera-name-set-accents').message.body.args)).toEqual({ ok: true });
+    expect(fixture('valid-command-camera-name-set-accents').message.body.args.name).toBe('Garage Süd – Einfahrt');
     expect(new RegExp(CAMERA_NAME_PATTERN, 'u').test('evil\u202Egnp')).toBe(false);
     expect(validateCommandArgs('proxy.restart', { v: 1 })).toEqual({ ok: true });
     expect(validateCommandArgs('proxy.restart', { v: 1, now: true })).toMatchObject({ ok: false });

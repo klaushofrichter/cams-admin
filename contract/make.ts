@@ -121,6 +121,12 @@ export function fixtures(): Record<string, unknown> {
     'refused-proxy-restart-budget': p3Refused('rate_limited', 'proxy.restart', { v: 1 }, ['proxy.restart'], 'two restarts within the hour (the journal budget)', { journal: journal(2, 'proxy.restart') }),
     'refused-camera-action-budget': p3Refused('rate_limited', 'camera.action', { v: 1, camera: 'cam1', action: 'camera-reboot' }, ['camera.action:camera-reboot'], 'six disruptive actions within the hour', { journal: journal(6, 'camera.action', (i) => DISRUPTIVE_ACTIONS[i % DISRUPTIVE_ACTIONS.length]) }),
     'refused-camera-name-set-bidi': p3Refused('invalid_args', 'camera.name.set', { v: 1, camera: 'cam1', name: 'evil\u202Egnp.exe' }, ['camera.name.set'], 'a bidi override in a camera name (strict args refuse)'),
+    'refused-camera-name-set-alm': p3Refused('invalid_args', 'camera.name.set', { v: 1, camera: 'cam1', name: 'evil\u061Cname' }, ['camera.name.set'], 'U+061C (Arabic letter mark, a format character) in a camera name'),
+    'refused-camera-name-set-tag': p3Refused('invalid_args', 'camera.name.set', { v: 1, camera: 'cam1', name: 'tag\u{E0041}name' }, ['camera.name.set'], 'a tag character (U+E0041) in a camera name'),
+    'refused-camera-name-set-surrogate': p3Refused('invalid_args', 'camera.name.set', { v: 1, camera: 'cam1', name: 'lone\uD800name' }, ['camera.name.set'], 'a lone surrogate (U+D800) in a camera name'),
+    'refused-camera-action-ftp-off': p3Refused('not_allowed', 'camera.action', { v: 1, camera: 'cam1', action: 'camera-ftp-off' }, [...ALLOW_ENTRIES], 'camera-ftp-off is never remote (cam-proxy #196), whatever the allow-list'),
+    'valid-command-camera-name-set-accents': p3Valid('a name with accents, spaces and a dash', ['camera.name.set'], 'camera.name.set', { v: 1, camera: 'cam1', name: 'Garage Süd – Einfahrt' }),
+    'valid-result-config-rollback-failed-widening': p3Result('config.rollback', 'a rollback that would lower a raise-only value (or touch a local-only path)', { status: 'failed', code: 'widening_local_only', result: { paths: [{ path: 'retention.clipsDays', code: 'widening_local_only', detail: 'a remote change may only keep data longer' }] } }),
     'refused-proxy-restart-paused': p3Refused('paused', 'proxy.restart', { v: 1 }, ['proxy.restart'], 'commands paused on the proxy', { paused: true }),
   };
 

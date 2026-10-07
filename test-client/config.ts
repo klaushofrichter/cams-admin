@@ -18,7 +18,7 @@ export interface RefOutcome { status: 'ok' | 'failed' | 'conflict'; code?: strin
 interface Step { before?: Leaf; after?: Leaf }
 interface Backup { paths: Record<string, Step>; rolledBack: boolean }
 
-const CAMERA_WRITES = ['camera-ftp-setup', 'camera-ftp-off', 'camera-ntp-set', 'camera-cert-push'];
+const CAMERA_WRITES = ['camera-ftp-setup', 'camera-ntp-set', 'camera-cert-push'];
 const LESS_REASON = 'a remote change may only lower spending';
 const MORE_REASON = 'a remote change may only keep data longer';
 // Google Vision caps where 0 means "no cap".
@@ -189,13 +189,16 @@ export class RefProxyConfig {
     this.onChange?.();
   }
 
-  // config.rollback: path-level; a path changed since → conflict; exempt from narrow.
+  // config.rollback: path-level; a path changed since → conflict; a restore that
+  // would widen (lower a raise-only value, raise spending) → widening_local_only.
   private rollback(args: { dryRun: boolean; cmdId: string }, cmd: { cmdId: string; actor: string }): RefOutcome {
     const b = this.backups.get(args.cmdId);
     if (!b) return { status: 'failed', code: 'no_backup', result: { paths: [] } };
     if (b.rolledBack) return { status: 'failed', code: 'already_rolled_back', result: { paths: [] } };
     const since = Object.entries(b.paths).filter(([p, s]) => this.overrides.get(p) !== s.after).map(([p]) => p);
     if (since.length) return this.conflict(since);
+    const widening = Object.entries(b.paths).filter(([p, st]) => !narrowOk(patternOf(p), this.current(p), st.before ?? this.base.get(p)?.v));
+    if (widening.length) return { status: 'failed', code: 'widening_local_only', result: { paths: widening.map(([p]) => ({ path: p, code: 'widening_local_only', detail: REMOTE_SETTABLE.narrow[patternOf(p)] === 'less' ? LESS_REASON : MORE_REASON })) } };
     const baseRevision = this.revision();
     const changes = Object.entries(b.paths).map(([p, s]) => {
       const base = this.base.get(p);
