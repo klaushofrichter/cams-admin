@@ -57,6 +57,23 @@ cams-admin restored from a backup?" and Issue, Retire and Re-apply answer
 2. **Confirm** on the card: cams-admin sends its current set above the
    proxy's revision, and token changes work again.
 
+## cams without cams-admin (the Export, M §11.6)
+
+If cams-admin is lost for good (no backup restores), cams goes back to its
+file mode:
+
+1. From the last cams-admin you can reach (or a restore on the Mac): account
+   → *Export* → the instance → `cameras-<account>-<instance>.json`. It has
+   every camera of the instance (its route URLs, pins and TLS names) but no
+   password and no token; `warnings` names a camera whose proxy has no URL.
+2. Put the camera passwords in from the credentials file and, per proxy, a
+   token the proxy accepts (its `CAMPROXY_TOKENS`, or a fresh token set
+   locally on the proxy with its admin token).
+3. On cams: `CAMERAS_FILE` = that file, `CONFIG_SOURCE=file`, restart. The
+   moved state files stay readable (ruling R4-10).
+4. The `tokens` list of the export names the managed tokens cams held: block
+   them on each proxy once cams uses the new ones.
+
 ## The quarterly drill
 
 `AWS_PROFILE=<Klaus's profile> scripts/backup/restore-drill.sh` restores the

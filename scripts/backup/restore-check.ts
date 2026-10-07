@@ -58,6 +58,10 @@ async function main() {
         const k = await enroll(url, c.code, { version: 'restore-test', cameraIds: ['cam1'] });
         writeKeyFile(opt('key'), k);
         await hello(k.connectUrl, opt('key'));
+        // P4: a cams instance serving alpha, with a route and a live code.
+        const inst = await api(url, cookie, 'POST', '/cams-instances', { name: 'restore', displayName: 'Restore', accounts: [a.id] });
+        await api(url, cookie, 'PUT', `/cams-instances/${inst.id}/routes/${p.id}`, { url: 'http://127.0.0.1:8480', hidden: false });
+        await api(url, cookie, 'POST', `/cams-instances/${inst.id}/enrollment-codes`, { lifetimeH: 1 });
       }
     }
     return;
