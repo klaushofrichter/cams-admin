@@ -7,8 +7,10 @@ import { checkEpoch, writeEpochFile } from '../server/db/epoch';
 import { MIGRATIONS } from '../server/db/migrations';
 import { toKey } from '../server/registry';
 import { tmpDir } from './helpers/tmp';
+import { makeRegistry, ACTOR } from './helpers/registry';
 
-const TABLES = ['accounts', 'account_users', 'proxies', 'proxy_keys', 'enrollment_codes', 'cameras', 'sims', 'proxy_status', 'status_events', 'audit_log', 'sessions', 'jobs', 'meta', 'commands', 'proxy_tokens', 'proxy_token_state'];
+const TABLES = ['accounts', 'account_users', 'proxies', 'proxy_keys', 'enrollment_codes', 'cameras', 'sims', 'proxy_status', 'status_events', 'audit_log', 'sessions', 'jobs', 'meta', 'commands', 'proxy_tokens', 'proxy_token_state',
+  'cams_instances', 'cams_instance_keys', 'cams_enrollment_codes', 'cams_instance_accounts', 'cams_instance_routes', 'config_revision'];
 
 function seed(db: DatabaseSync) {
   db.exec(`INSERT INTO accounts (id,name,display_name,created_at,updated_at) VALUES ('acc_a','alpha','A',1,1),('acc_b','beta','B',1,1);
@@ -145,7 +147,6 @@ describe('database', () => {
   });
 
   it('migration 4 (P2): a version-3 database gains commands, proxy_tokens, proxy_token_state with its rows intact', () => {
-    expect(LATEST_VERSION).toBe(4);
     const f = join(dir, 'm4.db');
     const raw = new DatabaseSync(f);
     for (let i = 0; i < 3; i++) MIGRATIONS[i](raw);
@@ -153,7 +154,7 @@ describe('database', () => {
     seed(raw);
     raw.close();
     const db = openDb(f);
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(4);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(LATEST_VERSION);
     expect(db.prepare('SELECT id FROM proxies ORDER BY id').all()).toEqual([{ id: 'prx_a' }, { id: 'prx_b' }]);
     expect(db.prepare('SELECT count(*) n FROM commands').get()).toEqual({ n: 0 });
   });
@@ -214,5 +215,63 @@ describe('database', () => {
     expect(checkEpoch(db, ef)).toBe('same');
     writeFileSync(ef, String(readEpoch(db) + 5));
     expect(checkEpoch(db, ef)).toBe('restored');
+  });
+
+  // --- P4 (cams instances) ---------------------------------------------------
+  it('P4 migration: tables, one active and one pending key per instance, routes need a url unless hidden', () => {
+    const r = makeRegistry(dir);
+    const acc = r.reg.createAccount(ACTOR, { name: 'home', displayName: 'Home' });
+    const px = r.reg.createProxy(ACTOR, acc.id, { name: 'pi', displayName: 'Pi', runsOn: 'local-host', url: 'https://proxy.example.net:8480' });
+    r.db.prepare(`INSERT INTO cams_instances (id, name, display_name, state, created_at, updated_at) VALUES ('cms_A', 'cluster', 'Cluster', 'pending', 1, 1)`).run();
+    expect(() => r.db.prepare(`INSERT INTO cams_instance_routes (instance_id, proxy_id, url, hidden) VALUES ('cms_A', ?, NULL, 0)`).run(px.id)).toThrow(/CHECK/);
+    r.db.prepare(`INSERT INTO cams_instance_routes (instance_id, proxy_id, url, hidden) VALUES ('cms_A', ?, NULL, 1)`).run(px.id);
+    r.db.prepare(`INSERT INTO cams_instance_keys (id, instance_id, public_key, fingerprint, created_at, confirmed_at) VALUES ('key_1', 'cms_A', 'pk1', 'fp', 1, 1)`).run();
+    expect(() => r.db.prepare(`INSERT INTO cams_instance_keys (id, instance_id, public_key, fingerprint, created_at, confirmed_at) VALUES ('key_2', 'cms_A', 'pk2', 'fp', 1, 2)`).run()).toThrow(/UNIQUE/);
+    r.db.prepare(`INSERT INTO cams_instance_keys (id, instance_id, public_key, fingerprint, created_at) VALUES ('key_3', 'cms_A', 'pk3', 'fp', 1)`).run();
+    expect(() => r.db.prepare(`INSERT INTO cams_instance_keys (id, instance_id, public_key, fingerprint, created_at) VALUES ('key_4', 'cms_A', 'pk4', 'fp', 1)`).run()).toThrow(/UNIQUE/);
+  });
+  it('config_revision: one row per account, bumped by every write cams can see, in the same transaction', () => {
+    const r = makeRegistry(dir);
+    const acc = r.reg.createAccount(ACTOR, { name: 'home', displayName: 'Home' });
+    const rev = () => (r.db.prepare('SELECT revision FROM config_revision WHERE account_id = ?').get(acc.id) as { revision: number }).revision;
+    let pxId = '';
+    const steps: [string, () => void][] = [
+      ['user', () => r.reg.createUser(ACTOR, acc.id, { email: 'a@example.org', role: 'viewer' })],
+      ['proxy', () => { pxId = r.reg.createProxy(ACTOR, acc.id, { name: 'pi', displayName: 'Pi', runsOn: 'local-host' }).id; }],
+      ['camera', () => r.reg.createCamera(ACTOR, acc.id, { camsId: 'cam1', name: 'Yard', kind: 'camera' })],
+      ['account', () => r.reg.updateAccount(ACTOR, acc.id, { displayName: 'Home 2', version: 1 })],
+      ['route', () => tx(r.db, () => {
+        r.db.prepare(`INSERT INTO cams_instances (id, name, display_name, state, created_at, updated_at) VALUES ('cms_R', 'r', 'R', 'pending', 1, 1)`).run();
+        r.db.prepare(`INSERT INTO cams_instance_routes (instance_id, proxy_id, url, hidden) VALUES ('cms_R', ?, NULL, 1)`).run(pxId);
+      })],
+      ['token', () => tx(r.db, () => r.db.prepare(`INSERT INTO proxy_tokens (id,account_id,proxy_id,kind,holder,label,hash,state,issued_revision,created_at,created_by) VALUES ('tok_1',?,?,'client','manual','l',?,'pending',1,1,'a@example.com')`).run(acc.id, pxId, 'sha256:' + 'a'.repeat(64)))],
+    ];
+    for (const [what, fn] of steps) {
+      const before = rev();
+      const epoch = readEpoch(r.db);
+      fn();
+      expect(rev(), what).toBe(before + 1);
+      expect(readEpoch(r.db) - epoch, what).toBe(1); // no extra write transaction
+    }
+  });
+  it('audit_log accepts actor type cams', () => {
+    const r = makeRegistry(dir);
+    r.audit.write({ actorType: 'cams', actor: 'cms_0123456789ABCDEFGHJK', action: 'cams-auth-refused', outcome: 'refused', detail: { reason: 'bad_signature' } });
+    expect(r.db.prepare(`SELECT count(*) n FROM audit_log WHERE actor_type = 'cams'`).get()).toEqual({ n: 1 });
+    expect(() => r.db.prepare(`INSERT INTO audit_log (id, at, actor_type, actor, action, outcome) VALUES ('aud_x', 1, 'nobody', 'x', 'signin', 'ok')`).run()).toThrow(/CHECK/);
+  });
+  it('a version-4 database migrates with its audit rows, indexes and accounts intact (config_revision seeded)', () => {
+    const f = join(dir, 'm5.db');
+    const raw = new DatabaseSync(f);
+    for (let i = 0; i < 4; i++) MIGRATIONS[i](raw);
+    raw.exec('PRAGMA user_version = 4');
+    seed(raw);
+    for (let i = 0; i < 3; i++) raw.prepare(`INSERT INTO audit_log (id, at, actor_type, actor, action, outcome, detail) VALUES (?, ?, 'sysadmin', 'a@example.com', 'account-create', 'ok', '{}')`).run(`aud_${i}`, i);
+    const before = raw.prepare('SELECT * FROM audit_log ORDER BY id').all();
+    raw.close();
+    const db = openDb(f);
+    expect(db.prepare('SELECT * FROM audit_log ORDER BY id').all()).toEqual(before);
+    expect((db.prepare(`SELECT name FROM pragma_index_list('audit_log') WHERE origin = 'c' ORDER BY name`).all() as { name: string }[]).map((x) => x.name)).toEqual(['audit_account_at', 'audit_action_at', 'audit_at']);
+    expect(db.prepare('SELECT account_id, revision FROM config_revision ORDER BY account_id').all()).toEqual([{ account_id: 'acc_a', revision: 1 }, { account_id: 'acc_b', revision: 1 }]);
   });
 });

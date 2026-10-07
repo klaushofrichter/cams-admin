@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { auditId, codeHash, newEnrollmentCode, newId, normaliseCode, ulid } from '../server/ids';
+import { auditId, codeHash, newCamsEnrollmentCode, newEnrollmentCode, newId, normaliseCamsCode, normaliseCode, ulid } from '../server/ids';
 
 const B32 = '[0-9A-HJKMNP-TV-Z]';
 
@@ -47,4 +47,16 @@ describe('enrollment codes', () => {
     expect(codeHash('CAE1-7Q2M-K9XD-4HPA-W3ZT-RN6B')).toMatch(/^[0-9a-f]{64}$/);
     expect(codeHash('CAE1-7Q2M-K9XD-4HPA-W3ZT-RN6B')).toBe(codeHash(normaliseCode('cae17q2mk9xd4hpaw3ztrn6b')!));
   });
+
+describe('cams enrollment codes (P4)', () => {
+  it('are CAC1 codes, normalised like proxy codes, and never accepted for the other kind', () => {
+    expect(newCamsEnrollmentCode()).toMatch(/^CAC1(-[0-9A-HJKMNP-TV-Z]{4}){5}$/);
+    expect(normaliseCamsCode(' cac1-abcd-efgh-jkmn-pqrs-tvwx ')).toBe('CAC1-ABCD-EFGH-JKMN-PQRS-TVWX');
+    expect(normaliseCamsCode('cac1 abcd efgh jkmn pqrs tvwo')).toBe('CAC1-ABCD-EFGH-JKMN-PQRS-TVW0');
+    expect(normaliseCamsCode(newEnrollmentCode())).toBeNull();
+    expect(normaliseCode(newCamsEnrollmentCode())).toBeNull();
+    expect(normaliseCode('CAE1-ABCD-EFGH-JKMN-PQRS-TVWX')).toBe('CAE1-ABCD-EFGH-JKMN-PQRS-TVWX');
+    expect(newId('cms')).toMatch(/^cms_[0-9A-HJKMNP-TV-Z]{20}$/);
+  });
+});
 });
