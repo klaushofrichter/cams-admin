@@ -139,7 +139,7 @@ mkdir -p "$RUN/keys" && chmod 700 "$RUN/keys"
 ( cd "$REPO" && npx tsx scripts/localstack/setup.ts --url "http://localhost:$ADMIN_PORT" --cookie-file "$RUN/cams-admin/cookie" --plan "$RUN/plan.json" --keys "$RUN/keys" )
 for p in "${PROXIES[@]}"; do
   read -r acc name port _ <<<"$p"
-  start_bg "bridge-$name" env -C "$REPO" node --import tsx "$REPO/test-client/cli.ts" bridge --key "$RUN/keys/$acc-$name.json" --health "http://127.0.0.1:$port/api/local/health"
+  start_bg "bridge-$name" env -C "$REPO" node --import tsx "$REPO/test-client/cli.ts" bridge --key "$RUN/keys/$acc-$name.json" --health "http://127.0.0.1:$port/api/local/health" --allow tokens.apply,tokens.apply.admin
 done
 # gamma-1: wait for its first heartbeat, then cut it: the bridge is killed
 # without a bye (an outage, not a deliberate stop, which would show
@@ -155,6 +155,15 @@ done < "$PIDS"
 awk '$2 != "gamma-1" && $2 != "bridge-gamma-1"' "$PIDS" > "$PIDS.tmp" && mv "$PIDS.tmp" "$PIDS"
 runenv_put ADMIN_URL "http://localhost:$ADMIN_PORT"
 
+# --- P4: two cams instances, enrolled by the reference cams client -------------------------
+( cd "$REPO" && npx tsx scripts/localstack/cams-setup.ts --url "http://localhost:$ADMIN_PORT" --cookie-file "$RUN/cams-admin/cookie" --keys "$RUN/cams" )
+CAMS_REPO="${LOCALSTACK_CAMS_REPO:-$DEV_DIR/cams}"
+if git -C "$CAMS_REPO" fetch -q origin main 2>/dev/null && git -C "$CAMS_REPO" show origin/main:server/cli.ts 2>/dev/null | grep -q admin-enroll; then
+  note "cams main has a cams-admin client: run cams against this stack with its livestack admin scenario (cams docs/livestack.md)"
+else
+  note "cams main has no cams-admin client yet: cams instances skipped (the reference client holds their keys in $RUN/cams)"
+fi
+
 cat <<EOF
 
 Local stack up (work dir $WORK):
@@ -162,5 +171,6 @@ Local stack up (work dir $WORK):
   accounts    alpha (alpha-1: 2 sims), beta (beta-1: 1, beta-2: 3), gamma (gamma-1: stopped, offline after $((HB * 3)) s)
   proxies     http://127.0.0.1:29100 / 29200 / 29300 (cam-proxy admin UIs)
   backups     $([ "$S3" = 1 ] && echo "local S3 :$S3_PORT, bucket localstack" || echo "local folder (no S3)")
+  cams        instances cms-main (alpha, beta) and cms-pi (alpha, loopback route), keys in $RUN/cams
 Stop: $HERE/stop.sh
 EOF

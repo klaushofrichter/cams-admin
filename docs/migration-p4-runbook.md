@@ -47,9 +47,9 @@ Nobody else touches the Pi, the cluster or the camera.
    - Pi: `docker compose exec -T cams node dist/server/cli.js export-config > export-pi.json`
 
    and copies both to the Mac's livestack work dir (`$LIVESTACK_DIR/rehearse/`, mode 600).
-2. Localize: `npx tsx scripts/rehearse/localize.ts --in export-cluster.json --map map.json --out local-cluster.json` (and the Pi's). `map.json` maps each real proxy URL to a local stack proxy and its local test CA's fingerprint.
-3. cams: `REHEARSE_EXPORTS=$LIVESTACK_DIR/rehearse scripts/livestack/rehearse-cutover.sh` — the two-proxy stack (proxy B multi-camera), a local cams-admin, two cams instances (`cluster`, `pi`).
-4. It imports (dry run, apply, apply again = "no changes"), runs both cams in `shadow` (zero differences), switches both to `cams-admin`, restarts them with cams-admin stopped (cache start), runs the livestack checks, rotates tokens with a request loop (0 failures), confirms a held change, and runs the rollback of every step below.
+2. Localize: `npx tsx scripts/rehearse/localize.ts --in export-cluster.json --map map.json --out local-cluster.json` (and the Pi's). `map.json` maps each real proxy URL to a local stack proxy and its local test CA's fingerprint (`docs/localstack.md`).
+3. **cams-admin side** (this repo, `docs/localstack.md` "The rehearsal"): `scripts/localstack/start.sh`, then `npx tsx scripts/rehearse/rehearse.ts …` — P2 tokens, exports, localize, two instances enrolled by the reference cams client, imports (dry run, apply, again = "no changes"; the Pi file with hidden proxies), signed pulls (200/304), shadow comparison 0, cams-held tokens and Rotate now, offline cache check, block. With the real exports: `npm run import -- … --file local-cluster.json` (dry run, then `--apply`, then again).
+4. **cams side:** `REHEARSE_EXPORTS=$LIVESTACK_DIR/rehearse scripts/livestack/rehearse-cutover.sh` (cams repo, once cams P4 is on its `main`) — the two-proxy stack, a local cams-admin, two cams instances (`cluster`, `pi`): both cams in `shadow` (zero differences), switched to `cams-admin`, restarted with cams-admin stopped (cache start), the livestack checks, token rotation with a request loop (0 failures), a held change confirmed, and the rollback of every step below.
 5. Write the result into the log (date, commits, pass/fail per step).
 
 ## The steps (M §11.4, steps 5–8)
@@ -107,6 +107,7 @@ Not part of this rollout; listed so nothing is removed early:
 
 | date | step | commits (cams-admin / cams / cam-proxy) | result | by |
 |---|---|---|---|---|
+| 2026-10-07 | §R cams-admin side only (synthetic exports, reference cams client; cams P4 not yet on cams `main`) | cams-admin `feat/migration-p4-ui` (`scripts/rehearse/rehearse.ts`) / — / cam-proxy `main` via the bridge | PASS 13/13: tokens, exports + localize, enroll ×2, imports (no changes on the second run, Pi route + hidden proxy), pulls 200/304 verified, shadow 0, cams-held tokens + rotate, offline cache, block | P4 implementer |
 | | §R rehearsal (before 5) | | | |
 | | 5 cluster shadow | | | |
 | | 6 Pi shadow | | | |
