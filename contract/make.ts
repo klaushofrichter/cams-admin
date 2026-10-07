@@ -5,7 +5,7 @@
 import { mkdirSync, rmSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 import type { KeyObject } from 'crypto';
-import { buildSchemas } from './build';
+import { ALLOW_ENTRIES, buildSchemas, DISRUPTIVE_ACTIONS, REMOTE_SETTABLE } from './build';
 import { keyFromSeed, privateFromB64, sign, signEnvelope, signedText } from '../server/crypto/ed25519';
 import { makeProxyInfo, makeSummary, truncateSummary } from '../test-client/summaries';
 import vectors from './v1/vectors.json';
@@ -43,7 +43,7 @@ export function fixtures(): Record<string, unknown> {
   const SERVER = privateFromB64(serverKey.privateKeyPkcs8B64);
   const PROXY = privateFromB64(proxyKey.privateKeyPkcs8B64);
   const OTHER = privateFromB64(keyFromSeed(vectors.keys.other.seedHex).privateKeyPkcs8B64);
-  const ctx = (o: Partial<{ allow: string[]; paused: boolean; seen: string[]; now: number; enabled: boolean; tokens: object[] }> = {}) => ({ now: NOW + 10, proxyId: PRX, connId: CON, serverKeys: [serverKey.publicKeySpkiB64], allow: ['tokens.apply'], paused: false, seen: [] as string[], ...o });
+  const ctx = (o: Partial<{ allow: string[]; paused: boolean; seen: string[]; now: number; enabled: boolean; tokens: object[]; journal: object[] }> = {}) => ({ now: NOW + 10, proxyId: PRX, connId: CON, serverKeys: [serverKey.publicKeySpkiB64], allow: ['tokens.apply'], paused: false, seen: [] as string[], ...o });
   const signed = <T extends Record<string, unknown>>(m: T, key: KeyObject) => ({ ...m, sig: signEnvelope(key, m) });
   const command = (seq: number, name: string, args: object, o: Partial<{ proxyId: string; connId: string; exp: number; key: KeyObject; revocationOnly: boolean }> = {}) =>
     signed(env('command', seq, { proxyId: o.proxyId ?? PRX, connId: o.connId ?? CON, cmdId: CMD, exp: o.exp ?? NOW + seq + 60_000, actor: 'admin@example.org', command: name, args, ...(o.revocationOnly ? { revocationOnly: true } : {}) }), o.key ?? SERVER);
@@ -58,6 +58,67 @@ export function fixtures(): Record<string, unknown> {
   const toProxyInvalid = (code: string, message: unknown, note: string) => ({ $note: note, schema: 'command', $context: ctx(), $expect: { runtime: code, strict: 'invalid', receiver: 'proxy' }, message });
   const result = (seq: number, body: object) => signed(env('result', seq, { proxyId: PRX, connId: CON, cmdId: CMD, ...body }, { re: ID(3) }), PROXY);
   const { sig: _unsigned, ...unsignedCommand } = goodCommand;
+
+  // --- P3: remote configuration ("The P3 contract"). $context.journal: the proxy's
+  // command journal entries the journal budget counts; result fixtures name their
+  // command in $command (a result body carries only the cmdId).
+  const REV = `sha256:${'a'.repeat(64)}`;
+  const REV2 = `sha256:${'b'.repeat(64)}`;
+  const journal = (n: number, name: string, action?: (i: number) => string) =>
+    Array.from({ length: n }, (_, i) => ({ cmdId: `cmd_${String(i).padStart(20, '0')}`, command: name, at: NOW - (i + 1) * 60_000, ...(action ? { action: action(i) } : {}) }));
+  const p3Valid = (note: string, allow: string[], name: string, args: object) => ({ $note: note, schema: 'command', $context: ctx({ allow }), message: command(3, name, args) });
+  const p3Refused = (code: string, name: string, args: object, allow: string[], note: string, o: { paused?: boolean; journal?: object[] } = {}) => refused(code, command(3, name, args), ctx({ allow, ...o }), note);
+  const p3Result = (cmd: string, note: string, body: object) => ({ $note: note, $command: cmd, schema: 'result', message: result(5, { phase: 'done', ...body }) });
+  const setArgs = (set: object, dryRun = true) => ({ v: 1, dryRun, baseRevision: REV, set });
+  const view = {
+    revision: REV, schema: 1, cameras: ['cam1'], omittedCameras: [],
+    paths: {
+      'sse.pingS': { v: 5, s: 'override', by: { cmdId: CMD, actor: 'admin@example.org', at: NOW } },
+      'sse.maxClients': { v: 20, s: 'default' },
+      'stills.quality': { v: 5, s: 'file', r: 'restart', p: true, n: 6 },
+      'retention.clipsDays': { v: 90, s: 'file' },
+      'ftp.publicHost': { v: 'proxy.example.net', s: 'env' },
+      'cameras.cam1.name': { v: 'Front door', s: 'file' },
+      'cameras.cam1.host': { v: '192.0.2.10', s: 'file' },
+      'stills.maxGB': { s: 'default' },
+    },
+    settable: {
+      'sse.pingS': { type: 'integer', min: 5, max: 300 },
+      'sse.maxClients': { type: 'integer', min: 1, max: 100 },
+      'stills.quality': { type: 'integer', oneOf: [1, 2, 3, 4, 5, 6] },
+      'retention.clipsDays': { type: 'integer', min: 1, max: 3650, dir: 'more' },
+      'stills.maxGB': { type: 'integer', min: 1, max: 10000, optional: true, dir: 'more' },
+      'cameras.*.name': { type: 'string', pattern: '^[^\\u0000-\\u001f]{1,64}$' },
+    },
+  };
+  const sixtyFive = Object.fromEntries(Array.from({ length: 65 }, (_, i) => [`sse.p${i}`, 1]));
+  const p3 = {
+    'valid-command-config-get': p3Valid('read the settings view', ['config.get'], 'config.get', { v: 1 }),
+    'valid-command-config-set': p3Valid('a dry run of one setting', ['config.set'], 'config.set', setArgs({ 'sse.pingS': 5 })),
+    'valid-command-config-unset': p3Valid('a dry run of a reset to the file or default value', ['config.unset'], 'config.unset', { v: 1, dryRun: true, baseRevision: REV, paths: ['sse.pingS'] }),
+    'valid-command-config-rollback': p3Valid('a dry run of undoing an earlier change', ['config.rollback'], 'config.rollback', { v: 1, dryRun: true, cmdId: 'cmd_1123456789ABCDEFGHJK' }),
+    'valid-command-camera-action': p3Valid('a non-disruptive camera action', ['camera.action:camera-test'], 'camera.action', { v: 1, camera: 'cam1', action: 'camera-test' }),
+    'valid-command-camera-name-set': p3Valid('rename a camera on the camera', ['camera.name.set'], 'camera.name.set', { v: 1, camera: 'cam1', name: 'Front door' }),
+    'valid-command-proxy-restart': p3Valid('restart the proxy after the result is sent', ['proxy.restart'], 'proxy.restart', { v: 1 }),
+    'valid-result-config-get': p3Result('config.get', 'a compact view: values, sources, restart marks, settable bounds', { status: 'ok', result: view }),
+    'valid-result-config-set-ok': p3Result('config.set', 'one change written', { status: 'ok', result: { dryRun: false, baseRevision: REV, revision: REV2, changes: [{ path: 'sse.pingS', from: 30, to: 5, sourceFrom: 'default', sourceTo: 'override' }], unchanged: [] } }),
+    'valid-result-config-set-conflict': p3Result('config.set', 'baseRevision is not the current revision: the current values of the named paths', { status: 'conflict', result: { revision: REV2, current: { 'sse.pingS': { v: 9, s: 'override' } } } }),
+    'valid-result-config-set-failed': p3Result('config.set', 'a denied path fails the whole command', { status: 'failed', code: 'not_remote_settable', result: { paths: [{ path: 'cameras.cam1.host', code: 'not_remote_settable' }] } }),
+    'valid-result-config-set-failed-retention': p3Result('config.set', 'a retention period lowered remotely', { status: 'failed', code: 'widening_local_only', result: { paths: [{ path: 'retention.clipsDays', code: 'widening_local_only', detail: 'a remote change may only keep data longer' }] } }),
+    'valid-result-config-set-failed-storage': p3Result('config.set', 'storage settings are local only', { status: 'failed', code: 'not_remote_settable', result: { paths: [{ path: 'storage.maxPercent', code: 'not_remote_settable' }] } }),
+    'valid-result-camera-action-verified': p3Result('camera.action', 'a camera write, re-read and compared', { status: 'ok', result: { action: 'camera-ntp-set', camera: 'cam1', httpStatus: 200, answer: { ok: true }, verified: true, mismatch: [] } }),
+    'refused-config-set-not-allowed': p3Refused('not_allowed', 'config.set', setArgs({ 'sse.pingS': 5 }), ['config.get'], 'config.set is not in the allow-list'),
+    'refused-camera-action-entry-missing': p3Refused('not_allowed', 'camera.action', { v: 1, camera: 'cam1', action: 'camera-reboot' }, ['camera.action:camera-test'], 'step 8 passes (a camera.action entry), step 11 needs camera.action:camera-reboot'),
+    'refused-camera-action-never-remote': p3Refused('not_allowed', 'camera.action', { v: 1, camera: 'cam1', action: 'find-camera' }, [...ALLOW_ENTRIES], 'never remote, whatever the allow-list (strict: not a remote action)'),
+    'refused-camera-action-no-camera': p3Refused('invalid_args', 'camera.action', { v: 1, camera: null, action: 'camera-reboot' }, ['camera.action:camera-reboot'], 'camera is null only for retention-run (strict args refuse)'),
+    'refused-config-set-bad-path': p3Refused('invalid_args', 'config.set', setArgs({ 'Sse.pingS': 5 }), ['config.set'], 'a path starts with a lower-case letter (strict args refuse)'),
+    'refused-config-set-object-value': p3Refused('invalid_args', 'config.set', setArgs({ sse: { pingS: 5 } }), ['config.set'], 'a value is a leaf, never an object (strict args refuse)'),
+    'refused-config-set-65-paths': p3Refused('invalid_args', 'config.set', setArgs(sixtyFive), ['config.set'], 'at most 64 entries (strict args refuse)'),
+    'refused-config-set-args-v2': p3Refused('unsupported_version', 'config.set', { ...setArgs({ 'sse.pingS': 5 }), v: 2 }, ['config.set'], 'args v 2'),
+    'refused-proxy-restart-budget': p3Refused('rate_limited', 'proxy.restart', { v: 1 }, ['proxy.restart'], 'two restarts within the hour (the journal budget)', { journal: journal(2, 'proxy.restart') }),
+    'refused-camera-action-budget': p3Refused('rate_limited', 'camera.action', { v: 1, camera: 'cam1', action: 'camera-reboot' }, ['camera.action:camera-reboot'], 'six disruptive actions within the hour', { journal: journal(6, 'camera.action', (i) => DISRUPTIVE_ACTIONS[i % DISRUPTIVE_ACTIONS.length]) }),
+    'refused-proxy-restart-paused': p3Refused('paused', 'proxy.restart', { v: 1 }, ['proxy.restart'], 'commands paused on the proxy', { paused: true }),
+  };
 
   return {
     'valid-heartbeat-4cam': valid('heartbeat', hb(four, false, makeProxyInfo({ now: NOW, site: 'garage', publicUrl: 'https://proxy.example.net' })), 'four cameras, site CA, cam3 offline'),
@@ -123,6 +184,7 @@ export function fixtures(): Record<string, unknown> {
     'drift-heartbeat-new-field': drift('heartbeat', hb(extra), 'run time ignores an unknown field; strict refuses: add it to the contract first'),
     'invalid-enroll-v2': invalid('enroll-request', 'unsupported_version', { v: 2, code, publicKey: proxyKey.publicKeySpkiB64, proof: 'AAAA' }, ''),
     'invalid-enroll-no-proof': invalid('enroll-request', 'bad_request', { v: 1, code, publicKey: proxyKey.publicKeySpkiB64 }, ''),
+    ...p3,
   };
 }
 
@@ -139,5 +201,6 @@ if (require.main === module) {
   rmSync(join(OUT, 'fixtures'), { recursive: true, force: true });
   mkdirSync(join(OUT, 'fixtures'));
   for (const [name, f] of Object.entries(fixtures())) writeFileSync(join(OUT, 'fixtures', `${name}.json`), JSON.stringify(f, null, 2) + '\n');
+  writeFileSync(join(OUT, 'remote-settable.json'), JSON.stringify(REMOTE_SETTABLE, null, 2) + '\n');
   console.log('contract/v1 written');
 }

@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { readdirSync, readFileSync } from 'fs';
+import { existsSync, readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
 import Ajv2020 from 'ajv/dist/2020';
-import { buildSchemas } from '../contract/build';
+import { buildSchemas, DISRUPTIVE_ACTIONS, NEVER_REMOTE_ACTIONS, P3_COMMANDS, PATH_PATTERN, REMOTE_ACTIONS, REMOTE_SETTABLE } from '../contract/build';
 import { fixtures } from '../contract/make';
-import { validateCommandArgs, validateEnroll, validateMessage, validateSummary } from '../server/contract';
+import { validateCommandArgs, validateEnroll, validateMessage, validateResultPayload, validateSummary } from '../server/contract';
 import { publicFromB64, verifyEnvelope } from '../server/crypto/ed25519';
 import vectors from '../contract/v1/vectors.json';
 
@@ -95,7 +95,7 @@ describe('the v1 contract', () => {
   it('every proxy-receiver fixture has a $context and a runtime code from the nack list', () => {
     const NACKS = ['bad_signature', 'wrong_target', 'expired', 'replayed', 'not_allowed', 'paused', 'rate_limited', 'invalid_args', 'unsupported_version', 'busy'];
     const proxyFixtures = allFixtures().filter((x) => x.$expect?.receiver === 'proxy');
-    expect(proxyFixtures.length).toBe(15);
+    expect(proxyFixtures.length).toBe(26);
     for (const f of proxyFixtures) {
       expect(f.$context, f.name).toMatchObject({ now: expect.any(Number), proxyId: expect.stringMatching(/^prx_/), connId: expect.stringMatching(/^con_/), serverKeys: [vectors.keys.server.publicKey] });
       expect(NACKS, f.name).toContain(f.$expect.runtime);
@@ -138,8 +138,104 @@ describe('the v1 contract', () => {
     expect(validateCommandArgs('tokens.apply', fixture('refused-tokens-apply-bad-hash').message.body.args)).toMatchObject({ ok: false });
     expect(validateCommandArgs('tokens.apply', { ...args, tokens: [args.tokens[0], { ...args.tokens[0], hash: 'sha256:' + 'b'.repeat(64) }] })).toEqual({ ok: false, detail: 'duplicate id or hash' });
     expect(validateCommandArgs('tokens.apply', { ...args, tokens: [args.tokens[0], { ...args.tokens[0], id: 'tok_ZZZZZZZZZZZZZZZZZZZZ' }] })).toEqual({ ok: false, detail: 'duplicate id or hash' });
-    expect(validateCommandArgs('config.get', { v: 1 })).toMatchObject({ ok: false });
+    expect(validateCommandArgs('frobnicate', { v: 1 })).toMatchObject({ ok: false });
     expect(strictValidator('commands/tokens.apply.result')(fixture('valid-result-done-ok').message.body.result)).toBe(true);
+  });
+
+  // --- P3: remote configuration ("The P3 contract") ---------------------------
+  it('every P3 command has strict args and result schemas; the valid fixtures pass them', () => {
+    for (const c of P3_COMMANDS) {
+      expect(existsSync(join(V1, 'strict/commands', `${c}.args.schema.json`)), c).toBe(true);
+      expect(existsSync(join(V1, 'strict/commands', `${c}.result.schema.json`)), c).toBe(true);
+      expect(existsSync(join(V1, 'commands', `${c}.args.schema.json`)), c).toBe(true);
+      expect(existsSync(join(V1, 'commands', `${c}.result.schema.json`)), c).toBe(true);
+    }
+    for (const n of ['valid-command-config-get', 'valid-command-config-set', 'valid-command-config-unset', 'valid-command-config-rollback', 'valid-command-camera-action', 'valid-command-camera-name-set', 'valid-command-proxy-restart']) {
+      const m = fixture(n).message;
+      expect(strictValidator(`commands/${m.body.command}.args`)(m.body.args), n).toBe(true);
+      expect(validateCommandArgs(m.body.command, m.body.args), n).toEqual({ ok: true });
+    }
+  });
+  it('the starred refused fixtures fail their strict args schema (the contract table)', () => {
+    for (const n of ['refused-camera-action-never-remote', 'refused-camera-action-no-camera', 'refused-config-set-bad-path', 'refused-config-set-object-value', 'refused-config-set-65-paths']) {
+      const m = fixture(n).message;
+      expect(strictValidator('command')(m), n).toBe(true);
+      expect(strictValidator(`commands/${m.body.command}.args`)(m.body.args), n).toBe(false);
+    }
+  });
+  it('the P3 refused fixtures: each names the nack the contract table says', () => {
+    const want: Record<string, string> = {
+      'refused-config-set-not-allowed': 'not_allowed', 'refused-camera-action-entry-missing': 'not_allowed', 'refused-camera-action-never-remote': 'not_allowed',
+      'refused-camera-action-no-camera': 'invalid_args', 'refused-config-set-bad-path': 'invalid_args', 'refused-config-set-object-value': 'invalid_args',
+      'refused-config-set-65-paths': 'invalid_args', 'refused-config-set-args-v2': 'unsupported_version', 'refused-proxy-restart-budget': 'rate_limited',
+      'refused-camera-action-budget': 'rate_limited', 'refused-proxy-restart-paused': 'paused',
+    };
+    for (const [n, code] of Object.entries(want)) expect(fixture(n).$expect, n).toEqual({ runtime: code, strict: 'valid', receiver: 'proxy' });
+    expect(fixture('refused-config-set-not-allowed').$context.allow).toEqual(['config.get']);
+    expect(fixture('refused-camera-action-entry-missing').$context.allow).toEqual(['camera.action:camera-test']);
+    expect(fixture('refused-camera-action-never-remote').message.body.args.action).toBe('find-camera');
+    expect(fixture('refused-proxy-restart-budget').$context.journal).toHaveLength(2);
+    expect(fixture('refused-camera-action-budget').$context.journal).toHaveLength(6);
+    for (const e of fixture('refused-camera-action-budget').$context.journal) expect(DISRUPTIVE_ACTIONS).toContain(e.action);
+    expect(Object.keys(fixture('refused-config-set-65-paths').message.body.args.set)).toHaveLength(65);
+  });
+  it('action lists: never-remote and remote are disjoint; disruptive ⊂ remote', () => {
+    for (const a of NEVER_REMOTE_ACTIONS) expect(REMOTE_ACTIONS as readonly string[], a).not.toContain(a);
+    for (const a of DISRUPTIVE_ACTIONS) expect(REMOTE_ACTIONS as readonly string[], a).toContain(a);
+    expect([...DISRUPTIVE_ACTIONS]).toEqual(['restart', 'camera-reboot', 'camera-powercycle', 'camera-ftp-setup', 'camera-ftp-off', 'camera-ntp-set', 'camera-cert-push']);
+  });
+  it('remote-settable.json is the contract text; no remote path is denied; narrow ⊂ remote', () => {
+    const r = JSON.parse(readFileSync(join(V1, 'remote-settable.json'), 'utf8'));
+    expect(r).toEqual(REMOTE_SETTABLE);
+    const under = (p: string, d: string) => p === d || p.startsWith(`${d}.`);
+    for (const p of r.remote) expect(r.denied.some((d: string) => under(p, d)), p).toBe(false);
+    for (const p of Object.keys(r.narrow)) expect(r.remote, p).toContain(p);
+    for (const p of r.remote) expect(p).toMatch(new RegExp(PATH_PATTERN.replace('[a-z0-9][A-Za-z0-9-]{0,31}', '(\\*|[a-z0-9][A-Za-z0-9-]{0,31})')));
+    expect(r.remote).toHaveLength(56);
+    // The coordinator's ruling: no remote write may make a proxy delete data.
+    for (const p of ['retention.stillsDays', 'retention.previewsDays', 'retention.clipsDays', 'retention.eventsDays', 'retention.auditDays', 'retention.streamLogDays', 'stills.maxGB', 'previews.maxGB', 'ftp.maxGB']) expect(r.narrow[p], p).toBe('more');
+    for (const p of ['analytics.googleVision.enabled', 'analytics.googleVision.monthlyLimit', 'analytics.googleVision.dailyCap', 'analytics.googleVision.checksPerDay', 'analytics.googleVision.perCameraDailyCap']) expect(r.narrow[p], p).toBe('less');
+    expect(Object.keys(r.narrow)).toHaveLength(14);
+    expect(r.remote.some((p: string) => p.startsWith('storage.') || /^cameras\.\*\.storage\./.test(p))).toBe(false);
+    for (const d of ['storage', 'cameras.*.storage', 'camsAdmin', 'cameras.*.host', 'server']) expect(r.denied, d).toContain(d);
+  });
+  it('results: the P3 result fixtures pass strict and the server; a config.get result with a denied settable entry still passes lenient (the server filters it)', () => {
+    for (const n of ['valid-result-config-get', 'valid-result-config-set-ok', 'valid-result-config-set-conflict', 'valid-result-config-set-failed', 'valid-result-camera-action-verified', 'valid-result-config-set-failed-retention', 'valid-result-config-set-failed-storage']) {
+      const f = fixture(n);
+      expect(P3_COMMANDS as readonly string[], n).toContain(f.$command);
+      expect(strictValidator(`commands/${f.$command}.result`)(f.message.body.result), `${n} ${JSON.stringify(ajv.errors)}`).toBe(true);
+      expect(validateResultPayload(f.$command, f.message.body.result), n).toBe(true);
+      expect(verifyEnvelope(publicFromB64(vectors.keys.proxy.publicKey), f.message), n).toBe(true);
+    }
+    expect(fixture('valid-result-config-set-failed-retention').message.body).toMatchObject({ status: 'failed', code: 'widening_local_only', result: { paths: [{ path: 'retention.clipsDays', code: 'widening_local_only', detail: 'a remote change may only keep data longer' }] } });
+    expect(fixture('valid-result-config-set-failed-storage').message.body).toMatchObject({ status: 'failed', code: 'not_remote_settable', result: { paths: [{ path: 'storage.maxPercent', code: 'not_remote_settable' }] } });
+    const view = structuredClone(fixture('valid-result-config-get').message.body.result);
+    view.settable['camsAdmin.url'] = { type: 'string' };
+    expect(validateResultPayload('config.get', view)).toBe(true);
+    expect(validateResultPayload('config.get', { paths: {} })).toBe(false);
+    expect(validateResultPayload('config.set', 'nope')).toBe(false);
+  });
+  it('validateCommandArgs: what cams-admin sends for every P3 command', () => {
+    const REV = `sha256:${'a'.repeat(64)}`;
+    expect(validateCommandArgs('config.get', { v: 1 })).toEqual({ ok: true });
+    expect(validateCommandArgs('config.set', { v: 1, dryRun: true, baseRevision: REV, set: { 'sse.pingS': 5 } })).toEqual({ ok: true });
+    expect(validateCommandArgs('config.set', { v: 1, dryRun: true, baseRevision: REV, set: { 'sse.pingS': null } })).toMatchObject({ ok: false });
+    expect(validateCommandArgs('config.set', { v: 1, dryRun: true, baseRevision: REV, set: { __proto__x: 1 } })).toMatchObject({ ok: false });
+    expect(validateCommandArgs('config.set', { v: 1, dryRun: true, baseRevision: REV, set: {} })).toMatchObject({ ok: false });
+    expect(validateCommandArgs('config.unset', { v: 1, dryRun: true, baseRevision: REV, paths: ['sse.pingS', 'sse.pingS'] })).toMatchObject({ ok: false });
+    expect(validateCommandArgs('config.unset', { v: 1, dryRun: false, baseRevision: REV, paths: ['sse.pingS'] })).toEqual({ ok: true });
+    expect(validateCommandArgs('config.rollback', { v: 1, dryRun: true, cmdId: 'cmd_0123456789ABCDEFGHJK' })).toEqual({ ok: true });
+    expect(validateCommandArgs('camera.action', { v: 1, camera: 'cam1', action: 'find-camera' })).toMatchObject({ ok: false }); // never sent
+    expect(validateCommandArgs('camera.action', { v: 1, camera: null, action: 'retention-run' })).toEqual({ ok: true });
+    expect(validateCommandArgs('camera.action', { v: 1, camera: null, action: 'camera-reboot' })).toMatchObject({ ok: false });
+    expect(validateCommandArgs('camera.action', { v: 1, camera: 'cam1', action: 'retention-run' })).toMatchObject({ ok: false });
+    expect(validateCommandArgs('camera.action', { v: 1, camera: 'cam1', action: 'inventory', input: { kind: 'clips' } })).toEqual({ ok: true });
+    expect(validateCommandArgs('camera.name.set', { v: 1, camera: 'cam1', name: 'a\nb' })).toMatchObject({ ok: false });
+    expect(validateCommandArgs('proxy.restart', { v: 1 })).toEqual({ ok: true });
+    expect(validateCommandArgs('proxy.restart', { v: 1, now: true })).toMatchObject({ ok: false });
+    // 64 entries of 512 characters: within the schema, over the 16 KiB args bound.
+    const big = Object.fromEntries(Array.from({ length: 64 }, (_, i) => [`sse.p${i}`, 'x'.repeat(512)]));
+    expect(validateCommandArgs('config.set', { v: 1, dryRun: true, baseRevision: REV, set: big })).toEqual({ ok: false, detail: 'args over 16 KiB' });
   });
 
   it('the server clamps text over 200 characters', () => {

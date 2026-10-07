@@ -8,6 +8,20 @@ import resultSchema from '../contract/v1/result.schema.json';
 import eventSchema from '../contract/v1/event.schema.json';
 import tokensApplyArgsStrict from '../contract/v1/strict/commands/tokens.apply.args.schema.json';
 import tokensApplyResult from '../contract/v1/commands/tokens.apply.result.schema.json';
+import configGetArgs from '../contract/v1/strict/commands/config.get.args.schema.json';
+import configSetArgs from '../contract/v1/strict/commands/config.set.args.schema.json';
+import configUnsetArgs from '../contract/v1/strict/commands/config.unset.args.schema.json';
+import configRollbackArgs from '../contract/v1/strict/commands/config.rollback.args.schema.json';
+import cameraActionArgs from '../contract/v1/strict/commands/camera.action.args.schema.json';
+import cameraNameSetArgs from '../contract/v1/strict/commands/camera.name.set.args.schema.json';
+import proxyRestartArgs from '../contract/v1/strict/commands/proxy.restart.args.schema.json';
+import configGetResult from '../contract/v1/commands/config.get.result.schema.json';
+import configSetResult from '../contract/v1/commands/config.set.result.schema.json';
+import configUnsetResult from '../contract/v1/commands/config.unset.result.schema.json';
+import configRollbackResult from '../contract/v1/commands/config.rollback.result.schema.json';
+import cameraActionResult from '../contract/v1/commands/camera.action.result.schema.json';
+import cameraNameSetResult from '../contract/v1/commands/camera.name.set.result.schema.json';
+import proxyRestartResult from '../contract/v1/commands/proxy.restart.result.schema.json';
 import { jcs } from './crypto/jcs';
 import enrollRequest from '../contract/v1/enroll-request.schema.json';
 import summarySchema from '../contract/v1/health-summary.schema.json';
@@ -56,22 +70,36 @@ export function validateMessage(m: unknown): MessageVerdict {
   return { ok: true, msg: e };
 }
 
-// What cams-admin itself sends is checked strictly (a bug here is ours).
-const vTokensArgs = compile(tokensApplyArgsStrict);
-const vTokensResult = compile(tokensApplyResult);
+// What cams-admin itself sends is checked strictly (a bug here is ours): the
+// command's strict args schema, then what JSON Schema can't say.
+const vArgs: Record<string, ValidateFunction> = {
+  'tokens.apply': compile(tokensApplyArgsStrict),
+  'config.get': compile(configGetArgs), 'config.set': compile(configSetArgs), 'config.unset': compile(configUnsetArgs),
+  'config.rollback': compile(configRollbackArgs), 'camera.action': compile(cameraActionArgs), 'camera.name.set': compile(cameraNameSetArgs),
+  'proxy.restart': compile(proxyRestartArgs),
+};
+// A proxy's result payload, leniently (unknown fields ignored).
+const vResult: Record<string, ValidateFunction> = {
+  'tokens.apply': compile(tokensApplyResult),
+  'config.get': compile(configGetResult), 'config.set': compile(configSetResult), 'config.unset': compile(configUnsetResult),
+  'config.rollback': compile(configRollbackResult), 'camera.action': compile(cameraActionResult), 'camera.name.set': compile(cameraNameSetResult),
+  'proxy.restart': compile(proxyRestartResult),
+};
 export function validateCommandArgs(command: string, args: unknown): { ok: true } | { ok: false; detail: string } {
-  if (command !== 'tokens.apply') return { ok: false, detail: `no args schema for ${command}` };
-  if (!vTokensArgs(args)) return { ok: false, detail: errText(vTokensArgs) };
-  // Uniqueness inside tokens can't be said in JSON Schema: checked here (and on the proxy).
-  const t = (args as { tokens: { id: string; hash: string }[] }).tokens;
-  if (new Set(t.map((x) => x.id)).size !== t.length || new Set(t.map((x) => x.hash)).size !== t.length) return { ok: false, detail: 'duplicate id or hash' };
+  const v = Object.hasOwn(vArgs, command) ? vArgs[command] : undefined;
+  if (!v) return { ok: false, detail: `no args schema for ${command}` };
+  if (!v(args)) return { ok: false, detail: errText(v) };
+  if (command === 'tokens.apply') {
+    // Uniqueness inside tokens can't be said in JSON Schema: checked here (and on the proxy).
+    const t = (args as { tokens: { id: string; hash: string }[] }).tokens;
+    if (new Set(t.map((x) => x.id)).size !== t.length || new Set(t.map((x) => x.hash)).size !== t.length) return { ok: false, detail: 'duplicate id or hash' };
+  }
   if (Buffer.byteLength(jcs(args)) > 16384) return { ok: false, detail: 'args over 16 KiB' };
   return { ok: true };
 }
-// A proxy's result payload, leniently (an unknown command's result is any object).
 export function validateResultPayload(command: string, result: unknown): boolean {
-  if (command === 'tokens.apply') return vTokensResult(result);
-  return isRecord(result);
+  const v = Object.hasOwn(vResult, command) ? vResult[command] : undefined;
+  return v ? v(result) : isRecord(result);
 }
 
 export type EnrollVerdict = { ok: true } | { ok: false; code: 'bad_request' | 'unsupported_version'; detail: string };

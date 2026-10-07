@@ -41,6 +41,9 @@ const envelopeCases = [
   { kind: 'event', key: 'proxy', envelope: env('event', 2, { proxyId: PRX, connId: CON, kind: 'command.done', cmdId: CMD, phase: 'done', status: 'ok', result: tokensResult }) },
   // A revocation: the set only removes tokens (body.revocationOnly).
   { kind: 'command', key: 'server', envelope: env('command', 5, { proxyId: PRX, connId: CON, cmdId: 'cmd_1123456789ABCDEFGHJK', exp: 1791273600005 + 60000, actor: 'admin@example.org', command: 'tokens.apply', args: { v: 1, revision: 2, tokens: [] }, revocationOnly: true }) },
+  // P3: a config.set and its done result (one change).
+  { kind: 'command', key: 'server', envelope: env('command', 6, { proxyId: PRX, connId: CON, cmdId: 'cmd_2123456789ABCDEFGHJK', exp: 1791273600006 + 60000, actor: 'admin@example.org', command: 'config.set', args: { v: 1, dryRun: false, baseRevision: 'sha256:' + 'a'.repeat(64), set: { 'sse.pingS': 5 } } }) },
+  { kind: 'result', key: 'proxy', envelope: env('result', 7, { proxyId: PRX, connId: CON, cmdId: 'cmd_2123456789ABCDEFGHJK', phase: 'done', status: 'ok', result: { dryRun: false, baseRevision: 'sha256:' + 'a'.repeat(64), revision: 'sha256:' + 'b'.repeat(64), changes: [{ path: 'sse.pingS', from: 30, to: 5, sourceFrom: 'default', sourceTo: 'override' }], unchanged: [] } }, { re: '01K6' + '6'.padStart(22, '0') }) },
 ].map((c) => ({ ...c, text: jcs(c.envelope), sig: signEnvelope(privateFromB64(keys[c.key].privateKey), c.envelope) }));
 const out = {
   $comment: 'Fixed Ed25519 test keys (PKCS#8 = 302e020100300506032b657004220420 + seed) and the signed strings of spec 8.2/8.3. Test keys only: never use them for a real proxy.',
