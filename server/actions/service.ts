@@ -5,7 +5,7 @@ import { ApiError, type Registry } from '../registry';
 import type { StatusStore } from '../status/store';
 import type { Commands } from '../commands/service';
 import type { ProxyConfig } from '../config/service';
-import { CAMERA_NAME_PATTERN, DISRUPTIVE_ACTIONS, REMOTE_ACTIONS } from '../../contract/build';
+import { CAMERA_NAME_PATTERN, DISRUPTIVE_ACTIONS, JOURNAL_BUDGET_ACTIONS, REMOTE_ACTIONS } from '../../contract/build';
 
 // Remote camera actions, camera renames and proxy restarts (migration spec
 // §8.6, P3 plan Task 5, R3-18): signed commands with closed args; the
@@ -22,7 +22,7 @@ export const BUSY_MS = 10_000;
 // time, at most 3 in any 10 minutes across all accounts.
 export const FLEET_WINDOW_MS = 10 * 60_000;
 export const FLEET_MAX = 3;
-const DISRUPTIVE_SQL = `(command = 'proxy.restart' OR (command = 'camera.action' AND json_extract(args, '$.action') IN (${DISRUPTIVE_ACTIONS.map((a) => `'${a}'`).join(',')})))`;
+const DISRUPTIVE_SQL = `(command = 'proxy.restart' OR (command = 'camera.action' AND json_extract(args, '$.action') IN (${JOURNAL_BUDGET_ACTIONS.map((a) => `'${a}'`).join(',')})))`;
 
 const isObj = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x);
 const only = (o: Record<string, unknown>, keys: string[]) => Object.keys(o).every((k) => keys.includes(k));

@@ -408,6 +408,33 @@ describe('ProxyConfig', () => {
       expect(() => C().preview(ACTOR, p.acc, p.prx, { set }), JSON.stringify(set)).toThrow(/not_remote_settable/);
   });
 
+  it('#20: an apply the proxy refuses before it ran (rate_limited) frees its preview; a second apply of it is accepted', async () => {
+    const p = await proxy();
+    await viewed(p.acc, p.prx);
+    const pv = C().preview(ACTOR, p.acc, p.prx, { set: { 'sse.pingS': 7 } });
+    await final(p.acc, p.prx, pv.commandId);
+    p.client.refuseNext = { code: 'rate_limited', retryAfterS: 20 };
+    const a1 = C().apply(ACTOR, p.acc, p.prx, pv.commandId);
+    expect(await final(p.acc, p.prx, a1.commandId)).toMatchObject({ state: 'refused', outcomeCode: 'rate_limited', previewOf: null });
+    expect(cmds().usedPreview(pv.commandId)).toBe(false);
+    const a2 = C().apply(ACTOR, p.acc, p.prx, pv.commandId);
+    expect(await final(p.acc, p.prx, a2.commandId)).toMatchObject({ state: 'done', previewOf: pv.commandId });
+    expect(p.ref.current('sse.pingS')).toBe(7);
+    expect(() => C().apply(ACTOR, p.acc, p.prx, pv.commandId)).toThrow(/preview_used/);
+  });
+
+  it('a rollback the proxy would refuse (it would lower a raise-only value) shows in the rollback dry run', async () => {
+    const p = await proxy();
+    await viewed(p.acc, p.prx);
+    const pv = C().preview(ACTOR, p.acc, p.prx, { set: { 'retention.clipsDays': 120 } });
+    await final(p.acc, p.prx, pv.commandId);
+    const a = C().apply(ACTOR, p.acc, p.prx, pv.commandId);
+    await final(p.acc, p.prx, a.commandId);
+    const rp = C().rollbackPreview(ACTOR, p.acc, p.prx, a.commandId);
+    expect(await final(p.acc, p.prx, rp.commandId)).toMatchObject({ state: 'failed', outcomeCode: 'widening_local_only' });
+    expect(() => C().rollbackApply(ACTOR, p.acc, p.prx, rp.commandId)).toThrow(/preview_required/);
+  });
+
   it('M5: duplicate camera ids from a proxy are stored once', async () => {
     const p = await proxy({ allow: ['config.set'] });
     C().storeView(p.prx, 'cmd_0123456789ABCDEFGHJK', { revision: `sha256:${'1'.repeat(64)}`, cameras: ['cam1', 'cam1', 'cam2'], omittedCameras: ['x', 'x'], paths: {}, settable: {} });

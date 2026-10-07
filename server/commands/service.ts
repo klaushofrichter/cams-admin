@@ -265,6 +265,8 @@ export class Commands {
     const state: CommandState = r.state === 'queued' && r.attempts === 0 ? 'expired' : 'unknown';
     tx(this.d.db, () => {
       this.q(`UPDATE commands SET state = ?, finished_at = ? WHERE id = ? AND state IN ${OPEN}`).run(state, now, r.id);
+      // Never sent: its dry run may be applied again (#20).
+      if (state === 'expired') this.q(`UPDATE commands SET preview_of = NULL WHERE id = ?`).run(r.id);
       this.d.audit.write({ actorType: 'system', actor: 'system', action: 'command-expired', accountId: r.accountId, targetType: 'proxy', targetId: r.proxyId, outcome: 'failed', detail: { cmdId: r.id, command: r.command, state } });
     });
     this.inflightConn.delete(r.id);
@@ -326,6 +328,8 @@ export class Commands {
     tx(this.d.db, () => {
       this.q(`UPDATE commands SET state = ?, outcome_code = ?, result = ?, result_sig = ?, finished_at = ? WHERE id = ?`)
         .run(state, typeof b.code === 'string' ? b.code.slice(0, 64) : b.status === 'conflict' ? 'conflict' : null, text.length <= 98304 ? text : null, typeof stored.sig === 'string' ? stored.sig : null, this.d.clock.now(), r.id);
+      // A refused apply never ran: its dry run may be applied again (#20).
+      if (state === 'refused') this.q(`UPDATE commands SET preview_of = NULL WHERE id = ? AND preview_of IS NOT NULL`).run(r.id);
       this.d.audit.write({
         actorType: 'proxy', actor: c.proxyId!, action: 'command-result', accountId: r.accountId, targetType: 'proxy', targetId: c.proxyId,
         outcome: state === 'done' ? 'ok' : state === 'refused' ? 'refused' : 'failed',

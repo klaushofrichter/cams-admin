@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { EFFECT, waitCommand, widens, groupPaths, isRemoteSettable, narrowNote, narrowOk, parseValue, rollbackable, stateLine, valueText, type ConfigView } from './config';
+import { EFFECT, nameError, waitCommand, widens, groupPaths, isRemoteSettable, narrowNote, narrowOk, parseValue, rollbackable, stateLine, valueText, type ConfigView } from './config';
 
 const view: ConfigView = {
   revision: `sha256:${'a'.repeat(64)}`, schema: 1, cameras: ['cam1'], omittedCameras: [], fetchedAt: 1, cmdId: 'cmd_0123456789ABCDEFGHJK',
@@ -59,7 +59,7 @@ describe('config (Settings UI)', () => {
     // M4: a proxy-supplied regex never runs in the browser (ReDoS); the proxy checks it.
     expect(parseValue({ type: 'string', pattern: '^(a+)+$' }, 'a'.repeat(40) + '!')).toEqual({ ok: true, value: 'a'.repeat(40) + '!' });
     // M3: a camera name follows the contract's name rule
-    expect(parseValue({ type: 'string' }, 'evil\u202Egnp', 'cameras.cam1.name')).toEqual({ ok: false, error: 'no control, bidi or zero-width characters; at most 64' });
+    expect(parseValue({ type: 'string' }, 'evil\u202Egnp', 'cameras.cam1.name')).toEqual({ ok: false, error: '1–64 characters; no control, format, bidi or zero-width characters' });
     expect(parseValue({ type: 'string' }, 'x'.repeat(513))).toEqual({ ok: false, error: 'at most 512 characters' });
   });
   it('narrowNote and narrowOk: the input refuses a lowered retention period, a raised Vision limit and any storage edit', () => {
@@ -88,7 +88,7 @@ describe('config (Settings UI)', () => {
     expect(stateLine({ state: 'failed', outcomeCode: 'conflict' })).toBe('changed on the proxy since you loaded it');
     expect(stateLine({ state: 'refused', outcomeCode: 'rate_limited', retryAfterS: 3000 })).toBe("the proxy's limit: try again in 50 min");
     expect(stateLine({ state: 'refused', outcomeCode: 'rate_limited', retryAfterS: 20 })).toBe("the proxy's limit: try again in 1 min");
-    expect(stateLine({ state: 'failed', outcomeCode: 'widening_local_only' })).toBe('failed: widening_local_only');
+    expect(stateLine({ state: 'failed', outcomeCode: 'widening_local_only' })).toBe('refused by the proxy: it would lower a raise-only value, raise spending or change a local-only setting');
     const real = { command: 'config.set', dryRun: false, state: 'done', result: { changes: [{ path: 'sse.pingS' }] } };
     expect(rollbackable(real)).toBe(true);
     expect(rollbackable({ ...real, dryRun: true })).toBe(false);
@@ -103,6 +103,10 @@ describe('config (Settings UI)', () => {
     expect(valueText('<b>x</b>')).toBe('<b>x</b>');
     expect(valueText(7)).toBe('7');
   });
+  it('nameError: the contract\'s camera-name rule, before anything is sent', () => {
+    expect(nameError('Garage Süd – Einfahrt')).toBeNull();
+    for (const bad of ['', 'evil\u061Cname', 'tag\u{E0041}x', 'lone\uD800x', 'a\u202Eb', 'x'.repeat(65)]) expect(nameError(bad), JSON.stringify(bad)).toBe('1–64 characters; no control, format, bidi or zero-width characters');
+  });
   it('waitCommand polls until the row is final, or gives up', async () => {
     const states = ['queued', 'sent', 'received', 'done'];
     let i = 0;
@@ -111,6 +115,7 @@ describe('config (Settings UI)', () => {
     expect(await waitCommand(async () => ({ state: 'sent' }), 5, 1)).toBeNull();
   });
   it('every disruptive action and proxy.restart has an effect sentence', () => {
-    for (const a of ['restart', 'camera-reboot', 'camera-powercycle', 'camera-ftp-setup', 'camera-ftp-off', 'camera-ntp-set', 'camera-cert-push', 'proxy.restart']) expect(EFFECT[a], a).toMatch(/\.$/);
+    for (const a of ['restart', 'camera-reboot', 'camera-powercycle', 'camera-ftp-setup', 'camera-ntp-set', 'camera-cert-push', 'proxy.restart']) expect(EFFECT[a], a).toMatch(/\.$/);
+    expect(EFFECT['camera-ftp-off']).toBeUndefined(); // never remote (cam-proxy #196)
   });
 });

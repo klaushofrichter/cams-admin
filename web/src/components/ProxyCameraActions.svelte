@@ -4,7 +4,7 @@
   // action's name typed back. cams-admin never talks to a camera: the proxy
   // runs the action and re-reads what it wrote.
   import { api, errorText } from '../lib/api';
-  import { EFFECT, stateLine, waitCommand } from '../lib/config';
+  import { EFFECT, nameError, stateLine, waitCommand } from '../lib/config';
   import Confirm from './Confirm.svelte';
 
   let { accountId, proxyId, refresh, camera = undefined }: { accountId: string; proxyId: string; refresh: number; camera?: string } = $props();
@@ -92,8 +92,9 @@
         </div>
         <div class="row">
           <input data-testid="rename-{cam}" placeholder="new name" maxlength="64" bind:value={names[cam]} disabled={!av.rename} />
-          <button class="btn" data-testid="rename-save-{cam}" disabled={!av.rename || !names[cam] || busy[cam]} title={av.rename ? '' : 'not allowed on the proxy'} onclick={() => rename(cam)}>Rename</button>
+          <button class="btn" data-testid="rename-save-{cam}" disabled={!av.rename || !names[cam] || !!nameError(names[cam]) || busy[cam]} title={av.rename ? '' : 'not allowed on the proxy'} onclick={() => rename(cam)}>Rename</button>
         </div>
+        {#if names[cam] && nameError(names[cam])}<p class="error small" data-testid="rename-error-{cam}">{nameError(names[cam])}</p>{/if}
         {#if results[cam]}<p class="mono small" data-testid="action-result-{cam}">{results[cam]}</p>{/if}
       </div>
     {:else}

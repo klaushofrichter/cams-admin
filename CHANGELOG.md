@@ -24,6 +24,9 @@ then empties it on `main`.
 - Retention periods and size caps can only be raised from cams-admin,
   Google Vision limits only lowered. Storage settings, capture and listener
   on/off switches, and health thresholds are local only.
+- Turning a camera's FTP upload off is never offered remotely, camera names
+  refuse control, format and bidi characters, and a rollback that would
+  lower a raise-only value is refused (the rollback preview says so).
 - Disruptive actions are limited across the fleet: one proxy at a time, at
   most 3 in 10 minutes. The audit log names every changed setting with its
   old and new value. Secret-shaped values from a proxy are never stored.

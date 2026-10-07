@@ -91,7 +91,7 @@ It will run at `cams-admin.skylar.technology`. Phase 1 is specified in
   the rollback for any setting that changed since.
 - **Camera actions:** each camera on the proxy page gets the allowed actions
   as buttons. The disruptive ones (reboot, power-cycle, worker restart, FTP
-  setup/off, NTP set, cert push, proxy restart) are grouped, and each asks
+  setup, NTP set, cert push, proxy restart) are grouped, and each asks
   you to type the action's name. The proxy runs the action, re-reads what it
   wrote, and limits disruptive actions per hour. cams-admin also limits them
   across the fleet: one proxy at a time, at most 3 in any 10 minutes.

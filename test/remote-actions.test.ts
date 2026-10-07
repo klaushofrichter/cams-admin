@@ -72,6 +72,7 @@ describe('RemoteActions', () => {
     const before = countCommands();
     for (const [body, field] of [
       [{ camera: 'cam1', action: 'find-camera' }, 'action'],
+      [{ camera: 'cam1', action: 'camera-ftp-off', confirm: 'camera-ftp-off' }, 'action'], // never remote (cam-proxy #196)
       [{ camera: 'cam1', action: 'frobnicate' }, 'action'],
       [{ camera: null, action: 'restart', confirm: 'restart' }, 'camera'],
       [{ action: 'camera-test' }, 'camera'],
@@ -150,13 +151,14 @@ describe('RemoteActions', () => {
 
   it('M3: a rename with a bidi override or zero-width character is 400', async () => {
     const p = await proxy(['camera.name.set']);
-    for (const name of ['evil\u202Egnp', 'a\u200Bb', 'a\u2028b']) expect(code(() => A().rename(ACTOR, p.acc, p.prx, 'cam1', { name }))).toEqual([400, 'invalid', 'name']);
+    for (const name of ['evil\u202Egnp', 'a\u200Bb', 'a\u2028b', 'evil\u061Cname', 'tag\u{E0041}x', 'lone\uD800x']) expect(code(() => A().rename(ACTOR, p.acc, p.prx, 'cam1', { name }))).toEqual([400, 'invalid', 'name']);
   });
 
   it('available(): every remote action with its disruptive mark and the reported allow-list; the cameras', async () => {
     const p = await proxy(['camera.action:camera-test', 'camera.action:camera-reboot', 'camera.name.set']);
     const av = A().available(p.acc, p.prx);
     expect(av.actions.map((a) => a.action)).toEqual([...REMOTE_ACTIONS]);
+    expect(av.actions.map((a) => a.action)).not.toContain('camera-ftp-off');
     for (const a of av.actions) expect(a.disruptive, a.action).toBe((DISRUPTIVE_ACTIONS as readonly string[]).includes(a.action));
     expect(av.actions.filter((a) => a.allowed).map((a) => a.action)).toEqual(['camera-test', 'camera-reboot']);
     expect(av).toMatchObject({ rename: true, restart: false, cameras: ['cam1', 'cam2'] });

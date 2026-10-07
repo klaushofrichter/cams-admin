@@ -75,6 +75,9 @@ export function groupPaths(view: ConfigView): Group[] {
 }
 
 const NAME_RE = new RegExp(CAMERA_NAME_PATTERN, 'u');
+const NAME_ERROR = '1–64 characters; no control, format, bidi or zero-width characters';
+// The contract's camera-name rule, checked before anything is sent (null: fine).
+export const nameError = (text: string): string | null => (NAME_RE.test(text) ? null : NAME_ERROR);
 
 // path: for the camera-name rule. A proxy's `pattern` is never run here (M4:
 // a hostile regex would freeze the tab); the proxy checks it.
@@ -91,7 +94,7 @@ export function parseValue(s: Settable, text: string, path = ''): { ok: true; va
   }
   if (text.length > 512) return { ok: false, error: 'at most 512 characters' };
   if (s.enum && !s.enum.includes(text)) return { ok: false, error: `one of ${s.enum.join(', ')}` };
-  if (patternOf(path) === 'cameras.*.name' && !NAME_RE.test(text)) return { ok: false, error: 'no control, bidi or zero-width characters; at most 64' };
+  if (patternOf(path) === 'cameras.*.name' && !NAME_RE.test(text)) return { ok: false, error: NAME_ERROR };
   return { ok: true, value: text };
 }
 
@@ -111,6 +114,7 @@ export function stateLine(row: { state: string; outcomeCode: string | null; retr
   if (['queued', 'sent', 'received'].includes(row.state)) return 'sent, waiting for the proxy';
   if (row.state === 'done') return row.dryRun ? 'previewed' : 'applied';
   if (row.outcomeCode === 'conflict') return 'changed on the proxy since you loaded it';
+  if (row.outcomeCode === 'widening_local_only') return 'refused by the proxy: it would lower a raise-only value, raise spending or change a local-only setting';
   if (row.state === 'refused' && row.outcomeCode === 'rate_limited' && row.retryAfterS) return `the proxy's limit: try again in ${Math.max(1, Math.ceil(row.retryAfterS / 60))} min`;
   return cmdStateText(row.state, row.outcomeCode);
 }
@@ -141,7 +145,6 @@ export const EFFECT: Record<string, string> = {
   'camera-reboot': 'Reboots the camera: no video for about two minutes.',
   'camera-powercycle': "Cuts the camera's PoE power and turns it back on: no video for a few minutes.",
   'camera-ftp-setup': "Writes the proxy's FTP upload settings into the camera.",
-  'camera-ftp-off': "Turns the camera's FTP upload off.",
   'camera-ntp-set': "Writes the proxy's NTP server into the camera.",
   'camera-cert-push': "Pushes the proxy's certificate to the camera; the camera restarts its web server.",
   'proxy.restart': "Restarts the proxy process: every camera's stream and events pause until it is back.",
