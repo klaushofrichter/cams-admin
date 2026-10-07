@@ -17,7 +17,8 @@
   let keys = $state<any[]>([]);
   let row = $state<any>(null);
   let served = $state<Record<string, boolean>>({});
-  let edit = $state<Record<string, { url: string; hidden: boolean }>>({});
+  let edit = $state<Record<string, { url: string; visible: boolean }>>({});
+  let revoking = $state<any>(null);
   let code = $state<any>(null);
   let stored = $state(false);
   let confirm = $state<'' | 'block' | 'delete' | 'rotate'>('');
@@ -53,11 +54,15 @@
   const saveAccounts = () => run(() => api('PATCH', `/cams-instances/${instanceId}`, { accounts: Object.keys(served).filter((k) => served[k]), version: inst.version }));
   const fromRoute = (proxyId: string) => {
     const rt = routes.find((x) => x.proxyId === proxyId);
-    return { url: rt?.url ?? '', hidden: rt?.hidden ?? false };
+    return { url: rt?.url ?? '', visible: !!rt && !rt.hidden };
   };
-  const saveRoute = (p: any) => run(async () => { await api('PUT', `/cams-instances/${instanceId}/routes/${p.id}`, { url: edit[p.id].url || null, hidden: edit[p.id].hidden }); delete edit[p.id]; });
-  const removeRoute = (p: any) => run(async () => { await api('DELETE', `/cams-instances/${instanceId}/routes/${p.id}`); delete edit[p.id]; });
-  const revokeKey = (k: any) => run(() => api('POST', `/cams-instances/${instanceId}/keys/${k.id}/revoke`));
+  // Routes are default-deny: visible = a route row (its URL, or the registered one); not visible = no row.
+  const saveRoute = (p: any) => run(async () => {
+    if (edit[p.id].visible) await api('PUT', `/cams-instances/${instanceId}/routes/${p.id}`, { url: edit[p.id].url || null, hidden: false });
+    else if (routeOf(p)) await api('DELETE', `/cams-instances/${instanceId}/routes/${p.id}`);
+    delete edit[p.id];
+  });
+  const revokeKey = (k: any) => run(() => api('POST', `/cams-instances/${instanceId}/keys/${k.id}/revoke`)).then(() => (revoking = null));
   async function newCode() {
     error = '';
     try { code = await api('POST', `/cams-instances/${instanceId}/enrollment-codes`, { lifetimeH: 24 }); stored = false; } catch (e) { error = errorText(e); }
@@ -112,19 +117,19 @@
     </div>
 
     <h3>Routes</h3>
-    <p class="muted">Per proxy: the URL this instance uses (else the proxy's registered URL), or hidden for this instance (the proxy and its cameras are left out of its configuration).</p>
+    <p class="muted">Routes are default-deny: the instance sees a proxy (its cameras, and may hold tokens for it) only when it is visible here, at the URL given or else the proxy's registered URL. A proxy added later reaches no instance until it is routed. Making a proxy not visible revokes the tokens the instance holds for it.</p>
     <div class="scroll-x">
       <table>
-        <thead><tr><th>Proxy</th><th class="hide-phone">Registered URL</th><th>Route</th><th>Hidden</th><th></th></tr></thead>
+        <thead><tr><th>Proxy</th><th class="hide-phone">Registered URL</th><th>Visible</th><th>URL for this instance</th><th></th></tr></thead>
         <tbody>
           {#each proxies as p (p.id)}
             {#if edit[p.id]}
               <tr data-testid="route-row-{p.name}">
                 <td>{p.displayName} <span class="mono muted">{p.accountName}/{p.name}</span></td>
                 <td class="hide-phone mono">{p.url ?? '—'}</td>
-                <td><input class="mono" bind:value={edit[p.id].url} placeholder="(registered URL)" data-testid="route-url-{p.name}" disabled={edit[p.id].hidden} /></td>
-                <td><input type="checkbox" bind:checked={edit[p.id].hidden} data-testid="route-hidden-{p.name}" /></td>
-                <td class="row"><button class="btn" data-testid="route-save-{p.name}" onclick={() => saveRoute(p)}>Save</button>{#if routeOf(p)}<button class="btn" data-testid="route-remove-{p.name}" onclick={() => removeRoute(p)}>Remove</button>{/if}</td>
+                <td><input type="checkbox" bind:checked={edit[p.id].visible} data-testid="route-visible-{p.name}" /> <span class="muted" data-testid="route-state-{p.name}">{routeOf(p) && !routeOf(p).hidden ? 'visible' : 'not visible'}</span></td>
+                <td><input class="mono" bind:value={edit[p.id].url} placeholder="(registered URL)" data-testid="route-url-{p.name}" disabled={!edit[p.id].visible} /></td>
+                <td class="row"><button class="btn" data-testid="route-save-{p.name}" onclick={() => saveRoute(p)}>Save</button></td>
               </tr>
             {/if}
           {/each}
@@ -150,7 +155,7 @@
               <td class="mono">{k.fingerprint.slice(0, 23)}…</td>
               <td>{keyState(k)}</td>
               <td class="hide-phone">{when(k.createdAt)}</td>
-              <td>{#if !k.revokedAt}<button class="btn danger" data-testid="cms-key-revoke" onclick={() => revokeKey(k)}>Revoke</button>{/if}</td>
+              <td>{#if !k.revokedAt}<button class="btn danger" data-testid="cms-key-revoke" onclick={() => (revoking = k)}>Revoke</button>{/if}</td>
             </tr>
           {/each}
           {#if !keys.length}<tr><td colspan="4" class="muted">Not enrolled yet.</td></tr>{/if}
@@ -177,6 +182,7 @@
       <div class="row end"><button class="btn primary" data-testid="cms-code-close" disabled={!stored} onclick={closeCode}>Close</button></div>
     </div>
   {/if}
+  {#if revoking}<Confirm title="Revoke this key" body="The key stops working at once, and every proxy token the instance holds is revoked with it (a stolen instance holds both). The instance keeps its routes; enroll it again with a new code. For a planned token change use Rotate now." ok="Revoke key and tokens" onconfirm={() => revokeKey(revoking)} oncancel={() => (revoking = null)} />{/if}
   {#if confirm === 'rotate'}<Confirm title="Rotate tokens of {inst.name}" body="cams registers new client and admin tokens for every proxy and retires its current ones (24 h)." ok="Rotate" onconfirm={doConfirm} oncancel={() => (confirm = '')} />{/if}
   {#if confirm === 'block'}<Confirm title="Block {inst.name}" body="Its keys and every token it holds are revoked at once; it can't pull its configuration any more. A new enrollment needs a new instance." typed={inst.name} ok="Block" onconfirm={doConfirm} oncancel={() => (confirm = '')} />{/if}
   {#if confirm === 'delete'}<Confirm title="Delete {inst.name}" body="Its keys, routes and codes go, and every token it holds is revoked." typed={inst.name} ok="Delete" onconfirm={doConfirm} oncancel={() => (confirm = '')} />{/if}

@@ -4,7 +4,7 @@ import { api, signIn, uniq } from './helpers';
 
 test.beforeEach(async ({ context }) => signIn(context));
 
-test('a cams instance: served accounts, a route and a hidden route, a code shown once with both commands, rotate, block', async ({ page }, info) => {
+test('a cams instance: served accounts, routes default-deny (one loopback route), a code shown once with both commands, rotate, block', async ({ page }, info) => {
   const accA = await api(page, 'POST', '/accounts', { name: uniq(info, 'ca'), displayName: 'Cams A' });
   const accB = await api(page, 'POST', '/accounts', { name: uniq(info, 'cb'), displayName: 'Cams B' });
   await api(page, 'POST', `/accounts/${accA.id}/proxies`, { name: 'pi', displayName: 'Pi', runsOn: 'local-host', url: 'https://proxy.example.net:8480' });
@@ -21,13 +21,13 @@ test('a cams instance: served accounts, a route and a hidden route, a code shown
   await page.getByTestId(`cms-serve-${accB.name}`).check();
   await page.getByTestId('cms-served-save').click();
   await expect(page.getByTestId(`cms-serve-${accB.name}`)).toBeChecked();
-  // Routes: the Pi over loopback, the cluster proxy hidden.
+  // Routes are default-deny: nothing is visible until routed; the Pi over loopback, the cluster proxy left out.
+  await expect(page.getByTestId('route-state-pi')).toHaveText('not visible');
+  await page.getByTestId('route-visible-pi').check();
   await page.getByTestId('route-url-pi').fill('http://127.0.0.1:8480');
   await page.getByTestId('route-save-pi').click();
-  await expect(page.getByTestId('route-remove-pi')).toBeVisible();
-  await page.getByTestId('route-hidden-cluster').check();
-  await page.getByTestId('route-save-cluster').click();
-  await expect(page.getByTestId('route-remove-cluster')).toBeVisible();
+  await expect(page.getByTestId('route-state-pi')).toHaveText('visible');
+  await expect(page.getByTestId('route-state-cluster')).toHaveText('not visible');
   // The code, once.
   await page.getByTestId('cms-code').click();
   await expect(page.getByTestId('cms-code-value')).toHaveValue(/^CAC1(-[0-9A-Z]{4}){5}$/);
@@ -64,6 +64,7 @@ test('import on the account page: dry run, accept mismatches, apply, again → n
   await page.getByTestId('import-dry-run').click();
   await expect(page.getByTestId('import-result')).toContainText('new camera cam1');
   await expect(page.getByTestId('import-result')).toContainText('proxy pi: matched by url');
+  await expect(page.getByTestId('import-result')).toContainText('route pi → (registered URL)');
   // The proxies are not enrolled here: two mismatches block Apply until accepted.
   await expect(page.getByTestId('import-apply')).toBeDisabled();
   for (const box of await page.getByTestId('import-mismatches').locator('input[type=checkbox]').all()) await box.check();

@@ -117,17 +117,22 @@ async function main() {
   record('3 instances enrolled (fingerprints match the keys)', rc.k.serverKeyFingerprints.length === 1 && rp.k.serverKeyFingerprints[0] === rc.k.serverKeyFingerprints[0]);
 
   // 4. Imports.
-  const imp = (inst: any, file: unknown, o: object = {}) => api('POST', `/accounts/${account.id}/import`, { instanceId: inst.id, file, ...o });
+  // Apply is bound to its dry run: dry run first, then apply with its planId.
+  const imp = async (inst: any, file: unknown, o: { apply?: boolean; hideUnlisted?: boolean } = {}) => {
+    const dry = await api('POST', `/accounts/${account.id}/import`, { instanceId: inst.id, file, ...o, apply: false });
+    if (!o.apply || dry.noChanges) return dry;
+    return api('POST', `/accounts/${account.id}/import`, { instanceId: inst.id, file, ...o, apply: true, planId: dry.planId });
+  };
   const dry = await imp(rc.i, cluster);
   const byToken = dry.changes.filter((c: any) => c.kind === 'proxy-matched' && c.by === 'token').length;
   record('4a cluster dry run: proxies matched by token, no mismatch', byToken === 2 && dry.mismatches.length === 0 && !dry.applied, `${dry.changes.length} changes`);
   const applied = await imp(rc.i, cluster, { apply: true });
-  record('4b cluster apply', applied.applied === true || applied.noChanges === true);
+  const routes = (await api('GET', `/cams-instances/${rc.i.id}/routes`)).items as any[];
+  record('4b cluster apply: both proxies routed to the cluster instance', (applied.applied === true || applied.noChanges === true) && routes.length === 2 && routes.every((x) => !x.hidden));
   record('4c cluster again: no changes', (await imp(rc.i, cluster, { apply: true })).noChanges === true);
   const piDry = await imp(rp.i, pi, { hideUnlisted: true });
   const routeAdd = piDry.changes.find((c: any) => c.kind === 'route-add');
-  const hidden = piDry.changes.find((c: any) => c.kind === 'route-hide');
-  record('4d Pi dry run: a loopback route and the other proxy hidden', !!routeAdd && routeAdd.proxyId === first.id && !!hidden && hidden.proxyId === second.id && piDry.mismatches.length === 0);
+  record('4d Pi dry run: a loopback route only (the other proxy stays unrouted: default-deny)', !!routeAdd && routeAdd.proxyId === first.id && piDry.changes.filter((c: any) => c.kind.startsWith('route-')).length === 1 && piDry.mismatches.length === 0);
   await imp(rp.i, pi, { hideUnlisted: true, apply: true });
   record('4e Pi again: no changes; the registered URL unchanged', (await imp(rp.i, pi, { hideUnlisted: true, apply: true })).noChanges === true
     && (await api('GET', `/accounts/${account.id}/proxies/${first.id}`)).url === first.url);

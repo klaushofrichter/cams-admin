@@ -48,8 +48,8 @@ contract independent of the server's code); their key files are in
 
 | instance | serves | routes |
 |---|---|---|
-| `cms-main` | alpha, beta | none (registered URLs) |
-| `cms-pi` | alpha | alpha-1 → `http://localhost:29100` (the loopback form), every other alpha proxy hidden |
+| `cms-main` | alpha, beta | every proxy at its registered URL (routes are default-deny) |
+| `cms-pi` | alpha | alpha-1 → `http://localhost:29100` (the loopback form) only |
 
 The bridges answer `tokens.apply` and `tokens.apply.admin` (`--allow`), so
 managed and cams-held tokens become `active` like on a real proxy (the
@@ -75,7 +75,7 @@ It issues the P2 managed tokens (cut-over steps 1–2) for beta's two
 proxies, writes two real-shaped `export-config` outputs (cluster and Pi,
 token hashes only), localizes them with `scripts/rehearse/localize.ts`,
 creates and enrolls `rh-cluster-*` and `rh-pi-*`, imports both (dry run,
-apply, again = no changes; the Pi file with hidden proxies), pulls and
+apply, again = no changes, each apply bound to its dry run; the Pi file routes only its proxy), pulls and
 verifies both snapshots (200, 304), compares the files with the snapshots
 like cams's shadow mode (0 differences, reported), registers cams-held
 tokens and rotates them, checks the cached snapshot offline, and blocks
@@ -88,4 +88,4 @@ local proxy URL and, where the file pins a CA, the local CA's fingerprint),
 then `npx tsx scripts/rehearse/localize.ts --in export-cluster.json --map
 map.json --out local-cluster.json` and import with `npm run import -- --url
 http://localhost:29000 --session-file $W/run/cams-admin/cookie --account
-<account> --instance <instance> --file local-cluster.json [--apply]`.
+<account> --instance <instance> --file local-cluster.json [--apply]` (with `--apply` it runs the dry run first and applies exactly that plan).

@@ -47,10 +47,17 @@
     try {
       result = await api('POST', `/accounts/${accountId}/import`, {
         instanceId, file, apply, createProxies, hideUnlisted, acceptMismatch: Object.keys(accepted).filter((k) => accepted[k]),
+        // Apply is bound to the dry run shown (same plan, once, 10 minutes).
+        ...(apply ? { planId: result?.planId } : {}),
       });
-    } catch (e) { error = errorText(e); }
+    } catch (e: any) {
+      error = e?.code === 'plan_changed' ? 'Something changed since the dry run: run it again and check the changes.' : e?.code === 'plan_expired' ? 'The dry run is too old (10 minutes) or was used: run it again.' : errorText(e);
+      if (apply) result = null;
+    }
     busy = false;
   }
+  // Any option changed after a dry run: its plan no longer applies.
+  const reset = () => { result = null; };
 
   async function exportFile(i: any) {
     error = '';
@@ -70,8 +77,8 @@
     switch (c.kind) {
       case 'proxy-matched': return `proxy ${c.name}: matched by ${c.by}`;
       case 'proxy-new': return `new proxy ${c.name} (${c.url})`;
-      case 'route-add': return `route ${c.name} → ${c.url}`;
-      case 'route-change': return `route ${c.name}: ${c.was ?? '(hidden)'} → ${c.url}`;
+      case 'route-add': return `route ${c.name} → ${c.url ?? '(registered URL)'}`;
+      case 'route-change': return `route ${c.name}: ${c.was ?? '(hidden)'} → ${c.url ?? '(registered URL)'}`;
       case 'route-hide': return `hide ${c.name} for this instance`;
       case 'camera-new': return `new camera ${c.camsId}`;
       case 'camera-change': return `camera ${c.camsId}: ${Object.entries(c.fields).map(([k, v]: [string, any]) => `${k} ${JSON.stringify(v.from)} → ${JSON.stringify(v.to)}`).join(', ')}`;
@@ -96,8 +103,8 @@
       {#if fileInfo}<span class="muted" data-testid="import-file-info">{fileInfo}</span>{/if}
     </div>
     <div class="row">
-      <label class="check"><input type="checkbox" bind:checked={createProxies} data-testid="import-create-proxies" /> create proxies the registry doesn't know</label>
-      <label class="check"><input type="checkbox" bind:checked={hideUnlisted} data-testid="import-hide-unlisted" /> hide proxies this file doesn't use (for this instance)</label>
+      <label class="check"><input type="checkbox" bind:checked={createProxies} onchange={reset} data-testid="import-create-proxies" /> create proxies the registry doesn't know</label>
+      <label class="check"><input type="checkbox" bind:checked={hideUnlisted} onchange={reset} data-testid="import-hide-unlisted" /> hide proxies this file doesn't use (for this instance)</label>
     </div>
     <div class="row">
       <button class="btn" data-testid="import-dry-run" disabled={!file || busy} onclick={() => run(false)}>Dry run</button>

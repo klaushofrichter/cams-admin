@@ -1,8 +1,8 @@
 // P4 in the local stack (start.sh): two cams instances through the API and
 // their enrollment by the reference cams client (test-client/cams.ts):
-//   cms-main  serves alpha and beta (the cluster's cams)
-//   cms-pi    serves alpha only, alpha-1 over a loopback route, every other
-//             alpha proxy hidden (the Pi's cams)
+//   cms-main  serves alpha and beta, every proxy routed at its registered URL (the cluster's cams)
+//   cms-pi    serves alpha only, alpha-1 over a loopback route; nothing else is
+//             routed to it (routes are default-deny: the Pi's cams)
 // Key files (mode 600) in --keys; prints nothing secret.
 //   tsx cams-setup.ts --url U --cookie-file F --keys DIR
 import { readFileSync } from 'fs';
@@ -27,9 +27,11 @@ async function api(method: string, path: string, body?: unknown) {
   const acc = (n: string) => accounts.find((a) => a.name === n)?.id ?? (() => { throw new Error(`no account ${n}`); })();
   const main = await api('POST', '/cams-instances', { name: 'cms-main', displayName: 'cams (main)', accounts: [acc('alpha'), acc('beta')] });
   const pi = await api('POST', '/cams-instances', { name: 'cms-pi', displayName: 'cams (Pi)', accounts: [acc('alpha')] });
-  for (const p of (await api('GET', `/accounts/${acc('alpha')}/proxies`)).items as { id: string; name: string; url: string }[]) {
-    if (p.name === 'alpha-1') await api('PUT', `/cams-instances/${pi.id}/routes/${p.id}`, { url: p.url.replace('127.0.0.1', 'localhost'), hidden: false });
-    else await api('PUT', `/cams-instances/${pi.id}/routes/${p.id}`, { url: null, hidden: true });
+  for (const a of ['alpha', 'beta']) {
+    for (const p of (await api('GET', `/accounts/${acc(a)}/proxies`)).items as { id: string; name: string; url: string }[]) {
+      await api('PUT', `/cams-instances/${main.id}/routes/${p.id}`, { url: null, hidden: false });
+      if (p.name === 'alpha-1') await api('PUT', `/cams-instances/${pi.id}/routes/${p.id}`, { url: p.url.replace('127.0.0.1', 'localhost'), hidden: false });
+    }
   }
   mkdirSync(opt('keys'), { recursive: true, mode: 0o700 });
   chmodSync(opt('keys'), 0o700);

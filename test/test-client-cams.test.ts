@@ -21,6 +21,7 @@ describe('the reference cams client (test-client/cams.ts) against a real server'
     px = { ...p, client };
     const inst = await s.api('POST', '/cams-instances', { name: 'ref', displayName: 'Ref', accounts: [p.accountId] });
     instId = inst.id;
+    await s.api('PUT', `/cams-instances/${inst.id}/routes/${p.proxyId}`, { url: null, hidden: false }); // routes are default-deny
   });
   afterAll(async () => {
     await px.client.stop('shutdown');
