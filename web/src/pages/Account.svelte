@@ -219,7 +219,7 @@
                 <td>{c.name}</td>
                 <td>{c.kind}</td>
                 <td><select value={c.proxyId ?? ''} data-testid="camera-proxy-{c.camsId}" onchange={(e) => assign(c, (e.target as HTMLSelectElement).value)}><option value="">— none —</option>{#each proxies as p}<option value={p.id}>{p.name}</option>{/each}</select></td>
-                <td class="hide-phone mono">{c.proxyCameraId ?? ''}</td>
+                <td class="hide-phone mono">{#if c.proxyId && c.proxyCameraId}<a href="#/accounts/{accountId}/proxies/{c.proxyId}?camera={encodeURIComponent(c.proxyCameraId)}" data-testid="camera-actions-link-{c.camsId}" title="camera actions on the proxy">{c.proxyCameraId}</a>{:else}{c.proxyCameraId ?? ''}{/if}</td>
                 <td><span class="chip {camClass(liveOf(c))}" data-testid="camera-live-{c.camsId}">{liveOf(c) === true ? 'online' : liveOf(c) === false ? 'offline' : 'unknown'}</span></td>
                 {#if tab === 'sims' && simEdit[c.id]}
                   {@const s = simEdit[c.id]}
