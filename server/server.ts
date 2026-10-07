@@ -16,11 +16,12 @@ import { Commands } from './commands/service';
 import { Tokens } from './tokens/service';
 import { Enrollment } from './enroll/codes';
 import { enrollRouter } from './enroll/route';
+import { CamsInstances } from './cams/instances';
 import { Sessions } from './auth/session';
 import { authRoutes } from './auth/routes';
 import { securityHeaders } from './auth/middleware';
 import { apiRouter, type BackupService } from './api/router';
-import { loadSigningKey } from './crypto/signingKey';
+import { loadSigningKey, type SigningKey } from './crypto/signingKey';
 import { createBackup } from './backup/service';
 import { log } from './log';
 import { limiter } from './rateLimit';
@@ -28,6 +29,7 @@ import { version } from './version';
 
 export interface Built {
   cfg: Config; clock: Clock; db: Db; audit: Audit; registry: Registry; live: LiveHub; status: StatusStore; hub: Hub; commands: Commands; tokens: Tokens; enrollment: Enrollment; sessions: Sessions; backup: BackupService;
+  camsInstances: CamsInstances; signing: SigningKey;
   app: express.Express; http: Server; epochFile: string;
   tick(): void;
   writeRoutes(): string[];
@@ -59,6 +61,11 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
   status.onTokens = (proxyId, t) => tokens.onHeartbeat(proxyId, t);
   const enrollment = new Enrollment({ db, clock, audit, registry, cfg, serverKeys: [signing.publicKeyB64], onKeyRevoked: (k) => hub.closeKey(k, 4401), onProxyChanged: (p) => live.publishRegistry('proxy', p) });
   const backup = createBackup({ db, clock, cfg, audit, env: merged });
+  // P4: cams instances. R4-19: blocking or deleting one revokes the tokens it holds.
+  const camsInstances = new CamsInstances({
+    db, clock, audit, registry, cfg, serverKeys: [signing.publicKeyB64], serverKeyFingerprints: [signing.fingerprint],
+    onRevoke: () => {},
+  });
 
   const app = express();
   app.disable('x-powered-by');
@@ -77,7 +84,7 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
   app.use(enrollRouter(enrollment));
   app.use(cookieParser());
   app.use(authRoutes({ cfg, sessions, audit, clock, live }));
-  const api = apiRouter({ db, clock, cfg, audit, registry, enrollment, hub, status, live, sessions, backup, commands, tokens });
+  const api = apiRouter({ db, clock, cfg, audit, registry, enrollment, hub, status, live, sessions, backup, commands, tokens, camsInstances, serverKeyFingerprints: [signing.fingerprint] });
   app.use('/api/v1', api);
   app.use('/api', (_req, res) => void res.status(404).json({ error: 'not_found' }));
   // The Svelte build (npm run build:web); every other GET is the SPA.
@@ -119,7 +126,7 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
   let closed = false;
 
   return {
-    cfg, clock, db, audit, registry, live, status, hub, commands, tokens, enrollment, sessions, backup, app, http, epochFile, tick,
+    cfg, clock, db, audit, registry, live, status, hub, commands, tokens, enrollment, sessions, backup, camsInstances, signing, app, http, epochFile, tick,
     writeRoutes() {
       const out: string[] = [];
       for (const layer of (api as unknown as { stack: { route?: { path: string; methods: Record<string, boolean> } }[] }).stack) {

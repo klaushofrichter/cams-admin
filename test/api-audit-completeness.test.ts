@@ -20,6 +20,17 @@ describe('audit completeness', () => {
     ['patch', '/accounts/:accountId/users/:userId', () => `/accounts/${ids.acc}/users/${ids.usr}`, () => ({ role: 'admin', version: 1 }), 'user-update'],
     ['post', '/accounts/:accountId/proxies', () => `/accounts/${ids.acc}/proxies`, () => ({ name: 'pi', displayName: 'Pi', runsOn: 'cloud' }), 'proxy-create'],
     ['patch', '/accounts/:accountId/proxies/:proxyId', () => `/accounts/${ids.acc}/proxies/${ids.prx}`, () => ({ notes: 'n', version: 1 }), 'proxy-update'],
+    // P4: cams instances (a route needs a proxy of a served account).
+    ['post', '/cams-instances', () => '/cams-instances', () => ({ name: 'cluster', displayName: 'Cluster', accounts: [ids.acc] }), 'cams-instance-create'],
+    ['patch', '/cams-instances/:instanceId', () => `/cams-instances/${ids.cms}`, () => ({ displayName: 'C', version: 1 }), 'cams-instance-update'],
+    ['put', '/cams-instances/:instanceId/routes/:proxyId', () => `/cams-instances/${ids.cms}/routes/${ids.prx}`, () => ({ url: 'http://127.0.0.1:8480', hidden: false }), 'route-update'],
+    ['delete', '/cams-instances/:instanceId/routes/:proxyId', () => `/cams-instances/${ids.cms}/routes/${ids.prx}`, () => ({}), 'route-update'],
+    ['post', '/cams-instances/:instanceId/enrollment-codes', () => `/cams-instances/${ids.cms}/enrollment-codes`, () => ({ lifetimeH: 1 }), 'cams-enrollment-code-create'],
+    ['delete', '/cams-instances/:instanceId/enrollment-codes/:codeId', () => `/cams-instances/${ids.cms}/enrollment-codes/${ids.cenr}`, () => ({}), 'cams-enrollment-code-cancel'],
+    ['post', '/cams-instances/:instanceId/keys/:keyId/revoke', () => `/cams-instances/${ids.cms}/keys/${ids.ckey}/revoke`, () => ({}), 'cams-key-revoke'],
+    ['post', '/cams-instances/:instanceId/rotate', () => `/cams-instances/${ids.cms}/rotate`, () => ({}), 'cams-rotate'],
+    ['post', '/cams-instances/:instanceId/block', () => `/cams-instances/${ids.cms}/block`, () => ({}), 'cams-instance-block'],
+    ['delete', '/cams-instances/:instanceId', () => `/cams-instances/${ids.cms}`, () => ({ confirmName: 'cluster' }), 'cams-instance-delete'],
     ['post', '/accounts/:accountId/proxies/:proxyId/enrollment-codes', () => `/accounts/${ids.acc}/proxies/${ids.prx}/enrollment-codes`, () => ({}), 'enrollment-code-create'],
     ['delete', '/accounts/:accountId/proxies/:proxyId/enrollment-codes/:codeId', () => `/accounts/${ids.acc}/proxies/${ids.prx}/enrollment-codes/${ids.enr}`, () => ({}), 'enrollment-code-cancel'],
     ['post', '/accounts/:accountId/proxies/:proxyId/keys/:keyId/revoke', () => `/accounts/${ids.acc}/proxies/${ids.prx}/keys/${ids.key}/revoke`, () => ({}), 'key-revoke'],
@@ -60,6 +71,12 @@ describe('audit completeness', () => {
       ids.prx = r.body.id;
     }
     if (action === 'enrollment-code-create') ids.enr = r.body.id;
+    if (action === 'cams-instance-create') ids.cms = r.body.id;
+    if (action === 'cams-enrollment-code-create') {
+      ids.cenr = r.body.id;
+      ids.ckey = 'key_00000000000000000009';
+      a.db.prepare(`INSERT INTO cams_instance_keys (id, instance_id, public_key, fingerprint, created_at, confirmed_at) VALUES (?, ?, 'cpk', 'fp', 1, 1)`).run(ids.ckey, ids.cms);
+    }
     if (action === 'enrollment-code-cancel') {
       // An enrolled key for the revoke row, and a report for the adopt row.
       a.db.prepare(`UPDATE proxies SET state='enrolled' WHERE id=?`).run(ids.prx);
