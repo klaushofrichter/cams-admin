@@ -20,6 +20,7 @@ import { CamsInstances } from './cams/instances';
 import { CamsEnrollment } from './cams/enroll';
 import { camsRouter } from './cams/routes';
 import { CamsAuth } from './cams/auth';
+import { Importer } from './import/importer';
 import { Sessions } from './auth/session';
 import { authRoutes } from './auth/routes';
 import { securityHeaders } from './auth/middleware';
@@ -69,6 +70,7 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
     db, clock, audit, registry, cfg, serverKeys: [signing.publicKeyB64], serverKeyFingerprints: [signing.fingerprint],
     onRevoke: (instanceId, actor) => { tokens.revokeHeldBy(actor, instanceId); },
   });
+  const importer = new Importer({ db, clock, audit, registry, instances: camsInstances, status });
   const camsAuth = new CamsAuth({ db, clock, audit, instances: camsInstances, signingKey: signing.key, limits: cfg.limits, log });
   const camsEnrollment = new CamsEnrollment({ db, clock, audit, instances: camsInstances, cfg, serverKeys: [signing.publicKeyB64], serverKeyFingerprints: [signing.fingerprint] });
 
@@ -90,7 +92,7 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
   app.use(camsRouter({ enrollment: camsEnrollment, auth: camsAuth, signingKey: signing.key, testRoutes: cfg.nodeEnv === 'test', instances: camsInstances, tokens, snapshot: { db, clock, signingKey: signing.key, signingFingerprint: signing.fingerprint } }));
   app.use(cookieParser());
   app.use(authRoutes({ cfg, sessions, audit, clock, live }));
-  const api = apiRouter({ db, clock, cfg, audit, registry, enrollment, hub, status, live, sessions, backup, commands, tokens, camsInstances, serverKeyFingerprints: [signing.fingerprint] });
+  const api = apiRouter({ db, clock, cfg, audit, registry, enrollment, hub, status, live, sessions, backup, commands, tokens, camsInstances, serverKeyFingerprints: [signing.fingerprint], importer });
   app.use('/api/v1', api);
   app.use('/api', (_req, res) => void res.status(404).json({ error: 'not_found' }));
   // The Svelte build (npm run build:web); every other GET is the SPA.

@@ -23,7 +23,8 @@
     "lint:types": "tsc --noEmit -p tsconfig.check.json",
     "contract:make": "tsx contract/make.ts",
     "client": "tsx test-client/cli.ts",
-    "load": "tsx test-client/load.ts"
+    "load": "tsx test-client/load.ts",
+    "import": "tsx scripts/import.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1146.0",

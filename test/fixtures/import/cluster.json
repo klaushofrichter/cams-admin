@@ -1,0 +1,52 @@
+{
+  "v": 1,
+  "kind": "cams-export",
+  "exportedAt": 1791273600000,
+  "camsVersion": "2026.10.07.1",
+  "source": "cameras-file",
+  "cameras": [
+    {
+      "id": "cam1",
+      "name": "Backyard",
+      "host": "from-proxy",
+      "protocol": "https",
+      "user": "cams",
+      "proxy": {
+        "url": "https://proxy.example.net:8480",
+        "token": {
+          "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+        },
+        "adminToken": {
+          "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+        },
+        "camera": "cam1",
+        "caFingerprint": [
+          "AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB"
+        ]
+      }
+    },
+    {
+      "id": "cam2",
+      "name": "Driveway",
+      "host": "192.0.2.31",
+      "protocol": "https",
+      "tlsServername": "cam2.example.net",
+      "webUiUrl": "https://192.0.2.31",
+      "webUiNote": "LAN only",
+      "user": "cams",
+      "proxy": {
+        "url": "https://cluster-proxy.example.net/",
+        "token": {
+          "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+        },
+        "camera": "cam2"
+      }
+    }
+  ],
+  "counts": {
+    "preferencesUsers": 2,
+    "proxySwitchOff": 0,
+    "tlsCas": 1,
+    "tlsPins": 0
+  }
+}

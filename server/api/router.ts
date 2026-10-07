@@ -12,6 +12,8 @@ import type { LiveHub } from '../live';
 import type { Commands } from '../commands/service';
 import type { Tokens } from '../tokens/service';
 import type { CamsInstances } from '../cams/instances';
+import type { Importer } from '../import/importer';
+import { exportForInstance } from '../import/export';
 import { SESSION_COOKIE, type Sessions } from '../auth/session';
 import { requireCsrf, requireSysadmin, writeLimiter } from '../auth/middleware';
 import { reconcile } from '../status/derive';
@@ -40,7 +42,7 @@ export interface BackupService { state(): BackupState; backupNow(actor: string):
 
 export interface ApiDeps {
   db: Db; clock: Clock; cfg: Config; audit: Audit; registry: Registry; enrollment: Enrollment; hub: Hub; status: StatusStore; live: LiveHub; sessions: Sessions; backup: BackupService;
-  commands: Commands; tokens: Tokens; camsInstances: CamsInstances; serverKeyFingerprints: string[];
+  commands: Commands; tokens: Tokens; camsInstances: CamsInstances; serverKeyFingerprints: string[]; importer: Importer;
 }
 
 type H = (req: Request, res: Response) => unknown;
@@ -52,6 +54,8 @@ export function apiRouter(d: ApiDeps): express.Router {
   const r = express.Router();
   // Every API request, per session (CodeQL-visible; the write limit below is tighter).
   r.use(limiter({ windowMs: 60_000, limit: 1200, key: (req) => sessionKey(req.cookies?.[SESSION_COOKIE]) }));
+  // P4: an import carries a whole cams export (≤ 1 MiB); only a signed-in sysadmin's body is read that far.
+  r.use('/accounts/:accountId/import', requireSysadmin(d.sessions), express.json({ limit: 1024 * 1024 }));
   r.use(express.json({ limit: 64 * 1024 }));
   r.use(requireSysadmin(d.sessions), requireCsrf(d.cfg), writeLimiter(d.cfg, d.clock));
   const actor = (res: Response): string => res.locals.session.email;
@@ -254,6 +258,26 @@ export function apiRouter(d: ApiDeps): express.Router {
   r.delete(`${cmsBase}/enrollment-codes/:codeId`, h((req, res) => { ci.cancelCode(actor(res), cms(req), p(req, 'codeId')); reg('cams-instance', cms(req)); }));
   r.get(`${cmsBase}/keys`, h((req) => ({ items: ci.keys(cms(req)) })));
   r.post(`${cmsBase}/keys/:keyId/revoke`, h((req, res) => { const k = ci.revokeKey(actor(res), cms(req), p(req, 'keyId')); reg('cams-instance', cms(req)); return k; }));
+
+  // --- P4: import a cams export, export a file-mode fallback (M §11.2, §11.6) ----------------
+  r.post('/accounts/:accountId/import', h((req, res) => {
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const accept = Array.isArray(b.acceptMismatch) ? b.acceptMismatch.filter((x): x is string => typeof x === 'string').slice(0, 500) : [];
+    if (typeof b.instanceId !== 'string') throw new ApiError(400, 'invalid', 'instanceId');
+    const out = d.importer.run(actor(res), p(req, 'accountId'), b.instanceId, b.file, { apply: b.apply === true, acceptMismatch: accept, createProxies: b.createProxies === true, hideUnlisted: b.hideUnlisted === true });
+    if (out.applied) reg('account', p(req, 'accountId'));
+    return out;
+  }));
+  r.get('/accounts/:accountId/export', h((req, res) => {
+    const accountId = p(req, 'accountId');
+    const instanceId = String(req.query.instance ?? '');
+    const out = exportForInstance({ db: d.db, registry: d.registry, instances: d.camsInstances }, accountId, instanceId);
+    const a = d.registry.getAccount(accountId);
+    const i = d.camsInstances.get(instanceId);
+    d.audit.write({ actorType: 'sysadmin', actor: actor(res), action: 'export-run', accountId, targetType: 'cams-instance', targetId: instanceId, targetLabel: i.name, outcome: 'ok', detail: { cameras: out.cameras.length, tokens: out.tokens.length } });
+    res.set({ 'Cache-Control': 'no-store', 'Content-Disposition': `attachment; filename="cameras-${a.name}-${i.name}.json"` });
+    return out;
+  }));
 
   // --- audit -------------------------------------------------------------------------------
   r.get('/audit', h((req) => {
