@@ -69,7 +69,7 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
   status.onTokens = (proxyId, t) => tokens.onHeartbeat(proxyId, t);
   const config = new ProxyConfig({ db, clock, registry, commands, status, live, log });
   status.onConfig = (proxyId) => config.onHeartbeat(proxyId);
-  const actions = new RemoteActions({ registry, commands, status, clock, config });
+  const actions = new RemoteActions({ db, audit, registry, commands, status, clock, config });
   const enrollment = new Enrollment({ db, clock, audit, registry, cfg, serverKeys: [signing.publicKeyB64], onKeyRevoked: (k) => hub.closeKey(k, 4401), onProxyChanged: (p) => live.publishRegistry('proxy', p) });
   const backup = createBackup({ db, clock, cfg, audit, env: merged });
   // P4: cams instances. R4-19: blocking or deleting one revokes the tokens it holds.

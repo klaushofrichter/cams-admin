@@ -7,7 +7,8 @@ import type { LiveHub } from '../live';
 import type { Logger } from '../log';
 import type { CommandRow, Commands, WireCommand } from '../commands/service';
 import { sanitize } from '../contract';
-import { REMOTE_SETTABLE } from '../../contract/build';
+import { CAMERA_NAME_PATTERN, REMOTE_SETTABLE } from '../../contract/build';
+import { SECRET_RE } from './redact';
 import { isRemoteSettable, narrowingOk, narrowReason, PATH_RE, patternOf, STORAGE_LOCAL_ONLY, type Leaf, type Settable } from './narrow';
 
 // A proxy's settings as cams-admin knows them (migration spec §8; P3 plan
@@ -35,6 +36,7 @@ const MAX_PATHS = 4096;
 const REV_RE = /^sha256:[0-9a-f]{64}$/;
 const CAM_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const CMD_RE = /^cmd_[0-9A-HJKMNP-TV-Z]{20}$/;
+const NAME_RE = new RegExp(CAMERA_NAME_PATTERN, 'u');
 const SOURCES = ['default', 'file', 'override', 'env'];
 const WRITES = ['config.set', 'config.unset', 'config.rollback'];
 const REMOTE = new Set(REMOTE_SETTABLE.remote);
@@ -136,6 +138,15 @@ export class ProxyConfig {
       if (STORAGE_LOCAL_ONLY.test(p) || /^storage$/.test(p)) throw new ApiError(400, 'not_remote_settable', 'storage settings are local only');
       if (!isRemoteSettable(p, view.settable)) throw new ApiError(400, 'not_remote_settable', p.slice(0, 200));
       if (view.paths[p]?.s === 'env') throw new ApiError(400, 'held_by_env', p);
+      // M2: a camera path names one of the proxy's cameras (adding one is never remote).
+      const cam = /^cameras\.([^.]+)\./.exec(p)?.[1];
+      if (cam !== undefined && !view.cameras.includes(cam)) throw new ApiError(400, 'unknown_camera', p);
+    }
+    // M1, M3: each value has the type the proxy reports; a camera name follows the contract's name rule.
+    if ('set' in parsed) for (const [p, v] of Object.entries(parsed.set)) {
+      const t = view.settable[patternOf(p)].type;
+      if (t === 'boolean' ? typeof v !== 'boolean' : t === 'integer' ? !Number.isSafeInteger(v) : typeof v !== 'string') throw new ApiError(400, 'invalid', p);
+      if (patternOf(p) === 'cameras.*.name' && !NAME_RE.test(v as string)) throw new ApiError(400, 'invalid', p);
     }
     for (const p of paths) {
       const to = 'set' in parsed ? parsed.set[p] : undefined;
@@ -235,7 +246,7 @@ export class ProxyConfig {
       this.d.log.warn({ proxyId, cmdId }, 'config_view_unreadable');
       return;
     }
-    const cams = (x: unknown) => (Array.isArray(x) ? x.filter((c): c is string => typeof c === 'string' && CAM_RE.test(c)).slice(0, 256) : []);
+    const cams = (x: unknown) => (Array.isArray(x) ? [...new Set(x.filter((c): c is string => typeof c === 'string' && CAM_RE.test(c)))].slice(0, 256) : []);
     const settable = Object.fromEntries(Object.entries(raw.settable).flatMap(([k, v]) => {
       const s = REMOTE.has(k) ? cleanSettable(v) : null; // a hostile or newer proxy can't widen the editor
       return s ? [[k, s]] : [];
@@ -248,7 +259,7 @@ export class ProxyConfig {
     const entries: [string, ConfigPath][] = [];
     let clamped = 0;
     for (const [k, v] of Object.entries(raw.paths).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
-      if (!PATH_RE.test(k)) continue;
+      if (!PATH_RE.test(k) || SECRET_RE.test(k)) continue; // I2: never a secret-shaped setting
       const p = cleanPath(v);
       if (!p) continue;
       const add = Buffer.byteLength(JSON.stringify(k)) + Buffer.byteLength(JSON.stringify(p)) + 2;

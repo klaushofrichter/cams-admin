@@ -15,6 +15,7 @@ import { Buckets } from '../channel/limits';
 import { CLOSE, type Connection } from '../channel/connection';
 import type { Hub } from '../channel/hub';
 import { sendCommand } from './envelope';
+import { redactSecrets } from '../config/redact';
 
 // Signed commands to the connected proxies (migration spec §7; plan Task 5):
 // a queue in the database, one command in flight per proxy, re-sent with the
@@ -78,6 +79,19 @@ export function requiredEntries(command: string, args: Record<string, unknown>):
   }
   if (command === 'camera.action') return [`camera.action:${String(args.action)}`];
   return [command];
+}
+
+// I1 (R3-19): a real settings write or rollback names each changed setting, old → new (clamped, redacted).
+function auditChanges(r: { command: string; rawArgs: Record<string, unknown> }, state: CommandState, result: unknown): { changes?: { path: unknown; from?: unknown; to?: unknown }[] } {
+  if (state !== 'done' || !['config.set', 'config.unset', 'config.rollback'].includes(r.command) || r.rawArgs.dryRun !== false) return {};
+  const changes = (result as { changes?: unknown } | null)?.changes;
+  if (!Array.isArray(changes)) return {};
+  return {
+    changes: changes.slice(0, 64).map((c: Record<string, unknown>) => ({
+      path: typeof c?.path === 'string' ? c.path.slice(0, 200) : null,
+      ...('from' in (c ?? {}) ? { from: clampValue(c.from) } : {}), ...('to' in (c ?? {}) ? { to: clampValue(c.to) } : {}),
+    })),
+  };
 }
 
 function toRaw(r: DbRow): Raw {
@@ -296,14 +310,29 @@ export class Commands {
     if (FINAL.includes(r.state)) return; // already final (a duplicate answer)
     const state: CommandState = b.status === 'ok' ? 'done' : b.status === 'refused' ? 'refused' : 'failed';
     if (state === 'done' && !validateResultPayload(r.command, b.result)) this.d.log.warn({ cmdId: r.id, proxyId: c.proxyId }, 'command_result_unreadable');
-    const text = JSON.stringify(m);
+    // I2: nothing secret-shaped from a proxy is stored or served. A redacted
+    // result loses its signature (the signed bytes held the secret).
+    let stored: Record<string, unknown> = m as unknown as Record<string, unknown>;
+    if (r.command !== 'tokens.apply' && b.result !== undefined) {
+      const red = redactSecrets(b.result);
+      if (red.changed) {
+        const { sig: _sig, ...rest } = stored;
+        stored = { ...rest, body: { ...b, result: red.value }, redacted: true };
+        this.d.log.warn({ cmdId: r.id, proxyId: c.proxyId }, 'command_result_redacted');
+      }
+    }
+    const text = JSON.stringify(stored);
+    const body = stored.body as Record<string, unknown>;
     tx(this.d.db, () => {
       this.q(`UPDATE commands SET state = ?, outcome_code = ?, result = ?, result_sig = ?, finished_at = ? WHERE id = ?`)
-        .run(state, typeof b.code === 'string' ? b.code.slice(0, 64) : b.status === 'conflict' ? 'conflict' : null, text.length <= 98304 ? text : null, typeof m.sig === 'string' ? m.sig : null, this.d.clock.now(), r.id);
+        .run(state, typeof b.code === 'string' ? b.code.slice(0, 64) : b.status === 'conflict' ? 'conflict' : null, text.length <= 98304 ? text : null, typeof stored.sig === 'string' ? stored.sig : null, this.d.clock.now(), r.id);
       this.d.audit.write({
         actorType: 'proxy', actor: c.proxyId!, action: 'command-result', accountId: r.accountId, targetType: 'proxy', targetId: c.proxyId,
         outcome: state === 'done' ? 'ok' : state === 'refused' ? 'refused' : 'failed',
-        detail: { cmdId: r.id, command: r.command, status: typeof b.status === 'string' ? b.status.slice(0, 16) : null, code: typeof b.code === 'string' ? b.code.slice(0, 64) : null, duplicate: b.duplicate === true, late: r.state === 'unknown' },
+        detail: {
+          cmdId: r.id, command: r.command, status: typeof b.status === 'string' ? b.status.slice(0, 16) : null, code: typeof b.code === 'string' ? b.code.slice(0, 64) : null, duplicate: b.duplicate === true, late: r.state === 'unknown',
+          ...auditChanges(r, state, body.result),
+        },
       });
     });
     this.inflightConn.delete(r.id);

@@ -119,6 +119,40 @@ describe('RemoteActions', () => {
     expect(await final(p.acc, p.prx, rs.commandId)).toMatchObject({ state: 'done', command: 'proxy.restart', result: { restartAt: expect.any(Number) } });
   });
 
+  it('I3: the fleet budget: one proxy at a time, at most 3 disruptive actions per 10 min across the fleet, persisted', async () => {
+    const p = await proxy(['camera.action:camera-reboot', 'proxy.restart', 'camera.action:camera-test']);
+    const q = await proxy(['camera.action:camera-reboot', 'proxy.restart'], 'other');
+    p.client.dropCommands = 1; // p's first disruptive action stays open
+    A().cameraAction(ACTOR, p.acc, p.prx, { camera: 'cam1', action: 'camera-reboot', confirm: 'camera-reboot' });
+    expect(code(() => A().cameraAction(ACTOR, q.acc, q.prx, { camera: 'cam1', action: 'camera-reboot', confirm: 'camera-reboot' }))).toEqual([409, 'fleet_busy', undefined]);
+    expect(code(() => A().restart(ACTOR, q.acc, q.prx, { confirm: 'proxy.restart' }))).toEqual([409, 'fleet_busy', undefined]);
+    // non-disruptive actions are not held
+    expect(A().cameraAction(ACTOR, p.acc, p.prx, { camera: 'cam1', action: 'camera-test' }).commandId).toMatch(/^cmd_/);
+    // the same proxy may go on (its own budget applies on the proxy)
+    clock.advance(10_001);
+    expect(A().cameraAction(ACTOR, p.acc, p.prx, { camera: 'cam2', action: 'camera-reboot', confirm: 'camera-reboot' }).commandId).toMatch(/^cmd_/);
+    expect(A().restart(ACTOR, p.acc, p.prx, { confirm: 'proxy.restart' }).commandId).toMatch(/^cmd_/);
+    // a fourth within 10 minutes: refused fleet-wide, with when to retry, and audited
+    let err: any;
+    try { A().restart(ACTOR, p.acc, p.prx, { confirm: 'proxy.restart' }); } catch (e) { err = e; }
+    expect(err).toMatchObject({ status: 429, code: 'fleet_limit' });
+    const refusals = (s.built.db.prepare(`SELECT detail, outcome FROM audit_log WHERE action = 'command-create' AND outcome = 'refused'`).all() as { detail: string }[]).map((x) => JSON.parse(x.detail).reason);
+    expect(refusals).toEqual(['fleet_busy', 'fleet_busy', 'fleet_limit']);
+    // persisted: a restart of cams-admin keeps the count (it comes from the commands table)
+    s = await s.restart();
+    expect(code(() => s.built.actions.restart(ACTOR, p.acc, p.prx, { confirm: 'proxy.restart' }))[1]).toMatch(/fleet_limit|fleet_busy/);
+    clock.advance(10 * 60_000 + 1);
+    // after 10 minutes the oldest leave the window (the open one gives up after 15 min)
+    clock.advance(5 * 60_000);
+    s.built.commands.tick();
+    expect(code(() => s.built.actions.restart(ACTOR, q.acc, q.prx, { confirm: 'proxy.restart' }))).not.toEqual([429, 'fleet_limit', undefined]);
+  });
+
+  it('M3: a rename with a bidi override or zero-width character is 400', async () => {
+    const p = await proxy(['camera.name.set']);
+    for (const name of ['evil\u202Egnp', 'a\u200Bb', 'a\u2028b']) expect(code(() => A().rename(ACTOR, p.acc, p.prx, 'cam1', { name }))).toEqual([400, 'invalid', 'name']);
+  });
+
   it('available(): every remote action with its disruptive mark and the reported allow-list; the cameras', async () => {
     const p = await proxy(['camera.action:camera-test', 'camera.action:camera-reboot', 'camera.name.set']);
     const av = A().available(p.acc, p.prx);

@@ -2,6 +2,7 @@
 // settings commands. The rules mirror the contract (remote-settable.json):
 // the proxy re-checks everything; this only keeps the editor honest.
 import remoteSettable from '../../../contract/v1/remote-settable.json';
+import { CAMERA_NAME_PATTERN } from '../../../contract/build';
 import { cmdStateText } from './commands';
 
 export type Leaf = boolean | number | string;
@@ -40,7 +41,10 @@ export function narrowOk(path: string, from: unknown, to: unknown): boolean {
   const pat = patternOf(path);
   const dir = NARROW[pat];
   if (!dir) return true;
-  if (typeof from === 'boolean' || typeof to === 'boolean') return to === from || (dir === 'less' ? to === false : to === true);
+  if (typeof from === 'boolean' || typeof to === 'boolean') {
+    if (typeof from !== 'boolean' || typeof to !== 'boolean') return false;
+    return to === from || (dir === 'less' ? to === false : to === true);
+  }
   const size = (x: unknown) => (x === undefined || x === null ? (UNSET_IS_NO_CAP.has(pat) ? Infinity : NaN) : typeof x !== 'number' ? NaN : ZERO_IS_NO_CAP.has(pat) && x === 0 ? Infinity : x);
   const f = size(from);
   const t = size(to);
@@ -70,7 +74,11 @@ export function groupPaths(view: ConfigView): Group[] {
   return [...groups.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([, g]) => g);
 }
 
-export function parseValue(s: Settable, text: string): { ok: true; value: Leaf } | { ok: false; error: string } {
+const NAME_RE = new RegExp(CAMERA_NAME_PATTERN, 'u');
+
+// path: for the camera-name rule. A proxy's `pattern` is never run here (M4:
+// a hostile regex would freeze the tab); the proxy checks it.
+export function parseValue(s: Settable, text: string, path = ''): { ok: true; value: Leaf } | { ok: false; error: string } {
   if (s.type === 'boolean') return text === 'true' ? { ok: true, value: true } : text === 'false' ? { ok: true, value: false } : { ok: false, error: 'true or false' };
   if (s.type === 'integer') {
     if (!/^-?\d+$/.test(text.trim())) return { ok: false, error: 'a whole number' };
@@ -83,12 +91,15 @@ export function parseValue(s: Settable, text: string): { ok: true; value: Leaf }
   }
   if (text.length > 512) return { ok: false, error: 'at most 512 characters' };
   if (s.enum && !s.enum.includes(text)) return { ok: false, error: `one of ${s.enum.join(', ')}` };
-  if (s.pattern) {
-    try {
-      if (!new RegExp(s.pattern, 'u').test(text)) return { ok: false, error: 'not in the expected form' };
-    } catch { /* a pattern this browser can't read: the proxy checks */ }
-  }
+  if (patternOf(path) === 'cameras.*.name' && !NAME_RE.test(text)) return { ok: false, error: 'no control, bidi or zero-width characters; at most 64' };
   return { ok: true, value: text };
+}
+
+// M6: a change a remote write could not make (a rollback restores the local value): say which way.
+export function widens(c: Change): string | null {
+  const dir = NARROW[patternOf(c.path)];
+  if (!dir || narrowOk(c.path, c.from, c.to)) return null;
+  return dir === 'more' ? 'restores the local value: keeps less data' : 'restores the local value: more spending';
 }
 
 export function valueText(v: unknown): string {

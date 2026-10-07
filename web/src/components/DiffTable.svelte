@@ -1,6 +1,6 @@
 <script lang="ts">
   // A settings change list (a dry run's or a real write's), as text.
-  import { narrowNote, valueText, type Change } from '../lib/config';
+  import { narrowNote, valueText, widens, type Change } from '../lib/config';
   let { changes, unchanged = [], testid = 'diff' }: { changes: Change[]; unchanged?: string[]; testid?: string } = $props();
 </script>
 <div class="scroll-x" data-testid={testid}>
@@ -8,7 +8,7 @@
     <table>
       <thead><tr><th>Setting</th><th>Now</th><th></th><th>After</th><th></th></tr></thead>
       <tbody>
-        {#each changes as c (c.path)}
+        {#each changes as c, i (i)}
           <tr data-testid="{testid}-row-{c.path}">
             <td class="mono">{c.path}</td>
             <td><span class="mono">{valueText(c.from)}</span> <span class="muted">({c.sourceFrom})</span></td>
@@ -16,7 +16,7 @@
             <td><span class="mono">{valueText(c.to)}</span> <span class="muted">({c.sourceTo})</span></td>
             <td>
               {#if c.restart}<span class="badge warn">{c.restart === 'process' ? 'needs a new process' : 'needs a restart'}</span>{/if}
-              {#if narrowNote(c.path)}<span class="muted">{narrowNote(c.path)}</span>{/if}
+              {#if widens(c)}<span class="badge warn" data-testid="{testid}-widens-{c.path}">{widens(c)}</span>{:else if narrowNote(c.path)}<span class="muted">{narrowNote(c.path)}</span>{/if}
             </td>
           </tr>
         {/each}

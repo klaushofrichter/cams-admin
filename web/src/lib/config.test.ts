@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { EFFECT, waitCommand, groupPaths, isRemoteSettable, narrowNote, narrowOk, parseValue, rollbackable, stateLine, valueText, type ConfigView } from './config';
+import { EFFECT, waitCommand, widens, groupPaths, isRemoteSettable, narrowNote, narrowOk, parseValue, rollbackable, stateLine, valueText, type ConfigView } from './config';
 
 const view: ConfigView = {
   revision: `sha256:${'a'.repeat(64)}`, schema: 1, cameras: ['cam1'], omittedCameras: [], fetchedAt: 1, cmdId: 'cmd_0123456789ABCDEFGHJK',
@@ -56,7 +56,10 @@ describe('config (Settings UI)', () => {
     expect(parseValue({ type: 'boolean' }, 'yes')).toEqual({ ok: false, error: 'true or false' });
     expect(parseValue({ type: 'string', enum: ['main', 'sub'] }, 'sub')).toEqual({ ok: true, value: 'sub' });
     expect(parseValue({ type: 'string', enum: ['main', 'sub'] }, 'x')).toEqual({ ok: false, error: 'one of main, sub' });
-    expect(parseValue({ type: 'string', pattern: '^[a-z]+$' }, 'AB')).toEqual({ ok: false, error: 'not in the expected form' });
+    // M4: a proxy-supplied regex never runs in the browser (ReDoS); the proxy checks it.
+    expect(parseValue({ type: 'string', pattern: '^(a+)+$' }, 'a'.repeat(40) + '!')).toEqual({ ok: true, value: 'a'.repeat(40) + '!' });
+    // M3: a camera name follows the contract's name rule
+    expect(parseValue({ type: 'string' }, 'evil\u202Egnp', 'cameras.cam1.name')).toEqual({ ok: false, error: 'no control, bidi or zero-width characters; at most 64' });
     expect(parseValue({ type: 'string' }, 'x'.repeat(513))).toEqual({ ok: false, error: 'at most 512 characters' });
   });
   it('narrowNote and narrowOk: the input refuses a lowered retention period, a raised Vision limit and any storage edit', () => {
@@ -72,6 +75,10 @@ describe('config (Settings UI)', () => {
     expect(narrowOk('analytics.googleVision.dailyCap', 0, 10)).toBe(true);
     expect(narrowOk('ftp.maxGB', undefined, 10)).toBe(false);
     expect(narrowOk('sse.pingS', 30, 5)).toBe(true);
+    expect(narrowOk('retention.clipsDays', 30, true)).toBe(false); // M1
+    expect(widens({ path: 'retention.clipsDays', from: 120, to: 90, sourceFrom: 'override', sourceTo: 'override' })).toBe('restores the local value: keeps less data'); // M6
+    expect(widens({ path: 'analytics.googleVision.monthlyLimit', from: 500, to: 1000, sourceFrom: 'override', sourceTo: 'default' })).toBe('restores the local value: more spending');
+    expect(widens({ path: 'retention.clipsDays', from: 90, to: 120, sourceFrom: 'override', sourceTo: 'override' })).toBeNull();
   });
   it('stateLine and rollbackable', () => {
     expect(stateLine({ state: 'received', outcomeCode: null })).toBe('sent, waiting for the proxy');

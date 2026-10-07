@@ -76,7 +76,7 @@
     <p class="muted">Loading…</p>
   {:else}
     <p class="muted small">Each action is allowed on the proxy itself (off by default). Disruptive ones ask for their name.</p>
-    {#each av.cameras as cam (cam)}
+    {#each av.cameras as cam, i (i)}
       <div class="cam grid" class:focus={camera === cam} data-testid="actions-camera-{cam}">
         <div class="row"><b class="mono">{cam}</b></div>
         <div class="row wrap">

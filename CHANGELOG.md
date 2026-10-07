@@ -22,7 +22,11 @@ then empties it on `main`.
   each one only if the proxy allows it. Disruptive actions need their name
   typed. A camera row on the Account page links to its actions.
 - Retention periods and size caps can only be raised from cams-admin,
-  Google Vision limits only lowered, and storage settings are local only.
+  Google Vision limits only lowered. Storage settings, capture and listener
+  on/off switches, and health thresholds are local only.
+- Disruptive actions are limited across the fleet: one proxy at a time, at
+  most 3 in 10 minutes. The audit log names every changed setting with its
+  old and new value. Secret-shaped values from a proxy are never stored.
 - Contract: args and result schemas for the P3 commands,
   `contract/v1/remote-settable.json`, and new fixtures and vectors.
 

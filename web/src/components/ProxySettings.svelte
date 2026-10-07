@@ -38,7 +38,7 @@
       const cur = view.paths[path];
       const s = view.settable[patternOf(path)];
       if (!cur || !s || text === valueText(cur.v)) continue;
-      const r = parseValue(s, text);
+      const r = parseValue(s, text, path);
       if (!r.ok) out.push({ path, error: r.error });
       else if (!narrowOk(path, cur.v, r.value)) out.push({ path, error: narrowNote(path) ?? 'not allowed from cams-admin' });
       else out.push({ path, value: r.value });

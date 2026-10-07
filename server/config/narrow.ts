@@ -28,7 +28,9 @@ export function isRemoteSettable(path: string, settable: Record<string, Settable
 export function narrowingOk(pattern: string, from: unknown, to: unknown): boolean {
   const dir = REMOTE_SETTABLE.narrow[pattern];
   if (!dir) return true;
+  // M1: the boolean rule only when both sides are booleans; a mix never passes.
   if (typeof from === 'boolean' || typeof to === 'boolean') {
+    if (typeof from !== 'boolean' || typeof to !== 'boolean') return false;
     if (to === from) return true;
     return dir === 'less' ? to === false : to === true;
   }

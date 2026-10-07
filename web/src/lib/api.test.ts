@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { api, ApiFailure } from './api';
+import { api, ApiFailure, errorText } from './api';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -21,5 +21,9 @@ describe('api', () => {
   it('204 is undefined', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 204 })));
     expect(await api('DELETE', '/x')).toBeUndefined();
+  });
+  it('fleet refusals of disruptive actions read as plain text (I3)', () => {
+    expect(errorText(new ApiFailure(409, 'fleet_busy'))).toBe("Another proxy's disruptive action is still running: wait until it reports back (at most 15 min).");
+    expect(errorText(new ApiFailure(429, 'fleet_limit', 'try again in 4 min'))).toBe('Fleet limit: at most 3 disruptive actions in 10 minutes across all proxies; try again in 4 min.');
   });
 });

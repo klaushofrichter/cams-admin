@@ -1,9 +1,11 @@
 import type { Clock } from '../clock';
+import type { Db } from '../db/open';
+import type { Audit } from '../audit';
 import { ApiError, type Registry } from '../registry';
 import type { StatusStore } from '../status/store';
 import type { Commands } from '../commands/service';
 import type { ProxyConfig } from '../config/service';
-import { DISRUPTIVE_ACTIONS, REMOTE_ACTIONS } from '../../contract/build';
+import { CAMERA_NAME_PATTERN, DISRUPTIVE_ACTIONS, REMOTE_ACTIONS } from '../../contract/build';
 
 // Remote camera actions, camera renames and proxy restarts (migration spec
 // §8.6, P3 plan Task 5, R3-18): signed commands with closed args; the
@@ -13,15 +15,20 @@ import { DISRUPTIVE_ACTIONS, REMOTE_ACTIONS } from '../../contract/build';
 // bounds the disruptive ones with its journal budget.
 
 const CAM_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
-// eslint-disable-next-line no-control-regex
-const NAME_RE = /^[^\u0000-\u001f\u007f]{1,64}$/;
+const NAME_RE = new RegExp(CAMERA_NAME_PATTERN, 'u');
 export const BUSY_MS = 10_000;
+// I3: the fleet budget for disruptive actions and proxy restarts, counted from
+// the commands table (so a restart of cams-admin keeps it): one proxy at a
+// time, at most 3 in any 10 minutes across all accounts.
+export const FLEET_WINDOW_MS = 10 * 60_000;
+export const FLEET_MAX = 3;
+const DISRUPTIVE_SQL = `(command = 'proxy.restart' OR (command = 'camera.action' AND json_extract(args, '$.action') IN (${DISRUPTIVE_ACTIONS.map((a) => `'${a}'`).join(',')})))`;
 
 const isObj = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x);
 const only = (o: Record<string, unknown>, keys: string[]) => Object.keys(o).every((k) => keys.includes(k));
 const isDisruptive = (a: string) => (DISRUPTIVE_ACTIONS as readonly string[]).includes(a);
 
-export interface ActionsDeps { registry: Registry; commands: Commands; status: StatusStore; clock: Clock; config?: ProxyConfig }
+export interface ActionsDeps { db: Db; audit: Audit; registry: Registry; commands: Commands; status: StatusStore; clock: Clock; config?: ProxyConfig }
 export interface Available { actions: { action: string; disruptive: boolean; allowed: boolean }[]; rename: boolean; restart: boolean; cameras: string[] }
 
 export class RemoteActions {
@@ -49,6 +56,7 @@ export class RemoteActions {
     const now = this.d.clock.now();
     const last = this.recent.get(key);
     if (last && now - last.at < BUSY_MS && this.isOpen(accountId, proxyId, last.cmdId)) throw new ApiError(409, 'busy');
+    if (isDisruptive(action)) this.fleetGate(actor, accountId, proxyId, 'camera.action', action);
     const row = this.d.commands.create(actor, accountId, proxyId, 'camera.action', { v: 1, camera, action, ...(input ? { input } : {}) });
     this.recent.set(key, { at: now, cmdId: row.id });
     for (const [k, v] of this.recent) if (now - v.at >= BUSY_MS) this.recent.delete(k);
@@ -65,6 +73,7 @@ export class RemoteActions {
   restart(actor: string, accountId: string, proxyId: string, body: unknown): { commandId: string } {
     this.d.registry.getProxy(accountId, proxyId);
     if (!isObj(body) || body.confirm !== 'proxy.restart') throw new ApiError(400, 'confirm_required', 'confirm');
+    this.fleetGate(actor, accountId, proxyId, 'proxy.restart');
     return { commandId: this.d.commands.create(actor, accountId, proxyId, 'proxy.restart', { v: 1 }).id };
   }
 
@@ -78,6 +87,23 @@ export class RemoteActions {
       actions: REMOTE_ACTIONS.map((a) => ({ action: a, disruptive: isDisruptive(a), allowed: allow.includes(`camera.action:${a}`) })),
       rename: allow.includes('camera.name.set'), restart: allow.includes('proxy.restart'), cameras,
     };
+  }
+
+  // I3: refuse (and audit) a disruptive request while another proxy's is open, or over the fleet window.
+  private fleetGate(actor: string, accountId: string, proxyId: string, command: string, action?: string): void {
+    const now = this.d.clock.now();
+    const refuse = (status: number, reason: string, extra: Record<string, unknown> = {}) => {
+      const px = this.d.registry.getProxy(accountId, proxyId);
+      this.d.audit.write({
+        actorType: 'sysadmin', actor, action: 'command-create', accountId, targetType: 'proxy', targetId: proxyId, targetLabel: px.name, outcome: 'refused',
+        detail: { command, ...(action ? { action } : {}), reason, ...extra },
+      });
+      throw new ApiError(status, reason, typeof extra.retryAfterS === 'number' ? `try again in ${Math.ceil(extra.retryAfterS / 60)} min` : undefined);
+    };
+    const other = this.d.db.prepare(`SELECT proxy_id FROM commands WHERE ${DISRUPTIVE_SQL} AND state IN ('queued','sent','received') AND proxy_id IS NOT NULL AND proxy_id <> ? LIMIT 1`).get(proxyId);
+    if (other) refuse(409, 'fleet_busy');
+    const recent = this.d.db.prepare(`SELECT created_at FROM commands WHERE ${DISRUPTIVE_SQL} AND created_at > ? ORDER BY created_at`).all(now - FLEET_WINDOW_MS) as { created_at: number }[];
+    if (recent.length >= FLEET_MAX) refuse(429, 'fleet_limit', { retryAfterS: Math.max(1, Math.ceil((recent[recent.length - FLEET_MAX].created_at + FLEET_WINDOW_MS - now) / 1000)) });
   }
 
   private isOpen(accountId: string, proxyId: string, cmdId: string): boolean {

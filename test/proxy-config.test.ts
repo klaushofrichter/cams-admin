@@ -66,8 +66,9 @@ describe('narrow.ts: the contract rules for the pre-check', () => {
     expect(narrowingOk('analytics.googleVision.monthlyLimit', 1000, 5000)).toBe(false);
     expect(narrowingOk('analytics.googleVision.dailyCap', 0, 50)).toBe(true);
     expect(narrowingOk('analytics.googleVision.dailyCap', 50, 0)).toBe(false);
-    expect(narrowingOk('analytics.googleVision.enabled', true, false)).toBe(true);
-    expect(narrowingOk('analytics.googleVision.enabled', false, true)).toBe(false);
+    // M1: a boolean never passes a numeric narrow path
+    expect(narrowingOk('retention.clipsDays', 30, true)).toBe(false);
+    expect(narrowingOk('analytics.googleVision.monthlyLimit', 100, false)).toBe(false);
     expect(narrowingOk('retention.clipsDays', 90, 120)).toBe(true);
     expect(narrowingOk('retention.clipsDays', 90, 30)).toBe(false);
     expect(narrowingOk('retention.clipsDays', 90, undefined)).toBe(false); // Reset: cams-admin can't know the value it restores
@@ -345,18 +346,71 @@ describe('ProxyConfig', () => {
     expect(readEpoch(s.built.db)).toBe(before);
   });
 
-  it('secret guard: a marker in the fake proxy\'s environment never reaches proxy_config, commands or the audit log', async () => {
+  it('secret guard (I2): a fake proxy that leaks its environment marker into the view and an answer — cams-admin stores and serves none of it', async () => {
     const MARK = 'SECRET-MARKER-7f3a9c';
     process.env.CAMPROXY_TEST_SECRET = MARK;
     try {
-      const p = await proxy();
+      const p = await proxy({ allow: [...ALLOW, 'camera.action:camera-test'] });
       await viewed(p.acc, p.prx);
+      // the fake proxy really emits it (otherwise this test proves nothing)
+      expect(JSON.stringify(p.ref.handle('config.get', { v: 1 }, { cmdId: 'cmd_0123456789ABCDEFGHJK', actor: 'x' }))).toContain(MARK);
+      expect(C().state(p.acc, p.prx).view!.paths['camsAdmin.token']).toBeUndefined();
+      expect(C().state(p.acc, p.prx).view!.paths['ftp.password']).toBeUndefined();
       const pv = C().preview(ACTOR, p.acc, p.prx, { set: { 'sse.pingS': 7 } });
       await final(p.acc, p.prx, pv.commandId);
       await final(p.acc, p.prx, C().apply(ACTOR, p.acc, p.prx, pv.commandId).commandId);
+      const act = s.built.actions.cameraAction(ACTOR, p.acc, p.prx, { camera: 'cam1', action: 'camera-test' });
+      const row = await final(p.acc, p.prx, act.commandId);
+      expect(row.result).toMatchObject({ answer: { ok: true, token: '[redacted]', nested: { apiKey: '[redacted]' } } });
       for (const t of ['proxy_config', 'commands', 'audit_log']) expect(JSON.stringify(s.built.db.prepare(`SELECT * FROM ${t}`).all()), t).not.toContain(MARK);
+      for (const c of cmds().list(p.acc, p.prx, { limit: 50 }).items) expect(JSON.stringify(cmds().get(p.acc, p.prx, c.id))).not.toContain(MARK);
+      expect(JSON.stringify(C().state(p.acc, p.prx))).not.toContain(MARK);
     } finally {
       delete process.env.CAMPROXY_TEST_SECRET;
     }
+  });
+
+  it('I1: the audit records each changed setting with old → new, for writes and rollbacks', async () => {
+    const p = await proxy();
+    await viewed(p.acc, p.prx);
+    const pv = C().preview(ACTOR, p.acc, p.prx, { set: { 'sse.pingS': 7 } });
+    await final(p.acc, p.prx, pv.commandId);
+    const a = C().apply(ACTOR, p.acc, p.prx, pv.commandId);
+    await final(p.acc, p.prx, a.commandId);
+    const results = () => (s.built.db.prepare(`SELECT detail FROM audit_log WHERE action = 'command-result' ORDER BY id`).all() as { detail: string }[]).map((x) => JSON.parse(x.detail));
+    expect(results().find((d) => d.cmdId === a.commandId)).toMatchObject({ changes: [{ path: 'sse.pingS', from: 30, to: 7 }] });
+    expect(results().find((d) => d.cmdId === pv.commandId)!.changes).toBeUndefined(); // a dry run changed nothing
+    const rp = C().rollbackPreview(ACTOR, p.acc, p.prx, a.commandId);
+    await final(p.acc, p.prx, rp.commandId);
+    const ra = C().rollbackApply(ACTOR, p.acc, p.prx, rp.commandId);
+    await final(p.acc, p.prx, ra.commandId);
+    expect(results().find((d) => d.cmdId === ra.commandId)).toMatchObject({ changes: [{ path: 'sse.pingS', from: 7, to: 30 }] });
+  });
+
+  it('M1/M2/M3: a leaf of the wrong type, an unknown camera and a bidi camera name are 400 before any command', async () => {
+    const p = await proxy();
+    await viewed(p.acc, p.prx);
+    const before = countCommands();
+    expect(() => C().preview(ACTOR, p.acc, p.prx, { set: { 'sse.pingS': 'often' } })).toThrow(/invalid/);
+    expect(() => C().preview(ACTOR, p.acc, p.prx, { set: { 'retention.clipsDays': true } })).toThrow(/invalid/);
+    expect(() => C().preview(ACTOR, p.acc, p.prx, { set: { 'cameras.nosuch.name': 'x' } })).toThrow(/unknown_camera/);
+    expect(() => C().preview(ACTOR, p.acc, p.prx, { set: { 'cameras.constructor.name': 'x' } })).toThrow(/unknown_camera/);
+    expect(() => C().preview(ACTOR, p.acc, p.prx, { set: { 'cameras.cam1.name': 'evil‮gnp' } })).toThrow(/invalid/);
+    expect(countCommands()).toBe(before);
+  });
+
+  it('I4: local-only switches and thresholds are not editable (not_remote_settable), even if a proxy reports them settable', async () => {
+    const p = await proxy();
+    await viewed(p.acc, p.prx);
+    C().storeView(p.prx, 'cmd_0123456789ABCDEFGHJK', { revision: p.ref.revision(), cameras: ['cam1'], omittedCameras: [], paths: { 'ftp.enabled': { v: true, s: 'file' }, 'sse.pingS': { v: 30, s: 'default' } }, settable: { 'ftp.enabled': { type: 'boolean' }, 'health.diskPercent': { type: 'integer' }, 'sse.pingS': { type: 'integer' } } });
+    expect(Object.keys(C().state(p.acc, p.prx).view!.settable)).toEqual(['sse.pingS']);
+    for (const set of [{ 'ftp.enabled': false }, { 'stills.enabled': false }, { 'health.diskPercent': 99 }, { 'cameras.cam1.ftp.enabled': false }])
+      expect(() => C().preview(ACTOR, p.acc, p.prx, { set }), JSON.stringify(set)).toThrow(/not_remote_settable/);
+  });
+
+  it('M5: duplicate camera ids from a proxy are stored once', async () => {
+    const p = await proxy({ allow: ['config.set'] });
+    C().storeView(p.prx, 'cmd_0123456789ABCDEFGHJK', { revision: `sha256:${'1'.repeat(64)}`, cameras: ['cam1', 'cam1', 'cam2'], omittedCameras: ['x', 'x'], paths: {}, settable: {} });
+    expect(C().state(p.acc, p.prx).view).toMatchObject({ cameras: ['cam1', 'cam2'], omittedCameras: ['x'] });
   });
 });
