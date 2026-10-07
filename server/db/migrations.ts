@@ -318,4 +318,20 @@ CREATE TABLE proxy_config (
 ALTER TABLE commands ADD COLUMN preview_of TEXT;
 CREATE UNIQUE INDEX commands_preview_of ON commands(preview_of) WHERE preview_of IS NOT NULL;
 `),
+  // 7: per-instance camera overrides (cut-over step 6): a cams instance may
+  // reach a camera at its own host and with its own camera user (the cluster
+  // at the camera's address, the Pi through its proxy). NULL = the camera's
+  // shared value. Writers bump the instance's version (its snapshot revision).
+  (db) => db.exec(`
+CREATE TABLE cams_camera_overrides (
+  instance_id TEXT NOT NULL REFERENCES cams_instances(id) ON DELETE CASCADE,
+  camera_id TEXT NOT NULL REFERENCES cameras(id) ON DELETE CASCADE,
+  host TEXT CHECK (host IS NULL OR length(host) BETWEEN 1 AND 253),
+  camera_user TEXT CHECK (camera_user IS NULL OR length(camera_user) BETWEEN 1 AND 64),
+  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, version INTEGER NOT NULL DEFAULT 1,
+  PRIMARY KEY (instance_id, camera_id),
+  CHECK (host IS NOT NULL OR camera_user IS NOT NULL)
+) STRICT;
+CREATE INDEX cams_overrides_camera ON cams_camera_overrides(camera_id);
+`),
 ];

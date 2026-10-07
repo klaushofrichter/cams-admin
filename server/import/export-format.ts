@@ -1,5 +1,5 @@
 import { ApiError } from '../registry';
-import { checkUrl, FieldError, normaliseFingerprint } from '../validate';
+import { checkUrl, FieldError, isCameraUser, normaliseFingerprint } from '../validate';
 
 // The redacted export of a cams cameras.json (cams `export-config`, M §11.1):
 // every camera field but the password; tokens only as {sha256: <hex>}; the
@@ -97,6 +97,7 @@ export function parseCamsExport(raw: unknown): CamsExport {
     const protocol = e.protocol === undefined ? 'https' : e.protocol;
     if (protocol !== 'https' && protocol !== 'http') bad(`${path}.protocol`);
     const out: ExportCamera = { id, name: str(e, 'name', path, 80)!, host: str(e, 'host', path, 253)!, protocol: protocol as 'https' | 'http', user: str(e, 'user', path, 64)! };
+    if (!isCameraUser(out.user)) bad(`${path}.user`);
     const tls = str(e, 'tlsServername', path, 253, false);
     if (tls !== undefined) {
       if (!HOST_RE.test(tls)) bad(`${path}.tlsServername`);

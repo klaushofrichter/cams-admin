@@ -82,7 +82,7 @@ sleep 5
 # /health's lastReplicationAt comes from the replica in S3 (spec §13.3).
 curl -fsS "http://127.0.0.1:$APP_PORT/health" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const b=JSON.parse(s).backup;if(!(b.lastReplicationAt>Date.now()-120000)||b.replicationCheckError){console.error("restore-test: /health backup",JSON.stringify(b));process.exit(1)}console.log("restore-test: lastReplicationAt from S3",new Date(b.lastReplicationAt).toISOString())})'
 npx tsx scripts/backup/restore-check.ts dump --db "$DB" > "$WORK/before.json"
-REG=accounts,account_users,proxies,proxy_keys,enrollment_codes,cameras,sims
+REG=accounts,account_users,proxies,proxy_keys,enrollment_codes,cameras,sims,cams_camera_overrides
 npx tsx scripts/backup/restore-check.ts dump --db "$DB" --tables "$REG" > "$WORK/before-registry.json"
 kill -9 "$APP_PID" "$LS_PID"
 note "app and litestream killed"
@@ -99,6 +99,7 @@ npx tsx scripts/backup/restore-check.ts dump --db "$WORK/rb/cams-admin.db" --tab
 fail=0
 if cmp -s "$WORK/before.json" "$WORK/after-a.json"; then note "Litestream restore: every table matches"; else note "Litestream restore DIFFERS"; diff <(tr ',' '\n' < "$WORK/before.json") <(tr ',' '\n' < "$WORK/after-a.json") || true; fail=1; fi
 if cmp -s "$WORK/before-registry.json" "$WORK/after-b.json"; then note "snapshot restore: every registry table matches"; else note "snapshot restore DIFFERS"; diff <(tr ',' '\n' < "$WORK/before-registry.json") <(tr ',' '\n' < "$WORK/after-b.json") || true; fail=1; fi
+grep -q '"cams_camera_overrides":{"rows":1,' "$WORK/after-b.json" || { note "the seeded camera override is missing"; fail=1; }
 grep -q '"integrity":"ok"' "$WORK/after-a.json" && grep -q '"integrity":"ok"' "$WORK/after-b.json" || { note "integrity check failed"; fail=1; }
 [ "$fail" = 0 ] || exit 1
 cat "$WORK/before-registry.json"

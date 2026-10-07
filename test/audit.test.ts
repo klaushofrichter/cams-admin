@@ -22,7 +22,9 @@ describe('audit log', () => {
     const P4 = ['cams-instance-create', 'cams-instance-update', 'cams-instance-delete', 'cams-instance-block', 'cams-enrollment-code-create', 'cams-enrollment-code-cancel',
       'cams-enrolled', 'cams-enroll-refused', 'cams-key-confirmed', 'cams-key-revoke', 'cams-auth-refused', 'route-update', 'cams-rotate', 'import-run', 'import-apply', 'export-run'];
     for (const a of P4) expect(AUDIT_ACTIONS).toContain(a);
-    expect(AUDIT_ACTIONS).toHaveLength(37 + P4.length);
+    const OVERRIDES = ['camera-override-set', 'camera-override-clear'];
+    for (const a of OVERRIDES) expect(AUDIT_ACTIONS).toContain(a);
+    expect(AUDIT_ACTIONS).toHaveLength(37 + P4.length + OVERRIDES.length);
     expect(new Set(AUDIT_ACTIONS).size).toBe(AUDIT_ACTIONS.length);
   });
 

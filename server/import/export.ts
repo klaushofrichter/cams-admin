@@ -23,8 +23,11 @@ export function exportForInstance(d: ExportDeps, accountId: string, instanceId: 
   // The proxies routed to this instance (default-deny), as in its snapshot.
   const proxies = new Map(d.registry.listProxies(accountId).filter((p) => routes.has(p.id) && !routes.get(p.id)!.hidden).map((p) => [p.id, p]));
   const warnings: string[] = [];
+  // The instance's own host and camera user (migration 7), as in its snapshot.
+  const overrides = d.instances.overrideMap(instanceId);
   const cameras = d.registry.listCameras(accountId).filter((c) => c.kind === 'camera' || c.kind === 'sim').filter((c) => !c.proxyId || proxies.has(c.proxyId)).map((c) => {
-    const out: Record<string, unknown> = { id: c.camsId, name: c.name, host: c.host ?? '', protocol: c.protocol ?? 'https', user: c.cameraUser ?? '' };
+    const o = overrides.get(c.id);
+    const out: Record<string, unknown> = { id: c.camsId, name: c.name, host: o?.host ?? c.host ?? '', protocol: c.protocol ?? 'https', user: o?.cameraUser ?? c.cameraUser ?? '' };
     if (c.tlsServername) out.tlsServername = c.tlsServername;
     if (c.webUiUrl !== null) out.webUiUrl = c.webUiUrl;
     if (c.webUiNote) out.webUiNote = c.webUiNote;

@@ -34,6 +34,9 @@ describe('audit completeness', () => {
     ['post', '/cams-instances/:instanceId/keys/:keyId/revoke', () => `/cams-instances/${ids.cms}/keys/${ids.ckey}/revoke`, () => ({}), 'cams-key-revoke'],
     // The apply is bound to its dry run (review M2): both records.
     ['post', '/accounts/:accountId/import', () => `/accounts/${ids.acc}/import`, () => ({ instanceId: ids.cms, file: IMPORT_FILE, apply: true, planId: a.importer.run('admin@example.com', ids.acc, ids.cms, IMPORT_FILE, { apply: false, acceptMismatch: [], createProxies: false, hideUnlisted: false }).planId }), ['import-run', 'import-apply', 'camera-create']],
+    // Per-instance camera overrides (migration 7), on the camera the import created.
+    ['put', '/cams-instances/:instanceId/camera-overrides/:cameraId', () => `/cams-instances/${ids.cms}/camera-overrides/${ids.impcam}`, () => ({ host: 'from-proxy', cameraUser: 'proxy' }), 'camera-override-set'],
+    ['delete', '/cams-instances/:instanceId/camera-overrides/:cameraId', () => `/cams-instances/${ids.cms}/camera-overrides/${ids.impcam}`, () => ({}), 'camera-override-clear'],
     ['post', '/cams-instances/:instanceId/rotate', () => `/cams-instances/${ids.cms}/rotate`, () => ({}), 'cams-rotate'],
     ['post', '/cams-instances/:instanceId/block', () => `/cams-instances/${ids.cms}/block`, () => ({}), 'cams-instance-block'],
     ['delete', '/cams-instances/:instanceId', () => `/cams-instances/${ids.cms}`, () => ({ confirmName: 'cluster' }), 'cams-instance-delete'],
@@ -115,6 +118,7 @@ describe('audit completeness', () => {
       a.db.prepare(`UPDATE proxy_tokens SET state = 'active' WHERE id = ?`).run(ids.tok); // as if the proxy confirmed it
     }
     if (action === 'camera-create') ids.cam = r.body.id;
+    if (actions.includes('import-apply')) ids.impcam = (a.db.prepare(`SELECT id FROM cameras WHERE cams_id = 'imp1'`).get() as { id: string }).id;
     expect(count() - before).toBe(actions.length);
     expect(a.audit.list({ limit: actions.length }).items.map((x) => x.action).sort()).toEqual([...actions].sort());
   });

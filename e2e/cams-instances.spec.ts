@@ -61,6 +61,10 @@ test('import on the account page: dry run, accept mismatches, apply, again → n
   await page.goto(`/#/accounts/${acc.id}/import`);
   await page.getByTestId('import-file').setInputFiles(join(__dirname, '../test/fixtures/import/cluster.json'));
   await expect(page.getByTestId('import-file-info')).toContainText('cluster.json');
+  // No default instance: the dry run waits until one is picked.
+  await expect(page.getByTestId('import-instance')).toHaveValue('');
+  await expect(page.getByTestId('import-dry-run')).toBeDisabled();
+  await page.getByTestId('import-instance').selectOption(inst.id);
   await page.getByTestId('import-dry-run').click();
   await expect(page.getByTestId('import-result')).toContainText('new camera cam1');
   await expect(page.getByTestId('import-result')).toContainText('proxy pi: matched by url');
@@ -80,6 +84,49 @@ test('import on the account page: dry run, accept mismatches, apply, again → n
   const download = page.waitForEvent('download');
   await page.getByTestId(`export-${inst.name}`).click();
   expect((await download).suggestedFilename()).toBe(`cameras-${acc.name}-${inst.name}.json`);
+});
+
+test('a file that looks like another instance\'s export: a warning, and Apply needs its own confirmation', async ({ page }, info) => {
+  const acc = await api(page, 'POST', '/accounts', { name: uniq(info, 'oth'), displayName: 'Other' });
+  const px = await api(page, 'POST', `/accounts/${acc.id}/proxies`, { name: 'pi', displayName: 'Pi', runsOn: 'local-host', url: 'https://proxy.example.net:8480' });
+  const c1 = await api(page, 'POST', '/cams-instances', { name: uniq(info, 'oc'), displayName: 'C', accounts: [acc.id] });
+  const p1 = await api(page, 'POST', '/cams-instances', { name: uniq(info, 'op'), displayName: 'P', accounts: [acc.id] });
+  await api(page, 'PUT', `/cams-instances/${p1.id}/routes/${px.id}`, { url: 'http://127.0.0.1:8480', hidden: false });
+  await page.goto(`/#/accounts/${acc.id}/import`);
+  await page.getByTestId('import-instance').selectOption(c1.id);
+  await page.getByTestId('import-file').setInputFiles(join(__dirname, '../test/fixtures/import/cutover-pi.json'));
+  await page.getByTestId('import-create-proxies').check();
+  await page.getByTestId('import-dry-run').click();
+  await expect(page.getByTestId('import-other-instance')).toContainText(`Is this ${p1.name}'s export? You picked ${c1.name}.`);
+  await expect(page.getByTestId('import-apply')).toBeDisabled();
+  await page.getByTestId('import-confirm-instance').check();
+  await expect(page.getByTestId('import-apply')).toBeEnabled();
+});
+
+test('camera overrides on the instance page; the camera\'s registry fields on the Cameras tab (issue #25)', async ({ page }, info) => {
+  const acc = await api(page, 'POST', '/accounts', { name: uniq(info, 'ovr'), displayName: 'Overrides' });
+  await api(page, 'POST', `/accounts/${acc.id}/cameras`, { camsId: 'cam1', name: 'Den', kind: 'camera', host: '192.0.2.164', cameraUser: 'cams' });
+  const inst = await api(page, 'POST', '/cams-instances', { name: uniq(info, 'ovc'), displayName: 'Ov', accounts: [acc.id] });
+  await page.goto(`/#/cams-instances/${inst.id}`);
+  const t = `${acc.name}-cam1`;
+  await expect(page.getByTestId(`ov-host-${t}`)).toHaveAttribute('placeholder', '192.0.2.164');
+  await expect(page.getByTestId(`ov-state-${t}`)).toHaveCount(0);
+  await page.getByTestId(`ov-host-${t}`).fill('from-proxy');
+  await page.getByTestId(`ov-user-${t}`).fill('proxy');
+  await page.getByTestId(`ov-save-${t}`).click();
+  await expect(page.getByTestId(`ov-state-${t}`)).toHaveText('override');
+  await expect(page.getByTestId(`ov-user-${t}`)).toHaveValue('proxy');
+  await page.getByTestId(`ov-clear-${t}`).click();
+  await expect(page.getByTestId(`ov-state-${t}`)).toHaveCount(0);
+  await expect(page.getByTestId(`ov-host-${t}`)).toHaveValue('');
+  // The registry name (what cams shows), edited on the account's Cameras tab.
+  await page.goto(`/#/accounts/${acc.id}/cameras`);
+  await page.getByTestId('camera-edit-cam1').click();
+  await expect(page.getByTestId('camera-edit-form')).toContainText('not the camera\'s own (OSD) name');
+  await page.getByTestId('camera-edit-name').fill('Backyard Left');
+  await page.getByTestId('camera-edit-save').click();
+  await expect(page.getByTestId('camera-edit-form')).toHaveCount(0);
+  await expect(page.getByTestId('camera-row-cam1')).toContainText('Backyard Left');
 });
 
 test('the dashboard lists cams instances', async ({ page }, info) => {

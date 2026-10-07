@@ -18,6 +18,9 @@
   let row = $state<any>(null);
   let served = $state<Record<string, boolean>>({});
   let edit = $state<Record<string, { url: string; visible: boolean }>>({});
+  let cameras = $state<any[]>([]);
+  let overrides = $state<any[]>([]);
+  let ovEdit = $state<Record<string, { host: string; cameraUser: string }>>({});
   let revoking = $state<any>(null);
   let code = $state<any>(null);
   let stored = $state(false);
@@ -38,6 +41,9 @@
       // Edit buffers: kept while open (a reload from a live event never
       // wipes what is being typed); a saved or removed route resets its own.
       edit = Object.fromEntries(proxies.map((p) => [p.id, edit[p.id] ?? fromRoute(p.id)]));
+      overrides = (await api('GET', `/cams-instances/${instanceId}/camera-overrides`)).items;
+      cameras = (await Promise.all(inst.accounts.map((id: string) => api('GET', `/accounts/${id}/cameras`).then((x) => x.items.map((c: any) => ({ ...c, accountName: accounts.find((y) => y.id === id)?.name })))))).flat();
+      ovEdit = Object.fromEntries(cameras.map((c) => [c.id, ovEdit[c.id] ?? fromOverride(c.id)]));
     } catch (e: any) {
       if (e?.status === 404) notFound = true;
       else error = errorText(e);
@@ -62,6 +68,17 @@
     else if (routeOf(p)) await api('DELETE', `/cams-instances/${instanceId}/routes/${p.id}`);
     delete edit[p.id];
   });
+  // Camera overrides: this instance's own host / camera user; empty = the camera's value.
+  const overrideOf = (cameraId: string) => overrides.find((o) => o.cameraId === cameraId);
+  const fromOverride = (cameraId: string) => ({ host: overrideOf(cameraId)?.host ?? '', cameraUser: overrideOf(cameraId)?.cameraUser ?? '' });
+  const saveOverride = (c: any) => run(async () => {
+    const e = ovEdit[c.id];
+    const o = overrideOf(c.id);
+    if (!e.host.trim() && !e.cameraUser.trim()) { if (o) await api('DELETE', `/cams-instances/${instanceId}/camera-overrides/${c.id}`); }
+    else await api('PUT', `/cams-instances/${instanceId}/camera-overrides/${c.id}`, { host: e.host.trim() || null, cameraUser: e.cameraUser.trim() || null, ...(o ? { version: o.version } : {}) });
+    delete ovEdit[c.id];
+  });
+  const clearOverride = (c: any) => run(async () => { await api('DELETE', `/cams-instances/${instanceId}/camera-overrides/${c.id}`); delete ovEdit[c.id]; });
   const revokeKey = (k: any) => run(() => api('POST', `/cams-instances/${instanceId}/keys/${k.id}/revoke`)).then(() => (revoking = null));
   async function newCode() {
     error = '';
@@ -134,6 +151,28 @@
             {/if}
           {/each}
           {#if !proxies.length}<tr><td colspan="5" class="muted">The served accounts have no proxies.</td></tr>{/if}
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Camera overrides</h3>
+    <p class="muted">Where this instance reaches a camera differently from the camera's registry values (the Pi's cams through its proxy: host <span class="mono">from-proxy</span>, its own camera user). Empty = the camera's value. A new host is held in cams until an account admin confirms it.</p>
+    <div class="scroll-x">
+      <table data-testid="cms-overrides">
+        <thead><tr><th>Camera</th><th>Host</th><th>Camera user</th><th></th></tr></thead>
+        <tbody>
+          {#each cameras as c (c.id)}
+            {#if ovEdit[c.id]}
+              {@const t = `${c.accountName}-${c.camsId}`}
+              <tr data-testid="ov-row-{t}">
+                <td>{c.name} <span class="mono muted">{c.accountName}/{c.camsId}</span> {#if overrideOf(c.id)}<span class="badge warn" data-testid="ov-state-{t}">override</span>{/if}</td>
+                <td><input class="mono" bind:value={ovEdit[c.id].host} placeholder={c.host ?? '(none)'} data-testid="ov-host-{t}" /></td>
+                <td><input class="mono" bind:value={ovEdit[c.id].cameraUser} placeholder={c.cameraUser ?? '(none)'} data-testid="ov-user-{t}" /></td>
+                <td class="row"><button class="btn" data-testid="ov-save-{t}" onclick={() => saveOverride(c)}>Save</button>{#if overrideOf(c.id)}<button class="btn" data-testid="ov-clear-{t}" onclick={() => clearOverride(c)}>Clear</button>{/if}</td>
+              </tr>
+            {/if}
+          {/each}
+          {#if !cameras.length}<tr><td colspan="4" class="muted">The served accounts have no cameras.</td></tr>{/if}
         </tbody>
       </table>
     </div>

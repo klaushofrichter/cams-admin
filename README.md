@@ -129,6 +129,11 @@ It will run at `cams-admin.skylar.technology`. Phase 1 is specified in
   reaches no instance until it is routed; an import routes the proxies its
   file uses. Hiding a proxy or removing a served account revokes the tokens
   the instance holds there.
+- **Camera overrides:** an instance can also reach a camera at its own host
+  and with its own camera user (the Pi's cams through its proxy,
+  `from-proxy`); its snapshot and Export carry them, the others keep the
+  camera's values. An import writes them when another instance already uses
+  the camera's values.
 - **Tokens:** cams generates its own proxy tokens and registers only their
   hashes (`POST /cams/v1/tokens`); cams-admin sends them to the proxy.
   *Rotate now* on the instance page makes cams register new ones and retire
@@ -138,7 +143,9 @@ It will run at `cams-admin.skylar.technology`. Phase 1 is specified in
 - **Import and export:** an account's *Import* reads cams's redacted
   `export-config` output (dry run first, idempotent, cross-checked against
   what the live proxies report; it never deletes and never changes a
-  proxy's registered URL). *Export* writes a `cameras.json` without
+  proxy's registered URL). The instance is always picked by hand, and a
+  file that looks like another instance's export needs its own
+  confirmation. *Export* writes a `cameras.json` without
   passwords and tokens, for cams's file mode if cams-admin is ever lost
   ([docs/restore.md](docs/restore.md)). The cut-over is
   [docs/migration-p4-runbook.md](docs/migration-p4-runbook.md).
