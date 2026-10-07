@@ -108,6 +108,7 @@ Not part of this rollout; listed so nothing is removed early:
 | date | step | commits (cams-admin / cams / cam-proxy) | result | by |
 |---|---|---|---|---|
 | 2026-10-07 | §R cams-admin side only (synthetic exports, reference cams client; cams P4 not yet on cams `main`) | cams-admin `feat/migration-p4-ui` (`scripts/rehearse/rehearse.ts`) / — / cam-proxy `main` via the bridge | PASS 13/13: tokens, exports + localize, enroll ×2, imports (no changes on the second run, Pi route + hidden proxy), pulls 200/304 verified, shadow 0, cams-held tokens + rotate, offline cache, block | P4 implementer |
+| 2026-10-07 | §R cams-admin side again, after the security review fixes (routes default-deny, plan-bound Apply) | cams-admin `feat/migration-p4-ui` / — / cam-proxy `main` via the bridge | PASS 13/13 (the cluster import routes both proxies; the Pi import routes only its own) | P4 implementer |
 | | §R rehearsal (before 5) | | | |
 | | 5 cluster shadow | | | |
 | | 6 Pi shadow | | | |
