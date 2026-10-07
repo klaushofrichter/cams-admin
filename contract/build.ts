@@ -158,6 +158,62 @@ export function buildSchemas(mode: Mode): Record<string, S> {
     } : {}),
   };
 
+  // --- P3: remote configuration (migration spec §8; "The P3 contract") ---------
+  const rev: S = { type: 'string', pattern: '^sha256:[0-9a-f]{64}$' };
+  const path: S = { type: 'string', pattern: PATH_PATTERN };
+  const camId: S = { type: 'string', pattern: '^[a-z0-9][a-z0-9-]{0,31}$' };
+  const leafValue: S = { anyOf: [bool, { type: 'integer', minimum: -9007199254740991, maximum: 9007199254740991 }, { type: 'string', maxLength: 512 }] };
+  const anyValue: S = { anyOf: [bool, num, { type: 'string', maxLength: 4096 }, { type: 'null' }] };
+  const source = en(['default', 'file', 'override', 'env']);
+  const restart = en(['restart', 'process']);
+  const change = obj({ path, from: anyValue, to: anyValue, sourceFrom: source, sourceTo: source, restart }, ['path', 'sourceFrom', 'sourceTo'], ['from', 'to', 'restart']);
+  const writeOk = (extra: Record<string, S> = {}, req: string[] = []) => obj(
+    { dryRun: bool, baseRevision: rev, revision: rev, changes: arr(change, 128), unchanged: arr(path, 64), ...extra },
+    ['dryRun', 'baseRevision', 'revision', 'changes', ...req], ['unchanged', ...Object.keys(extra).filter((k) => !req.includes(k))],
+  );
+  const pathState = obj({ v: anyValue, s: source }, ['s'], ['v']);
+  const configFailed = obj({ paths: arr(obj({ path: str(200), code: str(64), detail: str() }, ['path', 'code'], ['detail']), 128) }, ['paths']);
+  const configConflict = obj({ revision: rev, current: { type: 'object', propertyNames: { pattern: PATH_PATTERN }, additionalProperties: pathState, maxProperties: 128 } }, ['revision', 'current']);
+  const settable = obj({ type: en(['integer', 'boolean', 'string']), min: num, max: num, oneOf: arr(int(), 64), enum: arr(str(64), 64), pattern: str(400), optional: bool, dir: en(['less', 'more']) }, ['type'], ['min', 'max', 'oneOf', 'enum', 'pattern', 'optional', 'dir']);
+  const viewPath = obj({ v: anyValue, s: source, r: restart, p: bool, n: anyValue, by: obj({ cmdId, actor: str(), at: int() }, ['cmdId', 'actor', 'at']) }, ['s'], ['v', 'r', 'p', 'n', 'by']);
+  const p3Args: Record<(typeof P3_COMMANDS)[number], S> = {
+    'config.get': obj({ v: { const: 1 } }, ['v']),
+    'config.set': obj({ v: { const: 1 }, dryRun: bool, baseRevision: rev, set: { type: 'object', minProperties: 1, maxProperties: 64, propertyNames: { pattern: PATH_PATTERN }, additionalProperties: leafValue } }, ['v', 'dryRun', 'baseRevision', 'set']),
+    'config.unset': obj({ v: { const: 1 }, dryRun: bool, baseRevision: rev, paths: arr(path, 64, { minItems: 1, uniqueItems: true }) }, ['v', 'dryRun', 'baseRevision', 'paths']),
+    'config.rollback': obj({ v: { const: 1 }, dryRun: bool, cmdId }, ['v', 'dryRun', 'cmdId']),
+    'camera.action': {
+      ...obj({
+        v: { const: 1 }, camera: nullable(camId), action: strict ? { type: 'string', enum: [...REMOTE_ACTIONS] } : str(32),
+        input: obj({ kind: str(32, { minLength: 1 }), camera: bool }, ['kind'], ['camera']),
+      }, ['v', 'camera', 'action'], ['input']),
+      // camera is null only for retention-run (required otherwise); input only for inventory.
+      allOf: [
+        { if: { properties: { action: { const: 'retention-run' } }, required: ['action'] }, then: { properties: { camera: { type: 'null' } } }, else: { properties: { camera: camId } } },
+        { if: { properties: { input: { type: 'object' } }, required: ['input'] }, then: { properties: { action: { const: 'inventory' } } } },
+      ],
+    },
+    'camera.name.set': obj({ v: { const: 1 }, camera: camId, name: { type: 'string', minLength: 1, maxLength: 64, pattern: CAMERA_NAME_PATTERN } }, ['v', 'camera', 'name']),
+    'proxy.restart': obj({ v: { const: 1 } }, ['v']),
+  };
+  const p3Results: Record<(typeof P3_COMMANDS)[number], S> = {
+    'config.get': obj({
+      revision: rev, schema: int(), cameras: arr(camId, 256), omittedCameras: arr(camId, 256),
+      paths: { type: 'object', propertyNames: { pattern: PATH_PATTERN }, additionalProperties: viewPath, maxProperties: 4096 },
+      settable: { type: 'object', additionalProperties: settable, maxProperties: 512 },
+    }, ['revision', 'paths', 'settable'], ['schema', 'cameras', 'omittedCameras']),
+    'config.set': { anyOf: [writeOk(), configFailed, configConflict] },
+    'config.unset': { anyOf: [writeOk(), configFailed, configConflict] },
+    'config.rollback': { anyOf: [writeOk({ of: cmdId }, ['of']), configFailed, configConflict] },
+    'camera.action': obj({ action: str(32), camera: nullable(camId), httpStatus: int(100), answer: nullable({ type: 'object' }), clamped: bool, verified: bool, mismatch: arr(str(64), 32) }, ['action', 'camera', 'httpStatus', 'answer'], ['clamped', 'verified', 'mismatch']),
+    'camera.name.set': obj({ camera: camId, requested: str(64), name: str(64), verified: bool }, ['camera', 'requested', 'name', 'verified']),
+    'proxy.restart': obj({ restartAt: int() }, ['restartAt']),
+  };
+  const p3Schemas: Record<string, S> = {};
+  for (const c of P3_COMMANDS) {
+    p3Schemas[`commands/${c}.args`] = { $id: BASE + `commands/${c}.args.schema.json`, title: `${c} args v1`, ...p3Args[c] };
+    p3Schemas[`commands/${c}.result`] = { $id: BASE + `commands/${c}.result.schema.json`, title: `${c} result v1`, ...p3Results[c] };
+  }
+
   const schemas: Record<string, S> = {
     envelope: {
       $id: BASE + 'envelope.schema.json', title: 'cams-admin v1 envelope (any message)',
@@ -202,6 +258,7 @@ export function buildSchemas(mode: Mode): Record<string, S> {
     },
     'health-summary': summary,
     'health-summary-truncated': truncated,
+    ...p3Schemas,
   };
   if (strict) for (const s of Object.values(schemas)) s.$id = (s.$id as string).replace(BASE, BASE + 'strict/');
   return Object.fromEntries(Object.entries(schemas).map(([k, v]) => [k, { $schema: 'https://json-schema.org/draft/2020-12/schema', ...v }]));
@@ -223,3 +280,62 @@ export const ALLOW_ENTRIES: readonly string[] = [
   'tokens.apply', 'tokens.apply.admin', 'config.get', 'config.set', 'config.unset', 'config.rollback', 'camera.name.set', 'proxy.restart',
   ...REMOTE_ACTIONS.map((a) => `camera.action:${a}`),
 ];
+
+// --- P3 ("The P3 contract") ---------------------------------------------------
+// The commands P3 implements (all in WIRE_COMMANDS since P2).
+export const P3_COMMANDS = ['config.get', 'config.set', 'config.unset', 'config.rollback', 'camera.action', 'camera.name.set', 'proxy.restart'] as const;
+// Actions a proxy never runs for cams-admin, whatever its allow-list says.
+export const NEVER_REMOTE_ACTIONS = [
+  'find-camera', 'camera-address', 'camera-trust-clear', 'tls-ca-rotate', 'tls-ca-drop-previous', 'archive-clear', 'inventory-repair', 'camera-poe-on', 'restart-proxy',
+] as const;
+// Remote actions the UIs group and warn about (with proxy.restart); the journal budget counts them.
+export const DISRUPTIVE_ACTIONS = ['restart', 'camera-reboot', 'camera-powercycle', 'camera-ftp-setup', 'camera-ftp-off', 'camera-ntp-set', 'camera-cert-push'] as const;
+// A setting's dotted path, as GET /control/config names it (no "_": never __proto__).
+export const PATH_PATTERN = '^[a-z][A-Za-z0-9]{0,31}(\\.[a-z0-9][A-Za-z0-9-]{0,31}){0,5}$';
+// Coordinator ruling (security review I4): capture/feature on-off switches
+// and health thresholds are local only in P3 — a compromised cams-admin must
+// not be able to blind a proxy silently, and ftp.enabled=true opens ports
+// (network exposure needs Klaus). In `denied`, never in `remote`.
+export const LOCAL_ONLY = [
+  'stills.enabled', 'events.poll.enabled', 'ftp.enabled', 'ftp.stalledHours', 'archive.enabled', 'archive.warnPercent', 'health.diskPercent', 'health.tempC', 'host.stats',
+  'analytics.kinds.person', 'analytics.kinds.vehicle', 'analytics.kinds.pet', 'analytics.googleVision.enabled',
+  'cameras.*.stills.enabled', 'cameras.*.ftp.enabled', 'cameras.*.events.poll.enabled', 'cameras.*.analytics.kinds.person', 'cameras.*.analytics.kinds.vehicle', 'cameras.*.analytics.kinds.pet',
+] as const;
+// A key or dotted path that looks secret: cams-admin drops such paths from a
+// stored view and such keys from an action's answer (the proxy scrubs too).
+// A camera name (camera.name.set, and cameras.*.name from cams-admin):
+// 1–64 characters, no C0/C1 controls, no bidi controls, no line or paragraph
+// separators, no zero-width characters (security review M3). A `u` regex.
+export const CAMERA_NAME_PATTERN = '^[^\\u0000-\\u001f\\u007f-\\u009f\\u200b-\\u200f\\u2028-\\u202e\\u2060-\\u206f\\ufeff]{1,64}$';
+export const SECRET_KEY_PATTERN = 'pem|key|password|passwd|secret|token|cookie';
+// contract/v1/remote-settable.json: `remote` is the upper bound of what any
+// proxy may let cams-admin set; `narrow` the paths that may only move one way
+// (less spending, more data kept); `denied` documents what is never remote.
+export const REMOTE_SETTABLE: { v: 1; remote: string[]; narrow: Record<string, 'less' | 'more'>; denied: string[] } = {
+  v: 1,
+  remote: [
+    'stills.stream', 'stills.intervalS', 'stills.size', 'stills.quality', 'stills.maxGB',
+    'previews.tileSize', 'previews.grid', 'previews.quality', 'previews.maxGB',
+    'events.onvif.subscribeMin', 'events.onvif.pullTimeoutS', 'events.poll.intervalS', 'events.poll.afterOnvifDownS', 'events.maxOpenMin',
+    'retention.stillsDays', 'retention.previewsDays', 'retention.clipsDays', 'retention.eventsDays', 'retention.auditDays', 'retention.streamLogDays', 'retention.intervalMin',
+    'composition.concurrent', 'sse.maxClients', 'sse.queuePerClient', 'sse.pingS', 'recordings.cacheMB',
+    'ftp.stream', 'ftp.maxGB',
+    'analytics.googleVision.monthlyLimit', 'analytics.googleVision.dailyCap', 'analytics.googleVision.checksPerDay', 'analytics.googleVision.perCameraDailyCap',
+    'cameras.*.name', 'cameras.*.statusPollS', 'cameras.*.stills.stream', 'cameras.*.stills.intervalS',
+    'cameras.*.ftp.stream',
+  ],
+  narrow: {
+    'analytics.googleVision.monthlyLimit': 'less', 'analytics.googleVision.dailyCap': 'less',
+    'analytics.googleVision.checksPerDay': 'less', 'analytics.googleVision.perCameraDailyCap': 'less',
+    'retention.stillsDays': 'more', 'retention.previewsDays': 'more', 'retention.clipsDays': 'more', 'retention.eventsDays': 'more',
+    'retention.auditDays': 'more', 'retention.streamLogDays': 'more',
+    'stills.maxGB': 'more', 'previews.maxGB': 'more', 'ftp.maxGB': 'more',
+  },
+  denied: [
+    'server', 'go2rtc', 'storage', 'ftp.port', 'ftp.passive', 'ftp.tls', 'ftp.publicHost', 'ftp.certFile', 'ftp.keyFile', 'tls', 'composition.font', 'ntp.server',
+    'poeSwitch', 'camsAdmin', 'cameras.*.id', 'cameras.*.host', 'cameras.*.protocol', 'cameras.*.tlsName', 'cameras.*.user', 'cameras.*.onvifPort', 'cameras.*.rtspPort',
+    'cameras.*.baichuanPort', 'cameras.*.poeSwitch', 'cameras.*.ftp.user', 'cameras.*.webUiUrl', 'cameras.*.storage',
+    // Local only in P3 (coordinator ruling, security review I4): capture and listener switches, health thresholds.
+    ...LOCAL_ONLY,
+  ],
+};
