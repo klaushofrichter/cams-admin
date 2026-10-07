@@ -26,7 +26,7 @@ export const stateClass = (s: InstanceState): string => (s === 'ok' ? 'ok' : s =
 const LABELS: [string, string][] = [
   ['proxy-matched', 'proxies matched'], ['proxy-new', 'new proxies'], ['route-add', 'routes added'], ['route-change', 'routes changed'], ['route-hide', 'proxies hidden for this instance'],
   ['camera-new', 'new cameras'], ['camera-change', 'changed cameras'], ['camera-override', 'camera overrides for this instance'], ['pins-set', 'pins set'], ['proxy-tls-name', 'proxy TLS names'], ['token-external', 'external tokens'],
-  ['registry-only', 'in the registry, not in the file'],
+  ['registry-only', 'in the registry, not in the file'], ['camera-kept', 'cameras with values kept for another instance'],
 ];
 
 export function importSummary(r: { changes: { kind: string }[]; mismatches: unknown[] }): { label: string; count: number }[] {
@@ -50,6 +50,7 @@ export function describeChange(c: any): string {
     case 'camera-new': return `new camera ${c.camsId}`;
     case 'camera-change': return `camera ${c.camsId}: ${fieldsText(c.fields)}`;
     case 'camera-override': return `camera ${c.camsId}: override for ${c.instance}: ${fieldsText(c.fields)}`;
+    case 'camera-kept': return `camera ${c.camsId}: kept, ${c.servedTo.join(', ')} uses them: ${Object.entries(c.fields).map(([k, v]) => `${FIELD_LABEL[k] ?? k} ${JSON.stringify(v)}`).join(', ')}`;
     case 'pins-set': return `pins of ${c.name}: ${c.to.join(', ')}`;
     case 'proxy-tls-name': return `TLS name of ${c.name}: ${c.to}`;
     case 'token-external': return `external ${c.tokenKind} token on ${c.name} (${c.hashPrefix})`;

@@ -114,7 +114,7 @@
         <div class="row">{#each summary as s}<span class="badge" data-testid="import-count">{s.count} {s.label}</span>{/each}</div>
         <ul class="changes">{#each result.changes as c}<li class="mono" data-testid="import-change">{describeChange(c)}</li>{/each}</ul>
         {#if liveMismatches.length}
-          <div data-testid="import-mismatches"><b>Mismatches with the live proxies</b> (each blocks Apply until accepted):
+          <div data-testid="import-mismatches"><b>Mismatches</b> (with the live proxies, or a change another instance sees too; each blocks Apply until accepted):
             {#each liveMismatches as m (m.id)}<label class="check"><input type="checkbox" bind:checked={accepted[m.id]} data-testid="import-accept-{m.id}" /> <span class="mono">{m.what}</span> {m.detail}</label>{/each}
           </div>
         {/if}
@@ -128,7 +128,7 @@
   {#if error}<p class="error" data-testid="import-error">{error}</p>{/if}
 </div>
 {#if confirmApply && result}
-  <Confirm title="Apply the import" body={`Into ${accountName}, for cams instance ${instanceName}: ${summary.filter((s) => s.label !== 'proxies matched' && !s.label.startsWith('in the registry')).map((s) => `${s.count} ${s.label}`).join(', ')}. Nothing is deleted.`} ok="Apply" onconfirm={() => { confirmApply = false; run(true); }} oncancel={() => (confirmApply = false)} />
+  <Confirm title="Apply the import" body={`Into ${accountName}, for cams instance ${instanceName}: ${summary.filter((s) => s.label !== 'proxies matched' && !s.label.startsWith('in the registry') && !s.label.startsWith('cameras with values kept')).map((s) => `${s.count} ${s.label}`).join(', ')}. Nothing is deleted.`} ok="Apply" onconfirm={() => { confirmApply = false; run(true); }} oncancel={() => (confirmApply = false)} />
 {/if}
 
 <style>

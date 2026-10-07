@@ -88,6 +88,35 @@ describe('camera overrides per cams instance', () => {
     expect((await a.api('delete', `/cams-instances/${piInst.id}/camera-overrides/${cam2.id}`)).status).toBe(204);
   });
 
+  it('the camera user (override and shared) refuses control and format characters (review M1)', async () => {
+    for (const cameraUser of ['a\u0000b', 'a\nb', '\u202Eadmin', 'a\u0085b']) {
+      expect((await a.api('put', `/cams-instances/${piInst.id}/camera-overrides/${cam2.id}`, { host: '192.0.2.9', cameraUser })).body, JSON.stringify(cameraUser)).toMatchObject({ error: 'invalid', field: 'cameraUser' });
+      const c = (await a.api('get', `/accounts/${home.id}/cameras/${cam2.id}`)).body;
+      expect((await a.api('patch', `/accounts/${home.id}/cameras/${cam2.id}`, { cameraUser, version: c.version })).body).toMatchObject({ error: 'invalid', field: 'cameraUser' });
+    }
+  });
+
+  it('a changed shared host is checked like an override host; an old free-form host does not block other edits (review M2)', async () => {
+    const c = (await a.api('get', `/accounts/${home.id}/cameras/${cam2.id}`)).body;
+    for (const host of ['192.0.2.10/x', 'user@host']) expect((await a.api('patch', `/accounts/${home.id}/cameras/${cam2.id}`, { host, version: c.version })).body).toMatchObject({ error: 'invalid', field: 'host' });
+    a.db.prepare(`UPDATE cameras SET host = 'legacy host' WHERE id = ?`).run(cam2.id);
+    const r = await a.api('patch', `/accounts/${home.id}/cameras/${cam2.id}`, { name: 'Loose 2', host: 'legacy host', version: c.version });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    const r2 = await a.api('patch', `/accounts/${home.id}/cameras/${cam2.id}`, { host: '192.0.2.31', version: r.body.version });
+    expect(r2.body.host).toBe('192.0.2.31');
+  });
+
+  it('a PUT with the values already stored writes nothing: no version bump, no audit, no new revision (review M4)', async () => {
+    const o = (await a.api('get', `/cams-instances/${piInst.id}/camera-overrides`)).body.items.find((x: any) => x.cameraId === cam1.id);
+    const n = a.audit.list({ limit: 200 }).items.length;
+    const rev = snapshotRevision(a.db, piInst.id, d.signingFingerprint);
+    const r = await a.api('put', `/cams-instances/${piInst.id}/camera-overrides/${cam1.id}`, { host: o.host, cameraUser: o.cameraUser, version: o.version });
+    expect(r.status).toBe(200);
+    expect(r.body.version).toBe(o.version);
+    expect(a.audit.list({ limit: 200 }).items.length).toBe(n);
+    expect(snapshotRevision(a.db, piInst.id, d.signingFingerprint)).toBe(rev);
+  });
+
   it('only for a camera of an account the instance serves: another account\'s camera is 404 (no write, no leak)', async () => {
     const n = a.audit.list({ limit: 200 }).items.length;
     expect((await a.api('put', `/cams-instances/${piInst.id}/camera-overrides/${bcam.id}`, { host: '192.0.2.99' })).status).toBe(404);
@@ -110,6 +139,21 @@ describe('camera overrides per cams instance', () => {
     expect(lastAudit()).toMatchObject({ action: 'camera-override-clear', targetId: piInst.id, detail: { camera: 'cam1', host: 'from-proxy', cameraUser: 'proxy' } });
     expect(cams(piInst.id).find((c) => c.camsId === 'cam1')).toMatchObject({ host: '192.0.2.164', cameraUser: 'cams' });
     expect((await a.api('delete', `/cams-instances/${piInst.id}/camera-overrides/${cam1.id}`)).status).toBe(404);
+  });
+
+  it('an instance that stops serving an account drops its overrides there (audited), so a later re-serve starts clean (review M3)', async () => {
+    const tmp = (await a.api('post', '/cams-instances', { name: 'unserve', displayName: 'U', accounts: [home.id, beta.id] })).body;
+    await a.api('put', `/cams-instances/${tmp.id}/camera-overrides/${cam1.id}`, { host: 'from-proxy' });
+    await a.api('put', `/cams-instances/${tmp.id}/camera-overrides/${bcam.id}`, { host: '192.0.2.51' });
+    const v = (await a.api('get', `/cams-instances/${tmp.id}`)).body.version;
+    expect((await a.api('patch', `/cams-instances/${tmp.id}`, { accounts: [beta.id], version: v })).status).toBe(200);
+    expect((await a.api('get', `/cams-instances/${tmp.id}/camera-overrides`)).body.items.map((x: any) => x.camsId)).toEqual(['g1']);
+    expect(a.audit.list({ action: 'camera-override-clear', limit: 1 }).items[0]).toMatchObject({ targetId: tmp.id, accountId: home.id, detail: { camera: 'cam1', host: 'from-proxy', reason: 'account-not-served' } });
+    const v2 = (await a.api('get', `/cams-instances/${tmp.id}`)).body.version;
+    await a.api('patch', `/cams-instances/${tmp.id}`, { accounts: [home.id, beta.id], version: v2 });
+    expect((await a.api('get', `/cams-instances/${tmp.id}/camera-overrides`)).body.items.map((x: any) => x.camsId)).toEqual(['g1']);
+    expect(cams(tmp.id).find((c) => c.camsId === 'cam2')).toMatchObject({ host: '192.0.2.31' });
+    await a.api('delete', `/cams-instances/${tmp.id}`, { confirmName: 'unserve' });
   });
 
   it('deleting the camera or the instance takes its overrides with it', async () => {

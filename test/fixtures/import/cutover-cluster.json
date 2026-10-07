@@ -10,6 +10,9 @@
       "name": "Backyard Left",
       "host": "192.0.2.164",
       "protocol": "https",
+      "tlsServername": "cam1.example.net",
+      "webUiUrl": "https://192.0.2.164",
+      "webUiNote": "LAN only",
       "user": "cams",
       "proxy": {
         "url": "https://proxy.example.net:8480",

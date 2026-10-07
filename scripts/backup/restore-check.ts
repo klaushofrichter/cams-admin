@@ -50,7 +50,7 @@ async function main() {
       await api(url, cookie, 'POST', `/accounts/${a.id}/users`, { email: `admin@${name}.example.com`, role: 'admin' });
       await api(url, cookie, 'POST', `/accounts/${a.id}/users`, { email: 'shared@example.com', role: 'viewer' });
       const p = await api(url, cookie, 'POST', `/accounts/${a.id}/proxies`, { name: 'p1', displayName: 'P1', runsOn: 'local-host', hostKind: 'mac', caFingerprints: ['AB'.repeat(32)] });
-      await api(url, cookie, 'POST', `/accounts/${a.id}/cameras`, { camsId: `${name}-cam1`, name: 'Cam 1', kind: 'camera', proxyId: p.id, proxyCameraId: 'cam1' });
+      const cam1 = await api(url, cookie, 'POST', `/accounts/${a.id}/cameras`, { camsId: `${name}-cam1`, name: 'Cam 1', kind: 'camera', proxyId: p.id, proxyCameraId: 'cam1', host: '192.0.2.41', cameraUser: 'cams' });
       const s = await api(url, cookie, 'POST', `/accounts/${a.id}/cameras`, { camsId: `${name}-sim1`, name: 'Sim 1', kind: 'sim' });
       await api(url, cookie, 'PUT', `/accounts/${a.id}/cameras/${s.id}/sim`, { runsOn: 'mac', controlUrl: 'http://127.0.0.1:29502' });
       if (name === 'alpha') {
@@ -61,6 +61,8 @@ async function main() {
         // P4: a cams instance serving alpha, with a route and a live code.
         const inst = await api(url, cookie, 'POST', '/cams-instances', { name: 'restore', displayName: 'Restore', accounts: [a.id] });
         await api(url, cookie, 'PUT', `/cams-instances/${inst.id}/routes/${p.id}`, { url: 'http://127.0.0.1:8480', hidden: false });
+        // A camera override (migration 7): the restore must bring the row back.
+        await api(url, cookie, 'PUT', `/cams-instances/${inst.id}/camera-overrides/${cam1.id}`, { host: 'from-proxy', cameraUser: 'proxy' });
         await api(url, cookie, 'POST', `/cams-instances/${inst.id}/enrollment-codes`, { lifetimeH: 1 });
       }
     }

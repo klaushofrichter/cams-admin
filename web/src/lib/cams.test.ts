@@ -40,6 +40,7 @@ describe('an import change as a line', () => {
       .toBe('camera cam1: override for pi: host "192.0.2.164" → "from-proxy", camera user "proxy" → "cams" (the camera\'s value)');
     expect(describeChange({ kind: 'camera-change', camsId: 'cam2', fields: { host: { from: 'a', to: 'b' } } })).toBe('camera cam2: host "a" → "b"');
     expect(describeChange({ kind: 'route-add', name: 'pi', url: null })).toBe('route pi → (registered URL)');
+    expect(describeChange({ kind: 'camera-kept', camsId: 'cam1', servedTo: ['cluster'], fields: { tlsServername: 'cam1.example.net' } })).toBe('camera cam1: kept, cluster uses them: TLS name "cam1.example.net"');
     expect(importSummary({ changes: [{ kind: 'camera-override' }], mismatches: [] })).toEqual([{ label: 'camera overrides for this instance', count: 1 }]);
   });
 });

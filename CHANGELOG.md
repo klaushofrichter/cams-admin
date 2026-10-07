@@ -13,5 +13,7 @@ then empties it on `main`.
 ### Fixed
 
 - Importing one cams instance's export no longer overwrites the host and camera user another instance uses: when the camera is already served to another instance with its shared values, the differing values become this instance's override ("override for pi: host … → …"); both instances' second dry runs show "No changes".
+- An import never silently changes a camera another cams instance uses: a changed shared field (name, TLS name, web UI, protocol, proxy …) is a "shared-change" mismatch naming that instance, a value the file leaves out is kept (listed as kept), and moving such a camera to a proxy the import would create is refused.
+- Camera users refuse control and format characters; a changed camera host is checked (hostname or IP with an optional port, or `from-proxy`); overrides on an account an instance stops serving are dropped (audited); saving an unchanged override writes nothing.
 - The Import tab has no default cams instance any more, and a file that looks like another instance's export (a token that instance holds, its route URL, or a URL that would move a route this instance uses) shows a warning and needs its own confirmation before Apply.
 

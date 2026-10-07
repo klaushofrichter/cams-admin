@@ -168,7 +168,7 @@ export function cameraInput(raw: unknown, partial: boolean): Partial<CameraField
     host: str(b, 'host', { max: 253 }),
     protocol: oneOf(b, 'protocol', ['https', 'http']),
     tlsServername: str(b, 'tlsServername', { max: 253, re: HOSTNAME_RE }),
-    cameraUser: str(b, 'cameraUser', { max: 64 }),
+    cameraUser: cameraUserOf(b),
     webUiUrl: url(b, 'webUiUrl'),
     webUiNote: str(b, 'webUiNote', { max: 120 }),
     notes: str(b, 'notes', { max: 2000 }),
@@ -176,6 +176,15 @@ export function cameraInput(raw: unknown, partial: boolean): Partial<CameraField
   if (!partial) checkCameraProxy(out as CameraFields);
   return out;
 }
+// The camera user: ≤ 64 characters, no control or format characters (NUL,
+// newlines, bidi overrides): it is a login name, and shown in the audit log.
+const CONTROL_RE = /[\p{Cc}\p{Cf}]/u;
+function cameraUserOf(b: Obj, min = 0): string | null | undefined {
+  const v = str(b, 'cameraUser', { min, max: 64 });
+  if (typeof v === 'string' && CONTROL_RE.test(v)) throw new FieldError('cameraUser', 'format');
+  return v;
+}
+export const isCameraUser = (v: string): boolean => v.length >= 1 && v.length <= 64 && !CONTROL_RE.test(v);
 // A camera behind a proxy needs the proxy's id for it.
 export function checkCameraProxy(c: Pick<CameraFields, 'proxyId' | 'proxyCameraId'>): void {
   if (c.proxyId && !c.proxyCameraId) throw new FieldError('proxyCameraId', 'required with proxyId');
@@ -209,7 +218,7 @@ export function cameraOverrideInput(raw: unknown): CameraOverrideFields & { vers
   for (const k of Object.keys(b)) if (!['host', 'cameraUser', 'version'].includes(k)) throw new FieldError(k, 'unknown');
   const host = str(b, 'host', { max: 253 }) ?? null;
   if (host !== null) checkCameraHost(host);
-  const cameraUser = str(b, 'cameraUser', { min: 1, max: 64 }) ?? null;
+  const cameraUser = cameraUserOf(b, 1) ?? null;
   if (host === null && cameraUser === null) throw new FieldError('host', 'required: host or cameraUser');
   if (b.version !== undefined && !Number.isInteger(b.version)) throw new FieldError('version');
   return { host, cameraUser, version: b.version as number | undefined };

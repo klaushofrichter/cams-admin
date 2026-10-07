@@ -186,7 +186,17 @@ export class CamsInstances {
       const res = this.q(`UPDATE cams_instances SET ${[...sets, 'updated_at = ?', 'version = version + 1'].join(', ')} WHERE id = ? AND version = ?`)
         .run(...args, this.d.clock.now(), id, patch.version as number);
       if (res.changes === 0) throw new ApiError(409, 'conflict');
-      if (accounts) { this.setAccounts(id, accounts); fields.push('accounts'); }
+      if (accounts) {
+        this.setAccounts(id, accounts);
+        fields.push('accounts');
+        // Overrides on an account no longer served go with it (a re-serve starts clean).
+        const stale = this.q(`SELECT o.camera_id, o.host, o.camera_user, c.account_id, c.cams_id FROM cams_camera_overrides o JOIN cameras c ON c.id = o.camera_id
+          WHERE o.instance_id = ? ORDER BY c.cams_id`).all(id) as Row[];
+        for (const o of stale.filter((x) => !accounts.includes(x.account_id as string))) {
+          this.q('DELETE FROM cams_camera_overrides WHERE instance_id = ? AND camera_id = ?').run(id, o.camera_id as string);
+          this.d.audit.write({ actorType: 'sysadmin', actor, action: 'camera-override-clear', accountId: o.account_id as string, targetType: 'cams-instance', targetId: id, targetLabel: old.name, outcome: 'ok', detail: { camera: o.cams_id, host: o.host, cameraUser: o.camera_user, reason: 'account-not-served' } });
+        }
+      }
       this.log(actor, 'cams-instance-update', { id, name: old.name }, { fields, ...(accounts ? { accounts } : {}) });
       return { old, now: this.get(id) };
     }));
@@ -340,6 +350,8 @@ export class CamsInstances {
       const cam = this.servedCamera(i, cameraId);
       const old = this.q('SELECT host, camera_user, version FROM cams_camera_overrides WHERE instance_id = ? AND camera_id = ?').get(id, cameraId) as Row | undefined;
       if (old ? f.version !== old.version : f.version !== undefined) throw new ApiError(409, 'conflict');
+      // The same values again: nothing written (no version, no revision, no audit).
+      if (old && old.host === f.host && old.camera_user === f.cameraUser) return this.overrides(id).find((o) => o.cameraId === cameraId)!;
       const now = this.d.clock.now();
       this.q(`INSERT INTO cams_camera_overrides (instance_id, camera_id, host, camera_user, created_at, updated_at) VALUES (?,?,?,?,?,?)
         ON CONFLICT(instance_id, camera_id) DO UPDATE SET host = excluded.host, camera_user = excluded.camera_user, updated_at = excluded.updated_at, version = version + 1`)

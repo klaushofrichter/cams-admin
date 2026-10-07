@@ -10,6 +10,9 @@ import { randomBytes } from 'crypto';
 import { newId } from '../ids';
 import { groupKey, parseCamsExport, trimUrl, type ExportCamera, type ExportProxy } from './export-format';
 import { checkCameraHost, FieldError } from '../validate';
+const hostOr400 = (v: string, field: string) => {
+  try { checkCameraHost(v, field); } catch (e) { if (e instanceof FieldError) throw new ApiError(400, 'invalid', e.field); throw e; }
+};
 export { parseCamsExport } from './export-format';
 
 // The importer of M §11.2 (plan Task 8, ruling R4-6): a cams export into one
@@ -30,6 +33,8 @@ export type ImportChange =
   // This instance's own host / camera user (migration 7): from/to are the values the
   // instance sees; override is what is stored for it (null = the camera's shared value).
   | { kind: 'camera-override'; cameraId: string; camsId: string; instance: string; fields: Partial<Record<OverrideField, { from: string | null; to: string | null; override: string | null }>> }
+  // A camera another instance serves: values the file leaves out are kept, never cleared (review I1).
+  | { kind: 'camera-kept'; cameraId: string; camsId: string; fields: Record<string, unknown>; servedTo: string[] }
   | { kind: 'pins-set'; proxyId: string; name: string; from: string[]; to: string[] }
   | { kind: 'proxy-tls-name'; proxyId: string; name: string; from: string | null; to: string | null }
   | { kind: 'token-external'; proxyId: string; name: string; tokenKind: 'client' | 'admin'; hashPrefix: string }
@@ -38,7 +43,8 @@ export type OverrideField = 'host' | 'cameraUser';
 export interface ImportMismatch {
   id: string; camsId?: string; proxyId?: string; detail: string;
   // other-instance: the file looks like another cams instance's export (the wrong instance picked).
-  what: 'camera-not-on-proxy' | 'pin-differs' | 'pin-unverified' | 'proxy-offline' | 'proxy-not-enrolled' | 'proxy-ambiguous' | 'token-in-other-account' | 'other-instance';
+  // shared-change: a shared field of a camera another instance serves changes for that instance too.
+  what: 'camera-not-on-proxy' | 'pin-differs' | 'pin-unverified' | 'proxy-offline' | 'proxy-not-enrolled' | 'proxy-ambiguous' | 'token-in-other-account' | 'other-instance' | 'shared-change';
 }
 export interface ImportResult {
   dryRun: boolean; account: string; instance: string; changes: ImportChange[]; mismatches: ImportMismatch[]; blockers: string[];
@@ -51,7 +57,7 @@ export interface ImportResult {
 export interface ImportOptions { apply: boolean; acceptMismatch: string[]; createProxies: boolean; hideUnlisted: boolean; planId?: string }
 export interface ImporterDeps { db: Db; clock: Clock; audit: Audit; registry: Registry; instances: CamsInstances; status: StatusStore }
 
-const INFO = new Set(['proxy-matched', 'registry-only']);
+const INFO = new Set(['proxy-matched', 'registry-only', 'camera-kept']);
 const prefix = (hex: string) => `sha256:${hex.slice(0, 8)}`;
 const mismatchId = (what: string, proxyId: string, camsId = '') => sha256hex(`${what}|${proxyId}|${camsId}`).slice(0, 12);
 const sameList = (a: string[], b: string[]) => a.length === b.length && a.every((x, i) => x === b[i]);
@@ -277,6 +283,8 @@ export class Importer {
       const o = this.d.instances.overrideMap(i.id).get(cam.id);
       return (o?.[k] ?? null) === null;
     });
+    // The other instances whose snapshot has the camera (they serve its account and see its proxy).
+    const servedTo = (cam: { proxyId: string | null }) => others.filter((i) => !cam.proxyId || this.d.instances.routes(i.id).some((r) => r.proxyId === cam.proxyId && !r.hidden)).map((i) => i.name);
     file.cameras.forEach((c, idx) => {
       const f = fieldsOf(c);
       const old = registry.get(c.id);
@@ -286,6 +294,9 @@ export class Importer {
       }
       const diff: Record<string, { from: unknown; to: unknown }> = {};
       const odiff: Partial<Record<OverrideField, { from: string | null; to: string | null; override: string | null }>> = {};
+      const st = servedTo(old);
+      const kept: Record<string, unknown> = {};
+      const shared: string[] = [];
       for (const [k, v] of Object.entries(f)) {
         const was = (old as unknown as Record<string, unknown>)[k] ?? null;
         if (k === 'host' || k === 'cameraUser') {
@@ -294,15 +305,25 @@ export class Importer {
           if (seen === v) continue;
           if (cur !== null || (was !== null && servedElsewhere(old, k))) {
             const override = v === was ? null : (v as string);
-            if (k === 'host' && override !== null) {
-              try { checkCameraHost(override, `cameras[${idx}].host`); } catch (e) { if (e instanceof FieldError) throw new ApiError(400, 'invalid', e.field); throw e; }
-            }
+            if (k === 'host' && override !== null) hostOr400(override, `cameras[${idx}].host`);
             odiff[k] = { from: seen, to: v as string, override };
             continue;
           }
         }
-        if (was !== v) diff[k] = { from: was, to: v };
+        if (was === v) continue;
+        if (st.length && k !== 'host' && k !== 'cameraUser') {
+          // Another instance uses this camera: an absent value keeps the shared one;
+          // a different one changes it for that instance too (a mismatch to accept),
+          // and a move to a proxy the import would create is never done (a blocker).
+          if (v === null) { kept[k] = was; continue; }
+          if (k === 'proxyId' && String(v).startsWith('new:') && !blockers.includes('moves_served_camera')) blockers.push('moves_served_camera');
+          shared.push(`${k} ${JSON.stringify(was)} → ${JSON.stringify(v)}`);
+        }
+        if (k === 'host' && typeof v === 'string') hostOr400(v, `cameras[${idx}].host`);
+        diff[k] = { from: was, to: v };
       }
+      if (shared.length) mismatches.push({ id: mismatchId('shared-change', old.id, sha256hex(shared.join('|')).slice(0, 16)), camsId: c.id, what: 'shared-change', detail: `${c.id}: ${shared.join(', ')} changes the camera also for cams instance ${st.join(', ')}` });
+      if (Object.keys(kept).length) changes.push({ kind: 'camera-kept', cameraId: old.id, camsId: c.id, fields: kept, servedTo: st });
       if (Object.keys(diff).length) changes.push({ kind: 'camera-change', cameraId: old.id, camsId: c.id, fields: diff });
       if (Object.keys(odiff).length) changes.push({ kind: 'camera-override', cameraId: old.id, camsId: c.id, instance: instance.name, fields: odiff });
     });

@@ -15,6 +15,7 @@ export function formatImport(r: ImportResult): string[] {
       case 'camera-new': out.push(`  camera NEW ${c.camsId}`); break;
       case 'camera-change': out.push(`  camera ${c.camsId}: ${Object.entries(c.fields).map(([k, v]) => `${k} ${JSON.stringify(v.from)} → ${JSON.stringify(v.to)}`).join(', ')}`); break;
       case 'camera-override': out.push(`  camera ${c.camsId}: override for ${c.instance}: ${Object.entries(c.fields).map(([k, v]) => `${k} ${JSON.stringify(v!.from)} → ${JSON.stringify(v!.to)}${v!.override === null ? " (the camera's value)" : ''}`).join(', ')}`); break;
+      case 'camera-kept': out.push(`  camera ${c.camsId}: kept (${c.servedTo.join(', ')} uses them): ${Object.entries(c.fields).map(([k, v]) => `${k} ${JSON.stringify(v)}`).join(', ')}`); break;
       case 'pins-set': out.push(`  pins ${c.name}: ${c.from.join(',') || '(none)'} → ${c.to.join(',')}`); break;
       case 'proxy-tls-name': out.push(`  TLS name ${c.name}: ${c.from ?? '(none)'} → ${c.to}`); break;
       case 'token-external': out.push(`  external ${c.tokenKind} token on ${c.name}: ${c.hashPrefix}`); break;
