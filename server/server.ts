@@ -17,6 +17,8 @@ import { Tokens } from './tokens/service';
 import { Enrollment } from './enroll/codes';
 import { enrollRouter } from './enroll/route';
 import { CamsInstances } from './cams/instances';
+import { CamsEnrollment } from './cams/enroll';
+import { camsRouter } from './cams/routes';
 import { Sessions } from './auth/session';
 import { authRoutes } from './auth/routes';
 import { securityHeaders } from './auth/middleware';
@@ -66,6 +68,7 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
     db, clock, audit, registry, cfg, serverKeys: [signing.publicKeyB64], serverKeyFingerprints: [signing.fingerprint],
     onRevoke: () => {},
   });
+  const camsEnrollment = new CamsEnrollment({ db, clock, audit, instances: camsInstances, cfg, serverKeys: [signing.publicKeyB64], serverKeyFingerprints: [signing.fingerprint] });
 
   const app = express();
   app.disable('x-powered-by');
@@ -82,6 +85,7 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
     } });
   });
   app.use(enrollRouter(enrollment));
+  app.use(camsRouter({ enrollment: camsEnrollment }));
   app.use(cookieParser());
   app.use(authRoutes({ cfg, sessions, audit, clock, live }));
   const api = apiRouter({ db, clock, cfg, audit, registry, enrollment, hub, status, live, sessions, backup, commands, tokens, camsInstances, serverKeyFingerprints: [signing.fingerprint] });
