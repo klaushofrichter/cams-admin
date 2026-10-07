@@ -1,0 +1,10 @@
+{
+  "$note": "a client token hash (lower-case hex)",
+  "schema": "tokens-request",
+  "message": {
+    "v": 1,
+    "proxyId": "prx_00000000000000000001",
+    "kind": "client",
+    "hash": "sha256:0000000000000000000000000000000000000000000000000000000000000001"
+  }
+}

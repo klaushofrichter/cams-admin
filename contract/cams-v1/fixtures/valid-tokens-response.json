@@ -1,0 +1,9 @@
+{
+  "$note": "",
+  "schema": "tokens-response",
+  "message": {
+    "tokenId": "tok_00000000000000000001",
+    "state": "pending",
+    "label": "cams cluster"
+  }
+}

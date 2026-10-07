@@ -1,0 +1,8 @@
+{
+  "$note": "",
+  "schema": "report-response",
+  "message": {
+    "changed": true,
+    "revision": "r:0123456789abcdef"
+  }
+}

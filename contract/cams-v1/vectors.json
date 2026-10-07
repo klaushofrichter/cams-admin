@@ -1,0 +1,232 @@
+{
+  "$comment": "Fixed Ed25519 test keys (PKCS#8 = 302e020100300506032b657004220420 + seed): server = the v1 server key, cams = a cams instance, other = a stranger. Test keys only.",
+  "keys": {
+    "server": {
+      "seedHex": "0202020202020202020202020202020202020202020202020202020202020202",
+      "privateKey": "MC4CAQAwBQYDK2VwBCIEIAICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIC",
+      "publicKey": "MCowBQYDK2VwAyEAgTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=",
+      "fingerprint": "SHA256:47DEA58EA00FAE9417EE19D76755BFEF690899021132EFFB04FE1F9E4F0C8059"
+    },
+    "cams": {
+      "seedHex": "c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4",
+      "privateKey": "MC4CAQAwBQYDK2VwBCIEIMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTE",
+      "publicKey": "MCowBQYDK2VwAyEA3FF/9SfnvPqwZ/LMYbvvjnX5uo4TMq09QviTjgBF7Yk=",
+      "fingerprint": "SHA256:8291BCA25E1365005C6E0071B64FE6E882FE8AB7C5D587D37A29C4B6CB55848B"
+    },
+    "other": {
+      "seedHex": "0303030303030303030303030303030303030303030303030303030303030303",
+      "privateKey": "MC4CAQAwBQYDK2VwBCIEIAMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMD",
+      "publicKey": "MCowBQYDK2VwAyEA7UkoxijRwsbq6QM4kFmVYSlZJzpcY/k2NsFGFKyHN9E=",
+      "fingerprint": "SHA256:8CEF065B7AF83669150B7D32704D3D3E75C3E9AEE0D4F6740544C68E81B377AA"
+    }
+  },
+  "enroll": [
+    {
+      "code": "CAC1-7Q2M-K9XD-4HPA-W3ZT-RN6B",
+      "publicKey": "MCowBQYDK2VwAyEA3FF/9SfnvPqwZ/LMYbvvjnX5uo4TMq09QviTjgBF7Yk=",
+      "text": "cams-admin cams-enroll v1\nCAC1-7Q2M-K9XD-4HPA-W3ZT-RN6B\nMCowBQYDK2VwAyEA3FF/9SfnvPqwZ/LMYbvvjnX5uo4TMq09QviTjgBF7Yk=",
+      "sig": "zGgtXQluX6p78MSKGJ3+D9wftlj1mzEsOvCRpFUhZcnCPA8eUNzK173TSXNZ7e0E4mxApbBkYjoDQ/oeRoF4CA=="
+    }
+  ],
+  "requests": [
+    {
+      "method": "GET",
+      "pathAndQuery": "/cams/v1/config",
+      "ts": 1791273600000,
+      "nonce": "AAAAAAAAAAAAAAAAAAAAAA",
+      "body": "",
+      "bodySha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "text": "cams-admin/v1 request\nGET\n/cams/v1/config\n1791273600000\nAAAAAAAAAAAAAAAAAAAAAA\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "sig": "8hlNGyG2tPb/OlyTEL5/OSg/+sOmXseb381QmG5FbUazJliXk0CppW2I8TLh75Nrir2vT2zLcsauZ+x3BpBnDQ=="
+    },
+    {
+      "method": "POST",
+      "pathAndQuery": "/cams/v1/tokens",
+      "ts": 1791273600000,
+      "nonce": "AAAAAAAAAAAAAAAAAAAAAA",
+      "body": "{\"v\":1,\"proxyId\":\"prx_00000000000000000001\",\"kind\":\"client\",\"hash\":\"sha256:0000000000000000000000000000000000000000000000000000000000000001\"}",
+      "bodySha256": "068be61b3b9413a4781f2fa94496648a6c381ec5a7243e80a5ce6bf8866075a7",
+      "text": "cams-admin/v1 request\nPOST\n/cams/v1/tokens\n1791273600000\nAAAAAAAAAAAAAAAAAAAAAA\n068be61b3b9413a4781f2fa94496648a6c381ec5a7243e80a5ce6bf8866075a7",
+      "sig": "CMdMg7lTHAB2vjw4BJhD7nPgHE543Ee/HdGqkL2jl0jwKWrw0PwNyiADW1lD1WL/y6BsreJ0VIERQtlHLE4wAw=="
+    },
+    {
+      "method": "POST",
+      "pathAndQuery": "/cams/v1/report",
+      "ts": 1791273600000,
+      "nonce": "AAAAAAAAAAAAAAAAAAAAAA",
+      "body": "{\"v\":1,\"mode\":\"cams-admin\",\"version\":\"2026.10.07.1\",\"appliedRevision\":\"r:0123456789abcdef\",\"cacheVerifiedAt\":1791273600000,\"lastPullAt\":1791273600000,\"held\":[{\"accountId\":\"acc_00000000000000000001\",\"camsId\":\"cam1\",\"fields\":[\"host\"]}],\"keptOld\":[],\"shadow\":null,\"tokens\":{\"managed\":2,\"pending\":0,\"legacy\":0},\"problems\":[{\"code\":\"snapshot_invalid\",\"accountId\":\"acc_00000000000000000002\",\"detail\":\"camera 3: protocol\"}]}",
+      "bodySha256": "a52660e85b945916feee25f6235c941b9e2379dcba4fa5bc7b0d2d170034f20d",
+      "text": "cams-admin/v1 request\nPOST\n/cams/v1/report\n1791273600000\nAAAAAAAAAAAAAAAAAAAAAA\na52660e85b945916feee25f6235c941b9e2379dcba4fa5bc7b0d2d170034f20d",
+      "sig": "V8JIV9YCFoBzLNrANihUTPtUFziePyPGboIdbmwSFWlw0s66RuXM8oOKRez7HgThXYBT6GRbGbiZK4A61D4jBQ=="
+    }
+  ],
+  "responses": [
+    {
+      "status": 200,
+      "nonce": "AAAAAAAAAAAAAAAAAAAAAA",
+      "body": "{\"v\":1,\"type\":\"cams-config\",\"instance\":{\"id\":\"cms_00000000000000000001\",\"name\":\"cluster\",\"rotateBefore\":null},\"revision\":\"r:0123456789abcdef\",\"generatedAt\":1791273600000,\"accounts\":[{\"id\":\"acc_00000000000000000002\",\"name\":\"beta\",\"displayName\":\"Beta\",\"revision\":3,\"users\":[{\"email\":\"klaus@example.org\",\"role\":\"viewer\",\"disabled\":false}],\"proxies\":[{\"id\":\"prx_00000000000000000003\",\"name\":\"b1\",\"displayName\":\"Beta proxy\",\"url\":\"https://beta.example.net:8480\",\"adminUiUrl\":null,\"tlsServername\":null,\"caFingerprints\":[],\"tokens\":[]}],\"cameras\":[{\"id\":\"cam_00000000000000000003\",\"camsId\":\"cam1\",\"name\":\"Gate\",\"proxyId\":\"prx_00000000000000000003\",\"proxyCameraId\":\"cam1\",\"host\":\"from-proxy\",\"protocol\":\"https\",\"tlsServername\":null,\"cameraUser\":\"cams\",\"webUiUrl\":null,\"webUiNote\":null}]},{\"id\":\"acc_00000000000000000001\",\"name\":\"home\",\"displayName\":\"Home\",\"revision\":17,\"users\":[{\"email\":\"klaus@example.org\",\"role\":\"admin\",\"disabled\":false},{\"email\":\"viewer@example.org\",\"role\":\"viewer\",\"disabled\":false}],\"proxies\":[{\"id\":\"prx_00000000000000000002\",\"name\":\"cluster\",\"displayName\":\"Cluster\",\"url\":\"https://proxy.example.net:8480\",\"adminUiUrl\":null,\"tlsServername\":\"proxy.example.net\",\"caFingerprints\":[\"SHA256:A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1\"],\"tokens\":[{\"id\":\"tok_00000000000000000002\",\"kind\":\"admin\",\"state\":\"retiring\",\"retireAt\":1791360000000}]},{\"id\":\"prx_00000000000000000001\",\"name\":\"pi\",\"displayName\":\"Pi\",\"url\":\"http://127.0.0.1:8480\",\"adminUiUrl\":\"http://192.0.2.20:8480\",\"tlsServername\":null,\"caFingerprints\":[],\"tokens\":[{\"id\":\"tok_00000000000000000001\",\"kind\":\"client\",\"state\":\"active\",\"retireAt\":null}]}],\"cameras\":[{\"id\":\"cam_00000000000000000001\",\"camsId\":\"cam1\",\"name\":\"Backyard\",\"proxyId\":\"prx_00000000000000000001\",\"proxyCameraId\":\"cam1\",\"host\":\"from-proxy\",\"protocol\":\"https\",\"tlsServername\":\"cam1.example.net\",\"cameraUser\":\"cams\",\"webUiUrl\":null,\"webUiNote\":null},{\"id\":\"cam_00000000000000000002\",\"camsId\":\"cam2\",\"name\":\"Driveway\",\"proxyId\":\"prx_00000000000000000002\",\"proxyCameraId\":\"cam2\",\"host\":\"192.0.2.31\",\"protocol\":\"https\",\"tlsServername\":null,\"cameraUser\":\"cams\",\"webUiUrl\":\"https://192.0.2.31\",\"webUiNote\":\"LAN only\"}]}],\"sig\":\"WmiHkf8UBwhBdtg0en4W6BeEs2eisBgQ13JquHPTPqwUqBekcRbdLB3vpej+klre/4j+4PmXnwup5Sc1xr5fCQ==\"}",
+      "bodySha256": "b16b49d8443d95d99fda8598404c4ab4bb61f77060379a7362b5b34fa1269003",
+      "text": "cams-admin/v1 response\n200\nAAAAAAAAAAAAAAAAAAAAAA\nb16b49d8443d95d99fda8598404c4ab4bb61f77060379a7362b5b34fa1269003",
+      "sig": "f5ERPeRT/AGAI3fNn6emJEcSLVhNt3Ap6HNEqipSSrbC2a07mq6qKDTXUMrqxX2WkFol/wttO9EzDApjK7RnBw=="
+    },
+    {
+      "status": 304,
+      "nonce": "AAAAAAAAAAAAAAAAAAAAAA",
+      "body": "",
+      "bodySha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "text": "cams-admin/v1 response\n304\nAAAAAAAAAAAAAAAAAAAAAA\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "sig": "p1ej0XJGBw1nY3cGIog7I8NAXwoUzpmhxITjiI0NS6L/Fd8h3x3CynpvslY8u6GSTFJ45NPxdnRTbzTrae5IBA=="
+    },
+    {
+      "status": 401,
+      "nonce": "AAAAAAAAAAAAAAAAAAAAAA",
+      "body": "{\"error\":\"clock_skew\",\"serverTime\":1791273600000}",
+      "bodySha256": "de6f6f929f105fd021a71d581ecc63f49fdd0e1ea5530f4ac3c51de1cc16bbc4",
+      "text": "cams-admin/v1 response\n401\nAAAAAAAAAAAAAAAAAAAAAA\nde6f6f929f105fd021a71d581ecc63f49fdd0e1ea5530f4ac3c51de1cc16bbc4",
+      "sig": "nGLFUcBilg0QMZ5BV8GVLvlBkWfZMlm45jUlD70RvYVklFtRvMmfFehtIl/5/oBz1U/AMeT2rBEYnW8UReIpAQ=="
+    }
+  ],
+  "snapshots": [
+    {
+      "snapshot": {
+        "v": 1,
+        "type": "cams-config",
+        "instance": {
+          "id": "cms_00000000000000000001",
+          "name": "cluster",
+          "rotateBefore": null
+        },
+        "revision": "r:0123456789abcdef",
+        "generatedAt": 1791273600000,
+        "accounts": [
+          {
+            "id": "acc_00000000000000000002",
+            "name": "beta",
+            "displayName": "Beta",
+            "revision": 3,
+            "users": [
+              {
+                "email": "klaus@example.org",
+                "role": "viewer",
+                "disabled": false
+              }
+            ],
+            "proxies": [
+              {
+                "id": "prx_00000000000000000003",
+                "name": "b1",
+                "displayName": "Beta proxy",
+                "url": "https://beta.example.net:8480",
+                "adminUiUrl": null,
+                "tlsServername": null,
+                "caFingerprints": [],
+                "tokens": []
+              }
+            ],
+            "cameras": [
+              {
+                "id": "cam_00000000000000000003",
+                "camsId": "cam1",
+                "name": "Gate",
+                "proxyId": "prx_00000000000000000003",
+                "proxyCameraId": "cam1",
+                "host": "from-proxy",
+                "protocol": "https",
+                "tlsServername": null,
+                "cameraUser": "cams",
+                "webUiUrl": null,
+                "webUiNote": null
+              }
+            ]
+          },
+          {
+            "id": "acc_00000000000000000001",
+            "name": "home",
+            "displayName": "Home",
+            "revision": 17,
+            "users": [
+              {
+                "email": "klaus@example.org",
+                "role": "admin",
+                "disabled": false
+              },
+              {
+                "email": "viewer@example.org",
+                "role": "viewer",
+                "disabled": false
+              }
+            ],
+            "proxies": [
+              {
+                "id": "prx_00000000000000000002",
+                "name": "cluster",
+                "displayName": "Cluster",
+                "url": "https://proxy.example.net:8480",
+                "adminUiUrl": null,
+                "tlsServername": "proxy.example.net",
+                "caFingerprints": [
+                  "SHA256:A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1"
+                ],
+                "tokens": [
+                  {
+                    "id": "tok_00000000000000000002",
+                    "kind": "admin",
+                    "state": "retiring",
+                    "retireAt": 1791360000000
+                  }
+                ]
+              },
+              {
+                "id": "prx_00000000000000000001",
+                "name": "pi",
+                "displayName": "Pi",
+                "url": "http://127.0.0.1:8480",
+                "adminUiUrl": "http://192.0.2.20:8480",
+                "tlsServername": null,
+                "caFingerprints": [],
+                "tokens": [
+                  {
+                    "id": "tok_00000000000000000001",
+                    "kind": "client",
+                    "state": "active",
+                    "retireAt": null
+                  }
+                ]
+              }
+            ],
+            "cameras": [
+              {
+                "id": "cam_00000000000000000001",
+                "camsId": "cam1",
+                "name": "Backyard",
+                "proxyId": "prx_00000000000000000001",
+                "proxyCameraId": "cam1",
+                "host": "from-proxy",
+                "protocol": "https",
+                "tlsServername": "cam1.example.net",
+                "cameraUser": "cams",
+                "webUiUrl": null,
+                "webUiNote": null
+              },
+              {
+                "id": "cam_00000000000000000002",
+                "camsId": "cam2",
+                "name": "Driveway",
+                "proxyId": "prx_00000000000000000002",
+                "proxyCameraId": "cam2",
+                "host": "192.0.2.31",
+                "protocol": "https",
+                "tlsServername": null,
+                "cameraUser": "cams",
+                "webUiUrl": "https://192.0.2.31",
+                "webUiNote": "LAN only"
+              }
+            ]
+          }
+        ]
+      },
+      "text": "{\"accounts\":[{\"cameras\":[{\"cameraUser\":\"cams\",\"camsId\":\"cam1\",\"host\":\"from-proxy\",\"id\":\"cam_00000000000000000003\",\"name\":\"Gate\",\"protocol\":\"https\",\"proxyCameraId\":\"cam1\",\"proxyId\":\"prx_00000000000000000003\",\"tlsServername\":null,\"webUiNote\":null,\"webUiUrl\":null}],\"displayName\":\"Beta\",\"id\":\"acc_00000000000000000002\",\"name\":\"beta\",\"proxies\":[{\"adminUiUrl\":null,\"caFingerprints\":[],\"displayName\":\"Beta proxy\",\"id\":\"prx_00000000000000000003\",\"name\":\"b1\",\"tlsServername\":null,\"tokens\":[],\"url\":\"https://beta.example.net:8480\"}],\"revision\":3,\"users\":[{\"disabled\":false,\"email\":\"klaus@example.org\",\"role\":\"viewer\"}]},{\"cameras\":[{\"cameraUser\":\"cams\",\"camsId\":\"cam1\",\"host\":\"from-proxy\",\"id\":\"cam_00000000000000000001\",\"name\":\"Backyard\",\"protocol\":\"https\",\"proxyCameraId\":\"cam1\",\"proxyId\":\"prx_00000000000000000001\",\"tlsServername\":\"cam1.example.net\",\"webUiNote\":null,\"webUiUrl\":null},{\"cameraUser\":\"cams\",\"camsId\":\"cam2\",\"host\":\"192.0.2.31\",\"id\":\"cam_00000000000000000002\",\"name\":\"Driveway\",\"protocol\":\"https\",\"proxyCameraId\":\"cam2\",\"proxyId\":\"prx_00000000000000000002\",\"tlsServername\":null,\"webUiNote\":\"LAN only\",\"webUiUrl\":\"https://192.0.2.31\"}],\"displayName\":\"Home\",\"id\":\"acc_00000000000000000001\",\"name\":\"home\",\"proxies\":[{\"adminUiUrl\":null,\"caFingerprints\":[\"SHA256:A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1\"],\"displayName\":\"Cluster\",\"id\":\"prx_00000000000000000002\",\"name\":\"cluster\",\"tlsServername\":\"proxy.example.net\",\"tokens\":[{\"id\":\"tok_00000000000000000002\",\"kind\":\"admin\",\"retireAt\":1791360000000,\"state\":\"retiring\"}],\"url\":\"https://proxy.example.net:8480\"},{\"adminUiUrl\":\"http://192.0.2.20:8480\",\"caFingerprints\":[],\"displayName\":\"Pi\",\"id\":\"prx_00000000000000000001\",\"name\":\"pi\",\"tlsServername\":null,\"tokens\":[{\"id\":\"tok_00000000000000000001\",\"kind\":\"client\",\"retireAt\":null,\"state\":\"active\"}],\"url\":\"http://127.0.0.1:8480\"}],\"revision\":17,\"users\":[{\"disabled\":false,\"email\":\"klaus@example.org\",\"role\":\"admin\"},{\"disabled\":false,\"email\":\"viewer@example.org\",\"role\":\"viewer\"}]}],\"generatedAt\":1791273600000,\"instance\":{\"id\":\"cms_00000000000000000001\",\"name\":\"cluster\",\"rotateBefore\":null},\"revision\":\"r:0123456789abcdef\",\"type\":\"cams-config\",\"v\":1}",
+      "sig": "WmiHkf8UBwhBdtg0en4W6BeEs2eisBgQ13JquHPTPqwUqBekcRbdLB3vpej+klre/4j+4PmXnwup5Sc1xr5fCQ=="
+    }
+  ]
+}

@@ -180,3 +180,11 @@ differs, is reported `pending` (not a failure) by
 `scripts/contract/cam-proxy-commands.ts`, but only while cam-proxy implements
 **no** P3 command. Once one is in its `IMPLEMENTED`, every P3 fixture must
 match (nothing pending).
+## cams-v1 (P4: the cams service API)
+
+`cams-v1/` is a second contract, between a cams instance and cams-admin
+(`/cams/v1/*`: enrollment, signed requests and answers, the signed
+configuration snapshot, token-hash registration, status reports). Its source
+is `cams-build.ts` (written by the same `npm run contract:make`); its rules,
+check order and signed texts are in `cams-v1/README.md`. cams vendors the
+folder with a `SOURCE` file, like cam-proxy vendors `v1/`.

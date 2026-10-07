@@ -1,0 +1,17 @@
+{
+  "$note": "an instance that serves no account",
+  "schema": "snapshot",
+  "message": {
+    "v": 1,
+    "type": "cams-config",
+    "instance": {
+      "id": "cms_00000000000000000001",
+      "name": "cluster",
+      "rotateBefore": null
+    },
+    "revision": "r:0000000000000000",
+    "generatedAt": 1791273600000,
+    "accounts": [],
+    "sig": "KdamNjgCivbzBkGl0BTm6rIqlR3SaeUxsIF/iDv3XkcOURPDk52aapFiftAZg7defma2gj2NIhkPf1FbnUqKBg=="
+  }
+}

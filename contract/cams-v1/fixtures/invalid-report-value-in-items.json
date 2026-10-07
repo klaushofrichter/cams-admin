@@ -1,0 +1,30 @@
+{
+  "$note": "a shadow item over 200 characters (a value, not a name)",
+  "schema": "report-request",
+  "$expect": {
+    "strict": "invalid"
+  },
+  "message": {
+    "v": 1,
+    "mode": "shadow",
+    "version": "2026.10.07.1",
+    "appliedRevision": "r:0123456789abcdef",
+    "cacheVerifiedAt": 1791273600000,
+    "lastPullAt": 1791273600000,
+    "held": [],
+    "keptOld": [],
+    "shadow": {
+      "accountId": "acc_00000000000000000001",
+      "differences": 1,
+      "items": [
+        "cam2: tlsServername was xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      ]
+    },
+    "tokens": {
+      "managed": 2,
+      "pending": 0,
+      "legacy": 2
+    },
+    "problems": []
+  }
+}
