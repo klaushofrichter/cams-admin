@@ -112,7 +112,7 @@ export class Commands {
   // revocationOnly (tokens.apply): the set only removes tokens; the proxy
   // accepts it while paused and without an allow entry (never with its env
   // switch off), so the pause and allow pre-checks don't apply.
-  create(actor: string, accountId: string, proxyId: string, command: WireCommand, args: Record<string, unknown>, meta?: { reason?: string; revocationOnly?: boolean }): CommandRow {
+  create(actor: string, accountId: string, proxyId: string, command: WireCommand, args: Record<string, unknown>, meta?: { reason?: string; revocationOnly?: boolean; actorType?: 'sysadmin' | 'system' | 'cams' }): CommandRow {
     const revocation = meta?.revocationOnly === true && command === 'tokens.apply';
     const px = this.d.registry.getProxy(accountId, proxyId); // 404 for another account's proxy
     if (px.state !== 'enrolled') throw new ApiError(409, 'not_enrolled');
@@ -129,7 +129,7 @@ export class Commands {
       this.q(`INSERT INTO commands (id, account_id, proxy_id, actor, command, args, revocation_only, state, created_at) VALUES (?,?,?,?,?,?,?,'queued',?)`)
         .run(id, accountId, proxyId, actor, command, JSON.stringify(args), revocation ? 1 : 0, now);
       this.d.audit.write({
-        actorType: actor === 'system' ? 'system' : actor.startsWith('cms_') ? 'cams' : 'sysadmin', actor, action: 'command-create', accountId, targetType: 'proxy', targetId: proxyId, targetLabel: px.name, outcome: 'ok',
+        actorType: meta?.actorType ?? (actor === 'system' ? 'system' : 'sysadmin'), actor, action: 'command-create', accountId, targetType: 'proxy', targetId: proxyId, targetLabel: px.name, outcome: 'ok',
         detail: { cmdId: id, command, ...(meta?.reason ? { reason: meta.reason } : {}), ...(revocation ? { revocationOnly: true } : {}), args: summariseArgs(command, args) },
       });
     });

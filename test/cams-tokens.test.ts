@@ -216,6 +216,14 @@ describe('cams tokens: write budget', () => {
     expect(readEpoch(s.built.db)).toBe(e2);
   });
 
+  it('the command audit says who acted, never guessed from the actor text (review M7)', async () => {
+    const acc = (await s.api('GET', '/accounts')).items[0];
+    const px = (await s.api('GET', `/accounts/${acc.id}/proxies`)).items[0];
+    s.built.tokens.issue('cms_person@example.org', acc.id, px.id, { kind: 'client', label: 'by a person' });
+    const row = s.built.db.prepare(`SELECT actor_type, actor FROM audit_log WHERE action = 'command-create' ORDER BY id DESC LIMIT 1`).get();
+    expect(row).toEqual({ actor_type: 'sysadmin', actor: 'cms_person@example.org' });
+  });
+
   it('at most 3 live tokens per holder, kind and proxy (one rotation); the 4th is too_many_tokens for that holder only (review M3)', async () => {
     const acc = (await s.api('GET', '/accounts')).items[0];
     const px = (await s.api('GET', `/accounts/${acc.id}/proxies`)).items[0];

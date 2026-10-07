@@ -10,6 +10,8 @@ import { FieldError } from '../validate';
 import { newId } from '../ids';
 import type { CommandRow, Commands } from '../commands/service';
 import { validateCams } from '../contract';
+import type { AuditEntry } from '../audit';
+type ActorType = Exclude<AuditEntry['actorType'], 'proxy'>;
 
 // Managed cams↔proxy tokens (migration spec §10.1–§10.2; plan Task 6). A
 // token exists in plain text only in the answer to its issue (shown once);
@@ -115,19 +117,20 @@ export class Tokens {
   // The current set at our current revision, queued as one tokens.apply.
   // A set that only removes tokens from the one the proxy confirmed goes as
   // revocationOnly (the proxy takes it while paused / not allowed).
-  private queue(actor: string, accountId: string, proxyId: string, reason?: string, claim = true): string {
+  // actorType is said, never guessed from the actor text (review M7); 'system' is no email.
+  private queue(actor: string, accountId: string, proxyId: string, reason?: string, claim = true, actorType: ActorType = actor === 'system' ? 'system' : 'sysadmin'): string {
     const tokens = this.currentSet(proxyId);
     const base = claim ? this.appliedSet(proxyId) : [];
     const revocationOnly = claim && tokens.every((t) => base.some((b) => b.id === t.id && b.kind === t.kind && b.hash === t.hash && b.label === t.label && b.retireAt === t.retireAt));
     const args = { v: 1, revision: this.state(proxyId).revision, tokens };
-    return this.d.commands.create(actor, accountId, proxyId, 'tokens.apply', args, { ...(reason ? { reason } : {}), ...(revocationOnly ? { revocationOnly: true } : {}) }).id;
+    return this.d.commands.create(actor, accountId, proxyId, 'tokens.apply', args, { ...(reason ? { reason } : {}), ...(revocationOnly ? { revocationOnly: true } : {}), actorType }).id;
   }
 
   // The full managed set with the next revision. In the caller's
   // transaction: a refused create (409 pre-checks) rolls the change back too.
-  private nextApply(actor: string, accountId: string, proxyId: string, reason?: string, atLeast = 0, claim = true): string {
+  private nextApply(actor: string, accountId: string, proxyId: string, reason?: string, atLeast = 0, claim = true, actorType?: ActorType): string {
     this.bump(proxyId, atLeast);
-    return this.queue(actor, accountId, proxyId, reason, claim);
+    return this.queue(actor, accountId, proxyId, reason, claim, actorType);
   }
 
   // Queues the current set, never throwing: a revocation stands in the
@@ -182,7 +185,7 @@ export class Tokens {
     tx(this.d.db, () => {
       this.q(`UPDATE proxy_tokens SET state = 'retiring', retire_at = ? WHERE id = ?`).run(retireAt, tokenId);
       this.d.audit.write({ actorType, actor, action: 'token-retire', accountId, targetType: 'proxy', targetId: proxyId, outcome: 'ok', detail: { tokenId, label: t.label, hours: h, retireAt } });
-      this.nextApply(actor, accountId, proxyId);
+      this.nextApply(actor, accountId, proxyId, undefined, 0, true, actorType);
     });
     this.d.live.publishRegistry('proxy', proxyId);
     return this.view(accountId, proxyId, tokenId);
@@ -238,7 +241,7 @@ export class Tokens {
       this.q(`INSERT INTO proxy_tokens (id, account_id, proxy_id, kind, holder, label, hash, state, issued_revision, created_at, created_by) VALUES (?,?,?,?,?,?,?, 'pending', ?,?,?)`)
         .run(tokenId, px.accountId, proxyId, kind, inst.id, label, hash, rev, this.d.clock.now(), inst.id);
       this.d.audit.write({ actorType: 'cams', actor: inst.id, action: 'token-issue', accountId: px.accountId, targetType: 'proxy', targetId: proxyId, targetLabel: px.name, outcome: 'ok', detail: { tokenId, kind, label, hashPrefix: hash.slice(0, HASH_PREFIX) } });
-      this.nextApply(inst.id, px.accountId, proxyId);
+      this.nextApply(inst.id, px.accountId, proxyId, undefined, 0, true, 'cams');
     });
     this.d.live.publishRegistry('proxy', proxyId);
     return { status: 201, body: { tokenId, state: 'pending', label } };
