@@ -31,11 +31,11 @@ const OPEN = `('queued','sent','received')`;
 const FINAL = ['done', 'refused', 'failed', 'expired'];
 
 export type CommandState = 'queued' | 'sent' | 'received' | 'done' | 'refused' | 'failed' | 'expired' | 'unknown';
-export type WireCommand = 'tokens.apply';
+export type WireCommand = 'tokens.apply' | 'config.get' | 'config.set' | 'config.unset' | 'config.rollback' | 'camera.action' | 'camera.name.set' | 'proxy.restart';
 export interface CommandRow {
   id: string; accountId: string; proxyId: string | null; actor: string; command: string; args: Record<string, unknown>; state: CommandState;
   outcomeCode: string | null; result: Record<string, unknown> | null; createdAt: number; sentAt: number | null; finishedAt: number | null; attempts: number;
-  revocationOnly: boolean; retryAfterS: number | null;
+  revocationOnly: boolean; retryAfterS: number | null; dryRun: boolean; previewOf: string | null;
 }
 interface Raw extends CommandRow { rawArgs: Record<string, unknown>; envelope: Record<string, unknown> | null }
 
@@ -45,8 +45,23 @@ export interface CommandsDeps {
 
 type DbRow = Record<string, unknown>;
 
-// What a person may see of a command's args: never a full hash (8 hex digits).
+const VALUE_MAX = 200;
+const clampValue = (x: unknown) => (typeof x === 'string' && x.length > VALUE_MAX ? x.slice(0, VALUE_MAX) : x);
+const pick = (args: Record<string, unknown>, keys: string[]) => Object.fromEntries(keys.filter((k) => k in args).map((k) => [k, args[k]]));
+
+// What a person may see of a command's args: never a full hash (8 hex
+// digits), never a setting value over 200 characters (R3-19).
 export function summariseArgs(command: string, args: Record<string, unknown>): Record<string, unknown> {
+  switch (command) {
+    case 'config.set': {
+      const set = args.set && typeof args.set === 'object' ? (args.set as Record<string, unknown>) : {};
+      return { v: args.v, dryRun: args.dryRun, baseRevision: typeof args.baseRevision === 'string' ? args.baseRevision.slice(0, 15) : null, set: Object.fromEntries(Object.entries(set).map(([p, x]) => [p, clampValue(x)])) };
+    }
+    case 'config.unset': return pick(args, ['v', 'dryRun', 'paths']);
+    case 'config.rollback': return pick(args, ['v', 'dryRun', 'cmdId']);
+    case 'camera.action': return pick(args, ['v', 'camera', 'action', 'input']);
+    case 'camera.name.set': return { v: args.v, camera: args.camera, name: clampValue(args.name) };
+  }
   if (command !== 'tokens.apply') return { v: args.v };
   const tokens = Array.isArray(args.tokens) ? (args.tokens as Record<string, unknown>[]) : [];
   return {
@@ -61,6 +76,7 @@ export function requiredEntries(command: string, args: Record<string, unknown>):
     const tokens = Array.isArray(args.tokens) ? (args.tokens as { kind?: unknown }[]) : [];
     return ['tokens.apply', ...(tokens.some((t) => t?.kind === 'admin') ? ['tokens.apply.admin'] : [])];
   }
+  if (command === 'camera.action') return [`camera.action:${String(args.action)}`];
   return [command];
 }
 
@@ -74,6 +90,7 @@ function toRaw(r: DbRow): Raw {
     args: summariseArgs(r.command as string, rawArgs), state: r.state as CommandState, outcomeCode: r.outcome_code as string | null, result,
     createdAt: r.created_at as number, sentAt: r.sent_at as number | null, finishedAt: r.finished_at as number | null, attempts: r.attempts as number,
     revocationOnly: r.revocation_only === 1, retryAfterS: Number.isSafeInteger(body?.retryAfterS) ? (body!.retryAfterS as number) : null,
+    dryRun: r.dry_run === 1, previewOf: (r.preview_of as string | null) ?? null,
     rawArgs, envelope,
   };
 }
@@ -112,7 +129,8 @@ export class Commands {
   // revocationOnly (tokens.apply): the set only removes tokens; the proxy
   // accepts it while paused and without an allow entry (never with its env
   // switch off), so the pause and allow pre-checks don't apply.
-  create(actor: string, accountId: string, proxyId: string, command: WireCommand, args: Record<string, unknown>, meta?: { reason?: string; revocationOnly?: boolean; actorType?: 'sysadmin' | 'system' | 'cams' }): CommandRow {
+  // previewOf (R3-15): the dry run this real write was made from; each is used once.
+  create(actor: string, accountId: string, proxyId: string, command: WireCommand, args: Record<string, unknown>, meta?: { reason?: string; revocationOnly?: boolean; actorType?: 'sysadmin' | 'system' | 'cams'; previewOf?: string }): CommandRow {
     const revocation = meta?.revocationOnly === true && command === 'tokens.apply';
     const px = this.d.registry.getProxy(accountId, proxyId); // 404 for another account's proxy
     if (px.state !== 'enrolled') throw new ApiError(409, 'not_enrolled');
@@ -123,14 +141,22 @@ export class Commands {
     if (!v.ok) throw new ApiError(400, 'invalid_args');
     if (!revocation) for (const need of requiredEntries(command, args)) if (!rep.commands.allow.includes(need)) throw new ApiError(409, 'not_allowed_on_proxy');
     const now = this.d.clock.now();
+    const previewOf = meta?.previewOf ?? null;
+    if (previewOf && this.usedPreview(previewOf)) throw new ApiError(409, 'preview_used');
     if (!this.budget.take(proxyId, now).ok) throw new ApiError(429, 'rate_limited');
     const id = newId('cmd');
     tx(this.d.db, () => {
-      this.q(`INSERT INTO commands (id, account_id, proxy_id, actor, command, args, revocation_only, state, created_at) VALUES (?,?,?,?,?,?,?,'queued',?)`)
-        .run(id, accountId, proxyId, actor, command, JSON.stringify(args), revocation ? 1 : 0, now);
+      try {
+        this.q(`INSERT INTO commands (id, account_id, proxy_id, actor, command, args, dry_run, revocation_only, preview_of, state, created_at) VALUES (?,?,?,?,?,?,?,?,?,'queued',?)`)
+          .run(id, accountId, proxyId, actor, command, JSON.stringify(args), args.dryRun === true ? 1 : 0, revocation ? 1 : 0, previewOf, now);
+      } catch (e) {
+        // Two applies of one preview racing: the unique index decides.
+        if (previewOf && /UNIQUE/.test((e as Error).message)) throw new ApiError(409, 'preview_used');
+        throw e;
+      }
       this.d.audit.write({
         actorType: meta?.actorType ?? (actor === 'system' ? 'system' : 'sysadmin'), actor, action: 'command-create', accountId, targetType: 'proxy', targetId: proxyId, targetLabel: px.name, outcome: 'ok',
-        detail: { cmdId: id, command, ...(meta?.reason ? { reason: meta.reason } : {}), ...(revocation ? { revocationOnly: true } : {}), args: summariseArgs(command, args) },
+        detail: { cmdId: id, command, ...(meta?.reason ? { reason: meta.reason } : {}), ...(previewOf ? { previewOf } : {}), ...(revocation ? { revocationOnly: true } : {}), args: summariseArgs(command, args) },
       });
     });
     queueMicrotask(() => this.safeDispatch(proxyId));
@@ -153,6 +179,25 @@ export class Commands {
     if (!r) throw new ApiError(404, 'not_found');
     const raw = toRaw(r);
     return { ...view(raw), resultEnvelope: raw.envelope };
+  }
+
+  // The row with its full args (the preview copy for an apply; never served).
+  getRaw(accountId: string, proxyId: string, cmdId: string): CommandRow & { rawArgs: Record<string, unknown> } {
+    this.d.registry.getProxy(accountId, proxyId);
+    const r = this.q('SELECT * FROM commands WHERE id = ? AND account_id = ? AND proxy_id = ?').get(cmdId, accountId, proxyId) as DbRow | undefined;
+    if (!r) throw new ApiError(404, 'not_found');
+    const raw = toRaw(r);
+    return { ...view(raw), rawArgs: raw.rawArgs };
+  }
+
+  // Has a real write already been made from this dry run?
+  usedPreview(previewId: string): boolean {
+    return !!this.q('SELECT 1 FROM commands WHERE preview_of = ?').get(previewId);
+  }
+
+  // An open (queued, sent or received) command of this name for this proxy.
+  hasOpen(proxyId: string, command: WireCommand): boolean {
+    return !!this.q(`SELECT 1 FROM commands WHERE proxy_id = ? AND command = ? AND state IN ${OPEN} LIMIT 1`).get(proxyId, command);
   }
 
   private byId(id: string): Raw {
