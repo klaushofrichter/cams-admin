@@ -1,7 +1,9 @@
 // The protocol test client on the command line (spec §15.5).
 //   enroll  --url U --key FILE            the code from stdin (never an argument)
 //   run     --key FILE [--cameras N] [--offline cam2,cam3] [--heartbeat S]
-//   bridge  --key FILE --health URL       forwards a real cam-proxy's GET /api/local/health
+//   bridge  --key FILE --health URL [--allow tokens.apply,…]
+//                                         forwards a real cam-proxy's GET /api/local/health;
+//                                         --allow answers those commands (managed tokens in memory)
 //   ws-hold --key FILE [--minutes 5]      holds one connection; fails on any drop
 import { readFileSync } from 'fs';
 import { enroll, ProxyClient } from './client';
@@ -53,8 +55,9 @@ async function main() {
   }
   if (cmd === 'bridge') {
     const health = opt('health');
+    const allow = opt('allow', '').split(',').filter(Boolean);
     const c = new ProxyClient({
-      key, version: 'bridge',
+      key, version: 'bridge', ...(allow.length ? { commands: { allow } } : {}),
       summary: async () => {
         const r = await fetch(health, { signal: AbortSignal.timeout(5000) });
         if (!r.ok) throw new Error(`health ${r.status}`);

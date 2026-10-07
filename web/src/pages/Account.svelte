@@ -5,6 +5,7 @@
   import { camClass } from '../lib/format';
   import StateChip from '../components/StateChip.svelte';
   import Confirm from '../components/Confirm.svelte';
+  import ImportPanel from '../components/ImportPanel.svelte';
 
   let { accountId, tab }: { accountId: string; tab: string } = $props();
 
@@ -139,7 +140,7 @@
     <div class="row"><a href="#/accounts" class="muted">Accounts</a><span class="muted">/</span><h2 data-testid="account-title">{account.displayName}</h2><span class="mono muted">{account.name}</span></div>
     {#if admins === 0}<p class="badge warn" data-testid="no-admin-warning">This account has no admin user.</p>{/if}
     <nav class="tabs row">
-      {#each ['overview', 'users', 'proxies', 'cameras', 'sims'] as t}
+      {#each ['overview', 'users', 'proxies', 'cameras', 'sims', 'import'] as t}
         <button class="btn" class:on={tab === t} data-testid="tab-{t}" onclick={() => go(t)}>{t[0].toUpperCase() + t.slice(1)}</button>
       {/each}
     </nav>
@@ -244,6 +245,8 @@
         <button class="btn primary" data-testid="camera-add">Add camera</button>
       </form>
       {#if cError}<p class="error" data-testid="camera-error">{cError}</p>{/if}
+    {:else if tab === 'import'}
+      <ImportPanel accountId={accountId} accountName={account.name} />
     {/if}
   </section>
   {#if confirmDelete}
