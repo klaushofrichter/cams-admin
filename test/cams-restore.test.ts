@@ -49,7 +49,8 @@ describe('cams revocations survive a restore', () => {
     expect(q('SELECT revoked_at IS NOT NULL r FROM cams_instance_keys WHERE id = ?', ka.keyId)).toEqual({ r: 1 });
     expect(q('SELECT state FROM proxy_tokens WHERE id = ?', tokenId)).toEqual({ state: 'revoked' });
     expect(q('SELECT state FROM cams_instances WHERE id = ?', b.id)).toEqual({ state: 'revoked' });
-    const r = await signedFetch(s, ka, 'GET', '/cams/v1/config');
+    // A keep-alive socket to the stopped server may be reused once: retry on a closed socket.
+    const r = await signedFetch(s, ka, 'GET', '/cams/v1/config').catch(() => signedFetch(s, ka, 'GET', '/cams/v1/config'));
     expect(r.status).toBe(401);
     expect(s.built.audit.list({ action: 'cams-instance-block', limit: 5 }).items[0]).toMatchObject({ actorType: 'system', detail: expect.objectContaining({ replayed: true }) });
   });
