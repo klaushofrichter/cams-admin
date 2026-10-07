@@ -19,6 +19,7 @@ import { enrollRouter } from './enroll/route';
 import { CamsInstances } from './cams/instances';
 import { CamsEnrollment } from './cams/enroll';
 import { camsRouter } from './cams/routes';
+import { CamsAuth } from './cams/auth';
 import { Sessions } from './auth/session';
 import { authRoutes } from './auth/routes';
 import { securityHeaders } from './auth/middleware';
@@ -31,7 +32,7 @@ import { version } from './version';
 
 export interface Built {
   cfg: Config; clock: Clock; db: Db; audit: Audit; registry: Registry; live: LiveHub; status: StatusStore; hub: Hub; commands: Commands; tokens: Tokens; enrollment: Enrollment; sessions: Sessions; backup: BackupService;
-  camsInstances: CamsInstances; signing: SigningKey;
+  camsInstances: CamsInstances; camsAuth: CamsAuth; signing: SigningKey;
   app: express.Express; http: Server; epochFile: string;
   tick(): void;
   writeRoutes(): string[];
@@ -68,6 +69,7 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
     db, clock, audit, registry, cfg, serverKeys: [signing.publicKeyB64], serverKeyFingerprints: [signing.fingerprint],
     onRevoke: () => {},
   });
+  const camsAuth = new CamsAuth({ db, clock, audit, instances: camsInstances, signingKey: signing.key, limits: cfg.limits, log });
   const camsEnrollment = new CamsEnrollment({ db, clock, audit, instances: camsInstances, cfg, serverKeys: [signing.publicKeyB64], serverKeyFingerprints: [signing.fingerprint] });
 
   const app = express();
@@ -85,7 +87,7 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
     } });
   });
   app.use(enrollRouter(enrollment));
-  app.use(camsRouter({ enrollment: camsEnrollment }));
+  app.use(camsRouter({ enrollment: camsEnrollment, auth: camsAuth, signingKey: signing.key, testRoutes: cfg.nodeEnv === 'test' }));
   app.use(cookieParser());
   app.use(authRoutes({ cfg, sessions, audit, clock, live }));
   const api = apiRouter({ db, clock, cfg, audit, registry, enrollment, hub, status, live, sessions, backup, commands, tokens, camsInstances, serverKeyFingerprints: [signing.fingerprint] });
@@ -95,7 +97,7 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
   const web = [join(__dirname, '../web'), join(__dirname, '../../dist/web')].find((p) => existsSync(join(p, 'index.html')));
   if (web) {
     app.use(express.static(web, { index: false, maxAge: '1h', setHeaders: (res, path) => { if (path.endsWith('.html')) res.setHeader('Cache-Control', 'no-store'); } }));
-    app.get(/^\/(?!api\/|auth\/|proxy\/).*/, limiter({ windowMs: 60_000, limit: 3000, key: () => 'pages' }), (_req, res) => res.set('Cache-Control', 'no-store').sendFile(join(web, 'index.html')));
+    app.get(/^\/(?!api\/|auth\/|proxy\/|cams\/).*/, limiter({ windowMs: 60_000, limit: 3000, key: () => 'pages' }), (_req, res) => res.set('Cache-Control', 'no-store').sendFile(join(web, 'index.html')));
   }
   app.use(((err, _req, res, _next) => {
     log.error({ err }, 'request_failed');
@@ -114,6 +116,7 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
       status.tick();
       commands.tick();
       tokens.tick();
+      camsAuth.sweep();
       audit.flushThrottled();
       writeEpochFile(db, epochFile);
       if (clock.now() - lastDaily > 86400_000) {
@@ -130,7 +133,7 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
   let closed = false;
 
   return {
-    cfg, clock, db, audit, registry, live, status, hub, commands, tokens, enrollment, sessions, backup, camsInstances, signing, app, http, epochFile, tick,
+    cfg, clock, db, audit, registry, live, status, hub, commands, tokens, enrollment, sessions, backup, camsInstances, camsAuth, signing, app, http, epochFile, tick,
     writeRoutes() {
       const out: string[] = [];
       for (const layer of (api as unknown as { stack: { route?: { path: string; methods: Record<string, boolean> } }[] }).stack) {

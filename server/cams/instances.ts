@@ -324,6 +324,22 @@ export class CamsInstances {
     return ids;
   }
 
+  // A pending key's first verified request (CamsAuth step 7): it becomes the
+  // active key, the older active key goes ('re-enrolled'), a pending instance
+  // is enrolled. false when the instance is blocked or the key not pending.
+  confirmKey(instanceId: string, keyId: string): boolean {
+    return tx(this.d.db, () => {
+      const k = this.q('SELECT k.*, i.state, i.name FROM cams_instance_keys k JOIN cams_instances i ON i.id = k.instance_id WHERE k.id = ? AND k.instance_id = ?').get(keyId, instanceId) as Row | undefined;
+      if (!k || k.revoked_at !== null || k.confirmed_at !== null || k.state === 'revoked') return false;
+      const now = this.d.clock.now();
+      const replaced = this.revokeKeys(instanceId, 're-enrolled', now, 'confirmed');
+      this.q('UPDATE cams_instance_keys SET confirmed_at = ? WHERE id = ?').run(now, keyId);
+      if (k.state === 'pending') this.q(`UPDATE cams_instances SET state = 'enrolled', updated_at = ? WHERE id = ?`).run(now, instanceId);
+      this.d.audit.write({ actorType: 'cams', actor: instanceId, action: 'cams-key-confirmed', targetType: 'cams-instance', targetId: instanceId, targetLabel: k.name as string, outcome: 'ok', detail: { keyId, fingerprint: k.fingerprint, replacedKeys: replaced } });
+      return true;
+    });
+  }
+
   // --- in memory ------------------------------------------------------------------------------
 
   live(id: string): CamsLive {
