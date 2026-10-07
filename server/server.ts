@@ -15,6 +15,7 @@ import { Hub, CONNECT_PATH } from './channel/hub';
 import { Commands } from './commands/service';
 import { Tokens } from './tokens/service';
 import { ProxyConfig } from './config/service';
+import { RemoteActions } from './actions/service';
 import { Enrollment } from './enroll/codes';
 import { enrollRouter } from './enroll/route';
 import { CamsInstances } from './cams/instances';
@@ -34,7 +35,7 @@ import { limiter } from './rateLimit';
 import { version } from './version';
 
 export interface Built {
-  cfg: Config; clock: Clock; db: Db; audit: Audit; registry: Registry; live: LiveHub; status: StatusStore; hub: Hub; commands: Commands; tokens: Tokens; config: ProxyConfig; enrollment: Enrollment; sessions: Sessions; backup: BackupService;
+  cfg: Config; clock: Clock; db: Db; audit: Audit; registry: Registry; live: LiveHub; status: StatusStore; hub: Hub; commands: Commands; tokens: Tokens; actions: RemoteActions; config: ProxyConfig; enrollment: Enrollment; sessions: Sessions; backup: BackupService;
   camsInstances: CamsInstances; camsAuth: CamsAuth; importer: Importer; signing: SigningKey;
   app: express.Express; http: Server; epochFile: string;
   tick(): void;
@@ -68,6 +69,7 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
   status.onTokens = (proxyId, t) => tokens.onHeartbeat(proxyId, t);
   const config = new ProxyConfig({ db, clock, registry, commands, status, live, log });
   status.onConfig = (proxyId) => config.onHeartbeat(proxyId);
+  const actions = new RemoteActions({ registry, commands, status, clock, config });
   const enrollment = new Enrollment({ db, clock, audit, registry, cfg, serverKeys: [signing.publicKeyB64], onKeyRevoked: (k) => hub.closeKey(k, 4401), onProxyChanged: (p) => live.publishRegistry('proxy', p) });
   const backup = createBackup({ db, clock, cfg, audit, env: merged });
   // P4: cams instances. R4-19: blocking or deleting one revokes the tokens it holds.
@@ -146,7 +148,7 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
   let closed = false;
 
   return {
-    cfg, clock, db, audit, registry, live, status, hub, commands, tokens, config, enrollment, sessions, backup, camsInstances, camsAuth, importer, signing, app, http, epochFile, tick,
+    cfg, clock, db, audit, registry, live, status, hub, commands, tokens, actions, config, enrollment, sessions, backup, camsInstances, camsAuth, importer, signing, app, http, epochFile, tick,
     writeRoutes() {
       const out: string[] = [];
       for (const layer of (api as unknown as { stack: { route?: { path: string; methods: Record<string, boolean> } }[] }).stack) {
