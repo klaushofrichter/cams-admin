@@ -20,7 +20,8 @@ export function exportForInstance(d: ExportDeps, accountId: string, instanceId: 
   const inst = d.instances.get(instanceId);
   if (!inst.accounts.includes(accountId)) throw new ApiError(400, 'invalid', 'instance');
   const routes = new Map(d.instances.routes(instanceId).map((r) => [r.proxyId, r]));
-  const proxies = new Map(d.registry.listProxies(accountId).filter((p) => !routes.get(p.id)?.hidden).map((p) => [p.id, p]));
+  // The proxies routed to this instance (default-deny), as in its snapshot.
+  const proxies = new Map(d.registry.listProxies(accountId).filter((p) => routes.has(p.id) && !routes.get(p.id)!.hidden).map((p) => [p.id, p]));
   const warnings: string[] = [];
   const cameras = d.registry.listCameras(accountId).filter((c) => c.kind === 'camera' || c.kind === 'sim').filter((c) => !c.proxyId || proxies.has(c.proxyId)).map((c) => {
     const out: Record<string, unknown> = { id: c.camsId, name: c.name, host: c.host ?? '', protocol: c.protocol ?? 'https', user: c.cameraUser ?? '' };

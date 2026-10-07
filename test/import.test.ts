@@ -65,7 +65,8 @@ describe('the importer (M §11.2)', () => {
     expect(kinds(res, 'camera-new').map((c) => c.camsId)).toEqual(['cam1', 'cam2']);
     expect(kinds(res, 'camera-new')[1].fields).toMatchObject({ proxyId: clusterProxy.id, proxyCameraId: 'cam2', host: '192.0.2.31', tlsServername: 'cam2.example.net', cameraUser: 'cams', webUiNote: 'LAN only' });
     expect(kinds(res, 'pins-set')).toEqual([{ kind: 'pins-set', proxyId: piProxy.id, name: 'pi', from: [], to: [PIN] }]);
-    expect(kinds(res, 'route-add')).toEqual([]); // the file uses the registered URLs (a trailing slash is the same URL)
+    // Routes are default-deny: the file's proxies get a route at their registered URL (url null; a trailing slash is the same URL).
+    expect(kinds(res, 'route-add').map((c) => [c.name, c.url])).toEqual([['pi', null], ['cluster', null]]);
     expect(res).toMatchObject({ dryRun: true, applied: false, blocked: false, noChanges: false, mismatches: [] });
     expect(readEpoch(db())).toBe(e + 1);
     expect(r.audit.list({ limit: 1 }).items[0]).toMatchObject({ action: 'import-run', outcome: 'ok' });
@@ -84,19 +85,19 @@ describe('the importer (M §11.2)', () => {
     expect(again.changes.every((c) => c.kind === 'proxy-matched' || c.kind === 'registry-only')).toBe(true);
   });
 
-  it('the Pi file after the cluster file: a loopback route for the pi instance, hidden routes with hideUnlisted, the registered URL unchanged, nothing deleted', () => {
+  it('the Pi file after the cluster file: a loopback route for the pi instance only, the registered URL unchanged, nothing deleted', () => {
     imp.run(ACTOR, home.id, cluster.id, CLUSTER, APPLY);
     const res = imp.run(ACTOR, home.id, pi.id, PI, { ...APPLY, hideUnlisted: true });
     expect(res.applied).toBe(true);
     expect(res.changes).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: 'route-add', proxyId: piProxy.id, url: 'http://127.0.0.1:8480' }),
-      expect.objectContaining({ kind: 'route-hide', name: 'cluster' }),
       expect.objectContaining({ kind: 'registry-only', camsId: 'cam2' }),
     ]));
     expect(kinds(res, 'camera-change')).toEqual([]);
     expect(r.reg.getProxy(home.id, piProxy.id).url).toBe('https://proxy.example.net:8480');
-    expect(inst.routes(pi.id).map((x) => [x.proxyId, x.url, x.hidden])).toEqual(expect.arrayContaining([[piProxy.id, 'http://127.0.0.1:8480', false], [clusterProxy.id, null, true]]));
-    expect(inst.routes(cluster.id)).toEqual([]);
+    expect(kinds(res, 'route-hide')).toEqual([]); // the cluster proxy has no route for the Pi: it stays invisible (default-deny)
+    expect(inst.routes(pi.id).map((x) => [x.proxyId, x.url, x.hidden])).toEqual([[piProxy.id, 'http://127.0.0.1:8480', false]]);
+    expect(inst.routes(cluster.id).map((x) => [x.proxyId, x.url, x.hidden])).toEqual(expect.arrayContaining([[piProxy.id, null, false], [clusterProxy.id, null, false]]));
     expect(r.reg.listCameras(home.id)).toHaveLength(2);
     expect(imp.run(ACTOR, home.id, pi.id, PI, { ...APPLY, hideUnlisted: true }).noChanges).toBe(true);
   });
@@ -190,5 +191,40 @@ describe('the importer (M §11.2)', () => {
   it('the instance must serve the account', () => {
     const other = r.reg.createAccount(ACTOR, { name: 'beta', displayName: 'Beta' });
     expect(() => imp.run(ACTOR, other.id, cluster.id, CLUSTER, DRY)).toThrow(expect.objectContaining({ status: 400, field: 'instanceId' }));
+  });
+
+  it('a URL that only matches a route of another account never detaches the cameras: unknown_proxy blocks (review I2)', () => {
+    const demo = r.reg.createAccount(ACTOR, { name: 'demo', displayName: 'Demo' });
+    const demoPx = r.reg.createProxy(ACTOR, demo.id, { name: 'demo-pi', displayName: 'Demo Pi', runsOn: 'local-host', url: 'https://demo.example.net' });
+    const both = inst.create(ACTOR, { name: 'both', displayName: 'Both', accounts: [home.id, demo.id] });
+    inst.setRoute(ACTOR, both.id, demoPx.id, { url: 'http://127.0.0.1:8480', hidden: false });
+    const f = structuredClone(PI);
+    f.cameras[0].proxy.token = { sha256: '8'.repeat(64) }; // unknown here
+    const res = imp.run(ACTOR, home.id, both.id, f, APPLY);
+    expect(res).toMatchObject({ applied: false, blocked: true, blockers: ['unknown_proxy'] });
+    expect(kinds(res, 'proxy-matched')).toEqual([]);
+    expect(kinds(res, 'camera-new')[0].fields.proxyId).not.toBeNull();
+    expect(r.reg.listCameras(home.id)).toEqual([]);
+  });
+
+  it('a group matching two proxies is a blocker that accepting cannot lift; no camera is ever imported without its proxy (review I2)', () => {
+    r.db.prepare(`UPDATE proxies SET url = 'https://cluster-proxy.example.net' WHERE id = ?`).run(piProxy.id);
+    r.db.prepare(`DELETE FROM proxy_tokens`).run();
+    const res = imp.run(ACTOR, home.id, cluster.id, CLUSTER, APPLY);
+    expect(res.blockers).toContain('proxy_ambiguous');
+    const again = imp.run(ACTOR, home.id, cluster.id, CLUSTER, { ...APPLY, acceptMismatch: res.mismatches.map((m) => m.id), createProxies: true });
+    expect(again).toMatchObject({ applied: false, blocked: true });
+    expect(again.blockers).toContain('proxy_ambiguous');
+    expect(r.reg.listCameras(home.id)).toEqual([]);
+  });
+
+  it('a token hash already held in another account is reported, not silently skipped (review M4)', () => {
+    const other = r.reg.createAccount(ACTOR, { name: 'other', displayName: 'Other' });
+    const op = r.reg.createProxy(ACTOR, other.id, { name: 'op', displayName: 'Op', runsOn: 'cloud' });
+    r.db.prepare(`DELETE FROM proxy_tokens WHERE id = 'tok_00000000000000000003'`).run();
+    manual('tok_00000000000000000009', op, H('3'));
+    const res = imp.run(ACTOR, home.id, cluster.id, CLUSTER, DRY);
+    expect(res.mismatches.map((m) => m.what)).toContain('token-in-other-account');
+    expect(kinds(res, 'token-external')).toEqual([]);
   });
 });

@@ -40,6 +40,8 @@ describe('the cams snapshot (GET /cams/v1/config)', () => {
     unserved = await s.api('POST', '/cams-instances', { name: 'empty', displayName: 'Empty', accounts: [] });
     await s.api('PUT', `/cams-instances/${pi.id}/routes/${piProxy.id}`, { url: 'http://127.0.0.1:8480', hidden: false });
     await s.api('PUT', `/cams-instances/${pi.id}/routes/${clusterProxy.id}`, { url: null, hidden: true });
+    // Routes are default-deny: the cluster instance sees its proxies at their registered URLs.
+    for (const px of [piProxy, clusterProxy, b1]) await s.api('PUT', `/cams-instances/${cluster.id}/routes/${px.id}`, { url: null, hidden: false });
     const now = s.built.clock.now();
     tok('tok_00000000000000000001', piProxy, cluster.id, 'active', H('1'));
     tok('tok_00000000000000000002', piProxy, 'manual', 'active', H('2'));
@@ -59,6 +61,22 @@ describe('the cams snapshot (GET /cams/v1/config)', () => {
     expect(p.accounts[0].proxies.map((x) => [x.name, x.url])).toEqual([['pi', 'http://127.0.0.1:8480']]);
     expect(p.accounts[0].cameras.map((x) => x.camsId)).toEqual(['cam1', 'loose']);
     expect(buildSnapshot(d, unserved.id).accounts).toEqual([]);
+  });
+
+  it('routes are default-deny: a proxy added later is in no snapshot until routed, and takes no token registration (review I1)', async () => {
+    const late = await s.api('POST', `/accounts/${home.id}/proxies`, { name: 'late', displayName: 'Late', runsOn: 'local-host', url: 'https://late.example.net' });
+    await s.api('POST', `/accounts/${home.id}/cameras`, { camsId: 'latecam', name: 'Late cam', kind: 'camera', proxyId: late.id, proxyCameraId: 'latecam' });
+    for (const i of [cluster, pi]) {
+      const snap = JSON.stringify(buildSnapshot(d, i.id));
+      expect(snap).not.toContain(late.id);
+      expect(snap).not.toContain('latecam');
+    }
+    const r = await signedFetch(s, key, 'POST', '/cams/v1/tokens', { v: 1, proxyId: late.id, kind: 'admin', hash: 'sha256:' + 'e'.repeat(64) });
+    expect([r.status, (await r.json()).error]).toEqual([404, 'not_found']);
+    await s.api('PUT', `/cams-instances/${cluster.id}/routes/${late.id}`, { url: null, hidden: false });
+    expect(buildSnapshot(d, cluster.id).accounts[1].proxies.find((x) => x.id === late.id)?.url).toBe('https://late.example.net');
+    await s.api('DELETE', `/cams-instances/${cluster.id}/routes/${late.id}`);
+    await s.api('DELETE', `/accounts/${home.id}/cameras/${(await s.api('GET', `/accounts/${home.id}/cameras`)).items.find((c: any) => c.camsId === 'latecam').id}`);
   });
 
   it('users: every user, lower-case email, role and disabled', () => {

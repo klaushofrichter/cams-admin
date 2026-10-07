@@ -55,17 +55,17 @@ describe('cams instances (P4)', () => {
     expect(auditActions().filter((a) => a === 'cams-instance-update')).toHaveLength(1);
   });
 
-  it('a route only for a proxy of a served account; url rules as proxy urls; hidden needs no url', () => {
+  it('a route only for a proxy of a served account; url rules as proxy urls; no url = the registered URL', () => {
     const i = make();
     expect(() => inst.setRoute(ACTOR, i.id, otherAccountProxy.id, { url: 'http://127.0.0.1:8480', hidden: false })).toThrow(expect.objectContaining({ status: 404 }));
     expect(inst.setRoute(ACTOR, i.id, piProxy.id, { url: 'http://127.0.0.1:8480', hidden: false })).toMatchObject({ url: 'http://127.0.0.1:8480', hidden: false, accountId: home.id });
     expect(() => inst.setRoute(ACTOR, i.id, piProxy.id, { url: 'ftp://x', hidden: false })).toThrow(expect.objectContaining({ field: 'url' }));
-    expect(() => inst.setRoute(ACTOR, i.id, piProxy.id, { url: null, hidden: false })).toThrow(expect.objectContaining({ field: 'url' }));
+    expect(inst.setRoute(ACTOR, i.id, piProxy.id, { url: null, hidden: false })).toMatchObject({ url: null, hidden: false }); // the registered URL
     expect(inst.setRoute(ACTOR, i.id, clusterProxy.id, { url: null, hidden: true })).toMatchObject({ hidden: true, url: null });
     expect(inst.routes(i.id).map((x) => x.proxyId).sort()).toEqual([piProxy.id, clusterProxy.id].sort());
     inst.deleteRoute(ACTOR, i.id, piProxy.id);
     expect(() => inst.deleteRoute(ACTOR, i.id, piProxy.id)).toThrow(expect.objectContaining({ status: 404 }));
-    expect(auditActions().filter((a) => a === 'route-update')).toHaveLength(3);
+    expect(auditActions().filter((a) => a === 'route-update')).toHaveLength(4);
   });
 
   it('codes: shown once (CAC1-…), hash stored, a new code cancels the live one, commands name the cluster and the Pi forms', () => {

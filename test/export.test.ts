@@ -27,6 +27,7 @@ describe('the Export (M §11.6): a cameras.json for file mode', () => {
     piInst = (await a.api('post', '/cams-instances', { name: 'pi', displayName: 'Pi', accounts: [home.id] })).body;
     await a.api('put', `/cams-instances/${piInst.id}/routes/${pi.id}`, { url: 'http://127.0.0.1:8480', hidden: false });
     await a.api('put', `/cams-instances/${piInst.id}/routes/${cluster.id}`, { url: null, hidden: true });
+    for (const px of [pi, cluster, cluster2]) await a.api('put', `/cams-instances/${clusterInst.id}/routes/${px.id}`, { url: null, hidden: false });
     a.db.prepare(`INSERT INTO proxy_tokens (id,account_id,proxy_id,kind,holder,label,hash,state,issued_revision,created_at,created_by) VALUES ('tok_00000000000000000001',?,?,'client',?,'cams cluster',?,'active',1,1,'x')`)
       .run(home.id, pi.id, clusterInst.id, 'sha256:' + 'c'.repeat(64));
   });
@@ -39,7 +40,7 @@ describe('the Export (M §11.6): a cameras.json for file mode', () => {
     expect(c.cameras[1]).toMatchObject({ tlsServername: 'cam2.example.net', webUiUrl: 'https://192.0.2.31', webUiNote: 'LAN only', proxy: { tlsServername: 'cluster.example.net' } });
     expect(c.tokens).toEqual([{ proxyId: pi.id, tokenId: 'tok_00000000000000000001', kind: 'client', state: 'active' }]);
     const p = exportForInstance(d, home.id, piInst.id);
-    expect(p.cameras.map((x: any) => [x.id, x.proxy?.url ?? null])).toEqual([['cam1', 'http://127.0.0.1:8480'], ['cam3', null]]);
+    expect(p.cameras.map((x: any) => [x.id, x.proxy?.url ?? null])).toEqual([['cam1', 'http://127.0.0.1:8480']]); // nourl isn't routed to the Pi
     expect(p.tokens).toEqual([]);
     const all = JSON.stringify([c, p]);
     expect(all).not.toMatch(/"password"|"token"|"adminToken"|sha256:/);

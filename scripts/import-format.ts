@@ -9,8 +9,8 @@ export function formatImport(r: ImportResult): string[] {
     switch (c.kind) {
       case 'proxy-matched': out.push(`  proxy ${c.name}: matched by ${c.by} (${c.fileUrl})`); break;
       case 'proxy-new': out.push(`  proxy NEW ${c.name}: ${c.url}`); break;
-      case 'route-add': out.push(`  route ${c.name}: ${c.url}`); break;
-      case 'route-change': out.push(`  route ${c.name}: ${c.was ?? '(hidden)'} → ${c.url}`); break;
+      case 'route-add': out.push(`  route ${c.name}: ${c.url ?? '(registered URL)'}`); break;
+      case 'route-change': out.push(`  route ${c.name}: ${c.was ?? '(hidden)'} → ${c.url ?? '(registered URL)'}`); break;
       case 'route-hide': out.push(`  route ${c.name}: hidden for this instance`); break;
       case 'camera-new': out.push(`  camera NEW ${c.camsId}`); break;
       case 'camera-change': out.push(`  camera ${c.camsId}: ${Object.entries(c.fields).map(([k, v]) => `${k} ${JSON.stringify(v.from)} → ${JSON.stringify(v.to)}`).join(', ')}`); break;

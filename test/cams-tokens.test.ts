@@ -34,6 +34,8 @@ describe('cams-held tokens (POST /cams/v1/tokens, retire; R4-19)', () => {
     if (allow) await until(() => !!s.built.status.row(p.proxyId)?.reported?.commands, 5000);
     return { ...p, client };
   }
+  // Routes are default-deny: an instance sees a proxy only through a route row.
+  const route = (instanceId: string, proxyId: string) => s.api('PUT', `/cams-instances/${instanceId}/routes/${proxyId}`, { url: null, hidden: false });
   const auditRows = (action: string) => s.built.db.prepare('SELECT actor_type, actor FROM audit_log WHERE action = ? ORDER BY id').all(action) as { actor_type: string; actor: string }[];
 
   beforeAll(async () => {
@@ -47,6 +49,7 @@ describe('cams-held tokens (POST /cams/v1/tokens, retire; R4-19)', () => {
     inst = await s.api('POST', '/cams-instances', { name: 'cluster', displayName: 'Cluster', accounts: [home] });
     inst2 = await s.api('POST', '/cams-instances', { name: 'second', displayName: 'Second', accounts: [home] });
     await s.api('PUT', `/cams-instances/${inst.id}/routes/${hiddenPx.proxyId}`, { url: null, hidden: true });
+    for (const i of [inst, inst2]) for (const p of [px, pxNoAdmin]) await route(i.id, p.proxyId);
     key = await enrollCamsKey(s, inst.id);
     key2 = await enrollCamsKey(s, inst2.id);
   });
@@ -72,6 +75,7 @@ describe('cams-held tokens (POST /cams/v1/tokens, retire; R4-19)', () => {
     const { hash } = generateToken();
     // A proxy that can't take the set now keeps the token pending.
     const p = await proxy('tok-idem', ['tokens.apply']);
+    await route(inst.id, p.proxyId);
     await p.client.stop('shutdown');
     const a = await post(key, '/cams/v1/tokens', { v: 1, proxyId: p.proxyId, kind: 'client', hash });
     expect(a.status).toBe(201);
@@ -115,6 +119,7 @@ describe('cams-held tokens (POST /cams/v1/tokens, retire; R4-19)', () => {
 
   it('retire: only own tokens (another instance\'s → 404), only active (else 409 not_active); hours 1–168, default 24', async () => {
     const stopped = await proxy('tok-pend', ['tokens.apply']);
+    await route(inst.id, stopped.proxyId);
     await stopped.client.stop('shutdown');
     const p = await post(key, '/cams/v1/tokens', { v: 1, proxyId: stopped.proxyId, kind: 'client', hash: generateToken().hash });
     expect((await post(key, `/cams/v1/tokens/${p.json.tokenId}/retire`, { v: 1 })).json).toEqual({ error: 'not_active' });
@@ -133,6 +138,7 @@ describe('cams-held tokens (POST /cams/v1/tokens, retire; R4-19)', () => {
 
   it('a served account removed between two pulls: its tokens answer 404 and the next snapshot no longer lists it', async () => {
     const i = await s.api('POST', '/cams-instances', { name: 'shrink', displayName: 'Shrink', accounts: [home] });
+    await route(i.id, px.proxyId);
     const k = await enrollCamsKey(s, i.id);
     const { hash } = generateToken();
     const a = await post(k, '/cams/v1/tokens', { v: 1, proxyId: px.proxyId, kind: 'client', hash });
@@ -151,6 +157,7 @@ describe('cams-held tokens (POST /cams/v1/tokens, retire; R4-19)', () => {
 
   it('removing a served account or hiding a proxy revokes the tokens the instance holds there (no stale credential)', async () => {
     const i = await s.api('POST', '/cams-instances', { name: 'narrow', displayName: 'Narrow', accounts: [home] });
+    for (const p of [px, pxNoAdmin]) await route(i.id, p.proxyId);
     const k = await enrollCamsKey(s, i.id);
     const a = await post(k, '/cams/v1/tokens', { v: 1, proxyId: px.proxyId, kind: 'client', hash: generateToken().hash });
     const b = await post(k, '/cams/v1/tokens', { v: 1, proxyId: pxNoAdmin.proxyId, kind: 'client', hash: generateToken().hash });
@@ -165,6 +172,7 @@ describe('cams-held tokens (POST /cams/v1/tokens, retire; R4-19)', () => {
 
   it('blocking the instance revokes every token it holds and the next tokens.apply removes them (R4-19)', async () => {
     const i = await s.api('POST', '/cams-instances', { name: 'doomed', displayName: 'Doomed', accounts: [home] });
+    await route(i.id, px.proxyId);
     const k = await enrollCamsKey(s, i.id);
     const { hash } = generateToken();
     const a = await post(k, '/cams/v1/tokens', { v: 1, proxyId: px.proxyId, kind: 'client', hash });
@@ -191,6 +199,7 @@ describe('cams tokens: write budget', () => {
     s.built.status.heartbeat(px.id, { summary: makeSummary({ cameras: 1, now: Date.now() }), proxy: { ...makeProxyInfo({ now: Date.now() }), commands: { enabled: true, paused: false, pauseReason: null, allow: ['tokens.apply'], seenWindow: 1000 } }, truncated: false }, Date.now());
     s.built.status.flush(true);
     const inst = await s.api('POST', '/cams-instances', { name: 'cluster', displayName: 'Cluster', accounts: [acc.id] });
+    await s.api('PUT', `/cams-instances/${inst.id}/routes/${px.id}`, { url: null, hidden: false });
     const key = await enrollCamsKey(s, inst.id);
     await signedFetch(s, key, 'GET', '/cams/v1/ping'); // confirms the key
     const e = readEpoch(s.built.db);

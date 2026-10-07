@@ -43,8 +43,9 @@ export function buildSnapshot(d: SnapshotDeps, instanceId: string): Snapshot {
     const accountId = a.id as string;
     const users = (q('SELECT email, role, disabled FROM account_users WHERE account_id = ? ORDER BY email').all(accountId) as Row[])
       .map((u) => ({ email: (u.email as string).toLowerCase(), role: u.role as SnapUser['role'], disabled: u.disabled === 1 }));
+    // Only proxies routed to this instance (default-deny, security review I1).
     const proxies = (q(`SELECT p.id, p.name, p.display_name, COALESCE(r.url, p.url) url, p.admin_ui_url, p.tls_servername, p.ca_fingerprints FROM proxies p
-      LEFT JOIN cams_instance_routes r ON r.proxy_id = p.id AND r.instance_id = ? WHERE p.account_id = ? AND r.hidden IS NOT 1 ORDER BY p.name, p.id`).all(instanceId, accountId) as Row[])
+      JOIN cams_instance_routes r ON r.proxy_id = p.id AND r.instance_id = ? WHERE p.account_id = ? AND r.hidden = 0 ORDER BY p.name, p.id`).all(instanceId, accountId) as Row[])
       .map((p): SnapProxy => ({
         id: p.id as string, name: p.name as string, displayName: p.display_name as string, url: p.url as string | null, adminUiUrl: p.admin_ui_url as string | null,
         tlsServername: p.tls_servername as string | null, caFingerprints: (JSON.parse(p.ca_fingerprints as string) as unknown[]).filter((x): x is string => typeof x === 'string'),

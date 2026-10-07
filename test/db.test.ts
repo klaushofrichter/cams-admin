@@ -218,13 +218,13 @@ describe('database', () => {
   });
 
   // --- P4 (cams instances) ---------------------------------------------------
-  it('P4 migration: tables, one active and one pending key per instance, routes need a url unless hidden', () => {
+  it('P4 migration: tables, one active and one pending key per instance; a route without a url is the registered URL', () => {
     const r = makeRegistry(dir);
     const acc = r.reg.createAccount(ACTOR, { name: 'home', displayName: 'Home' });
     const px = r.reg.createProxy(ACTOR, acc.id, { name: 'pi', displayName: 'Pi', runsOn: 'local-host', url: 'https://proxy.example.net:8480' });
     r.db.prepare(`INSERT INTO cams_instances (id, name, display_name, state, created_at, updated_at) VALUES ('cms_A', 'cluster', 'Cluster', 'pending', 1, 1)`).run();
-    expect(() => r.db.prepare(`INSERT INTO cams_instance_routes (instance_id, proxy_id, url, hidden) VALUES ('cms_A', ?, NULL, 0)`).run(px.id)).toThrow(/CHECK/);
-    r.db.prepare(`INSERT INTO cams_instance_routes (instance_id, proxy_id, url, hidden) VALUES ('cms_A', ?, NULL, 1)`).run(px.id);
+    r.db.prepare(`INSERT INTO cams_instance_routes (instance_id, proxy_id, url, hidden) VALUES ('cms_A', ?, NULL, 0)`).run(px.id);
+    expect(() => r.db.prepare(`INSERT INTO cams_instance_routes (instance_id, proxy_id, url, hidden) VALUES ('cms_A', ?, NULL, 2)`).run(px.id)).toThrow(/CHECK|UNIQUE|PRIMARY/);
     r.db.prepare(`INSERT INTO cams_instance_keys (id, instance_id, public_key, fingerprint, created_at, confirmed_at) VALUES ('key_1', 'cms_A', 'pk1', 'fp', 1, 1)`).run();
     expect(() => r.db.prepare(`INSERT INTO cams_instance_keys (id, instance_id, public_key, fingerprint, created_at, confirmed_at) VALUES ('key_2', 'cms_A', 'pk2', 'fp', 1, 2)`).run()).toThrow(/UNIQUE/);
     r.db.prepare(`INSERT INTO cams_instance_keys (id, instance_id, public_key, fingerprint, created_at) VALUES ('key_3', 'cms_A', 'pk3', 'fp', 1)`).run();

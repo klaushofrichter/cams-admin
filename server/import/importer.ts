@@ -19,7 +19,8 @@ export { parseCamsExport } from './export-format';
 export type ImportChange =
   | { kind: 'proxy-matched'; proxyId: string; name: string; by: 'token' | 'url' | 'route'; fileUrl: string }
   | { kind: 'proxy-new'; name: string; url: string }
-  | { kind: 'route-add' | 'route-change'; proxyId: string; name: string; url: string; was?: string | null }
+  // url null: the proxy's registered URL (the file uses it).
+  | { kind: 'route-add' | 'route-change'; proxyId: string; name: string; url: string | null; was?: string | null }
   | { kind: 'route-hide'; proxyId: string; name: string }
   | { kind: 'camera-new'; camsId: string; fields: Record<string, unknown> }
   | { kind: 'camera-change'; cameraId: string; camsId: string; fields: Record<string, { from: unknown; to: unknown }> }
@@ -27,7 +28,7 @@ export type ImportChange =
   | { kind: 'proxy-tls-name'; proxyId: string; name: string; from: string | null; to: string | null }
   | { kind: 'token-external'; proxyId: string; name: string; tokenKind: 'client' | 'admin'; hashPrefix: string }
   | { kind: 'registry-only'; camsId: string };
-export interface ImportMismatch { id: string; camsId?: string; proxyId?: string; what: 'camera-not-on-proxy' | 'pin-differs' | 'proxy-offline' | 'proxy-not-enrolled' | 'proxy-ambiguous'; detail: string }
+export interface ImportMismatch { id: string; camsId?: string; proxyId?: string; what: 'camera-not-on-proxy' | 'pin-differs' | 'pin-unverified' | 'proxy-offline' | 'proxy-not-enrolled' | 'proxy-ambiguous' | 'token-in-other-account'; detail: string }
 export interface ImportResult {
   dryRun: boolean; account: string; instance: string; changes: ImportChange[]; mismatches: ImportMismatch[]; blockers: string[];
   blocked: boolean; applied: boolean; noChanges: boolean;
@@ -63,7 +64,8 @@ export class Importer {
     const q = (sql: string) => this.d.db.prepare(sql);
     const proxies = this.d.registry.listProxies(accountId);
     const byId = new Map(proxies.map((p) => [p.id, p]));
-    const routes = new Map(this.d.instances.routes(instanceId).map((r) => [r.proxyId, r]));
+    // Only this account's routes (review I2: a route of another served account must never match).
+    const routes = new Map(this.d.instances.routes(instanceId).filter((r) => byId.has(r.proxyId)).map((r) => [r.proxyId, r]));
     const changes: ImportChange[] = [];
     const mismatches: ImportMismatch[] = [];
     const blockers: string[] = [];
@@ -93,7 +95,9 @@ export class Importer {
         }
       }
       if (ids.length > 1) {
+        // A blocker, never an acceptable mismatch (review I2): no proxy is guessed.
         mismatches.push({ id: mismatchId('proxy-ambiguous', ids.join(','), g.url), what: 'proxy-ambiguous', detail: `${g.url} matches ${ids.length} proxies` });
+        if (!blockers.includes('proxy_ambiguous')) blockers.push('proxy_ambiguous');
         continue;
       }
       if (ids.length === 1 && by) {
@@ -113,11 +117,12 @@ export class Importer {
       if (!px) continue;
       if (matched.has(px.id)) continue; // a second group of the same proxy (another token): routes and pins once
       matched.add(px.id);
+      // Routes are default-deny (review I1): every proxy the file uses gets a
+      // visible route for this instance; null = the registered URL.
       const route = routes.get(px.id);
-      if (trimUrl(px.url) !== g.url) {
-        if (!route) changes.push({ kind: 'route-add', proxyId: px.id, name: px.name, url: g.url });
-        else if (route.hidden || trimUrl(route.url) !== g.url) changes.push({ kind: 'route-change', proxyId: px.id, name: px.name, url: g.url, was: route.hidden ? null : route.url });
-      }
+      const want = trimUrl(px.url) === g.url ? null : g.url;
+      if (!route) changes.push({ kind: 'route-add', proxyId: px.id, name: px.name, url: want });
+      else if (route.hidden || trimUrl(route.url ?? px.url) !== g.url) changes.push({ kind: 'route-change', proxyId: px.id, name: px.name, url: want, was: route.hidden ? null : route.url ?? px.url });
       if (g.proxy.caFingerprint && !sameList(g.proxy.caFingerprint, px.caFingerprints)) changes.push({ kind: 'pins-set', proxyId: px.id, name: px.name, from: px.caFingerprints, to: g.proxy.caFingerprint });
       if (g.proxy.tlsServername && g.proxy.tlsServername !== px.tlsServername) changes.push({ kind: 'proxy-tls-name', proxyId: px.id, name: px.name, from: px.tlsServername, to: g.proxy.tlsServername });
     }
@@ -151,11 +156,21 @@ export class Importer {
 
     // --- hidden routes for the account's other proxies --------------------------------------
     if (o.hideUnlisted) {
-      for (const p of proxies) if (!matched.has(p.id) && !routes.has(p.id)) changes.push({ kind: 'route-hide', proxyId: p.id, name: p.name });
+      // Without a route a proxy is already invisible: only visible routes the file doesn't use are hidden.
+      for (const p of proxies) if (!matched.has(p.id) && routes.has(p.id) && !routes.get(p.id)!.hidden) changes.push({ kind: 'route-hide', proxyId: p.id, name: p.name });
     }
 
     // --- tokens the registry doesn't know: external (never in a tokens.apply) -----------------
-    const known = (hex: string) => !!q('SELECT 1 FROM proxy_tokens WHERE hash = ?').get(`sha256:${hex}`);
+    const owner = (hex: string) => (q('SELECT account_id FROM proxy_tokens WHERE hash = ?').get(`sha256:${hex}`) as { account_id: string } | undefined)?.account_id;
+    const known = (hex: string) => {
+      const acc = owner(hex);
+      if (acc && acc !== accountId) {
+        // Held in another account: not recorded here, and said so (review M4).
+        const id = mismatchId('token-in-other-account', '', hex.slice(0, 8));
+        if (!mismatches.some((m) => m.id === id)) mismatches.push({ id, what: 'token-in-other-account', detail: `the token ${prefix(hex)} is registered in another account: not recorded as external here` });
+      }
+      return !!acc;
+    };
     const externals: { g: Group; kind: 'client' | 'admin'; hex: string }[] = [];
     const seenHex = new Set<string>();
     for (const g of groups.values()) {
@@ -175,7 +190,8 @@ export class Importer {
       const g = groupOf(c);
       return {
         name: c.name, host: c.host, protocol: c.protocol, tlsServername: c.tlsServername ?? null, cameraUser: c.user, webUiUrl: c.webUiUrl ?? null, webUiNote: c.webUiNote ?? null,
-        proxyId: c.proxy ? g?.target?.id ?? (g?.newName ? `new:${g.newName}` : null) : null, proxyCameraId: c.proxy ? c.proxy.camera ?? c.id : null,
+        // A camera with a proxy in the file never becomes a direct camera (review I2).
+        proxyId: c.proxy ? g?.target?.id ?? (g?.newName ? `new:${g.newName}` : `unresolved:${g?.url ?? c.proxy.url}`) : null, proxyCameraId: c.proxy ? c.proxy.camera ?? c.id : null,
       };
     };
     for (const c of file.cameras) {
@@ -203,10 +219,13 @@ export class Importer {
     for (const c of changes) counts[c.kind] = (counts[c.kind] ?? 0) + 1;
     const record = (action: 'import-run' | 'import-apply', extra: Record<string, unknown> = {}) => this.d.audit.write({
       actorType: 'sysadmin', actor, action, accountId, targetType: 'cams-instance', targetId: instanceId, targetLabel: instance.name, outcome: 'ok',
-      detail: { instance: instance.name, changes: counts, mismatches: mismatches.length, blocked, ...extra },
+      detail: { instance: instance.name, changes: counts, mismatches: mismatches.length, blocked: result.blocked, ...extra },
     });
 
-    if (!o.apply || blocked || noChanges) {
+    // Defense in depth: nothing unresolved reaches the registry.
+    const unresolved = changes.some((c) => (c.kind === 'camera-new' && String(c.fields.proxyId).startsWith('unresolved:')) || (c.kind === 'camera-change' && String(c.fields.proxyId?.to).startsWith('unresolved:')));
+    if (unresolved && !blockers.includes('unresolved_proxy')) { blockers.push('unresolved_proxy'); result.blocked = true; }
+    if (!o.apply || result.blocked || noChanges) {
       record('import-run', { apply: o.apply, ...(o.apply && noChanges ? { noChanges: true } : {}) });
       return result;
     }

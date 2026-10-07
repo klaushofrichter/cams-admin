@@ -266,8 +266,7 @@ CREATE TABLE cams_instance_routes (
   instance_id TEXT NOT NULL REFERENCES cams_instances(id) ON DELETE CASCADE,
   proxy_id TEXT NOT NULL REFERENCES proxies(id) ON DELETE CASCADE,
   url TEXT, hidden INTEGER NOT NULL DEFAULT 0 CHECK (hidden IN (0,1)),
-  PRIMARY KEY (instance_id, proxy_id),
-  CHECK (hidden = 1 OR url IS NOT NULL)
+  PRIMARY KEY (instance_id, proxy_id)
 ) STRICT;
 CREATE INDEX cams_routes_proxy ON cams_instance_routes(proxy_id);
 CREATE TABLE config_revision (

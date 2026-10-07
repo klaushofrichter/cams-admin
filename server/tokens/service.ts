@@ -213,8 +213,8 @@ export class Tokens {
     if (!v.ok) throw new ApiError(400, 'invalid', fieldOf(v.detail));
     const { proxyId, kind, hash } = input as { proxyId: string; kind: 'client' | 'admin'; hash: string };
     const px = this.d.registry.proxyById(proxyId);
-    const hidden = px && this.q('SELECT 1 FROM cams_instance_routes WHERE instance_id = ? AND proxy_id = ? AND hidden = 1').get(inst.id, proxyId);
-    if (!px || !served.includes(px.accountId) || hidden) throw new ApiError(404, 'not_found');
+    const routed = px && this.q('SELECT 1 FROM cams_instance_routes WHERE instance_id = ? AND proxy_id = ? AND hidden = 0').get(inst.id, proxyId);
+    if (!px || !served.includes(px.accountId) || !routed) throw new ApiError(404, 'not_found');
     const same = this.q('SELECT id, holder, proxy_id, kind, state, label FROM proxy_tokens WHERE hash = ?').get(hash) as Row | undefined;
     if (same) {
       if (same.holder === inst.id && same.proxy_id === proxyId && same.kind === kind && ['pending', 'active', 'retiring'].includes(same.state as string)) {

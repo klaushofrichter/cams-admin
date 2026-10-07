@@ -236,8 +236,9 @@ export class CamsInstances {
     if (!isObj(input)) throw new ApiError(400, 'invalid', 'body');
     if (typeof input.hidden !== 'boolean') throw new ApiError(400, 'invalid', 'hidden');
     const hidden = input.hidden;
-    const url = urlOrNull(input.url, 'url');
-    if (!hidden && url === null) throw new ApiError(400, 'invalid', 'url');
+    // url null: the proxy's registered URL. Routes are default-deny: without
+    // a visible route row an instance never sees the proxy (review I1).
+    const url = hidden ? null : urlOrNull(input.url, 'url');
     const route = tx(this.d.db, (): CamsRoute => {
       const i = this.get(id);
       const px = this.d.registry.proxyById(proxyId);
