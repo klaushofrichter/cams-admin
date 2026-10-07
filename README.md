@@ -81,13 +81,18 @@ It will run at `cams-admin.skylar.technology`. Phase 1 is specified in
   cameras, and the ids and states of the tokens the instance holds. It is
   signed as a whole, so cams verifies its cached copy at every start. It
   never carries a password, token, hash, code or key.
-- **Routes:** per instance and proxy, a URL (the Pi reaches its proxy over
-  loopback) or *hidden* (that proxy and its cameras are not in the
-  instance's snapshot).
+- **Routes are default-deny:** an instance sees a proxy (and its cameras,
+  and may hold tokens for it) only through a route: the registered URL, or
+  its own URL (the Pi reaches its proxy over loopback). A proxy added later
+  reaches no instance until it is routed; an import routes the proxies its
+  file uses. Hiding a proxy or removing a served account revokes the tokens
+  the instance holds there.
 - **Tokens:** cams generates its own proxy tokens and registers only their
   hashes (`POST /cams/v1/tokens`); cams-admin sends them to the proxy.
   *Rotate now* on the instance page makes cams register new ones and retire
-  the old. Blocking or deleting an instance revokes everything it holds.
+  the old (with a grace period). Revoking its key, a re-enrollment, Block
+  and Delete revoke everything it holds at once; these revocations are
+  journaled outside the database, so a restore can't bring them back.
 - **Import and export:** an account's *Import* reads cams's redacted
   `export-config` output (dry run first, idempotent, cross-checked against
   what the live proxies report; it never deletes and never changes a

@@ -60,7 +60,7 @@ Nobody else touches the Pi, the cluster or the camera.
 2. **kube-setup:** NetworkPolicy cams → cams-admin; ksvc env `CAMS_ADMIN_URL=<in-cluster Service URL>` (no `CONFIG_SOURCE` yet).
 3. **Klaus:** `kubectl exec -i -n cams <cams pod> -- node dist/server/cli.js admin-enroll --url $CAMS_ADMIN_URL`, code on stdin. Compare the printed server key fingerprint with the UI. The key lands on the `cams-data` PVC (`/var/lib/cams/admin/key.json`, mode 600).
 4. **Klaus:** `export-config` (as §R 1).
-5. **cams-admin UI:** account `home` → Import → instance `cluster` → the file → Dry run. Expect: both proxies matched **by token**; cameras `cam1` (Pi proxy) and `cam2` (cluster proxy) new or matching; no mismatch (a mismatch is a stop: find out why before accepting it). Apply. Dry run again: "No changes".
+5. **cams-admin UI:** account `home` → Import → instance `cluster` → the file → Dry run. Expect: both proxies matched **by token**, a route at the registered URL for each (routes are default-deny); cameras `cam1` (Pi proxy) and `cam2` (cluster proxy) new or matching; no mismatch (a mismatch is a stop: find out why before accepting it). Apply. Dry run again: "No changes".
 6. **kube-setup:** ksvc env `CONFIG_SOURCE=shadow`.
 7. **Check:** the instance page shows mode `shadow`, the applied revision current, **0 shadow differences**, then "zero since …" for **24 h**. cams works as before (it still uses the file).
 
@@ -68,10 +68,10 @@ Nobody else touches the Pi, the cluster or the camera.
 
 ### Step 6 — Pi cams: enroll with a loopback route, import, shadow
 
-1. **cams-admin UI:** instance `pi`, served accounts `home`; Routes: the Pi proxy → `http://127.0.0.1:8480`; the cluster proxy → **hidden for this instance** (the Pi shows only its camera, as today, R4-3). Enrollment code.
+1. **cams-admin UI:** instance `pi`, served accounts `home`; Routes: the Pi proxy → `http://127.0.0.1:8480`; nothing for the cluster proxy (routes are default-deny: the Pi shows only its camera, as today, R4-3). Enrollment code.
 2. **Klaus (Pi):** `config/.env` gains `CAMS_ADMIN_URL=https://<cams-admin public host>` and `CAMS_TOKEN_ACCOUNT=home`; pull the cams release; `docker compose up -d`; then `docker compose exec -T cams node dist/server/cli.js admin-enroll --url https://<cams-admin public host>` with the code on stdin; compare the fingerprint.
 3. **Klaus:** `export-config` on the Pi.
-4. **cams-admin UI:** Import → instance `pi` → the Pi file → options "hide proxies this file doesn't use" → Dry run: the Pi proxy matched by token, a route (already set: no change), `cam1` matching; Apply; Dry run again: "No changes".
+4. **cams-admin UI:** Import → instance `pi` → the Pi file → Dry run: the Pi proxy matched by token, a route (already set: no change), `cam1` matching; Apply; Dry run again: "No changes".
 5. **Klaus (Pi):** `CONFIG_SOURCE=shadow` in `config/.env`, `docker compose up -d`.
 6. **Check:** 0 shadow differences for 24 h on the `pi` instance page. **Offline start test:** unplug the Pi's network (or block cams-admin), `docker compose restart cams`, token sign-in, live still, recordings — then plug back in.
 
