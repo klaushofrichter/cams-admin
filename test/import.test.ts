@@ -227,4 +227,12 @@ describe('the importer (M §11.2)', () => {
     expect(res.mismatches.map((m) => m.what)).toContain('token-in-other-account');
     expect(kinds(res, 'token-external')).toEqual([]);
   });
+
+  it('a second pin the proxy does not report is its own mismatch (review M9)', () => {
+    const f = structuredClone(CLUSTER);
+    f.cameras[0].proxy.caFingerprint = [PIN, 'SHA256:' + 'EE'.repeat(32)];
+    const res = imp.run(ACTOR, home.id, cluster.id, f, DRY);
+    expect(res.mismatches.map((m) => m.what)).toEqual(['pin-unverified']);
+    expect(imp.run(ACTOR, home.id, cluster.id, CLUSTER, DRY).mismatches).toEqual([]);
+  });
 });

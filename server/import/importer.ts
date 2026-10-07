@@ -152,6 +152,12 @@ export class Importer {
           mismatches.push({ id: mismatchId('pin-differs', px.id), proxyId: px.id, what: 'pin-differs', detail: `${px.name} reports ${repN ? repN.slice(0, 15) + '…' : 'no CA'}, the file pins ${filePin.slice(0, 15)}…` });
         }
       }
+      // Every further pin must be one the proxy reports, else it is an unverified CA (review M9).
+      const reported = new Set(row.reported.caFingerprint.map((x) => 'SHA256:' + x.replace(/^sha256:/i, '').replace(/:/g, '').toUpperCase()));
+      for (const extra of (g.proxy.caFingerprint ?? []).slice(1)) {
+        const id = mismatchId('pin-unverified', px.id, extra.slice(7, 23));
+        if (!reported.has(extra) && !mismatches.some((m) => m.id === id)) mismatches.push({ id, proxyId: px.id, what: 'pin-unverified', detail: `${px.name} does not report the file's second CA ${extra.slice(0, 15)}…` });
+      }
     }
 
     // --- hidden routes for the account's other proxies --------------------------------------
