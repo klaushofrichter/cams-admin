@@ -264,7 +264,10 @@ export function apiRouter(d: ApiDeps): express.Router {
     const b = (req.body ?? {}) as Record<string, unknown>;
     const accept = Array.isArray(b.acceptMismatch) ? b.acceptMismatch.filter((x): x is string => typeof x === 'string').slice(0, 500) : [];
     if (typeof b.instanceId !== 'string') throw new ApiError(400, 'invalid', 'instanceId');
-    const out = d.importer.run(actor(res), p(req, 'accountId'), b.instanceId, b.file, { apply: b.apply === true, acceptMismatch: accept, createProxies: b.createProxies === true, hideUnlisted: b.hideUnlisted === true });
+    const out = d.importer.run(actor(res), p(req, 'accountId'), b.instanceId, b.file, {
+      apply: b.apply === true, acceptMismatch: accept, createProxies: b.createProxies === true, hideUnlisted: b.hideUnlisted === true,
+      planId: typeof b.planId === 'string' ? b.planId.slice(0, 64) : undefined,
+    });
     if (out.applied) reg('account', p(req, 'accountId'));
     return out;
   }));

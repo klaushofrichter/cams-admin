@@ -12,6 +12,7 @@ describe('audit completeness', () => {
   const count = () => (a.db.prepare('SELECT count(*) n FROM audit_log').get() as { n: number }).n;
   const ids: Record<string, string> = {};
 
+  const IMPORT_FILE = { v: 1, kind: 'cams-export', exportedAt: 1, camsVersion: 't', source: 'cameras-file', cameras: [{ id: 'imp1', name: 'Imp', host: '192.0.2.40', protocol: 'https', user: 'cams' }], counts: { preferencesUsers: 0, proxySwitchOff: 0, tlsCas: 0, tlsPins: 0 } };
   type Row = [method: 'post' | 'patch' | 'put' | 'delete', pattern: string, path: () => string, body: () => unknown, action: string | string[]];
   const table: Row[] = [
     ['post', '/accounts', () => '/accounts', () => ({ name: 'home', displayName: 'Home' }), 'account-create'],
@@ -28,7 +29,8 @@ describe('audit completeness', () => {
     ['post', '/cams-instances/:instanceId/enrollment-codes', () => `/cams-instances/${ids.cms}/enrollment-codes`, () => ({ lifetimeH: 1 }), 'cams-enrollment-code-create'],
     ['delete', '/cams-instances/:instanceId/enrollment-codes/:codeId', () => `/cams-instances/${ids.cms}/enrollment-codes/${ids.cenr}`, () => ({}), 'cams-enrollment-code-cancel'],
     ['post', '/cams-instances/:instanceId/keys/:keyId/revoke', () => `/cams-instances/${ids.cms}/keys/${ids.ckey}/revoke`, () => ({}), 'cams-key-revoke'],
-    ['post', '/accounts/:accountId/import', () => `/accounts/${ids.acc}/import`, () => ({ instanceId: ids.cms, file: { v: 1, kind: 'cams-export', exportedAt: 1, camsVersion: 't', source: 'cameras-file', cameras: [{ id: 'imp1', name: 'Imp', host: '192.0.2.40', protocol: 'https', user: 'cams' }], counts: { preferencesUsers: 0, proxySwitchOff: 0, tlsCas: 0, tlsPins: 0 } }, apply: true }), ['import-apply', 'camera-create']],
+    // The apply is bound to its dry run (review M2): both records.
+    ['post', '/accounts/:accountId/import', () => `/accounts/${ids.acc}/import`, () => ({ instanceId: ids.cms, file: IMPORT_FILE, apply: true, planId: a.importer.run('admin@example.com', ids.acc, ids.cms, IMPORT_FILE, { apply: false, acceptMismatch: [], createProxies: false, hideUnlisted: false }).planId }), ['import-run', 'import-apply', 'camera-create']],
     ['post', '/cams-instances/:instanceId/rotate', () => `/cams-instances/${ids.cms}/rotate`, () => ({}), 'cams-rotate'],
     ['post', '/cams-instances/:instanceId/block', () => `/cams-instances/${ids.cms}/block`, () => ({}), 'cams-instance-block'],
     ['delete', '/cams-instances/:instanceId', () => `/cams-instances/${ids.cms}`, () => ({ confirmName: 'cluster' }), 'cams-instance-delete'],

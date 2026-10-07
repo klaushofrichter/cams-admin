@@ -33,7 +33,7 @@ import { version } from './version';
 
 export interface Built {
   cfg: Config; clock: Clock; db: Db; audit: Audit; registry: Registry; live: LiveHub; status: StatusStore; hub: Hub; commands: Commands; tokens: Tokens; enrollment: Enrollment; sessions: Sessions; backup: BackupService;
-  camsInstances: CamsInstances; camsAuth: CamsAuth; signing: SigningKey;
+  camsInstances: CamsInstances; camsAuth: CamsAuth; importer: Importer; signing: SigningKey;
   app: express.Express; http: Server; epochFile: string;
   tick(): void;
   writeRoutes(): string[];
@@ -135,7 +135,7 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
   let closed = false;
 
   return {
-    cfg, clock, db, audit, registry, live, status, hub, commands, tokens, enrollment, sessions, backup, camsInstances, camsAuth, signing, app, http, epochFile, tick,
+    cfg, clock, db, audit, registry, live, status, hub, commands, tokens, enrollment, sessions, backup, camsInstances, camsAuth, importer, signing, app, http, epochFile, tick,
     writeRoutes() {
       const out: string[] = [];
       for (const layer of (api as unknown as { stack: { route?: { path: string; methods: Record<string, boolean> } }[] }).stack) {

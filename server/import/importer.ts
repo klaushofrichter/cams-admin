@@ -5,6 +5,8 @@ import { ApiError, type Proxy, type Registry } from '../registry';
 import type { StatusStore } from '../status/store';
 import type { CamsInstances } from '../cams/instances';
 import { sha256hex } from '../crypto/ed25519';
+import { jcs } from '../crypto/jcs';
+import { randomBytes } from 'crypto';
 import { newId } from '../ids';
 import { groupKey, parseCamsExport, trimUrl, type ExportCamera, type ExportProxy } from './export-format';
 export { parseCamsExport } from './export-format';
@@ -32,8 +34,10 @@ export interface ImportMismatch { id: string; camsId?: string; proxyId?: string;
 export interface ImportResult {
   dryRun: boolean; account: string; instance: string; changes: ImportChange[]; mismatches: ImportMismatch[]; blockers: string[];
   blocked: boolean; applied: boolean; noChanges: boolean;
+  // A dry run's plan: Apply must name it (same plan, same sysadmin, once, 10 min; review M2).
+  planId?: string;
 }
-export interface ImportOptions { apply: boolean; acceptMismatch: string[]; createProxies: boolean; hideUnlisted: boolean }
+export interface ImportOptions { apply: boolean; acceptMismatch: string[]; createProxies: boolean; hideUnlisted: boolean; planId?: string }
 export interface ImporterDeps { db: Db; clock: Clock; audit: Audit; registry: Registry; instances: CamsInstances; status: StatusStore }
 
 const INFO = new Set(['proxy-matched', 'registry-only']);
@@ -53,10 +57,24 @@ function nameFromUrl(url: string, taken: Set<string>): string {
   return n;
 }
 
+export const PLAN_TTL_MS = 10 * 60_000;
+const MAX_PLANS = 100;
+
 export class Importer {
+  private plans = new Map<string, { hash: string; actor: string; accountId: string; instanceId: string; expiresAt: number }>();
   constructor(private d: ImporterDeps) {}
 
   run(actor: string, accountId: string, instanceId: string, raw: unknown, o: ImportOptions): ImportResult {
+    const now = this.d.clock.now();
+    for (const [id, p] of this.plans) if (p.expiresAt <= now) this.plans.delete(id);
+    let bound: { hash: string } | null = null;
+    if (o.apply) {
+      // One shot: the plan is used up by this attempt, whatever its outcome.
+      const p = o.planId ? this.plans.get(o.planId) : undefined;
+      if (p) this.plans.delete(o.planId!);
+      if (!p || p.actor !== actor || p.accountId !== accountId || p.instanceId !== instanceId) throw new ApiError(409, 'plan_expired');
+      bound = p;
+    }
     const file = parseCamsExport(raw);
     const account = this.d.registry.getAccount(accountId);
     const instance = this.d.instances.get(instanceId);
@@ -221,6 +239,15 @@ export class Importer {
     const blocked = blockers.length > 0 || mismatches.some((m) => !accepted.has(m.id));
     const noChanges = changes.every((c) => INFO.has(c.kind));
     const result: ImportResult = { dryRun: !o.apply, account: account.name, instance: instance.name, changes, mismatches, blockers, blocked, applied: false, noChanges };
+    // What the person saw: the changes, the mismatches and blockers, and the options that shape them.
+    const planHash = sha256hex(jcs({ accountId, instanceId, changes: changes as unknown as object[], mismatches: mismatches.map((m) => m.id), blockers, createProxies: o.createProxies, hideUnlisted: o.hideUnlisted }));
+    if (bound && bound.hash !== planHash) throw new ApiError(409, 'plan_changed');
+    if (!o.apply) {
+      const planId = randomBytes(16).toString('base64url');
+      if (this.plans.size >= MAX_PLANS) this.plans.delete(this.plans.keys().next().value!);
+      this.plans.set(planId, { hash: planHash, actor, accountId, instanceId, expiresAt: now + PLAN_TTL_MS });
+      result.planId = planId;
+    }
     const counts: Record<string, number> = {};
     for (const c of changes) counts[c.kind] = (counts[c.kind] ?? 0) + 1;
     const record = (action: 'import-run' | 'import-apply', extra: Record<string, unknown> = {}) => this.d.audit.write({

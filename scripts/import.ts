@@ -31,10 +31,16 @@ async function main() {
   const account = (await api('GET', '/accounts')).items.find((a: { name: string }) => a.name === need('account')) ?? fail(`no account ${opt('account')}`);
   const instance = (await api('GET', '/cams-instances')).items.find((i: { name: string }) => i.name === need('instance')) ?? fail(`no cams instance ${opt('instance')}`);
   const file = JSON.parse(readFileSync(need('file'), 'utf8'));
-  const result = await api('POST', `/accounts/${account.id}/import`, {
-    instanceId: instance.id, file, apply: flag('apply'), acceptMismatch: (opt('accept-mismatch') ?? '').split(',').filter(Boolean),
+  const body = {
+    instanceId: instance.id, file, acceptMismatch: (opt('accept-mismatch') ?? '').split(',').filter(Boolean),
     createProxies: flag('create-proxies'), hideUnlisted: flag('hide-unlisted'),
-  });
+  };
+  // Apply is bound to a dry run (same plan, once, 10 min): the dry run first, its lines, then the apply.
+  let result = await api('POST', `/accounts/${account.id}/import`, { ...body, apply: false });
+  if (flag('apply') && !result.noChanges) {
+    for (const line of formatImport(result as never)) console.log(line);
+    result = await api('POST', `/accounts/${account.id}/import`, { ...body, apply: true, planId: result.planId });
+  }
   for (const line of formatImport(result as never)) console.log(line);
   if (flag('apply') && !result.applied && !result.noChanges) process.exit(3);
 }

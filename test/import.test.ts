@@ -36,6 +36,12 @@ describe('the importer (M §11.2)', () => {
     status.heartbeat(proxy.id, { summary: s, proxy: makeProxyInfo({ now: r.clock.now(), site: fps ? 'home' : null, caFingerprint: fps ?? undefined }), truncated: false }, r.clock.now());
   };
 
+  // Apply is bound to the dry run shown (review M2): a dry run with the same options, then apply with its planId.
+  const applyRun = (acc: string, i: string, file: unknown, o: typeof APPLY & Record<string, unknown>) => {
+    const d = imp.run(ACTOR, acc, i, file, { ...o, apply: false });
+    return imp.run(ACTOR, acc, i, file, { ...o, apply: true, planId: d.planId });
+  };
+
   beforeEach(() => {
     r = makeRegistry(dir);
     const live = new LiveHub({ clock: r.clock, maxPerSession: 5, keepaliveMs: 0 });
@@ -74,20 +80,20 @@ describe('the importer (M §11.2)', () => {
 
   it('apply writes everything in one transaction with one import-apply record; a second apply shows noChanges', () => {
     const e = readEpoch(db());
-    const a = imp.run(ACTOR, home.id, cluster.id, CLUSTER, APPLY);
+    const a = applyRun(home.id, cluster.id, CLUSTER, APPLY);
     expect(a).toMatchObject({ applied: true, dryRun: false });
-    expect(readEpoch(db())).toBe(e + 1);
+    expect(readEpoch(db())).toBe(e + 2); // the dry run's import-run record + the apply transaction
     expect(r.reg.listCameras(home.id).map((c) => [c.camsId, c.proxyId])).toEqual([['cam1', piProxy.id], ['cam2', clusterProxy.id]]);
     expect(r.reg.getProxy(home.id, piProxy.id).caFingerprints).toEqual([PIN]);
     expect(r.audit.list({ action: 'import-apply' }).items).toHaveLength(1);
-    const again = imp.run(ACTOR, home.id, cluster.id, CLUSTER, APPLY);
+    const again = applyRun(home.id, cluster.id, CLUSTER, APPLY);
     expect(again).toMatchObject({ noChanges: true, applied: false });
     expect(again.changes.every((c) => c.kind === 'proxy-matched' || c.kind === 'registry-only')).toBe(true);
   });
 
   it('the Pi file after the cluster file: a loopback route for the pi instance only, the registered URL unchanged, nothing deleted', () => {
-    imp.run(ACTOR, home.id, cluster.id, CLUSTER, APPLY);
-    const res = imp.run(ACTOR, home.id, pi.id, PI, { ...APPLY, hideUnlisted: true });
+    applyRun(home.id, cluster.id, CLUSTER, APPLY);
+    const res = applyRun(home.id, pi.id, PI, { ...APPLY, hideUnlisted: true });
     expect(res.applied).toBe(true);
     expect(res.changes).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: 'route-add', proxyId: piProxy.id, url: 'http://127.0.0.1:8480' }),
@@ -99,15 +105,15 @@ describe('the importer (M §11.2)', () => {
     expect(inst.routes(pi.id).map((x) => [x.proxyId, x.url, x.hidden])).toEqual([[piProxy.id, 'http://127.0.0.1:8480', false]]);
     expect(inst.routes(cluster.id).map((x) => [x.proxyId, x.url, x.hidden])).toEqual(expect.arrayContaining([[piProxy.id, null, false], [clusterProxy.id, null, false]]));
     expect(r.reg.listCameras(home.id)).toHaveLength(2);
-    expect(imp.run(ACTOR, home.id, pi.id, PI, { ...APPLY, hideUnlisted: true }).noChanges).toBe(true);
+    expect(applyRun(home.id, pi.id, PI, { ...APPLY, hideUnlisted: true }).noChanges).toBe(true);
   });
 
   it('a changed camera is listed field by field and applied', () => {
-    imp.run(ACTOR, home.id, cluster.id, CLUSTER, APPLY);
+    applyRun(home.id, cluster.id, CLUSTER, APPLY);
     const f = structuredClone(CLUSTER);
     f.cameras[1].name = 'Front';
     f.cameras[1].host = '192.0.2.32';
-    const res = imp.run(ACTOR, home.id, cluster.id, f, APPLY);
+    const res = applyRun(home.id, cluster.id, f, APPLY);
     expect(kinds(res, 'camera-change')).toEqual([{ kind: 'camera-change', cameraId: expect.stringMatching(/^cam_/), camsId: 'cam2', fields: { name: { from: 'Driveway', to: 'Front' }, host: { from: '192.0.2.31', to: '192.0.2.32' } } }]);
     expect(r.reg.listCameras(home.id).find((c) => c.camsId === 'cam2')).toMatchObject({ name: 'Front', host: '192.0.2.32' });
   });
@@ -123,13 +129,13 @@ describe('the importer (M §11.2)', () => {
 
   it('cross-check: a proxy.camera not in the proxy\'s reported cameras, a pin that differs, an offline proxy → mismatches; apply blocked unless every id is accepted', () => {
     beat(piProxy, ['other'], ['SHA256:' + 'EF'.repeat(32)]);
-    const res = imp.run(ACTOR, home.id, cluster.id, CLUSTER, APPLY);
+    const res = applyRun(home.id, cluster.id, CLUSTER, APPLY);
     expect(res).toMatchObject({ blocked: true, applied: false });
     expect(res.mismatches.map((m) => [m.what, m.camsId ?? null])).toEqual(expect.arrayContaining([['camera-not-on-proxy', 'cam1'], ['pin-differs', null]]));
     expect(r.reg.listCameras(home.id)).toEqual([]);
     const again = imp.run(ACTOR, home.id, cluster.id, CLUSTER, DRY);
     expect(again.mismatches.map((m) => m.id)).toEqual(res.mismatches.map((m) => m.id)); // stable ids
-    const ok = imp.run(ACTOR, home.id, cluster.id, CLUSTER, { ...APPLY, acceptMismatch: res.mismatches.map((m) => m.id) });
+    const ok = applyRun(home.id, cluster.id, CLUSTER, { ...APPLY, acceptMismatch: res.mismatches.map((m) => m.id) });
     expect(ok.applied).toBe(true);
     r.clock.advance(120_000);
     status.tick();
@@ -139,7 +145,7 @@ describe('the importer (M §11.2)', () => {
 
   it('never deletes: a registry camera missing from the file is listed registry-only', () => {
     r.reg.createCamera(ACTOR, home.id, { camsId: 'old', name: 'Old', kind: 'camera' });
-    const res = imp.run(ACTOR, home.id, cluster.id, CLUSTER, APPLY);
+    const res = applyRun(home.id, cluster.id, CLUSTER, APPLY);
     expect(kinds(res, 'registry-only').map((c) => c.camsId)).toEqual(['old']);
     expect(r.reg.listCameras(home.id).map((c) => c.camsId)).toContain('old');
   });
@@ -147,10 +153,10 @@ describe('the importer (M §11.2)', () => {
   it('an unknown proxy without createProxies: listed proxy-new, apply blocked with unknown_proxy; with it: created as runs_on local-host, pending', () => {
     const f = structuredClone(CLUSTER);
     f.cameras[1].proxy = { url: 'https://new-proxy.example.net:8480', token: { sha256: '7'.repeat(64) }, camera: 'cam2' };
-    const res = imp.run(ACTOR, home.id, cluster.id, f, APPLY);
+    const res = applyRun(home.id, cluster.id, f, APPLY);
     expect(kinds(res, 'proxy-new')).toEqual([{ kind: 'proxy-new', name: 'new-proxy', url: 'https://new-proxy.example.net:8480' }]);
     expect(res).toMatchObject({ blocked: true, applied: false, blockers: ['unknown_proxy'] });
-    const ok = imp.run(ACTOR, home.id, cluster.id, f, { ...APPLY, createProxies: true });
+    const ok = applyRun(home.id, cluster.id, f, { ...APPLY, createProxies: true });
     expect(ok.applied).toBe(true);
     const created = r.reg.listProxies(home.id).find((p) => p.name === 'new-proxy')!;
     expect(created).toMatchObject({ runsOn: 'local-host', state: 'pending', url: 'https://new-proxy.example.net:8480' });
@@ -160,7 +166,7 @@ describe('the importer (M §11.2)', () => {
 
   it('a hash of the file\'s token that is unknown is recorded as an external token; never sent in tokens.apply', () => {
     r.db.prepare(`DELETE FROM proxy_tokens WHERE id = 'tok_00000000000000000003'`).run();
-    const res = imp.run(ACTOR, home.id, cluster.id, CLUSTER, APPLY);
+    const res = applyRun(home.id, cluster.id, CLUSTER, APPLY);
     expect(kinds(res, 'token-external')).toEqual([{ kind: 'token-external', proxyId: clusterProxy.id, name: 'cluster', tokenKind: 'client', hashPrefix: 'sha256:33333333' }]);
     expect(r.db.prepare(`SELECT state, kind, label FROM proxy_tokens WHERE hash = ?`).get(H('3'))).toEqual({ state: 'external', kind: 'client', label: 'imported cluster-proxy.example.net' });
     expect(r.db.prepare(`SELECT count(*) n FROM commands`).get()).toEqual({ n: 0 });
@@ -182,7 +188,7 @@ describe('the importer (M §11.2)', () => {
 
   it('the diff and the audit detail carry only 8-hex hash prefixes (secret guard)', () => {
     r.db.prepare(`DELETE FROM proxy_tokens`).run();
-    const res = imp.run(ACTOR, home.id, cluster.id, CLUSTER, APPLY);
+    const res = applyRun(home.id, cluster.id, CLUSTER, APPLY);
     const all = JSON.stringify(res) + JSON.stringify(r.db.prepare('SELECT detail FROM audit_log').all());
     for (const c of ['1', '2', '3']) expect(all).not.toContain(c.repeat(64));
     expect(all).not.toMatch(/[0-9a-f]{16}/);
@@ -200,7 +206,7 @@ describe('the importer (M §11.2)', () => {
     inst.setRoute(ACTOR, both.id, demoPx.id, { url: 'http://127.0.0.1:8480', hidden: false });
     const f = structuredClone(PI);
     f.cameras[0].proxy.token = { sha256: '8'.repeat(64) }; // unknown here
-    const res = imp.run(ACTOR, home.id, both.id, f, APPLY);
+    const res = applyRun(home.id, both.id, f, APPLY);
     expect(res).toMatchObject({ applied: false, blocked: true, blockers: ['unknown_proxy'] });
     expect(kinds(res, 'proxy-matched')).toEqual([]);
     expect(kinds(res, 'camera-new')[0].fields.proxyId).not.toBeNull();
@@ -210,9 +216,9 @@ describe('the importer (M §11.2)', () => {
   it('a group matching two proxies is a blocker that accepting cannot lift; no camera is ever imported without its proxy (review I2)', () => {
     r.db.prepare(`UPDATE proxies SET url = 'https://cluster-proxy.example.net' WHERE id = ?`).run(piProxy.id);
     r.db.prepare(`DELETE FROM proxy_tokens`).run();
-    const res = imp.run(ACTOR, home.id, cluster.id, CLUSTER, APPLY);
+    const res = applyRun(home.id, cluster.id, CLUSTER, APPLY);
     expect(res.blockers).toContain('proxy_ambiguous');
-    const again = imp.run(ACTOR, home.id, cluster.id, CLUSTER, { ...APPLY, acceptMismatch: res.mismatches.map((m) => m.id), createProxies: true });
+    const again = applyRun(home.id, cluster.id, CLUSTER, { ...APPLY, acceptMismatch: res.mismatches.map((m) => m.id), createProxies: true });
     expect(again).toMatchObject({ applied: false, blocked: true });
     expect(again.blockers).toContain('proxy_ambiguous');
     expect(r.reg.listCameras(home.id)).toEqual([]);
@@ -234,5 +240,24 @@ describe('the importer (M §11.2)', () => {
     const res = imp.run(ACTOR, home.id, cluster.id, f, DRY);
     expect(res.mismatches.map((m) => m.what)).toEqual(['pin-unverified']);
     expect(imp.run(ACTOR, home.id, cluster.id, CLUSTER, DRY).mismatches).toEqual([]);
+  });
+
+  it('Apply is bound to the dry run shown: same plan, same sysadmin, once, within 10 minutes (review M2)', () => {
+    const d = imp.run(ACTOR, home.id, cluster.id, CLUSTER, DRY);
+    expect(d.planId).toMatch(/^[A-Za-z0-9_-]{22}$/);
+    expect(() => imp.run(ACTOR, home.id, cluster.id, CLUSTER, APPLY)).toThrow(expect.objectContaining({ status: 409, code: 'plan_expired' }));
+    // Options changed after the dry run: another plan.
+    expect(() => imp.run(ACTOR, home.id, cluster.id, CLUSTER, { ...APPLY, hideUnlisted: true, planId: d.planId })).toThrow(expect.objectContaining({ status: 409, code: 'plan_changed' }));
+    const d2 = imp.run(ACTOR, home.id, cluster.id, CLUSTER, DRY);
+    expect(() => imp.run('other@example.com', home.id, cluster.id, CLUSTER, { ...APPLY, planId: d2.planId })).toThrow(expect.objectContaining({ code: 'plan_expired' }));
+    const d3 = imp.run(ACTOR, home.id, cluster.id, CLUSTER, DRY);
+    r.clock.advance(601_000);
+    expect(() => imp.run(ACTOR, home.id, cluster.id, CLUSTER, { ...APPLY, planId: d3.planId })).toThrow(expect.objectContaining({ code: 'plan_expired' }));
+    const d4 = imp.run(ACTOR, home.id, cluster.id, CLUSTER, DRY);
+    r.reg.createCamera(ACTOR, home.id, { camsId: 'between', name: 'B', kind: 'camera' }); // the registry changed meanwhile
+    expect(() => imp.run(ACTOR, home.id, cluster.id, CLUSTER, { ...APPLY, planId: d4.planId })).toThrow(expect.objectContaining({ code: 'plan_changed' }));
+    const d5 = imp.run(ACTOR, home.id, cluster.id, CLUSTER, DRY);
+    expect(imp.run(ACTOR, home.id, cluster.id, CLUSTER, { ...APPLY, planId: d5.planId }).applied).toBe(true);
+    expect(() => imp.run(ACTOR, home.id, cluster.id, CLUSTER, { ...APPLY, planId: d5.planId })).toThrow(expect.objectContaining({ code: 'plan_expired' })); // once
   });
 });
