@@ -113,5 +113,5 @@ Not part of this rollout; listed so nothing is removed early:
 | | 5 cluster shadow | | | |
 | | 6 Pi shadow | | | |
 | 2026-10-19 | §R rehearsal (before 7), cams side (`scripts/livestack/rehearse-cutover.sh`, local stack `--no-s3`) | `8e31281` / `812c0d3` (cams PR #260: step 9 moves the cluster instance's camera override) / `ab6ec0d` | first run FAIL at 9 (script bug: the per-instance override masked the shared host); rerun PASS 16/16: tokens, export, enroll, imports, shadow 0, rollback, cams-admin mode, offline cache, Rotate now (14136 calls, 0 failures), held change, rollback to file | P4 implementer |
-| | 7 cluster switched | | | |
+| 2026-10-19 | 7 cluster switched: `CONFIG_SOURCE=cams-admin` (kube-setup `17c007f`, revision cams-00094, 22:08Z) | — / v2026.10.19.1 / — | PASS: picker (Home, Test), live, recording playback, Timeline, Archive, rename and back (simulated camera), proxy switch off/on, sign-in link to the proxy, viewer check in Home (read-only settings, then admin again), instance report cams-admin, managed 4 / legacy 0, nothing held. Start warning `allowed_emails_ignored` expected (ALLOWED_EMAILS kept for rollback). Held-change banner not exercised (nothing held; covered by the rehearsal) | P4 implementer |
 | | 8 Pi switched | | | |
