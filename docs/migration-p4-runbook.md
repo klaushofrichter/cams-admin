@@ -112,6 +112,6 @@ Not part of this rollout; listed so nothing is removed early:
 | | §R rehearsal (before 5) | | | |
 | | 5 cluster shadow | | | |
 | | 6 Pi shadow | | | |
-| | §R rehearsal (before 7) | | | |
+| 2026-10-19 | §R rehearsal (before 7), cams side (`scripts/livestack/rehearse-cutover.sh`, local stack `--no-s3`) | `8e31281` / `812c0d3` (cams PR #260: step 9 moves the cluster instance's camera override) / `ab6ec0d` | first run FAIL at 9 (script bug: the per-instance override masked the shared host); rerun PASS 16/16: tokens, export, enroll, imports, shadow 0, rollback, cams-admin mode, offline cache, Rotate now (14136 calls, 0 failures), held change, rollback to file | P4 implementer |
 | | 7 cluster switched | | | |
 | | 8 Pi switched | | | |
