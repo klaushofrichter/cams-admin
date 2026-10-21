@@ -110,6 +110,38 @@
       },
       "maxItems": 200
     },
+    "heldProxies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "accountId": {
+            "type": "string",
+            "pattern": "^acc_[0-9A-HJKMNP-TV-Z]{20}$"
+          },
+          "proxyId": {
+            "type": "string",
+            "pattern": "^prx_[0-9A-HJKMNP-TV-Z]{20}$"
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "maxItems": 3,
+            "minItems": 1,
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "accountId",
+          "proxyId",
+          "fields"
+        ]
+      },
+      "maxItems": 64
+    },
     "shadow": {
       "anyOf": [
         {

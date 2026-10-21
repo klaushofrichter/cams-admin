@@ -6,8 +6,10 @@
 // implementation the fixtures are checked against. Step 9 (rate limits) is
 // cam-proxy's and is left out here.
 import { createHash } from 'crypto';
+import Ajv2020 from 'ajv/dist/2020';
+import type { ValidateFunction } from 'ajv';
 import { publicFromB64, verifyEnvelope } from '../server/crypto/ed25519';
-import { CAMERA_NAME_PATTERN, DISRUPTIVE_ACTIONS, JOURNAL_BUDGET_ACTIONS, NEVER_REMOTE_ACTIONS, P3_COMMANDS, PATH_PATTERN, REMOTE_ACTIONS } from '../contract/build';
+import { buildSchemas, CAMERA_NAME_PATTERN, DISRUPTIVE_ACTIONS, JOURNAL_BUDGET_ACTIONS, MOVE_COMMANDS, NEVER_REMOTE_ACTIONS, P3_COMMANDS, PATH_PATTERN, REMOTE_ACTIONS } from '../contract/build';
 
 export interface CheckContext {
   now: number; // cams-admin time: Date.now() + the offset learned from the challenge
@@ -32,8 +34,8 @@ const TOK_RE = new RegExp(`^tok_${ULID20}$`);
 const HASH_RE = /^sha256:[0-9a-f]{64}$/;
 // eslint-disable-next-line no-control-regex
 const LABEL_RE = /^[^\u0000-\u001f\u007f]{1,64}$/;
-// What this version implements: tokens.apply (P2) and the P3 commands.
-export const IMPLEMENTED: readonly string[] = ['tokens.apply', ...P3_COMMANDS];
+// What this version implements: tokens.apply (P2), the P3 commands and the camera-move commands.
+export const IMPLEMENTED: readonly string[] = ['tokens.apply', ...P3_COMMANDS, ...MOVE_COMMANDS];
 const PATH_RE = new RegExp(PATH_PATTERN);
 const REV_RE = /^sha256:[0-9a-f]{64}$/;
 const CAM_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
@@ -97,6 +99,22 @@ export function p3ArgsOk(command: string, a: Record<string, any>): boolean {
   return false;
 }
 
+// The camera-move args are checked against the strict args schemas of contract/v1 (their written source is contract/build.ts: the move
+// commands have many nested shapes, and the schema is the contract text for them).
+const moveAjv = new Ajv2020({ strict: true });
+const moveValidators = new Map<string, ValidateFunction>();
+export function moveArgsOk(command: string, a: unknown): boolean {
+  if (moveValidators.size === 0) {
+    const schemas = buildSchemas('strict');
+    for (const c of MOVE_COMMANDS) moveValidators.set(c, moveAjv.compile(schemas[`commands/${c}.args`]));
+  }
+  return moveValidators.get(command)!(a) as boolean;
+}
+// The allow entry a move command needs: the source's commands move.send, the target's move.receive; move.finish and move.cancel by args.role.
+const MOVE_ENTRY: Record<string, string> = { 'move.targets': 'move.send', 'move.open': 'move.send', 'move.answer': 'move.send', 'move.go': 'move.send', 'move.release': 'move.send', 'move.offer': 'move.receive', 'move.start': 'move.receive' };
+const moveEntryOf = (command: string, a: Record<string, any>): string => MOVE_ENTRY[command] ?? (a.role === 'target' ? 'move.receive' : 'move.send');
+const isMoveByRole = (c: string) => c === 'move.finish' || c === 'move.cancel';
+
 const isDisruptive = (a: string | undefined) => (DISRUPTIVE_ACTIONS as readonly string[]).includes(a ?? '');
 // Step 11's journal budget: proxy.restart ≤ 2 an hour, disruptive camera actions ≤ 6 an hour (any status).
 export function journalBudget(journal: JournalEntry[], now: number, command: string, action?: string): { ok: true } | { ok: false; retryAfterS: number } {
@@ -143,7 +161,11 @@ export function refCheck(m: Record<string, any>, ctx: CheckContext): CheckVerdic
   if (ctx.paused && !revocation) return nack('paused');
   // 8. implemented and allowed (camera.action: any camera.action:* entry)
   if (typeof b.command !== 'string' || !IMPLEMENTED.includes(b.command)) return nack('not_allowed');
-  const entryOk = b.command === 'camera.action' ? ctx.allow.some((e) => e.startsWith('camera.action:')) : ctx.allow.includes(b.command);
+  // (camera.action: any camera.action:* entry; move.finish and move.cancel: either move entry, the role's own is step 11)
+  const entryOk = b.command === 'camera.action' ? ctx.allow.some((e) => e.startsWith('camera.action:'))
+    : isMoveByRole(b.command) ? ctx.allow.some((e) => e === 'move.send' || e === 'move.receive')
+    : (MOVE_COMMANDS as readonly string[]).includes(b.command) ? ctx.allow.includes(MOVE_ENTRY[b.command])
+    : ctx.allow.includes(b.command);
   if (!revocation && !entryOk) return nack('not_allowed');
   // 9. rate limits: cam-proxy's (not in the reference)
   // 10. args version, then the command's strict args (and a revocation claim)
@@ -153,6 +175,10 @@ export function refCheck(m: Record<string, any>, ctx: CheckContext): CheckVerdic
     if (revocation && !isRevocation(b.args.tokens, ctx.tokens ?? [])) return nack('invalid_args');
     // 11. allow entries the args need
     if (!revocation && b.args.tokens.some((t: { kind: string }) => t.kind === 'admin') && !ctx.allow.includes('tokens.apply.admin')) return nack('not_allowed');
+  } else if ((MOVE_COMMANDS as readonly string[]).includes(b.command)) {
+    if (!moveArgsOk(b.command, b.args)) return nack('invalid_args');
+    // 11. the entry of the side the command is for (move.finish and move.cancel: args.role)
+    if (!ctx.allow.includes(moveEntryOf(b.command, b.args))) return nack('not_allowed');
   } else {
     if (!p3ArgsOk(b.command, b.args)) return nack('invalid_args');
     // 11. the action's own entry (never a never-remote one), then the journal budget

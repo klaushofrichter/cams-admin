@@ -8,6 +8,7 @@
 // time, nonces and seeds), so a re-run changes nothing unless the contract does.
 import { fingerprint, keyFromSeed, privateFromB64, sign, signEnvelope, signedText, camsRequestText, camsResponseText, sha256hex } from '../server/crypto/ed25519';
 import { jcs } from '../server/crypto/jcs';
+import { SITE_PATTERN } from './build';
 
 export type Mode = 'lenient' | 'strict';
 type S = Record<string, unknown>;
@@ -18,6 +19,7 @@ const TEXT = 200;
 // The values cams holds until an account admin confirms (M §9.7, ruling R4-7).
 export const TRUST_FIELDS = ['proxyUrl', 'caFingerprints', 'proxyTlsServername', 'host', 'protocol', 'tlsServername'] as const;
 export type TrustField = (typeof TRUST_FIELDS)[number];
+export const HELD_PROXY_FIELDS = ['proxyUrl', 'caFingerprints', 'proxyTlsServername'] as const;
 export const CAMS_ID_PATTERN = '^[a-z0-9][a-z0-9-]{0,31}$';
 export const REVISION_PATTERN = '^r:[0-9a-f]{16}$';
 
@@ -49,14 +51,19 @@ export function buildCamsSchemas(mode: Mode): Record<string, S> {
   // --- the snapshot ------------------------------------------------------------
   const user = all({ email: str(254), role: en(['admin', 'viewer']), disabled: bool });
   const tokenRef = all({ id: id('tok'), kind: en(['client', 'admin']), state: tokenState, retireAt: nullable(int()) });
-  const proxy = all({
+  // Camera moves: proxies[].site (the TLS site name the registry holds, pinned to cam-proxy's tls.site pattern) and cameras[].moveId (the
+  // move that currently holds the camera, else null) are required in strict and optional at run time, so an older snapshot stays readable.
+  const proxyProps: Record<string, S> = {
     id: id('prx'), name: str(32), displayName: str(), url: nullable(str(512)), adminUiUrl: nullable(str(512)), tlsServername: nullable(str(253)),
-    caFingerprints: arr(fp, 2), tokens: arr(tokenRef, 64),
-  });
-  const camera = all({
+    caFingerprints: arr(fp, 2), tokens: arr(tokenRef, 64), site: nullable({ type: 'string', pattern: SITE_PATTERN }),
+  };
+  const proxy = obj(proxyProps, Object.keys(proxyProps).filter((k) => k !== 'site'));
+  const cameraProps: Record<string, S> = {
     id: id('cam'), camsId, name: str(), proxyId: nullable(id('prx')), proxyCameraId: nullable(str(32)), host: nullable(str(255)),
     protocol: nullable(en(['https', 'http'])), tlsServername: nullable(str(253)), cameraUser: nullable(str(64)), webUiUrl: nullable(str(512)), webUiNote: nullable(str(120)),
-  });
+    moveId: nullable(id('mv')),
+  };
+  const camera = obj(cameraProps, Object.keys(cameraProps).filter((k) => k !== 'moveId'));
   const account = all({ id: id('acc'), name: str(32), displayName: str(), revision: int(0), users: arr(user, 500), proxies: arr(proxy, 64), cameras: arr(camera, 256) });
   const snapshot = all({
     v: { const: 1 }, type: { const: 'cams-config' }, instance: all({ id: id('cms'), name: str(32), rotateBefore: nullable(int()) }),
@@ -75,10 +82,12 @@ export function buildCamsSchemas(mode: Mode): Record<string, S> {
     v: { const: 1 }, mode: en(['file', 'shadow', 'cams-admin']), version: str(64),
     appliedRevision: nullable(revision), cacheVerifiedAt: nullable(int()), lastPullAt: nullable(int()),
     held: arr(trustEntry, 200), keptOld: arr(trustEntry, 200),
+    // Camera moves: proxies cams holds because their address or CA changed (never a value), for the trusted-proxy banner. Optional in strict too.
+    heldProxies: arr(all({ accountId: id('acc'), proxyId: id('prx'), fields: arr(en(HELD_PROXY_FIELDS), HELD_PROXY_FIELDS.length, { minItems: 1, uniqueItems: true }) }), 64),
     shadow: nullable(all({ accountId: nullable(id('acc')), differences: int(), items: arr(str(200), 20) })),
     tokens: all({ managed: int(), pending: int(), legacy: int() }),
     problems: arr(obj({ code: str(64), accountId: nullable(id('acc')), detail: str(200) }, ['code'], ['accountId']), 50),
-  }, ['v', 'mode']);
+  }, ['v', 'mode'], ['heldProxies']);
   const reportResponse = all({ changed: bool, revision });
 
   // --- enrollment and errors -----------------------------------------------------
@@ -131,21 +140,21 @@ function unsignedSnapshot(kind: 'two-accounts' | 'empty'): Record<string, unknow
     {
       id: IDS.beta, name: 'beta', displayName: 'Beta', revision: 3,
       users: [{ email: 'klaus@example.org', role: 'viewer', disabled: false }],
-      proxies: [{ id: IDS.b1, name: 'b1', displayName: 'Beta proxy', url: 'https://beta.example.net:8480', adminUiUrl: null, tlsServername: null, caFingerprints: [], tokens: [] }],
-      cameras: [{ id: IDS.bcam1, camsId: 'cam1', name: 'Gate', proxyId: IDS.b1, proxyCameraId: 'cam1', host: 'from-proxy', protocol: 'https', tlsServername: null, cameraUser: 'cams', webUiUrl: null, webUiNote: null }],
+      proxies: [{ id: IDS.b1, name: 'b1', displayName: 'Beta proxy', url: 'https://beta.example.net:8480', adminUiUrl: null, tlsServername: null, caFingerprints: [], tokens: [], site: null }],
+      cameras: [{ id: IDS.bcam1, camsId: 'cam1', name: 'Gate', proxyId: IDS.b1, proxyCameraId: 'cam1', host: 'from-proxy', protocol: 'https', tlsServername: null, cameraUser: 'cams', webUiUrl: null, webUiNote: null, moveId: null }],
     },
     {
       id: IDS.home, name: 'home', displayName: 'Home', revision: 17,
       users: [{ email: 'klaus@example.org', role: 'admin', disabled: false }, { email: 'viewer@example.org', role: 'viewer', disabled: false }],
       proxies: [
         { id: IDS.cluster, name: 'cluster', displayName: 'Cluster', url: 'https://proxy.example.net:8480', adminUiUrl: null, tlsServername: 'proxy.example.net',
-          caFingerprints: ['SHA256:' + 'A1'.repeat(32)], tokens: [{ id: IDS.tok2, kind: 'admin', state: 'retiring', retireAt: NOW + 86_400_000 }] },
+          caFingerprints: ['SHA256:' + 'A1'.repeat(32)], tokens: [{ id: IDS.tok2, kind: 'admin', state: 'retiring', retireAt: NOW + 86_400_000 }], site: 'garage' },
         { id: IDS.pi, name: 'pi', displayName: 'Pi', url: 'http://127.0.0.1:8480', adminUiUrl: 'http://192.0.2.20:8480', tlsServername: null, caFingerprints: [],
-          tokens: [{ id: IDS.tok1, kind: 'client', state: 'active', retireAt: null }] },
+          tokens: [{ id: IDS.tok1, kind: 'client', state: 'active', retireAt: null }], site: null },
       ],
       cameras: [
-        { id: IDS.cam1, camsId: 'cam1', name: 'Backyard', proxyId: IDS.pi, proxyCameraId: 'cam1', host: 'from-proxy', protocol: 'https', tlsServername: 'cam1.example.net', cameraUser: 'cams', webUiUrl: null, webUiNote: null },
-        { id: IDS.cam2, camsId: 'cam2', name: 'Driveway', proxyId: IDS.cluster, proxyCameraId: 'cam2', host: '192.0.2.31', protocol: 'https', tlsServername: null, cameraUser: 'cams', webUiUrl: 'https://192.0.2.31', webUiNote: 'LAN only' },
+        { id: IDS.cam1, camsId: 'cam1', name: 'Backyard', proxyId: IDS.pi, proxyCameraId: 'cam1', host: 'from-proxy', protocol: 'https', tlsServername: 'cam1.example.net', cameraUser: 'cams', webUiUrl: null, webUiNote: null, moveId: null },
+        { id: IDS.cam2, camsId: 'cam2', name: 'Driveway', proxyId: IDS.cluster, proxyCameraId: 'cam2', host: '192.0.2.31', protocol: 'https', tlsServername: null, cameraUser: 'cams', webUiUrl: 'https://192.0.2.31', webUiNote: 'LAN only', moveId: 'mv_0123456789ABCDEFGHJK' },
       ],
     },
   ];
@@ -159,6 +168,7 @@ const report = (mode: 'shadow' | 'cams-admin') => ({
   v: 1, mode, version: '2026.10.07.1', appliedRevision: 'r:0123456789abcdef', cacheVerifiedAt: NOW, lastPullAt: NOW,
   held: mode === 'cams-admin' ? [{ accountId: IDS.home, camsId: 'cam1', fields: ['host'] }] : [],
   keptOld: [],
+  heldProxies: mode === 'cams-admin' ? [{ accountId: IDS.home, proxyId: IDS.cluster, fields: ['proxyUrl', 'caFingerprints'] }] : undefined,
   shadow: mode === 'shadow' ? { accountId: IDS.home, differences: 1, items: ['cam2: tlsServername'] } : null,
   tokens: { managed: 2, pending: 0, legacy: mode === 'shadow' ? 2 : 0 },
   problems: mode === 'shadow' ? [] : [{ code: 'snapshot_invalid', accountId: IDS.beta, detail: 'camera 3: protocol' }],

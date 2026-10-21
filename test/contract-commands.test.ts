@@ -8,6 +8,10 @@ import { join } from 'path';
 import { refCheck } from '../test-client/commands';
 import { keyFromSeed, privateFromB64, signEnvelope } from '../server/crypto/ed25519';
 import vectors from '../contract/v1/vectors.json';
+import { ALLOW_ENTRIES, WIRE_COMMANDS } from '../contract/build';
+import { generateKeyPairSync } from 'crypto';
+import { strictErrors, strictValid } from './helpers/contractV1';
+import { validateMessage } from '../server/contract';
 
 const DIR = join(__dirname, '../contract/v1/fixtures');
 const all = readdirSync(DIR).map((f) => ({ name: f.replace(/\.json$/, ''), ...JSON.parse(readFileSync(join(DIR, f), 'utf8')) }));
@@ -16,7 +20,7 @@ const resign = (m: Record<string, any>) => { const { sig: _s, ...rest } = m; ret
 
 describe('the reference proxy check agrees with every proxy fixture', () => {
   const cases = all.filter((x) => x.$expect?.receiver === 'proxy' || (x.schema === 'command' && x.name.startsWith('valid-')));
-  it('covers 41 fixtures (P2 17, P3 24)', () => expect(cases).toHaveLength(41));
+  it('covers 52 fixtures (P2 17, P3 24, moves 11)', () => expect(cases).toHaveLength(52));
   for (const f of cases) {
     it(f.name, () => {
       const c = f.$context;
@@ -93,5 +97,163 @@ describe('the reference proxy check agrees with every proxy fixture', () => {
   });
   it('another command running: busy', () => {
     expect(refCheck(valid.message, ctx({ running: true }))).toEqual({ kind: 'nack', code: 'busy' });
+  });
+});
+
+// --- camera move (contract amendments A4, A5, A33, X4, X13, X20) -----------------------------
+const MOVE = ['move.targets', 'move.open', 'move.offer', 'move.answer', 'move.start', 'move.go', 'move.release', 'move.finish', 'move.cancel'];
+const MV = 'mv_0123456789ABCDEFGHJK';
+const RQ = 'rq_0123456789ABCDEFGHJK';
+const FP = 'SHA256:' + 'AB'.repeat(32);
+const x25519 = generateKeyPairSync('x25519').publicKey.export({ type: 'spki', format: 'der' }).toString('base64');
+const KINDS = ['stills', 'clips', 'events', 'checks', 'archive'];
+const summary = () => Object.fromEntries(KINDS.map((k) => [k, { files: 2, bytes: 100, rows: 2, oldest: 1791273600000, newest: 1791273700000 }]));
+const plan = () => ({ transfer: true, kinds: ['clips', 'events'], space: 'all', targetSettings: null, budgetS: 3600, estimateS: 600 });
+const cameraConn = { proxyCameraId: 'cam1', name: 'Front door', host: '192.0.2.10', protocol: 'https', user: 'cams', onvifPort: 8000, rtspPort: 554, baichuanPort: 9000 };
+const spaceOk = { needed: 100, available: 1000, fits: true, perKind: { clips: 90, events: 10 }, retentionProposal: null };
+const args = (c: string): Record<string, unknown> => ({
+  'move.targets': { v: 1, requestId: RQ, targets: [{ proxyId: 'prx_0123456789ABCDEFGHJK', name: 'Garage', site: 'garage' }, { proxyId: 'prx_1123456789ABCDEFGHJK', name: 'Pi', site: null }] },
+  'move.open': { v: 1, moveId: MV, requestId: RQ, camera: 'cam1', tokenHash: 'sha256:' + 'a'.repeat(64), targetIp: '192.0.2.20' },
+  'move.offer': {
+    v: 1, moveId: MV, token: 'tok-placeholder', source: { proxyId: 'prx_0123456789ABCDEFGHJK', name: 'Garage', url: 'https://192.0.2.1:8480', caFingerprints: [FP], tlsServername: 'proxy.example.net' },
+    camera: { camsId: 'cam1', ...cameraConn }, summary: summary(), settings: { name: 'Front door' },
+  },
+  'move.answer': { v: 1, moveId: MV, requestId: RQ, target: { proxyId: 'prx_1123456789ABCDEFGHJK', name: 'Pi' }, accept: true, space: spaceOk, estimateS: 600 },
+  'move.start': { v: 1, moveId: MV, plan: plan(), settings: {}, done: ['clips:2026-10-20'] },
+  'move.go': { v: 1, moveId: MV, plan: plan(), targetPublicKey: x25519, expectedLeaf: FP },
+  'move.release': { v: 1, moveId: MV },
+  'move.finish': { v: 1, moveId: MV, role: 'source', abandoned: false },
+  'move.cancel': { v: 1, moveId: MV, role: 'target', copied: 'delete' },
+}[c] as Record<string, unknown>);
+const argsOk = (c: string, a: unknown) => strictValid(`commands/${c}.args`, a);
+const resultOk = (c: string, r: unknown) => strictValid(`commands/${c}.result`, r);
+
+describe('move commands', () => {
+  it.each(MOVE)('%s has args and result schemas, strict and lenient', (c) => {
+    expect(strictValid(`commands/${c}.args`, args(c)), `${c} ${strictErrors()}`).toBe(true);
+    for (const dir of ['strict/commands', 'commands']) {
+      expect(() => readFileSync(join(__dirname, '../contract/v1', dir, `${c}.args.schema.json`))).not.toThrow();
+      expect(() => readFileSync(join(__dirname, '../contract/v1', dir, `${c}.result.schema.json`))).not.toThrow();
+    }
+  });
+  it.each(MOVE)('%s is a wire command and refuses another args version, an extra field and a bad move id (strict)', (c) => {
+    expect(WIRE_COMMANDS as readonly string[]).toContain(c);
+    expect(argsOk(c, { ...args(c), v: 2 })).toBe(false);
+    expect(argsOk(c, { ...args(c), extra: 1 })).toBe(false);
+    if (c !== 'move.targets') expect(argsOk(c, { ...args(c), moveId: 'mv_0123456789ABCDEFGHJI' })).toBe(false);
+  });
+  it('heartbeat allow enum contains move.send and move.receive', () => {
+    expect(ALLOW_ENTRIES).toEqual(expect.arrayContaining(['move.send', 'move.receive']));
+    const hb = JSON.parse(readFileSync(join(__dirname, '../contract/v1/strict/heartbeat.schema.json'), 'utf8'));
+    expect(JSON.stringify(hb)).toContain('"move.send"');
+    expect(JSON.stringify(hb)).toContain('"move.receive"');
+  });
+  it('move.offer refuse reasons are the closed list; move.answer adds six', () => {
+    const offerReasons = ['moves_not_allowed', 'camera_unreachable', 'camera_limit', 'id_taken', 'busy', 'incompatible', 'no_site_ca', 'ca_does_not_cover_camera', 'external_cert'];
+    const answerReasons = [...offerReasons, 'other_account', 'target_offline', 'not_routed', 'host_overridden', 'target_failed', 'offer_expired'];
+    for (const reason of offerReasons) expect(resultOk('move.offer', { accept: false, reason }), reason).toBe(true);
+    expect(resultOk('move.offer', { accept: false, reason: 'other_account' })).toBe(false);
+    for (const reason of answerReasons) expect(argsOk('move.answer', { ...(args('move.answer') as object), accept: false, reason }), reason).toBe(true);
+    expect(argsOk('move.answer', { ...(args('move.answer') as object), accept: false, reason: 'nope' })).toBe(false);
+  });
+  it('move.offer result: accepted with space and probe rate, or refused with a reason', () => {
+    expect(resultOk('move.offer', { accept: true, space: spaceOk, probeBps: 1000000 })).toBe(true);
+    expect(resultOk('move.offer', { accept: true, space: spaceOk })).toBe(false);
+    expect(resultOk('move.offer', { accept: false })).toBe(false);
+    expect(resultOk('move.offer', { accept: true, reason: 'busy', space: spaceOk, probeBps: 1 })).toBe(false);
+  });
+  it('move.offer carries the token and the camera connection fields, never a password', () => {
+    const a = args('move.offer') as { camera: Record<string, unknown> };
+    expect(argsOk('move.offer', { ...(a as object), camera: { ...a.camera, password: 'x' } })).toBe(false);
+    expect(argsOk('move.offer', { ...(a as object), settings: { name: null } })).toBe(false);
+    expect(argsOk('move.offer', { ...(a as object), source: { ...(args('move.offer') as { source: object }).source, caFingerprints: ['sha256:ab'] } })).toBe(false);
+  });
+  it('move.targets: proxy id, name and a site that is null or a short lower-case name', () => {
+    const t = (site: unknown) => ({ ...(args('move.targets') as object), targets: [{ proxyId: 'prx_0123456789ABCDEFGHJK', name: 'Garage', site }] });
+    expect(argsOk('move.targets', t('a'.repeat(31)))).toBe(true);
+    expect(argsOk('move.targets', t('a'.repeat(32)))).toBe(false);
+    expect(argsOk('move.targets', t('-bad'))).toBe(false);
+    expect(argsOk('move.targets', t('Upper'))).toBe(false);
+    expect(resultOk('move.targets', {})).toBe(true);
+    expect(argsOk('move.targets', { v: 1, requestId: 'short', targets: [] })).toBe(false);
+  });
+  it('move.start result: an X25519 SPKI public key and the leaf fingerprint', () => {
+    expect(x25519).toHaveLength(60);
+    expect(resultOk('move.start', { publicKey: x25519, leafFingerprint: FP })).toBe(true);
+    expect(resultOk('move.start', { publicKey: x25519.slice(0, 40), leafFingerprint: FP })).toBe(false);
+    expect(resultOk('move.start', { publicKey: x25519, leafFingerprint: FP.toLowerCase() })).toBe(false);
+    expect(argsOk('move.go', { ...(args('move.go') as object), expectedLeaf: 'SHA256:ab' })).toBe(false);
+    expect(argsOk('move.go', { ...(args('move.go') as object), targetPublicKey: 'AAAA' })).toBe(false);
+  });
+  it('plan: kinds, space choice, target settings (paths to leaves) or null', () => {
+    const p = (o: object) => ({ ...(args('move.start') as object), plan: { ...plan(), ...o } });
+    expect(argsOk('move.start', p({ targetSettings: { 'retention.clipsDays': 30 } }))).toBe(true);
+    for (const space of ['all', 'omit', 'fit', 'retention']) expect(argsOk('move.start', p({ space })), space).toBe(true);
+    expect(argsOk('move.start', p({ space: 'some' }))).toBe(false);
+    expect(argsOk('move.start', p({ kinds: ['photos'] }))).toBe(false);
+    expect(argsOk('move.start', p({ targetSettings: { 'Bad path': 1 } }))).toBe(false);
+    expect(argsOk('move.start', p({ targetSettings: { 'retention.clipsDays': { a: 1 } } }))).toBe(false);
+    expect(argsOk('move.start', { ...(args('move.start') as object), done: ['clips'] })).toBe(false);
+  });
+  it('A4: move.cancel needs copied only when role is target', () => {
+    const c = (o: object) => ({ v: 1, moveId: MV, ...o });
+    expect(argsOk('move.cancel', c({ role: 'source', expectedLeaf: FP }))).toBe(true);
+    expect(argsOk('move.cancel', c({ role: 'source' }))).toBe(true);
+    expect(argsOk('move.cancel', c({ role: 'target', copied: 'age-out' }))).toBe(true);
+    expect(argsOk('move.cancel', c({ role: 'target' }))).toBe(false);
+    expect(argsOk('move.cancel', c({ role: 'target', copied: 'keep' }))).toBe(false);
+    expect(argsOk('move.cancel', c({ role: 'both', copied: 'delete' }))).toBe(false);
+  });
+  it('A5: move.finish names the side; X13: its result keys are only the five kinds', () => {
+    expect(argsOk('move.finish', { v: 1, moveId: MV, role: 'target', abandoned: true })).toBe(true);
+    expect(argsOk('move.finish', { v: 1, moveId: MV, abandoned: false })).toBe(false);
+    expect(argsOk('move.finish', { v: 1, moveId: MV, role: 'source' })).toBe(false);
+    expect(resultOk('move.finish', { deleted: { clips: { files: 3, bytes: 30 }, stills: { files: 0, bytes: 0 } } })).toBe(true);
+    expect(resultOk('move.finish', { deleted: {} })).toBe(true);
+    expect(resultOk('move.finish', { deleted: { recordings: { files: 1, bytes: 1 } } })).toBe(false);
+    expect(resultOk('move.finish', { deleted: { clips: { files: 3 } } })).toBe(false);
+  });
+  it('A33: the token is a plain string in move.offer only; move.open carries its hash', () => {
+    expect(argsOk('move.offer', { ...(args('move.offer') as object), token: undefined })).toBe(false);
+    expect(argsOk('move.open', { ...(args('move.open') as object), tokenHash: 'sha256:ABC' })).toBe(false);
+    expect(argsOk('move.open', { ...(args('move.open') as object), token: 'x' })).toBe(false);
+  });
+  it('move fixtures: the valid ones pass their args schema; the refused ones fail it or the allow check', () => {
+    const names = readdirSync(DIR).map((f) => f.replace(/\.json$/, '')).filter((n) => /-move-/.test(n));
+    expect(names.filter((n) => n.startsWith('valid-command-move-')).sort()).toEqual(MOVE.map((c) => `valid-command-${c.replace('.', '-')}`).sort());
+    for (const f of all.filter((x) => /^valid-command-move-/.test(x.name))) expect(argsOk(f.message.body.command, f.message.body.args), f.name).toBe(true);
+    const na = all.find((x) => x.name === 'refused-move-offer-not-allowed')!;
+    expect(na.$expect).toEqual({ runtime: 'not_allowed', strict: 'valid', receiver: 'proxy' });
+    expect(na.$context.allow).not.toContain('move.receive');
+    const tc = all.find((x) => x.name === 'refused-move-cancel-target-no-copied')!;
+    expect(tc.$expect.runtime).toBe('invalid_args');
+    expect(argsOk('move.cancel', tc.message.body.args)).toBe(false);
+  });
+  it('the reference check gates each move command by role: source commands need move.send, target commands move.receive', () => {
+    const send = ['move.targets', 'move.open', 'move.answer', 'move.go', 'move.release', 'move.finish'];
+    const recv = ['move.offer', 'move.start'];
+    for (const c of [...send, ...recv]) {
+      const f = all.find((x) => x.name === `valid-command-${c.replace('.', '-')}`)!;
+      const want = recv.includes(c) ? 'move.receive' : 'move.send';
+      const other = recv.includes(c) ? 'move.send' : 'move.receive';
+      expect(f.$context.allow, c).toEqual([want]);
+      expect(refCheck(f.message, { ...f.$context, seen: new Set() }).kind, c).toBe('run');
+      expect(refCheck(f.message, { ...f.$context, seen: new Set(), allow: [other] }), c).toEqual({ kind: 'nack', code: 'not_allowed' });
+    }
+  });
+  it('move.finish and move.cancel are gated by args.role', () => {
+    for (const [c, role, entry] of [['move.finish', 'target', 'move.receive'], ['move.cancel', 'source', 'move.send']] as const) {
+      const f = all.find((x) => x.name === `valid-command-${c.replace('.', '-')}`)!;
+      const m = structuredClone(f.message);
+      m.body.args.role = role;
+      if (role === 'source') delete m.body.args.copied;
+      const ctx = { ...f.$context, seen: new Set<string>() };
+      expect(refCheck(resign(m), { ...ctx, allow: [entry] }).kind, `${c} ${role}`).toBe('run');
+      expect(refCheck(resign(m), { ...ctx, seen: new Set(), allow: [entry === 'move.send' ? 'move.receive' : 'move.send'] }), `${c} ${role}`).toEqual({ kind: 'nack', code: 'not_allowed' });
+    }
+  });
+  it('a move command from a proxy is still unsupported_type at the server', () => {
+    const f = all.find((x) => x.name === 'valid-command-move-release')!;
+    expect(validateMessage(f.message)).toMatchObject({ ok: false, code: 'unsupported_type' });
   });
 });

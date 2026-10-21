@@ -12,10 +12,10 @@ import { ApiError } from '../registry';
 
 export interface SnapUser { email: string; role: 'admin' | 'viewer'; disabled: boolean }
 export interface SnapToken { id: string; kind: 'client' | 'admin'; state: 'pending' | 'active' | 'retiring' | 'revoked'; retireAt: number | null }
-export interface SnapProxy { id: string; name: string; displayName: string; url: string | null; adminUiUrl: string | null; tlsServername: string | null; caFingerprints: string[]; tokens: SnapToken[] }
+export interface SnapProxy { id: string; name: string; displayName: string; url: string | null; adminUiUrl: string | null; tlsServername: string | null; caFingerprints: string[]; tokens: SnapToken[]; site: string | null }
 export interface SnapCamera {
   id: string; camsId: string; name: string; proxyId: string | null; proxyCameraId: string | null; host: string | null; protocol: 'https' | 'http' | null;
-  tlsServername: string | null; cameraUser: string | null; webUiUrl: string | null; webUiNote: string | null;
+  tlsServername: string | null; cameraUser: string | null; webUiUrl: string | null; webUiNote: string | null; moveId: string | null;
 }
 export interface SnapAccount { id: string; name: string; displayName: string; revision: number; users: SnapUser[]; proxies: SnapProxy[]; cameras: SnapCamera[] }
 export interface Snapshot { v: 1; type: 'cams-config'; instance: { id: string; name: string; rotateBefore: number | null }; revision: string; generatedAt: number; accounts: SnapAccount[]; sig: string }
@@ -59,6 +59,8 @@ export function buildSnapshot(d: SnapshotDeps, instanceId: string): Snapshot {
         tokens: (q(`SELECT id, kind, state, retire_at FROM proxy_tokens WHERE proxy_id = ? AND holder = ?
           AND (state IN ('pending','active','retiring') OR (state = 'revoked' AND revoked_at > ?)) ORDER BY created_at, id`).all(p.id as string, instanceId, now - REVOKED_KEEP_MS) as Row[])
           .map((t) => ({ id: t.id as string, kind: t.kind as SnapToken['kind'], state: t.state as SnapToken['state'], retireAt: t.retire_at as number | null })),
+        // Camera moves (contract amendment): null until the camera-move plan's snapshot task fills it from the registry.
+        site: null,
       }));
     const listed = new Set(proxies.map((p) => p.id));
     const cameras = (q(`SELECT id, cams_id, name, proxy_id, proxy_camera_id, host, protocol, tls_servername, camera_user, web_ui_url, web_ui_note FROM cameras
@@ -71,6 +73,7 @@ export function buildSnapshot(d: SnapshotDeps, instanceId: string): Snapshot {
         id: c.id as string, camsId: c.cams_id as string, name: c.name as string, proxyId: c.proxy_id as string | null, proxyCameraId: c.proxy_camera_id as string | null,
         host: o?.host ?? (c.host as string | null), protocol: c.protocol as SnapCamera['protocol'], tlsServername: c.tls_servername as string | null, cameraUser: o?.cameraUser ?? (c.camera_user as string | null),
         webUiUrl: c.web_ui_url as string | null, webUiNote: c.web_ui_note as string | null,
+        moveId: null, // as site: filled by the camera-move plan's snapshot task
         };
       });
     return { id: accountId, name: a.name as string, displayName: a.display_name as string, revision: a.revision as number, users, proxies, cameras };

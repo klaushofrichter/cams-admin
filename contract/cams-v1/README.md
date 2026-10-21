@@ -83,11 +83,12 @@ A pending key that passes 1–7 becomes the instance's active key (any other act
     "users": [ { "email": "user@example.org", "role": "admin", "disabled": false } ],
     "proxies": [ { "id": "prx_…", "name": "pi", "displayName": "Pi", "url": "http://127.0.0.1:8480",
                    "adminUiUrl": "http://192.0.2.20:8480", "tlsServername": null, "caFingerprints": [],
-                   "tokens": [ { "id": "tok_…", "kind": "client", "state": "active", "retireAt": null } ] } ],
+                   "tokens": [ { "id": "tok_…", "kind": "client", "state": "active", "retireAt": null } ],
+                   "site": "garage" } ],
     "cameras": [ { "id": "cam_…", "camsId": "cam1", "name": "Backyard", "proxyId": "prx_…",
                    "proxyCameraId": "cam1", "host": "from-proxy", "protocol": "https",
                    "tlsServername": "cam1.example.net", "cameraUser": "cams",
-                   "webUiUrl": null, "webUiNote": null } ] } ],
+                   "webUiUrl": null, "webUiNote": null, "moveId": null } ] } ],
   "sig": "<b64>" }
 ```
 
@@ -97,6 +98,7 @@ A pending key that passes 1–7 becomes the instance's active key (any other act
 - `users`: every user row of the account (`email` lower case, `role` `admin` | `viewer`, `disabled`).
 - `proxies`: **only** the proxies with a route row for this instance that is not hidden (routes are default-deny: a proxy nobody routed to an instance never reaches it, security review 2026-10-07; §9.6 + ruling R4-3); `url` = the route's URL if it has one, else the proxy's registered `url` (may be `null`); `caFingerprints` as registered (`SHA256:` + 64 upper-case hex, no colons, as P1's `normaliseFingerprint` stores them; cams normalises with its own `normalizeFingerprint`); `tokens` = the `proxy_tokens` rows **held by this instance** (`holder` = the instance id) in states `pending`, `active`, `retiring` (and `revoked` ones for 7 days after `revoked_at`, so cams can drop its copy) — ids, kinds, states and `retireAt` only.
 - `cameras`: the account's cameras whose `proxyId` is null or a listed proxy; all P1 camera fields as registered (nulls kept).
+- `proxies[].site` (camera moves): the TLS site name the registry holds, `null` or `^[a-z0-9][a-z0-9-]{0,30}$` (cam-proxy's `tls.site`); `cameras[].moveId`: the id (`mv_` + 20) of the move that currently holds the camera, else `null`. Both are required in strict and optional at run time (an older snapshot stays readable); cams derives nothing from TLS names.
 - **No secrets, ever:** no password, token, hash, enrollment code or private key. A guard test fills every text column with a marker and checks the snapshot never contains a marker from `proxy_tokens.hash`, `enrollment_codes`, `cams_enrollment_codes` or a key.
 
 ## `POST /cams/v1/tokens`
@@ -123,12 +125,13 @@ Request (≤ 64 KiB):
   "appliedRevision": "r:0123456789abcdef", "cacheVerifiedAt": 1791273600000, "lastPullAt": 1791273600000,
   "held":    [ { "accountId": "acc_…", "camsId": "cam1", "fields": ["host"] } ],
   "keptOld": [ { "accountId": "acc_…", "camsId": "cam1", "fields": ["host"] } ],
+  "heldProxies": [ { "accountId": "acc_…", "proxyId": "prx_…", "fields": ["proxyUrl", "caFingerprints"] } ],
   "shadow":  { "accountId": "acc_…", "differences": 0, "items": [] },
   "tokens":  { "managed": 2, "pending": 0, "legacy": 0 },
   "problems": [ { "code": "snapshot_invalid", "accountId": "acc_…", "detail": "camera 3: protocol" } ] }
 ```
 
-`mode` `file` | `shadow` | `cams-admin`; `appliedRevision`, `cacheVerifiedAt`, `lastPullAt` may be null; `held`/`keptOld` ≤ 200 entries, `fields` ⊆ the trust fields `proxyUrl`, `caFingerprints`, `proxyTlsServername`, `host`, `protocol`, `tlsServername`; `shadow` null outside shadow mode, `items` ≤ 20 strings of ≤ 200 characters naming a camsId and a field, never a value; `problems` ≤ 50, `code` ≤ 64, `detail` ≤ 200. Answer `200 { "changed": <revision ≠ appliedRevision>, "revision": "r:…" }`. cams sends one at start, then at most one per 60 s, and at once after a held change is confirmed or kept.
+`mode` `file` | `shadow` | `cams-admin`; `appliedRevision`, `cacheVerifiedAt`, `lastPullAt` may be null; `held`/`keptOld` ≤ 200 entries, `fields` ⊆ the trust fields `proxyUrl`, `caFingerprints`, `proxyTlsServername`, `host`, `protocol`, `tlsServername`; `shadow` null outside shadow mode, `items` ≤ 20 strings of ≤ 200 characters naming a camsId and a field, never a value; `problems` ≤ 50, `code` ≤ 64, `detail` ≤ 200. Answer `200 { "changed": <revision ≠ appliedRevision>, "revision": "r:…" }`. cams sends one at start, then at most one per 60 s, and at once after a held change is confirmed or kept. `heldProxies` (camera moves) is optional, ≤ 64 entries, each exactly `{accountId, proxyId, fields}` with `fields` ⊆ `proxyUrl`, `caFingerprints`, `proxyTlsServername` (no values).
 
 ## Fixtures and vectors
 
