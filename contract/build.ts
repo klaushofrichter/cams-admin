@@ -234,8 +234,8 @@ export function buildSchemas(mode: Mode): Record<string, S> {
   const nameS = str(64, { minLength: 1 });
   const port = int(1, { maximum: 65535 });
   const chunkId: S = { type: 'string', pattern: `^(${MOVE_KINDS.join('|')}):[0-9]{4}-[0-9]{2}-[0-9]{2}$` };
-  // X25519 public key as SPKI DER (44 bytes), base64.
-  const x25519: S = { type: 'string', pattern: '^[A-Za-z0-9+/]{59}=$' };
+  // X25519 public key as SPKI DER (44 bytes), base64; the fixed prefix MCowBQYDK2VuAyEA refuses any other key type (an Ed25519 SPKI starts MCowBQYDK2Vw).
+  const x25519: S = { type: 'string', pattern: '^MCowBQYDK2VuAyEA[A-Za-z0-9+/]{43}=$' };
   const pathMap: S = { type: 'object', propertyNames: { pattern: PATH_PATTERN }, additionalProperties: leafValue, maxProperties: 64 };
   const moveSummary = all(kindMap(all({ files: int(), bytes: int(), rows: int(), oldest: nullable(int()), newest: nullable(int()) })));
   // The camera node of the cam-proxy config, as a move carries it: every leaf optional (cam-proxy leaves most unset), no nulls.
@@ -311,7 +311,11 @@ export function buildSchemas(mode: Mode): Record<string, S> {
       }),
       moveEvent('move.approve', { moveId: mvId, plan: movePlan }),
       moveEvent('move.cancel', { moveId: mvId, copied: copiedChoice }),
-      moveEvent('move.phase', { moveId: mvId, role: en(['source', 'target']), phase: en([...MOVE_PHASES]), ok: bool, code: str(64), detail: str() }, ['code', 'detail']),
+      {
+        ...moveEvent('move.phase', { moveId: mvId, role: en(['source', 'target']), phase: en([...MOVE_PHASES]), ok: bool, code: str(64), detail: str() }, ['code', 'detail']),
+        // a failed phase says why
+        if: { properties: { phase: { const: 'failed' } }, required: ['phase'] }, then: { properties: { code: str(64) }, required: ['code'] },
+      },
       moveEvent('move.progress', {
         moveId: mvId, chunks: arr(all({ id: chunkId, state: en([...CHUNK_STATES]) }), 4096), bytesDone: int(), bytesTotal: int(), rateBps: int(), etaS: int(),
       }),

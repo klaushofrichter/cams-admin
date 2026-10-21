@@ -236,6 +236,8 @@ Rulings of the camera-move plan that the schemas carry:
   camera's connection fields come from the source's config, never a password.
 - `move.phase` `failed` carries a `code` (for example `token_address`); the target
   step that gives up and a source guard that refuses the bound peer both send it.
+- `move.start.done` holds at most 512 chunk ids (the newest ones: the args stay
+  under the 16 KiB cap); the target's journal is authoritative for the rest.
 - A chunk `state` of `failed` means copied with failures; chunk ids are
   `<kind>:<YYYY-MM-DD>`.
 - `site` (`move.targets`, and cams-v1 `proxies[].site`) is null or

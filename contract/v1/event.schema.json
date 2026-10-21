@@ -718,7 +718,28 @@
             "role",
             "phase",
             "ok"
-          ]
+          ],
+          "if": {
+            "properties": {
+              "phase": {
+                "const": "failed"
+              }
+            },
+            "required": [
+              "phase"
+            ]
+          },
+          "then": {
+            "properties": {
+              "code": {
+                "type": "string",
+                "maxLength": 64
+              }
+            },
+            "required": [
+              "code"
+            ]
+          }
         },
         {
           "type": "object",

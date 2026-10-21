@@ -90,7 +90,7 @@ describe('cams-v1 contract', () => {
     for (const s of ['**only** the proxies with a route row for this instance', 'per named instance', 'held by this instance on this proxy', 'The `ETag` header is not covered by the signature']) expect(md).toContain(s);
   });
   it('camera moves: the snapshot proxy requires site and the camera requires moveId (both nullable) in strict, optional at run time', () => {
-    const snap = fixtures.find((f) => f.name === 'valid-snapshot-two-accounts')!.message;
+    const snap = structuredClone(fixtures.find((f) => f.name === 'valid-snapshot-two-accounts')!.message);
     const strict = strictCamsValidator('snapshot');
     const proxies = snap.accounts.flatMap((a: { proxies: Record<string, unknown>[] }) => a.proxies);
     const cameras = snap.accounts.flatMap((a: { cameras: Record<string, unknown>[] }) => a.cameras);

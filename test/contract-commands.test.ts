@@ -184,6 +184,13 @@ describe('move commands', () => {
     expect(resultOk('move.start', { publicKey: x25519, leafFingerprint: FP.toLowerCase() })).toBe(false);
     expect(argsOk('move.go', { ...(args('move.go') as object), expectedLeaf: 'SHA256:ab' })).toBe(false);
     expect(argsOk('move.go', { ...(args('move.go') as object), targetPublicKey: 'AAAA' })).toBe(false);
+    // An Ed25519 SPKI (MCowBQYDK2Vw...) has the same length but is not an X25519 key.
+    const ed = generateKeyPairSync('ed25519').publicKey.export({ type: 'spki', format: 'der' }).toString('base64');
+    expect(ed).toHaveLength(60);
+    expect(ed.startsWith('MCowBQYDK2Vw')).toBe(true);
+    expect(x25519.startsWith('MCowBQYDK2VuAyEA')).toBe(true);
+    expect(argsOk('move.go', { ...(args('move.go') as object), targetPublicKey: ed })).toBe(false);
+    expect(resultOk('move.start', { publicKey: ed, leafFingerprint: FP })).toBe(false);
   });
   it('plan: kinds, space choice, target settings (paths to leaves) or null', () => {
     const p = (o: object) => ({ ...(args('move.start') as object), plan: { ...plan(), ...o } });

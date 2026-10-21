@@ -38,8 +38,12 @@ describe('move events', () => {
   });
   it('move.phase: closed phase list, failed carries a code', () => {
     const phase = (p: string, extra: object = {}) => wrap({ kind: 'move.phase', moveId: MV, role: 'target', phase: p, ok: false, ...extra });
-    for (const p of ['opened', 'switching', 'switched', 'released', 'copying', 'copied', 'finished', 'cancelled', 'failed']) expect(strictValid('event', phase(p)), p).toBe(true);
+    for (const p of ['opened', 'switching', 'switched', 'released', 'copying', 'copied', 'finished', 'cancelled']) expect(strictValid('event', phase(p)), p).toBe(true);
     expect(strictValid('event', phase('failed', { code: 'token_address', detail: 'x' }))).toBe(true);
+    // failed without a code is invalid, strict and at run time
+    expect(strictValid('event', phase('failed'))).toBe(false);
+    expect(validateMessage(phase('failed'))).toMatchObject({ ok: false, code: 'bad_message' });
+    expect(validateMessage(phase('failed', { code: 'token_address' }))).toMatchObject({ ok: true });
     expect(strictValid('event', phase('exploded'))).toBe(false);
     expect(strictValid('event', phase('failed', { role: 'both' }))).toBe(false);
   });

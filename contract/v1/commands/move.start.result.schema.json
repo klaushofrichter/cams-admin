@@ -6,7 +6,7 @@
   "properties": {
     "publicKey": {
       "type": "string",
-      "pattern": "^[A-Za-z0-9+/]{59}=$"
+      "pattern": "^MCowBQYDK2VuAyEA[A-Za-z0-9+/]{43}=$"
     },
     "leafFingerprint": {
       "type": "string",

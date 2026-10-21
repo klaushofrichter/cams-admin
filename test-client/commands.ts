@@ -4,7 +4,8 @@
 // contract" in docs/superpowers/plans/2026-10-07-migration-p3-cams-admin.md). It must not
 // import cam-proxy code or server/ code other than crypto: it is the second
 // implementation the fixtures are checked against. Step 9 (rate limits) is
-// cam-proxy's and is left out here.
+// cam-proxy's and is left out here. Exception: the camera-move args are checked
+// with the strict schemas (not independent); the move role gating is independent.
 import { createHash } from 'crypto';
 import Ajv2020 from 'ajv/dist/2020';
 import type { ValidateFunction } from 'ajv';
@@ -99,8 +100,8 @@ export function p3ArgsOk(command: string, a: Record<string, any>): boolean {
   return false;
 }
 
-// The camera-move args are checked against the strict args schemas of contract/v1 (their written source is contract/build.ts: the move
-// commands have many nested shapes, and the schema is the contract text for them).
+// The camera-move args are checked with the strict args schemas of contract/v1 (written in contract/build.ts), so that part is NOT
+// independent of the schemas; the role gating below (entry per command, args.role for finish and cancel) is written from the contract text.
 const moveAjv = new Ajv2020({ strict: true });
 const moveValidators = new Map<string, ValidateFunction>();
 export function moveArgsOk(command: string, a: unknown): boolean {
