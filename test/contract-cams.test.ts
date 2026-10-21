@@ -89,4 +89,49 @@ describe('cams-v1 contract', () => {
     // a per-holder token cap (M3), and the ETag header is not signed (info).
     for (const s of ['**only** the proxies with a route row for this instance', 'per named instance', 'held by this instance on this proxy', 'The `ETag` header is not covered by the signature']) expect(md).toContain(s);
   });
+  it('camera moves: the snapshot proxy requires site and the camera requires moveId (both nullable) in strict, optional at run time', () => {
+    const snap = structuredClone(fixtures.find((f) => f.name === 'valid-snapshot-two-accounts')!.message);
+    const strict = strictCamsValidator('snapshot');
+    const proxies = snap.accounts.flatMap((a: { proxies: Record<string, unknown>[] }) => a.proxies);
+    const cameras = snap.accounts.flatMap((a: { cameras: Record<string, unknown>[] }) => a.cameras);
+    expect(proxies.map((p: { site: unknown }) => p.site)).toEqual(expect.arrayContaining(['garage', null]));
+    expect(cameras.map((c: { moveId: unknown }) => c.moveId)).toEqual(expect.arrayContaining(['mv_0123456789ABCDEFGHJK', null]));
+    for (const [list, key] of [[proxies, 'site'], [cameras, 'moveId']] as const) {
+      const keep = list[0][key];
+      delete list[0][key];
+      expect(strict(snap), `${key} missing`).toBe(false);
+      expect(validateCams('snapshot', snap).ok, `${key} missing, run time`).toBe(true);
+      list[0][key] = keep;
+    }
+  });
+  it('camera moves: site is null or ^[a-z0-9][a-z0-9-]{0,30}$ (X21, C14); moveId is null or mv_ + 20', () => {
+    const snap = structuredClone(fixtures.find((f) => f.name === 'valid-snapshot-two-accounts')!.message);
+    const strict = strictCamsValidator('snapshot');
+    const proxy = snap.accounts[1].proxies[0];
+    const camera = snap.accounts[1].cameras[0];
+    for (const site of ['a', 'a'.repeat(31), 'garage-2', null]) { proxy.site = site; expect(strict(snap), String(site)).toBe(true); }
+    for (const site of ['', 'a'.repeat(32), '-a', 'A', 'a_b', 'a.b']) { proxy.site = site; expect(strict(snap), site).toBe(false); expect(validateCams('snapshot', snap).ok, site).toBe(false); }
+    proxy.site = null;
+    for (const moveId of ['mv_0123456789ABCDEFGHJI', 'mv_0123456789abcdefghjk', 'cam_0123456789ABCDEFGHJK', '']) { camera.moveId = moveId; expect(strict(snap), moveId).toBe(false); }
+  });
+  it('camera moves: report heldProxies is optional, at most 64 entries, each exactly {accountId, proxyId, fields}', () => {
+    const rep = structuredClone(fixtures.find((f) => f.name === 'valid-report-cams-admin')!.message);
+    const strict = strictCamsValidator('report-request');
+    expect(strict(rep)).toBe(true); // heldProxies absent
+    const entry = { accountId: 'acc_00000000000000000001', proxyId: 'prx_00000000000000000001', fields: ['proxyUrl', 'caFingerprints', 'proxyTlsServername'] };
+    rep.heldProxies = [entry];
+    expect(strict(rep)).toBe(true);
+    expect(validateCams('report-request', rep).ok).toBe(true);
+    rep.heldProxies = Array.from({ length: 64 }, () => entry);
+    expect(strict(rep)).toBe(true);
+    rep.heldProxies = Array.from({ length: 65 }, () => entry);
+    expect(strict(rep)).toBe(false);
+    for (const bad of [{ ...entry, fields: ['host'] }, { ...entry, fields: [] }, { ...entry, fields: ['proxyUrl', 'proxyUrl'] }, { ...entry, extra: 1 }, { accountId: entry.accountId, fields: entry.fields }, { ...entry, proxyId: 'cam1' }]) {
+      rep.heldProxies = [bad];
+      expect(strict(rep), JSON.stringify(bad)).toBe(false);
+    }
+  });
+  it('camera moves: a fixture carries heldProxies', () => {
+    expect(fixtures.find((f) => f.name === 'valid-report-cams-admin')!.message.heldProxies).toHaveLength(1);
+  });
 });

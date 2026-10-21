@@ -54,6 +54,16 @@ const envelopeCases = [
   { kind: 'command', key: 'server', envelope: env('command', 13, { proxyId: PRX, connId: CON, cmdId: 'cmd_7123456789ABCDEFGHJK', exp: 1791273600013 + 60000, actor: 'admin@example.org', command: 'config.unset', args: { v: 1, dryRun: true, baseRevision: 'sha256:' + 'a'.repeat(64), paths: ['sse.pingS', 'cameras.cam1.name'] } }) },
   // A camera name the proxy refuses (U+061C): JCS writes it as UTF-8, both sides must sign the same bytes.
   { kind: 'command', key: 'server', envelope: env('command', 14, { proxyId: PRX, connId: CON, cmdId: 'cmd_8123456789ABCDEFGHJK', exp: 1791273600014 + 60000, actor: 'admin@example.org', command: 'camera.name.set', args: { v: 1, camera: 'cam1', name: 'evil\u061Cname' } }) },
+  // Camera moves: a move.offer (non-ASCII camera name, nested objects, null) and a move.progress event.
+  { kind: 'command', key: 'server', envelope: env('command', 15, { proxyId: PRX, connId: CON, cmdId: 'cmd_9123456789ABCDEFGHJK', exp: 1791273600015 + 60000, actor: 'admin@example.org', command: 'move.offer', args: {
+    v: 1, moveId: 'mv_0123456789ABCDEFGHJK', token: 'example-move-token-not-a-secret',
+    source: { proxyId: PRX, name: 'Garage', url: 'https://192.0.2.1:8480', caFingerprints: ['SHA256:' + 'AB'.repeat(32)], tlsServername: 'garage.example.net' },
+    camera: { camsId: 'cam1', proxyCameraId: 'cam1', name: 'Garage S\u00fcd', host: '192.0.2.10', protocol: 'https', user: 'cams', onvifPort: 8000, rtspPort: 554, baichuanPort: 9000 },
+    summary: { stills: { files: 0, bytes: 0, rows: 0, oldest: null, newest: null }, clips: { files: 120, bytes: 52428800, rows: 130, oldest: 1788681600000, newest: 1791273540000 },
+      events: { files: 0, bytes: 0, rows: 130, oldest: 1788681600000, newest: 1791273540000 }, checks: { files: 0, bytes: 0, rows: 0, oldest: null, newest: null }, archive: { files: 0, bytes: 0, rows: 0, oldest: null, newest: null } },
+    settings: { name: 'Garage S\u00fcd', ftp: { enabled: true, stream: 'main' } } } }) },
+  { kind: 'event', key: 'proxy', envelope: env('event', 16, { proxyId: PRX, connId: CON, kind: 'move.progress', moveId: 'mv_0123456789ABCDEFGHJK',
+    chunks: [{ id: 'clips:2026-10-20', state: 'verified' }, { id: 'events:2026-10-20', state: 'failed' }], bytesDone: 10485760, bytesTotal: 52428800, rateBps: 1048576, etaS: 40 }) },
 ].map((c) => ({ ...c, text: jcs(c.envelope), sig: signEnvelope(privateFromB64(keys[c.key].privateKey), c.envelope) }));
 const out = {
   $comment: 'Fixed Ed25519 test keys (PKCS#8 = 302e020100300506032b657004220420 + seed) and the signed strings of spec 8.2/8.3. Test keys only: never use them for a real proxy.',

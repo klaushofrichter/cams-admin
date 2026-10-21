@@ -189,6 +189,60 @@ differs, is reported `pending` (not a failure) by
 `scripts/contract/cam-proxy-commands.ts`, but only while cam-proxy implements
 **no** P3 command. Once one is in its `IMPLEMENTED`, every P3 fixture must
 match (nothing pending).
+## Camera moves
+
+Additive: the envelope stays v1, signatures and JCS unchanged. Nine commands
+(`move.targets`, `move.open`, `move.offer`, `move.answer`, `move.start`,
+`move.go`, `move.release`, `move.finish`, `move.cancel`; all `v:1`, in the strict
+`command` enum, each with `commands/<name>.args` and `.result` schemas) and six
+`event` kinds without a `cmdId` (`move.targets`, `move.request`,
+`move.approve`, `move.cancel`, `move.phase`, `move.progress`; they keep the
+`proxyId` and `connId` of `command.done`). The wire shapes are the schemas and the
+`valid-command-move-*` / `valid-event-move-*` fixtures; the design is cam-proxy's
+`docs/superpowers/specs/2026-10-21-camera-move-design.md`.
+
+**Allow entries** (new in the strict heartbeat enum, both local, off by default):
+`move.send` (the source side: `move.targets`, `move.open`, `move.answer`,
+`move.go`, `move.release`, and `move.finish` / `move.cancel` with `args.role` =
+`source`) and `move.receive` (the target side: `move.offer`, `move.start`, and
+`move.finish` / `move.cancel` with `args.role` = `target`).
+
+Changed steps of the check order:
+
+- **Step 8 (allowed):** each move command needs its entry; `move.finish` and
+  `move.cancel` pass with either move entry here (their role is not checked yet).
+- **Step 9 (rate, in memory):** every `move.*` command counts toward one window of
+  60 per minute per proxy (the same as `config.get`); no journal budget.
+- **Step 11 (entries):** `move.finish` and `move.cancel` need the entry of
+  `args.role` (`source` -> `move.send`, `target` -> `move.receive`) -> else
+  `not_allowed` (after the args check, as `tokens.apply.admin`).
+
+Rulings of the camera-move plan that the schemas carry:
+
+- `requestId` is `rq_` + 20 characters like every other id; `camera` (in
+  `move.targets`, `move.open`, and `move.request.camera.proxyCameraId`) is the
+  proxy's camera id; `target` is a `prx_` id.
+- `move.cancel` (command): `copied` (`delete` | `age-out`) is required only when
+  `role` is `target`; a source cancel carries `expectedLeaf` instead (optional).
+- `move.finish` (command) names the side with `role`; the proxy of that side ends
+  its part (a target stops its copier and closes its journal). Its result
+  `deleted` has only the five kinds (`stills`, `clips`, `events`, `checks`,
+  `archive`) as keys, each `{files, bytes}`; the recordings cache is not content.
+- The plaintext `token` is in a non-final `move.offer`'s args only (it is not
+  stored once the command is final); `move.open` carries its `tokenHash`.
+- `settings` is the camera node of the proxy's config: every leaf optional,
+  never null, closed objects. `summary` has all five kinds, times nullable.
+- `move.request` also carries `actor` `{origin: local | managed, label}`; the
+  camera's connection fields come from the source's config, never a password.
+- `move.phase` `failed` carries a `code` (for example `token_address`); the target
+  step that gives up and a source guard that refuses the bound peer both send it.
+- `move.start.done` holds at most 512 chunk ids (the newest ones: the args stay
+  under the 16 KiB cap); the target's journal is authoritative for the rest.
+- A chunk `state` of `failed` means copied with failures; chunk ids are
+  `<kind>:<YYYY-MM-DD>`.
+- `site` (`move.targets`, and cams-v1 `proxies[].site`) is null or
+  `^[a-z0-9][a-z0-9-]{0,30}$`, cam-proxy's `tls.site`.
+
 ## cams-v1 (P4: the cams service API)
 
 `cams-v1/` is a second contract, between a cams instance and cams-admin

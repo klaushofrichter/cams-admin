@@ -202,6 +202,17 @@
                     "additionalProperties": false
                   },
                   "maxItems": 64
+                },
+                "site": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "pattern": "^[a-z0-9][a-z0-9-]{0,30}$"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 }
               },
               "required": [
@@ -212,7 +223,8 @@
                 "adminUiUrl",
                 "tlsServername",
                 "caFingerprints",
-                "tokens"
+                "tokens",
+                "site"
               ],
               "additionalProperties": false
             },
@@ -325,6 +337,17 @@
                       "type": "null"
                     }
                   ]
+                },
+                "moveId": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "pattern": "^mv_[0-9A-HJKMNP-TV-Z]{20}$"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 }
               },
               "required": [
@@ -338,7 +361,8 @@
                 "tlsServername",
                 "cameraUser",
                 "webUiUrl",
-                "webUiNote"
+                "webUiNote",
+                "moveId"
               ],
               "additionalProperties": false
             },
