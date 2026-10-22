@@ -47,3 +47,16 @@ export function issueBlocked(kind: 'client' | 'admin', policy: string | undefine
   if (kind === 'admin' && !allow.includes('tokens.apply.admin')) return 'the proxy does not allow tokens.apply.admin';
   return null;
 }
+
+// The args of a move.* command as one line for the command history. Fields are named one by one:
+// never the token, its hash, the target's public key or leaf fingerprint, or an address.
+export function moveArgsText(command: string, a: Record<string, any> = {}): string {
+  if (!command.startsWith('move.')) return '';
+  const parts: string[] = [];
+  if (typeof a.moveId === 'string') parts.push(`move ${a.moveId}`);
+  if ((command === 'move.finish' || command === 'move.cancel') && typeof a.role === 'string') parts.push(a.role);
+  if (command === 'move.finish' && a.abandoned === true) parts.push('abandoned');
+  if (command === 'move.cancel' && a.copied) parts.push(a.copied === 'delete' ? 'delete what was copied' : 'let it age out');
+  if (command === 'move.answer' && typeof a.accept === 'boolean') parts.push(a.accept ? 'accepted' : `refused${a.reason ? ` (${a.reason})` : ''}`);
+  return parts.join(', ');
+}

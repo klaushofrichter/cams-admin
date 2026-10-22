@@ -3,7 +3,7 @@
   // history; P3 rows show their args and result, and a real settings write
   // can be rolled back (a dry run of the rollback first, then its Apply).
   import { api, errorText } from '../lib/api';
-  import { cmdStateClass, cmdStateText, commandsText } from '../lib/commands';
+  import { cmdStateClass, cmdStateText, commandsText, moveArgsText } from '../lib/commands';
   import { rollbackable, stateLine, valueText, waitCommand, type Change } from '../lib/config';
   import { when } from '../lib/format';
   import DiffTable from './DiffTable.svelte';
@@ -40,6 +40,7 @@
     if (c.command === 'config.rollback') return `undo ${a.cmdId}`;
     if (c.command === 'camera.action') return `${a.action}${a.camera ? ` on ${a.camera}` : ''}`;
     if (c.command === 'camera.name.set') return `${a.camera} → "${a.name}"`;
+    if (c.command.startsWith('move.')) return moveArgsText(c.command, a);
     return '';
   }
   const label = (c: any) => (c.dryRun ? 'dry run' : '');
@@ -83,7 +84,7 @@
             <tr data-testid="command-{c.id}">
               <td>{when(c.createdAt)}</td><td>{c.actor}</td>
               <td class="mono">{c.command}{c.args?.revision !== undefined ? ` r${c.args.revision}` : ''}{c.attempts > 1 ? ` ×${c.attempts}` : ''}{#if label(c)} <span class="badge">{label(c)}</span>{/if}
-                {#if P3.includes(c.command) && argsText(c)}<div class="muted small" data-testid="command-args-{c.id}">{argsText(c)}</div>{/if}
+                {#if (P3.includes(c.command) || c.command.startsWith('move.')) && argsText(c)}<div class="muted small" data-testid="command-args-{c.id}">{argsText(c)}</div>{/if}
               </td>
               <td><span class="chip {cmdStateClass(c.state)}" data-testid="command-state-{c.id}">{P3.includes(c.command) || c.command === 'config.get' ? (c.state === 'done' ? 'done' : stateLine(c)) : cmdStateText(c.state, c.outcomeCode)}</span></td>
               <td>{#if rollbackable(c)}<button class="btn" data-testid="command-rollback-{c.id}" onclick={() => rollbackPreview(c)}>Roll back</button>{/if}</td>

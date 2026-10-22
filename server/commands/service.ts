@@ -32,7 +32,8 @@ const OPEN = `('queued','sent','received')`;
 const FINAL = ['done', 'refused', 'failed', 'expired'];
 
 export type CommandState = 'queued' | 'sent' | 'received' | 'done' | 'refused' | 'failed' | 'expired' | 'unknown';
-export type WireCommand = 'tokens.apply' | 'config.get' | 'config.set' | 'config.unset' | 'config.rollback' | 'camera.action' | 'camera.name.set' | 'proxy.restart';
+export type WireCommand = 'tokens.apply' | 'config.get' | 'config.set' | 'config.unset' | 'config.rollback' | 'camera.action' | 'camera.name.set' | 'proxy.restart'
+  | 'move.targets' | 'move.open' | 'move.offer' | 'move.answer' | 'move.start' | 'move.go' | 'move.release' | 'move.finish' | 'move.cancel';
 export interface CommandRow {
   id: string; accountId: string; proxyId: string | null; actor: string; command: string; args: Record<string, unknown>; state: CommandState;
   outcomeCode: string | null; result: Record<string, unknown> | null; createdAt: number; sentAt: number | null; finishedAt: number | null; attempts: number;
@@ -50,6 +51,15 @@ const VALUE_MAX = 200;
 const clampValue = (x: unknown) => (typeof x === 'string' && x.length > VALUE_MAX ? x.slice(0, VALUE_MAX) : x);
 const pick = (args: Record<string, unknown>, keys: string[]) => Object.fromEntries(keys.filter((k) => k in args).map((k) => [k, args[k]]));
 
+// Args that carry or derive from a move secret: never shown, never kept after the command is final.
+const MOVE_SECRET_ARGS = ['token', 'tokenHash', 'targetPublicKey'];
+
+function moveStartPublic(result: unknown): boolean {
+  if (!validateResultPayload('move.start', result)) return false;
+  const { publicKey: _k, ...rest } = result as Record<string, unknown>;
+  return !redactSecrets(rest).changed;
+}
+
 // What a person may see of a command's args: never a full hash (8 hex
 // digits), never a setting value over 200 characters (R3-19).
 export function summariseArgs(command: string, args: Record<string, unknown>): Record<string, unknown> {
@@ -63,6 +73,7 @@ export function summariseArgs(command: string, args: Record<string, unknown>): R
     case 'camera.action': return pick(args, ['v', 'camera', 'action', 'input']);
     case 'camera.name.set': return { v: args.v, camera: args.camera, name: clampValue(args.name) };
   }
+  if (command.startsWith('move.')) return sanitize(Object.fromEntries(Object.entries(args).filter(([k]) => !MOVE_SECRET_ARGS.includes(k)))) as Record<string, unknown>;
   if (command !== 'tokens.apply') return { v: args.v };
   const tokens = Array.isArray(args.tokens) ? (args.tokens as Record<string, unknown>[]) : [];
   return {
@@ -78,6 +89,10 @@ export function requiredEntries(command: string, args: Record<string, unknown>):
     return ['tokens.apply', ...(tokens.some((t) => t?.kind === 'admin') ? ['tokens.apply.admin'] : [])];
   }
   if (command === 'camera.action') return [`camera.action:${String(args.action)}`];
+  // Camera move (R3): the source's commands need move.send, the target's move.receive; finish and cancel go by args.role.
+  if (command === 'move.finish' || command === 'move.cancel') return [args.role === 'target' ? 'move.receive' : 'move.send'];
+  if (command === 'move.offer' || command === 'move.start') return ['move.receive'];
+  if (command.startsWith('move.')) return ['move.send'];
   return [command];
 }
 
@@ -261,12 +276,18 @@ export class Commands {
     tx(this.d.db, () => this.q(`UPDATE commands SET state = ?, sent_at = ?, attempts = attempts + 1 WHERE id = ?`).run(head.state === 'received' ? 'received' : 'sent', now, head.id));
   }
 
+  // The move token's plaintext lives in the move.offer args only while the command is open (it is re-sent with them); once final the stored args are the summary.
+  private scrubMoveArgs(r: Raw): void {
+    if (r.command === 'move.offer') this.q(`UPDATE commands SET args = ? WHERE id = ?`).run(JSON.stringify(summariseArgs(r.command, r.rawArgs)), r.id);
+  }
+
   private giveUp(r: Raw, now: number): void {
     const state: CommandState = r.state === 'queued' && r.attempts === 0 ? 'expired' : 'unknown';
     tx(this.d.db, () => {
       this.q(`UPDATE commands SET state = ?, finished_at = ? WHERE id = ? AND state IN ${OPEN}`).run(state, now, r.id);
       // Never sent: its dry run may be applied again (#20).
       if (state === 'expired') this.q(`UPDATE commands SET preview_of = NULL WHERE id = ?`).run(r.id);
+      this.scrubMoveArgs(r);
       this.d.audit.write({ actorType: 'system', actor: 'system', action: 'command-expired', accountId: r.accountId, targetType: 'proxy', targetId: r.proxyId, outcome: 'failed', detail: { cmdId: r.id, command: r.command, state } });
     });
     this.inflightConn.delete(r.id);
@@ -315,7 +336,10 @@ export class Commands {
     // I2: nothing secret-shaped from a proxy is stored or served. A redacted
     // result loses its signature (the signed bytes held the secret).
     let stored: Record<string, unknown> = m as unknown as Record<string, unknown>;
-    if (r.command !== 'tokens.apply' && b.result !== undefined) {
+    // move.start's publicKey is the target's X25519 public key (public, S §9.3; its name only looks secret): kept when
+    // the result is the contract's and nothing else in it looks secret.
+    const keepAsIs = r.command === 'tokens.apply' || (r.command === 'move.start' && state === 'done' && moveStartPublic(b.result));
+    if (!keepAsIs && b.result !== undefined) {
       const red = redactSecrets(b.result);
       if (red.changed) {
         const { sig: _sig, ...rest } = stored;
@@ -330,6 +354,7 @@ export class Commands {
         .run(state, typeof b.code === 'string' ? b.code.slice(0, 64) : b.status === 'conflict' ? 'conflict' : null, text.length <= 98304 ? text : null, typeof stored.sig === 'string' ? stored.sig : null, this.d.clock.now(), r.id);
       // A refused apply never ran: its dry run may be applied again (#20).
       if (state === 'refused') this.q(`UPDATE commands SET preview_of = NULL WHERE id = ? AND preview_of IS NOT NULL`).run(r.id);
+      this.scrubMoveArgs(r);
       this.d.audit.write({
         actorType: 'proxy', actor: c.proxyId!, action: 'command-result', accountId: r.accountId, targetType: 'proxy', targetId: c.proxyId,
         outcome: state === 'done' ? 'ok' : state === 'refused' ? 'refused' : 'failed',

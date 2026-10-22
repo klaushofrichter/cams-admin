@@ -212,6 +212,13 @@ describe('the v1 contract', () => {
       expect(r.remote, p).not.toContain(p);
       expect(r.denied.some((d: string) => under(p, d)), p).toBe(true);
     }
+    // cam-proxy marks these local only (the camera-move journal and the moved marker): cams-admin never sets them.
+    for (const p of ['cameras.*.moved', 'moves']) {
+      expect(r.remote, p).not.toContain(p);
+      expect(r.denied, p).toContain(p);
+    }
+    expect(r.denied.some((d: string) => under('moves.maxCameras', d))).toBe(true);
+    expect(r.denied.some((d: string) => under('cameras.*.moved', d))).toBe(true);
     for (const p of r.remote) expect(p.endsWith('.enabled'), p).toBe(false);
     // No remote path looks secret; the secret pattern catches the usual names.
     const secret = new RegExp(SECRET_KEY_PATTERN, 'i');

@@ -28,10 +28,11 @@ export interface CameraOverride {
   createdAt: number; updatedAt: number; version: number;
 }
 export type TrustEntry = { accountId: string; camsId: string; fields: string[] };
+export type ProxyTrustEntry = { accountId: string; proxyId: string; fields: string[] };
 // The contract's report-request (contract/cams-v1, lenient: only v and mode are sure).
 export interface CamsReport {
   v: 1; mode: 'file' | 'shadow' | 'cams-admin'; version?: string; appliedRevision?: string | null; cacheVerifiedAt?: number | null; lastPullAt?: number | null;
-  held?: TrustEntry[]; keptOld?: TrustEntry[]; shadow?: { accountId: string | null; differences: number; items: string[] } | null;
+  held?: TrustEntry[]; heldProxies?: ProxyTrustEntry[]; keptOld?: TrustEntry[]; shadow?: { accountId: string | null; differences: number; items: string[] } | null;
   tokens?: { managed: number; pending: number; legacy: number }; problems?: { code: string; accountId?: string | null; detail?: string }[];
 }
 export interface CamsLive { lastSeenAt: number | null; lastPullAt: number | null; lastPullStatus: 200 | 304 | null; report: CamsReport | null; reportAt: number | null; shadowZeroSince: number | null }

@@ -157,6 +157,9 @@ that turns capture or a listener on/off) and health thresholds
 LOCAL ONLY in P3. A compromised cams-admin must not be able to blind a proxy
 silently, and `ftp.enabled=true` opens ports (network exposure needs Klaus).
 Cost if wrong: these stay local; adding them later is a contract change.
+`cameras.*.moved` and `moves` (the moved marker of a camera and the `moves.*`
+settings such as `moves.maxCameras`) are also in `denied`: cam-proxy marks them local only, and cams-admin
+refuses to set them (`not_remote_settable`) whatever a proxy reports.
 
 **Camera names** (`CAMERA_NAME_PATTERN`, a `u` regex, from cam-proxy #196):
 1–64 assigned characters (no `Cn`), none of them a control (`Cc`), a format
@@ -218,6 +221,16 @@ Changed steps of the check order:
   `not_allowed` (after the args check, as `tokens.apply.admin`).
 
 Rulings of the camera-move plan that the schemas carry:
+
+- `move.answer.reason` is the `move.offer` refusal reasons (`moves_not_allowed`,
+  `camera_unreachable`, `camera_limit`, `id_taken`, `busy`, `incompatible`,
+  `no_site_ca`, `ca_does_not_cover_camera`, `external_cert`) plus the cams-admin-only
+  reasons `other_account`, `target_offline`, `not_routed`, `host_overridden`,
+  `target_failed`, `offer_expired`, `not_registered` (the requested camera is not in
+  cams-admin's registry) and `internal` (the source's `move.open` failed with
+  anything else, or ended unknown or expired). They are answered at once so the
+  source page does not wait. A proxy that validates the reason against a closed
+  list must add `not_registered` and `internal`.
 
 - `requestId` is `rq_` + 20 characters like every other id; `camera` (in
   `move.targets`, `move.open`, and `move.request.camera.proxyCameraId`) is the

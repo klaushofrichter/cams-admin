@@ -119,6 +119,7 @@
       {#if report?.tokens}<div>Tokens: managed {report.tokens.managed}, pending {report.tokens.pending}, legacy {report.tokens.legacy}</div>{/if}
     </div>
     {#if report?.held?.length}<div data-testid="cms-held"><b>Held changes</b> (cams waits for an account admin):{#each report.held as h}<div class="mono">{accounts.find((a) => a.id === h.accountId)?.name ?? h.accountId}/{h.camsId}: {h.fields.join(', ')}</div>{/each}</div>{/if}
+    {#if report?.heldProxies?.length}<div data-testid="cms-held-proxies"><b>Held proxy changes</b> (cams waits for an account admin):{#each report.heldProxies as h}<div class="mono">{accounts.find((a) => a.id === h.accountId)?.name ?? h.accountId}/{h.proxyId}: {h.fields.join(', ')}</div>{/each}</div>{/if}
     {#if report?.keptOld?.length}<div data-testid="cms-kept-old"><b>Kept old values</b>:{#each report.keptOld as h}<div class="mono">{accounts.find((a) => a.id === h.accountId)?.name ?? h.accountId}/{h.camsId}: {h.fields.join(', ')}</div>{/each}</div>{/if}
     {#if report?.shadow?.items?.length}<div><b>Shadow differences</b>{#each report.shadow.items as it}<div class="mono">{it}</div>{/each}</div>{/if}
     {#if report?.problems?.length}<div data-testid="cms-problems"><b>Problems</b>{#each report.problems as p}<div class="mono">{p.code}{p.detail ? `: ${p.detail}` : ''}</div>{/each}</div>{/if}

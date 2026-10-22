@@ -10,7 +10,7 @@ import { tmpDir } from './helpers/tmp';
 import { makeRegistry, ACTOR } from './helpers/registry';
 
 const TABLES = ['accounts', 'account_users', 'proxies', 'proxy_keys', 'enrollment_codes', 'cameras', 'sims', 'proxy_status', 'status_events', 'audit_log', 'sessions', 'jobs', 'meta', 'commands', 'proxy_tokens', 'proxy_token_state',
-  'cams_instances', 'cams_instance_keys', 'cams_enrollment_codes', 'cams_instance_accounts', 'cams_instance_routes', 'config_revision', 'proxy_config', 'cams_camera_overrides'];
+  'cams_instances', 'cams_instance_keys', 'cams_enrollment_codes', 'cams_instance_accounts', 'cams_instance_routes', 'config_revision', 'proxy_config', 'cams_camera_overrides', 'moves', 'move_chunks'];
 
 function seed(db: DatabaseSync) {
   db.exec(`INSERT INTO accounts (id,name,display_name,created_at,updated_at) VALUES ('acc_a','alpha','A',1,1),('acc_b','beta','B',1,1);
@@ -174,7 +174,6 @@ describe('database', () => {
   });
 
   it('migration 7: a version-6 database gains cams_camera_overrides (empty) with its cameras and instances intact', () => {
-    expect(LATEST_VERSION).toBe(7);
     const f = join(dir, 'm7.db');
     const raw = new DatabaseSync(f);
     for (let i = 0; i < 6; i++) MIGRATIONS[i](raw);
@@ -184,7 +183,7 @@ describe('database', () => {
       INSERT INTO cams_instances (id,name,display_name,state,created_at,updated_at) VALUES ('cms_1','pi','Pi','pending',1,1);`);
     raw.close();
     const db = openDb(f);
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(7);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(LATEST_VERSION);
     expect(db.prepare('SELECT host, camera_user FROM cameras').all()).toEqual([{ host: '192.0.2.1', camera_user: 'cams' }]);
     expect(db.prepare('SELECT count(*) n FROM cams_camera_overrides').get()).toEqual({ n: 0 });
     db.prepare(`INSERT INTO cams_camera_overrides (instance_id, camera_id, host, created_at, updated_at) VALUES ('cms_1','cam_1','from-proxy',1,1)`).run();

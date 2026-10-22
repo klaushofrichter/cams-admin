@@ -5,6 +5,7 @@ import { tmpDir } from './helpers/tmp';
 import { startServer, type Running } from './helpers/server';
 import { enrollCamsKey, signedFetch, type CamsKeyT } from './helpers/cams';
 import { strictCamsValidator, strictCamsErrors } from './helpers/contract';
+import { MoveStore } from '../server/moves/store';
 import { makeProxyInfo, makeSummary } from '../test-client/summaries';
 
 const H = (c: string) => 'sha256:' + c.repeat(64);
@@ -145,13 +146,48 @@ describe('the cams snapshot (GET /cams/v1/config)', () => {
     expect(JSON.stringify(p)).not.toContain('Gate');
   });
 
+  it('snapshot carries proxy site and camera moveId', () => {
+    const db = s.built.db;
+    db.prepare('UPDATE proxies SET tls_site = ? WHERE id = ?').run('yard-1', piProxy.id);
+    db.prepare('UPDATE proxies SET tls_site = ? WHERE id = ?').run('Not A Site', clusterProxy.id); // off the contract pattern: emitted as null
+    const before = buildSnapshot(d, cluster.id).accounts.find((a) => a.name === 'home')!;
+    expect(before.proxies.map((x) => [x.name, x.site])).toEqual([['cluster', null], ['pi', 'yard-1']]);
+    expect(before.cameras.every((c) => c.moveId === null)).toBe(true);
+    const store = new MoveStore(db, s.built.clock);
+    const cam1 = (db.prepare("SELECT id FROM cameras WHERE cams_id = 'cam1' AND account_id = ?").get(home.id) as { id: string }).id;
+    const m = store.create({ accountId: home.id, cameraId: cam1, sourceProxyId: piProxy.id, targetProxyId: clusterProxy.id, requestId: 'req-1' });
+    store.markCamera(m.id);
+    db.prepare('UPDATE moves SET ended_at = ?, phase = ? WHERE id = ?').run(s.built.clock.now(), 'done', m.id); // moveId stays (A16)
+    const snap = buildSnapshot(d, cluster.id);
+    const cams = snap.accounts.find((a) => a.name === 'home')!.cameras;
+    expect(cams.find((c) => c.camsId === 'cam1')!.moveId).toBe(m.id);
+    expect(cams.find((c) => c.camsId === 'cam2')!.moveId).toBeNull();
+    expect(strictCamsValidator('snapshot')(snap), strictCamsErrors()).toBe(true);
+    db.prepare('UPDATE proxies SET tls_site = NULL WHERE account_id = ?').run(home.id);
+  });
+
+  it('snapshot has no token: an active move\'s token, token hash and keys never appear', () => {
+    const db = s.built.db;
+    const MV = 'deadbeef';
+    const cam2 = (db.prepare("SELECT id FROM cameras WHERE cams_id = 'cam2' AND account_id = ?").get(home.id) as { id: string }).id;
+    const store = new MoveStore(db, s.built.clock);
+    const m = store.create({ accountId: home.id, cameraId: cam2, sourceProxyId: clusterProxy.id, targetProxyId: piProxy.id, requestId: 'req-2', tokenHash: 'sha256:' + MV.repeat(8), targetIp: '192.0.2.7' });
+    db.prepare('UPDATE moves SET target_public_key = ?, leaf_fingerprint = ? WHERE id = ?').run(MV + 'key', MV + 'leaf', m.id);
+    db.prepare(`INSERT INTO commands (id, account_id, proxy_id, actor, command, args, state, created_at) VALUES ('cmd_00000000000000000001', ?, ?, 'a@example.com', 'move.offer', ?, 'queued', 1)`)
+      .run(home.id, piProxy.id, JSON.stringify({ moveId: m.id, token: 'tok-' + MV }));
+    store.markCamera(m.id);
+    for (const i of [cluster, pi, unserved]) expect(JSON.stringify(buildSnapshot(d, i.id))).not.toContain(MV);
+    db.prepare('UPDATE moves SET ended_at = ?, phase = ? WHERE id = ?').run(s.built.clock.now(), 'cancelled', m.id);
+    db.prepare("DELETE FROM commands WHERE id = 'cmd_00000000000000000001'").run();
+  });
+
   it('the secret guard: markers in token hashes, codes and keys never appear in any instance\'s snapshot', async () => {
     const MARK = 'f00dfeed';
     s.built.db.prepare(`UPDATE proxy_tokens SET hash = 'sha256:' || ? || substr(hash, 16)`).run(MARK);
     await s.api('POST', `/cams-instances/${cluster.id}/enrollment-codes`, { lifetimeH: 1 });
     s.built.db.prepare(`UPDATE cams_enrollment_codes SET code_hash = ? || code_hash`).run(MARK);
     s.built.db.prepare(`UPDATE cams_instance_keys SET public_key = public_key || ?, fingerprint = ?`).run(MARK, MARK);
-    s.built.db.prepare(`UPDATE proxies SET notes = ?, dns_name = ?, tls_site = ?`).run(MARK, MARK, MARK);
+    s.built.db.prepare(`UPDATE proxies SET notes = ?, dns_name = ?`).run(MARK, MARK);
     s.built.db.prepare(`UPDATE cameras SET notes = ?, model = ?`).run(MARK, MARK);
     s.built.db.prepare(`UPDATE accounts SET notes = ?`).run(MARK);
     for (const i of [cluster, pi, unserved]) expect(JSON.stringify(buildSnapshot(d, i.id))).not.toContain(MARK);

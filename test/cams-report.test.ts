@@ -51,6 +51,17 @@ describe('cams status reports (POST /cams/v1/report)', () => {
     expect(await post({ v: 2, mode: 'file' })).toEqual({ status: 400, json: { error: 'invalid', field: 'v' } });
   });
 
+  it('report with heldProxies is stored and shown in the instance view data', async () => {
+    const px = 'prx_' + '0'.repeat(20);
+    const r = await post({ ...REPORT, heldProxies: [{ accountId: acc.id, proxyId: px, fields: ['url', 'tlsServername'] }] });
+    expect(r.status).toBe(200);
+    expect(s.built.camsInstances.live(inst.id).report).toMatchObject({ heldProxies: [{ accountId: acc.id, proxyId: px, fields: ['url', 'tlsServername'] }] });
+    const d = await s.api('GET', '/dashboard');
+    expect(d.cams[0]).toMatchObject({ held: 1, heldProxies: 1 });
+    expect(await post({ ...REPORT, heldProxies: [{ accountId: acc.id, proxyId: px, fields: [], extra: 1 }] })).toEqual({ status: 400, json: { error: 'invalid', field: 'heldProxies' } });
+    await post(REPORT);
+  });
+
   it('the dashboard lists each instance with its pull, mode, revision, held/kept-old counts, shadow and problems', async () => {
     await post({ ...REPORT, mode: 'shadow', appliedRevision: null, held: [{ accountId: acc.id, camsId: 'cam1', fields: ['host'] }], shadow: { accountId: acc.id, differences: 2, items: ['cam1: host', 'cam2: protocol'] }, problems: [{ code: 'snapshot_invalid', detail: 'x' }] });
     const d = await s.api('GET', '/dashboard');

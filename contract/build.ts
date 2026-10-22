@@ -384,7 +384,7 @@ export const MOVE_COMMANDS = ['move.targets', 'move.open', 'move.offer', 'move.a
 export const MOVE_EVENT_KINDS = ['move.targets', 'move.request', 'move.approve', 'move.cancel', 'move.phase', 'move.progress'] as const;
 export const MOVE_KINDS = ['stills', 'clips', 'events', 'checks', 'archive'] as const;
 export const MOVE_OFFER_REASONS = ['moves_not_allowed', 'camera_unreachable', 'camera_limit', 'id_taken', 'busy', 'incompatible', 'no_site_ca', 'ca_does_not_cover_camera', 'external_cert'] as const;
-export const MOVE_ANSWER_REASONS = [...MOVE_OFFER_REASONS, 'other_account', 'target_offline', 'not_routed', 'host_overridden', 'target_failed', 'offer_expired'] as const;
+export const MOVE_ANSWER_REASONS = [...MOVE_OFFER_REASONS, 'other_account', 'target_offline', 'not_routed', 'host_overridden', 'target_failed', 'offer_expired', 'not_registered', 'internal'] as const;
 export const MOVE_PHASES = ['opened', 'switching', 'switched', 'released', 'copying', 'copied', 'finished', 'cancelled', 'failed'] as const;
 // `failed` = copied with failures.
 export const CHUNK_STATES = ['pending', 'copied', 'verified', 'skipped', 'failed'] as const;
@@ -470,5 +470,7 @@ export const REMOTE_SETTABLE: { v: 1; remote: string[]; narrow: Record<string, '
     'cameras.*.baichuanPort', 'cameras.*.poeSwitch', 'cameras.*.ftp.user', 'cameras.*.webUiUrl', 'cameras.*.storage',
     // Local only in P3 (coordinator ruling, security review I4): capture and listener switches, health thresholds.
     ...LOCAL_ONLY,
+    // cam-proxy marks these local only: the moved marker of a camera and the moves.* settings such as moves.maxCameras.
+    'cameras.*.moved', 'moves',
   ],
 };

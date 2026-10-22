@@ -11,7 +11,7 @@ import { join } from 'path';
 import { enroll } from '../../test-client/client';
 import { writeKeyFile } from '../../test-client/keyfile';
 
-interface Plan { accounts: { name: string; displayName: string; users: { email: string; role: string }[]; proxies: { name: string; displayName: string; port: number; cameras: { id: string; camsId: string; name: string; controlPort: number }[] }[] }[] }
+interface Plan { accounts: { name: string; displayName: string; users: { email: string; role: string }[]; proxies: { name: string; displayName: string; port: number; cameras: { id: string; camsId: string; name: string; protocol?: string; controlPort: number }[] }[] }[] }
 
 const args = process.argv.slice(2);
 const opt = (n: string) => args[args.indexOf(`--${n}`) + 1];
@@ -46,8 +46,9 @@ async function waitLive(names: string[]) {
     for (const u of a.users) await api('POST', `/accounts/${acc.id}/users`, u);
     for (const p of a.proxies) {
       const px = await api('POST', `/accounts/${acc.id}/proxies`, { name: p.name, displayName: p.displayName, runsOn: 'local-host', hostKind: 'mac', url: `http://127.0.0.1:${p.port}`, adminUiUrl: `http://127.0.0.1:${p.port}` });
+      // The protocol the proxy itself uses for the camera (a move's request must match the registry's).
       for (const c of p.cameras) {
-        const cam = await api('POST', `/accounts/${acc.id}/cameras`, { camsId: c.camsId, name: c.name, kind: 'sim', proxyId: px.id, proxyCameraId: c.id, host: 'from-proxy', protocol: 'http', cameraUser: 'cams' });
+        const cam = await api('POST', `/accounts/${acc.id}/cameras`, { camsId: c.camsId, name: c.name, kind: 'sim', proxyId: px.id, proxyCameraId: c.id, host: 'from-proxy', protocol: c.protocol ?? 'http', cameraUser: 'cams' });
         await api('PUT', `/accounts/${acc.id}/cameras/${cam.id}/sim`, { runsOn: 'mac', controlUrl: `http://127.0.0.1:${c.controlPort}`, uiUrl: `http://127.0.0.1:${c.controlPort}`, image: 'cam-sim origin/main' });
       }
       const code = (await api('POST', `/accounts/${acc.id}/proxies/${px.id}/enrollment-codes`, { lifetimeH: 1 })).code;
