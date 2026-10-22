@@ -70,6 +70,9 @@ describe('audit completeness', () => {
     // Camera moves (Task 8): one record each; the moves are made by hand in the matching phase.
     ['post', '/moves/:moveId/cancel', () => `/moves/${ids.mvCancel}/cancel`, () => ({ copied: 'delete', confirm: 'cancel' }), 'move-cancel'],
     ['post', '/moves/:moveId/end-transfer', () => `/moves/${ids.mvEnd}/end-transfer`, () => ({ confirm: 'end transfer' }), 'move-end-transfer'],
+    // Diagnostics tokens (issue #45).
+    ['post', '/diag-tokens', () => '/diag-tokens', () => ({ name: 'mac', days: 1 }), 'diag-token-issue'],
+    ['post', '/diag-tokens/:tokenId/revoke', () => `/diag-tokens/${ids.dgt}/revoke`, () => ({}), 'diag-token-revoke'],
     ['post', '/backup/now', () => '/backup/now', () => ({}), 'backup-now'],
     ['delete', '/accounts/:accountId', () => `/accounts/${ids.acc}`, () => ({ confirmName: 'home' }), 'account-delete'],
     // Last: it ends every session, this test's too.
@@ -120,6 +123,7 @@ describe('audit completeness', () => {
       ids.tok = r.body.tokenId;
       a.db.prepare(`UPDATE proxy_tokens SET state = 'active' WHERE id = ?`).run(ids.tok); // as if the proxy confirmed it
     }
+    if (action === 'diag-token-issue') ids.dgt = r.body.item.id;
     if (action === 'camera-create') ids.cam = r.body.id;
     if (action === 'camera-create') {
       // Two moves for the move rows: proxies and cameras of their own, in copying.

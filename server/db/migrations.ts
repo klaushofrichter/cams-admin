@@ -385,4 +385,16 @@ CREATE TABLE move_chunks (
 ) STRICT;
 ALTER TABLE cameras ADD COLUMN move_id TEXT;
 `),
+  // 9: read-only diagnostics tokens (issue #45): only the SHA-256 hash is
+  // stored; reads never write here (last use is kept in memory).
+  (db) => db.exec(`
+CREATE TABLE diag_tokens (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 64),
+  hash TEXT NOT NULL UNIQUE CHECK (hash GLOB 'sha256:*' AND length(hash) = 71),
+  created_at INTEGER NOT NULL, created_by TEXT NOT NULL,
+  expires_at INTEGER NOT NULL,
+  revoked_at INTEGER, revoked_by TEXT
+) STRICT;
+`),
 ];

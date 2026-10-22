@@ -29,6 +29,8 @@ import { Sessions } from './auth/session';
 import { authRoutes } from './auth/routes';
 import { securityHeaders } from './auth/middleware';
 import { apiRouter, type BackupService } from './api/router';
+import { DiagTokens } from './diag/tokens';
+import { diagRouter } from './diag/router';
 import { loadSigningKey, type SigningKey } from './crypto/signingKey';
 import { createBackup } from './backup/service';
 import { log } from './log';
@@ -37,7 +39,7 @@ import { version } from './version';
 
 export interface Built {
   cfg: Config; clock: Clock; db: Db; audit: Audit; registry: Registry; live: LiveHub; status: StatusStore; hub: Hub; commands: Commands; moves: Moves; tokens: Tokens; actions: RemoteActions; config: ProxyConfig; enrollment: Enrollment; sessions: Sessions; backup: BackupService;
-  camsInstances: CamsInstances; camsAuth: CamsAuth; importer: Importer; signing: SigningKey;
+  camsInstances: CamsInstances; camsAuth: CamsAuth; importer: Importer; signing: SigningKey; diag: DiagTokens;
   app: express.Express; http: Server; epochFile: string;
   tick(): void;
   writeRoutes(): string[];
@@ -84,8 +86,12 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
     journal: (r) => journal.append(r, clock.now()),
   });
   // What was revoked stays revoked, whatever a restore brought back (review M5).
+  const diag = new DiagTokens({ db, clock, audit, journal: (tokenId) => journal.append({ kind: 'diag-token', tokenId }, clock.now()) });
   for (const r of journal.read()) {
-    try { camsInstances.replay(r, (t) => tokens.revokeReplayed(t)); } catch (e) { log.error({ err: e }, 'cams_revocation_replay_failed'); }
+    try {
+      if (r.kind === 'diag-token') diag.replay(r.tokenId);
+      else camsInstances.replay(r, (t) => tokens.revokeReplayed(t));
+    } catch (e) { log.error({ err: e }, 'cams_revocation_replay_failed'); }
   }
   const importer = new Importer({ db, clock, audit, registry, instances: camsInstances, status });
   const camsAuth = new CamsAuth({ db, clock, audit, instances: camsInstances, signingKey: signing.key, limits: cfg.limits, log });
@@ -109,7 +115,10 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
   app.use(camsRouter({ globalPerMin: cfg.limits.camsGlobalPerMin, enrollment: camsEnrollment, auth: camsAuth, signingKey: signing.key, testRoutes: cfg.nodeEnv === 'test', instances: camsInstances, tokens, snapshot: { db, clock, signingKey: signing.key, signingFingerprint: signing.fingerprint } }));
   app.use(cookieParser());
   app.use(authRoutes({ cfg, sessions, audit, clock, live }));
-  const api = apiRouter({ db, clock, cfg, audit, registry, enrollment, hub, status, live, sessions, backup, commands, tokens, config, actions, moves, camsInstances, serverKeyFingerprints: [signing.fingerprint], importer });
+  const apiDeps = { db, clock, cfg, audit, registry, enrollment, hub, status, live, sessions, backup, commands, tokens, config, actions, moves, camsInstances, serverKeyFingerprints: [signing.fingerprint], importer, diag };
+  const api = apiRouter(apiDeps);
+  // Before the API: the diagnostics token opens this router only (issue #45).
+  app.use('/api/v1/diag', diagRouter(apiDeps));
   app.use('/api/v1', api);
   app.use('/api', (_req, res) => void res.status(404).json({ error: 'not_found' }));
   // The Svelte build (npm run build:web); every other GET is the SPA.
@@ -154,7 +163,7 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
   let closed = false;
 
   return {
-    cfg, clock, db, audit, registry, live, status, hub, commands, moves, tokens, actions, config, enrollment, sessions, backup, camsInstances, camsAuth, importer, signing, app, http, epochFile, tick,
+    cfg, clock, db, audit, registry, live, status, hub, commands, moves, tokens, actions, config, enrollment, sessions, backup, camsInstances, camsAuth, importer, signing, diag, app, http, epochFile, tick,
     writeRoutes() {
       const out: string[] = [];
       for (const layer of (api as unknown as { stack: { route?: { path: string; methods: Record<string, boolean> } }[] }).stack) {

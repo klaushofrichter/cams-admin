@@ -49,19 +49,42 @@ export function hostOverridden(d: PrecheckDeps, cameraId: string): boolean {
   return !!d.db.prepare('SELECT 1 FROM cams_camera_overrides WHERE camera_id = ? AND host IS NOT NULL').get(cameraId);
 }
 
-export function precheck(d: PrecheckDeps, m: Candidate): { ok: true } | { ok: false; reason: PrecheckReason } {
-  const no = (reason: PrecheckReason) => ({ ok: false as const, reason });
-  if (m.targetProxyId === m.sourceProxyId) return no('id_taken'); // the camera is already there
+// Every rule in the order precheck applies them, with a detail where one helps
+// (diagnostics, issue #45). After a failed proxy lookup the proxy rules are not run.
+export interface PrecheckRule { rule: string; ok: boolean; reason: PrecheckReason; detail?: string }
+export function precheckReport(d: PrecheckDeps, m: Candidate): { ok: boolean; reason: PrecheckReason | null; rules: PrecheckRule[] } {
+  const rules: PrecheckRule[] = [];
+  const add = (rule: string, ok: boolean, reason: PrecheckReason, detail?: string) => rules.push({ rule, ok, reason, ...(detail ? { detail } : {}) });
+  const done = () => {
+    const f = rules.find((r) => !r.ok);
+    return { ok: !f, reason: f?.reason ?? null, rules };
+  };
+  add('different_proxies', m.targetProxyId !== m.sourceProxyId, 'id_taken'); // the camera is already there
   const t = d.registry.proxyById(m.targetProxyId);
   const src = d.registry.proxyById(m.sourceProxyId);
-  if (!t || !src || t.accountId !== m.accountId || src.accountId !== m.accountId) return no('other_account');
-  if (!online(d, t)) return no('target_offline');
-  if (!receives(d, t)) return no('moves_not_allowed');
-  if (d.store.byProxy(src.id) || d.store.byProxy(t.id)) return no('busy');
-  if (!siteOf(d, src) || !siteOf(d, t)) return no('no_site_ca');
-  if (!routed(d, src.id, t.id)) return no('not_routed');
-  if (m.cameraId && hostOverridden(d, m.cameraId)) return no('host_overridden');
-  return { ok: true };
+  const missing = [!src && 'source', !t && 'target'].filter(Boolean).join(', ');
+  const foreign = [src && src.accountId !== m.accountId && 'source', t && t.accountId !== m.accountId && 'target'].filter(Boolean).join(', ');
+  add('same_account', !!t && !!src && !foreign, 'other_account', missing ? `not registered: ${missing}` : foreign ? `other account: ${foreign}` : undefined);
+  if (!t || !src || foreign) return done();
+  const tv = d.status.viewOf(t);
+  add('target_online', online(d, t), 'target_offline', `target ${t.state === 'enrolled' ? tv.state : t.state}`);
+  add('target_receives', receives(d, t), 'moves_not_allowed', `commands ${tv.commands}; move.receive ${tv.allow.includes('move.receive') ? 'allowed' : 'not allowed'}`);
+  const busy = [d.store.byProxy(src.id) && 'source', d.store.byProxy(t.id) && 'target'].filter(Boolean).join(', ');
+  add('not_busy', !busy, 'busy', busy ? `a move is open on the ${busy}` : undefined);
+  const siteDetail = (p: Proxy) => `${p.id}: registry ${p.tlsSite ?? 'none'}, reported ${d.status.row(p.id)?.reported?.site ?? 'none'}`;
+  add('site_ca', !!siteOf(d, src) && !!siteOf(d, t), 'no_site_ca', [siteOf(d, src) ? null : siteDetail(src), siteOf(d, t) ? null : siteDetail(t)].filter(Boolean).join('; ') || undefined);
+  const tSeen = seenBy(d, t.id);
+  const unseen = [...seenBy(d, src.id)].filter((i) => !tSeen.has(i));
+  add('routed', unseen.length === 0, 'not_routed', unseen.length ? `cams instances that see the source but not the target: ${unseen.map((i) => instanceName(d, i)).join(', ')}` : undefined);
+  if (m.cameraId) add('no_host_override', !hostOverridden(d, m.cameraId), 'host_overridden');
+  return done();
+}
+
+const instanceName = (d: PrecheckDeps, id: string) => (d.db.prepare('SELECT name FROM cams_instances WHERE id = ?').get(id) as { name: string } | undefined)?.name ?? id;
+
+export function precheck(d: PrecheckDeps, m: Candidate): { ok: true } | { ok: false; reason: PrecheckReason } {
+  const r = precheckReport(d, m);
+  return r.ok ? { ok: true } : { ok: false, reason: r.reason! };
 }
 
 // What the source's "Move to…" list offers (S §4): every proxy precheck would let through.

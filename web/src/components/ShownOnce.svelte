@@ -1,18 +1,22 @@
 <script lang="ts">
   // A managed token, shown once. It lives only in this component's state
   // (never in the URL, localStorage or the router) and is gone on Close.
-  let { token, proxyName, onclose }: { token: string; proxyName: string; onclose: () => void } = $props();
+  // children: what to do with it (a proxy token's text when there are none).
+  import type { Snippet } from 'svelte';
+  let { token, proxyName = '', title, onclose, children }: { token: string; proxyName?: string; title?: string; onclose: () => void; children?: Snippet } = $props();
   let stored = $state(false);
   const copy = () => navigator.clipboard?.writeText(token);
 </script>
 <div class="scrim" role="presentation"></div>
 <div class="dialog card" role="dialog" aria-modal="true" aria-label="New token" data-testid="shown-once">
-  <h3>New token for {proxyName}</h3>
+  <h3>{title ?? `New token for ${proxyName}`}</h3>
   <div class="row"><input class="mono" readonly value={token} data-testid="shown-token" autocomplete="off" spellcheck="false" /><button class="btn" onclick={copy}>Copy</button></div>
+  {#if children}{@render children()}{:else}
   <p>
     This is the only time cams-admin shows this token. Put it in cams's <code>cameras-config.json</code> as this proxy's <code>token</code>
     (cluster: the <code>cams-cameras</code> Secret, through kube-setup). If you lose it, revoke it and issue a new one.
   </p>
+  {/if}
   <label class="row"><input type="checkbox" bind:checked={stored} data-testid="shown-stored" /> I have stored it</label>
   <div class="row end"><button class="btn primary" data-testid="shown-close" disabled={!stored} onclick={onclose}>Close</button></div>
 </div>
