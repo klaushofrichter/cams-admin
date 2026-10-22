@@ -386,8 +386,9 @@ export class Moves {
       case 'move.cancel':
         if (r.state === 'done') return;
         this.d.log.warn({ moveId: m.id, proxyId: r.proxyId, state: r.state, code: r.outcomeCode }, 'move_cancel_not_done');
-        // While cancelling, a cancel the proxy did not take on is asked again with a backoff (ensureCancels); each failure audited (throttled).
-        if (m.phase === 'cancelling' && (r.state === 'failed' || r.state === 'refused')) {
+        // While cancelling (and a target's after the move ended) a cancel the proxy did not take on is asked again
+        // with a backoff (ensureCancels); each failure audited (throttled).
+        if ((r.state === 'failed' || r.state === 'refused') && (m.phase === 'cancelling' || (r.proxyId === m.targetProxyId && m.endedAt !== null))) {
           const role = r.proxyId === m.sourceProxyId ? 'source' : 'target';
           this.d.audit.throttled(`move-cancel-failed:${m.id}:${role}`, {
             actorType: 'system', actor: 'system', action: 'move-cancel', accountId: m.accountId, targetType: 'camera', targetId: m.cameraId, targetLabel: this.camsId(m), outcome: 'failed',
@@ -681,11 +682,15 @@ export class Moves {
   // is online (ruling a): the camera keeps working on the target, which lets go
   // only when the source can take it back. A cancel answered failed or refused
   // there is asked again with a backoff.
+  // A target cancel answered failed or refused is also asked again after the
+  // move ended (the source's `cancelled` came first, or an automatic cancel):
+  // the target must let go of the camera (the ended sweep, ENDED_RETRY_MS).
   private ensureCancels(m: Move): void {
     const cancelling = m.phase === 'cancelling';
     if (cancelling && !this.online(m.sourceProxyId)) return;
     const unsent = (p: string) => (r: CommandRow) => (r.state === 'expired' || r.state === 'unknown') && this.online(p);
-    const failedAgain = (p: string) => (r: CommandRow) => cancelling && (r.state === 'failed' || r.state === 'refused') && this.online(p) && this.retryDue(m, p, 'move.cancel', CANCEL_RETRY_MS, r);
+    const retrying = (p: string) => cancelling || (p === m.targetProxyId && m.endedAt !== null);
+    const failedAgain = (p: string) => (r: CommandRow) => retrying(p) && (r.state === 'failed' || r.state === 'refused') && this.online(p) && this.retryDue(m, p, 'move.cancel', CANCEL_RETRY_MS, r);
     const goSent = m.leafFingerprint !== null && this.lastCommand(m, m.sourceProxyId, 'move.go') !== null;
     this.ensure(m, m.targetProxyId, 'move.cancel', { v: 1, moveId: m.id, role: 'target', copied: m.copiedChoice === 'age-out' ? 'age-out' : 'delete' }, (r) => unsent(m.targetProxyId)(r) || failedAgain(m.targetProxyId)(r));
     this.ensure(m, m.sourceProxyId, 'move.cancel', { v: 1, moveId: m.id, role: 'source', ...(goSent ? { expectedLeaf: m.leafFingerprint } : {}) }, (r) =>
@@ -849,8 +854,10 @@ export class Moves {
     // A finish that can never be queued (the allow entry gone) does not hold the move open.
     const never = (proxyId: string) => this.gaveUp.has(`${m.id}:${proxyId}:move.finish`);
     if (!(final(target) || never(m.targetProxyId))) return;
-    const sourceDone = final(source) || never(m.sourceProxyId);
-    const pending = !sourceDone && m.reason !== null && (!this.online(m.sourceProxyId) || this.releaseFailing(m));
+    // The source's cleanup is done only when its finish was answered: one that expired or went unanswered is sent again (sourceFinish), now or once the source is back.
+    const unanswered = source !== null && (source.state === 'expired' || source.state === 'unknown');
+    const sourceDone = (final(source) && !unanswered) || never(m.sourceProxyId);
+    const pending = !sourceDone && m.reason !== null && (!this.online(m.sourceProxyId) || this.releaseFailing(m) || unanswered);
     if (!sourceDone && !pending) return;
     tx(this.d.db, () => {
       if (this.store.get(m.id)?.phase === 'cleaning') this.done(m, pending ? null : source, pending);

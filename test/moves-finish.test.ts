@@ -17,7 +17,7 @@ import { AUDIT_ACTIONS } from '../server/audit';
 import { readEpoch } from '../server/db/open';
 import { ApiError } from '../server/registry';
 import { CANCEL_RETRY_MS, PROGRESS_SAVE_MS, RELEASE_RETRY_MS } from '../server/moves/service';
-import { RESEND_AFTER_MS } from '../server/commands/service';
+import { GIVE_UP_AFTER_MS, RESEND_AFTER_MS } from '../server/commands/service';
 
 const ACTOR = 'admin@example.com';
 const fx = (name: string) => JSON.parse(readFileSync(join(__dirname, '../contract/v1/fixtures', name), 'utf8')).message.body as Record<string, any>;
@@ -377,6 +377,35 @@ describe('cancel', () => {
     expect(s.built.registry.getCamera(a.src.accountId, a.cam.id).proxyId).toBe(a.src.proxyId);
   });
 
+  it('a target cancel answered failed is asked again after the move is cancelled', async () => {
+    const a = await copying();
+    a.tgt.client.moveResults['move.cancel'] = { status: 'failed', code: 'camera_active' };
+    s.built.moves.cancel(ACTOR, a.m.id, 'delete');
+    const tgtCancels = () => cmdRows(a.m.id, 'move.cancel').filter((r) => r.proxy_id === a.tgt.proxyId);
+    await until(() => tgtCancels()[0]?.state === 'failed' && cmdRows(a.m.id, 'move.cancel').some((r) => r.proxy_id === a.src.proxyId && r.state === 'done'), 5000, 'answers');
+    phase(a.src, a.m.id, 'source', 'cancelled');
+    await until(() => move(a.m.id).phase === 'cancelled', 5000, 'cancelled');
+    await until(() => auditFor('move-cancel').some((x) => x.outcome === 'failed' && x.d.role === 'target'), 5000, 'failure audited');
+    s.built.moves.tick();
+    await settle();
+    expect(tgtCancels()).toHaveLength(1);
+    clock.advance(CANCEL_RETRY_MS);
+    s.built.moves.tick();
+    await until(() => tgtCancels().length === 2 && tgtCancels()[1].state === 'failed', 5000, 'asked again');
+    clock.advance(CANCEL_RETRY_MS);
+    s.built.moves.tick();
+    await settle();
+    expect(tgtCancels()).toHaveLength(2); // the backoff doubles
+    delete a.tgt.client.moveResults['move.cancel'];
+    clock.advance(CANCEL_RETRY_MS);
+    s.built.moves.tick();
+    await until(() => tgtCancels().length === 3 && tgtCancels()[2].state === 'done', 5000, 'taken on');
+    clock.advance(CANCEL_RETRY_MS * 8);
+    s.built.moves.tick();
+    await settle();
+    expect(tgtCancels()).toHaveLength(3);
+  });
+
   it('cancel in done is refused 409', async () => {
     const a = await copying();
     phase(a.tgt, a.m.id, 'target', 'copied');
@@ -440,6 +469,25 @@ describe('end transfer', () => {
     expect(all).toHaveLength(2);
     expect(all[1].d).toMatchObject({ moveId: a.m.id, cleanup: 'done', followUp: true, deleted: DELETED, cleanupAt: expect.any(Number) });
     expect(move(a.m.id).phase).toBe('done');
+  });
+
+  it('a source finish that goes unanswered (the source dropped) leaves the cleanup pending and is sent again', async () => {
+    const a = await copying();
+    a.src.client.dropCommands = 1; // the source finish is received, never answered
+    s.built.moves.endTransfer(ACTOR, a.m.id);
+    await until(() => got(a.src.client, 'move.finish', a.m.id).length === 1 && cmdRows(a.m.id, 'move.finish').some((r) => r.proxy_id === a.tgt.proxyId && r.state === 'done'), 5000, 'finishes');
+    await offline(a.src);
+    clock.advance(GIVE_UP_AFTER_MS);
+    s.built.commands.tick();
+    await until(() => move(a.m.id).phase === 'done', 5000, 'done');
+    expect(cmdRows(a.m.id, 'move.finish').find((r) => r.proxy_id === a.src.proxyId)!.state).toBe('unknown');
+    expect(move(a.m.id).cleanupPending).toBe(true);
+    expect(auditFor('move-done')[0].d).toMatchObject({ cleanup: 'pending' });
+    a.src.client.moveResults['move.finish'] = { status: 'ok', result: { deleted: DELETED } };
+    await back(a.src);
+    await until(() => move(a.m.id).cleanupPending === false, 5000, 'cleanup landed');
+    expect(cmdRows(a.m.id, 'move.finish').filter((r) => r.proxy_id === a.src.proxyId).map((r) => r.state)).toEqual(['unknown', 'done']);
+    expect(auditFor('move-done')[1].d).toMatchObject({ followUp: true, cleanup: 'done', deleted: DELETED });
   });
 
   it('a post-switch failure with the source offline leaves the cleanup pending', async () => {
