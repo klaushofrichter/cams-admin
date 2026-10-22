@@ -52,7 +52,8 @@ const PRE_SWITCH = new Set(['requested', 'offered', 'awaiting-approval', 'approv
 const CANCELLABLE = new Set(['awaiting-approval', 'approved', 'switching', 'copying']);
 // R8: progress reaches the DB at most this often per move (and at every phase change).
 export const PROGRESS_SAVE_MS = 60_000;
-// Ended moves whose automatic cancels tick() still derives when one could not be queued.
+// Ended moves whose automatic cancels tick() still derives when one could not be queued (after that, a target's
+// return still derives its cancel: onLive).
 export const ENDED_RETRY_MS = 24 * 3600_000;
 // A cancelling move whose source took the cancel on without reporting `cancelled`: asked again this often (cam-proxy re-emits the terminal phase).
 export const CANCEL_RECHECK_MS = 15 * 60_000;
@@ -210,6 +211,19 @@ export class Moves {
         this.d.log.error({ err: e, moveId: r.id }, 'move_tick_failed');
       }
     }
+    // Done moves whose target finish has not landed: likewise, only while the target is online.
+    for (const r of this.d.db.prepare('SELECT id, target_proxy_id FROM moves WHERE target_cleanup_pending = 1').all() as { id: string; target_proxy_id: string }[]) {
+      const key = `t:${r.id}`;
+      if (!this.online(r.target_proxy_id) || now - (this.resumedAt.get(key) ?? 0) < RESUME_GAP_MS) continue;
+      this.resumedAt.set(key, now);
+      ids.add(key);
+      try {
+        const m = this.store.get(r.id);
+        if (m) this.targetCleanupStep(m);
+      } catch (e) {
+        this.d.log.error({ err: e, moveId: r.id }, 'move_tick_failed');
+      }
+    }
     for (const id of ended) {
       if (now - (this.resumedAt.get(id) ?? 0) < RESUME_GAP_MS) continue;
       this.resumedAt.set(id, now);
@@ -231,6 +245,19 @@ export class Moves {
     for (const r of this.d.db.prepare('SELECT id FROM moves WHERE cleanup_pending = 1 AND source_proxy_id = ?').all(proxyId) as { id: string }[]) {
       const mv = this.store.get(r.id);
       if (mv) this.cleanupStep(mv);
+    }
+    // A target back with a done move's finish still pending.
+    for (const r of this.d.db.prepare('SELECT id FROM moves WHERE target_cleanup_pending = 1 AND target_proxy_id = ?').all(proxyId) as { id: string }[]) {
+      const mv = this.store.get(r.id);
+      if (mv) this.targetCleanupStep(mv);
+    }
+    // A target back with an ended move's cancel not taken on (also after the ended sweep's ENDED_RETRY_MS): the
+    // target must let go of the camera, or it runs on both proxies.
+    const cancelsDue = this.d.db.prepare(`SELECT m.id FROM moves m WHERE m.target_proxy_id = ? AND m.phase IN ('failed', 'cancelled') AND m.copied_choice IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM commands c WHERE c.proxy_id = m.target_proxy_id AND c.command = 'move.cancel' AND c.state = 'done' AND json_extract(c.args, '$.moveId') = m.id)`).all(proxyId) as { id: string }[];
+    for (const r of cancelsDue) {
+      const mv = this.store.get(r.id);
+      if (mv) this.ensureTargetCancel(mv);
     }
   }
 
@@ -382,6 +409,7 @@ export class Moves {
         if (r.command === 'move.release' && m.phase === 'copying') return this.onReleaseFinal(m, r);
         if (m.phase === 'cleaning') return this.checkCleaning(m);
         if (m.cleanupPending && r.proxyId === m.sourceProxyId) return this.cleanupStep(m);
+        if (r.command === 'move.finish' && m.targetCleanupPending && r.proxyId === m.targetProxyId) return this.targetCleanupStep(m);
         return;
       case 'move.cancel':
         if (r.state === 'done') return;
@@ -515,8 +543,10 @@ export class Moves {
 
   private onReleaseFinal(m: Move, r: CommandRow): void {
     if (m.phase !== 'copying' || r.proxyId !== m.sourceProxyId) return;
-    // After the switch-over the camera stays on the target: a failure ends the transfer (failMoveIn), never an automatic cancel.
-    if (r.state !== 'done') this.failMove(m, `release:${r.outcomeCode ?? r.state}`);
+    // After the switch-over the camera stays on the target: a failure the source answered ends the transfer (failMoveIn), never an automatic cancel.
+    if (r.state === 'failed' || r.state === 'refused') return this.failMove(m, `release:${r.outcomeCode ?? r.state}`);
+    // Expired or unanswered (the source away): the copy goes on; the release is sent again once the source is online (now, or resume: tick, its return).
+    if ((r.state === 'expired' || r.state === 'unknown') && this.online(m.sourceProxyId)) this.queueStep(m, 'release', () => this.sendRelease(m));
   }
 
   private onPhase(proxyId: string, accountId: string, ev: MovePhaseEvent): void {
@@ -689,13 +719,28 @@ export class Moves {
   private ensureCancels(m: Move): void {
     const cancelling = m.phase === 'cancelling';
     if (cancelling && !this.online(m.sourceProxyId)) return;
+    const { unsent, failedAgain } = this.cancelRetry(m);
+    const goSent = m.leafFingerprint !== null && this.lastCommand(m, m.sourceProxyId, 'move.go') !== null;
+    this.ensureTargetCancel(m);
+    this.ensure(m, m.sourceProxyId, 'move.cancel', { v: 1, moveId: m.id, role: 'source', ...(goSent ? { expectedLeaf: m.leafFingerprint } : {}) }, (r) =>
+      unsent(m.sourceProxyId)(r) || failedAgain(m.sourceProxyId)(r) || (cancelling && r.state === 'done' && this.d.clock.now() - (r.finishedAt ?? 0) >= CANCEL_RECHECK_MS && this.online(m.sourceProxyId)));
+  }
+
+  // When a cancel is asked again: one that went unanswered (expired, unknown) while its proxy is online; one answered
+  // failed or refused while cancelling (and a target's after the move ended), with a backoff.
+  private cancelRetry(m: Move) {
+    const cancelling = m.phase === 'cancelling';
     const unsent = (p: string) => (r: CommandRow) => (r.state === 'expired' || r.state === 'unknown') && this.online(p);
     const retrying = (p: string) => cancelling || (p === m.targetProxyId && m.endedAt !== null);
     const failedAgain = (p: string) => (r: CommandRow) => retrying(p) && (r.state === 'failed' || r.state === 'refused') && this.online(p) && this.retryDue(m, p, 'move.cancel', CANCEL_RETRY_MS, r);
-    const goSent = m.leafFingerprint !== null && this.lastCommand(m, m.sourceProxyId, 'move.go') !== null;
+    return { unsent, failedAgain };
+  }
+
+  // The target's cancel, with the choice for copied content (no outer transaction: reads only unless one is due).
+  private ensureTargetCancel(m: Move): void {
+    if (m.phase === 'cancelling' && !this.online(m.sourceProxyId)) return;
+    const { unsent, failedAgain } = this.cancelRetry(m);
     this.ensure(m, m.targetProxyId, 'move.cancel', { v: 1, moveId: m.id, role: 'target', copied: m.copiedChoice === 'age-out' ? 'age-out' : 'delete' }, (r) => unsent(m.targetProxyId)(r) || failedAgain(m.targetProxyId)(r));
-    this.ensure(m, m.sourceProxyId, 'move.cancel', { v: 1, moveId: m.id, role: 'source', ...(goSent ? { expectedLeaf: m.leafFingerprint } : {}) }, (r) =>
-      unsent(m.sourceProxyId)(r) || failedAgain(m.sourceProxyId)(r) || (cancelling && r.state === 'done' && this.d.clock.now() - (r.finishedAt ?? 0) >= CANCEL_RECHECK_MS && this.online(m.sourceProxyId)));
   }
 
   private commandCount(m: Move, proxyId: string, command: WireCommand): number {
@@ -850,23 +895,25 @@ export class Moves {
     const m = this.store.get(m0.id);
     if (!m || m.phase !== 'cleaning') return;
     const { source, target } = this.ensureFinishes(m);
-    // An unanswered finish (expired, unknown) ends a normal move's role only once answered; an ended-early move does not wait for it.
-    const final = (r: CommandRow | null) => r !== null && FINAL_STATES.has(r.state) && !((r.state === 'expired' || r.state === 'unknown') && !m.reason);
+    // A finish counts only once answered: one that expired or went unanswered is sent again (now, or once its proxy is back).
+    const unanswered = (r: CommandRow | null) => r !== null && (r.state === 'expired' || r.state === 'unknown');
+    const answered = (r: CommandRow | null) => r !== null && FINAL_STATES.has(r.state) && !unanswered(r);
     // A finish that can never be queued (the allow entry gone) does not hold the move open.
     const never = (proxyId: string) => this.gaveUp.has(`${m.id}:${proxyId}:move.finish`);
-    if (!(final(target) || never(m.targetProxyId))) return;
-    // The source's cleanup is done only when its finish was answered: one that expired or went unanswered is sent again (sourceFinish), now or once the source is back.
-    const unanswered = source !== null && (source.state === 'expired' || source.state === 'unknown');
-    const sourceDone = (final(source) && !unanswered) || never(m.sourceProxyId);
-    const pending = !sourceDone && m.reason !== null && (!this.online(m.sourceProxyId) || this.releaseFailing(m) || unanswered);
+    // A move ended early does not wait for an absent target: done with the target cleanup pending (onLive and tick derive its finish).
+    const targetDone = answered(target) || never(m.targetProxyId);
+    const targetPending = !targetDone && m.reason !== null && unanswered(target);
+    if (!targetDone && !targetPending) return;
+    const sourceDone = answered(source) || never(m.sourceProxyId);
+    const pending = !sourceDone && m.reason !== null && (!this.online(m.sourceProxyId) || this.releaseFailing(m) || unanswered(source));
     if (!sourceDone && !pending) return;
     tx(this.d.db, () => {
-      if (this.store.get(m.id)?.phase === 'cleaning') this.done(m, pending ? null : source, pending);
+      if (this.store.get(m.id)?.phase === 'cleaning') this.done(m, pending ? null : source, pending, targetPending);
     });
   }
 
   // Inside a transaction: done, audited move-done with the totals from the chunk states (S §12).
-  private done(m: Move, src: CommandRow | null, pending: boolean): void {
+  private done(m: Move, src: CommandRow | null, pending: boolean, targetPending: boolean): void {
     const counts = { copied: 0, skipped: 0, failed: 0, abandoned: 0, pending: 0 };
     for (const c of this.chunkStates(m.id)) {
       if (c.state === 'verified') counts.copied++;
@@ -875,10 +922,10 @@ export class Moves {
     }
     const abandoned = m.reason !== null;
     const failure = abandoned && m.reason !== END_TRANSFER ? m.reason : null;
-    const mv = this.store.setPhase(m.id, 'done', { cleanupPending: pending });
+    const mv = this.store.setPhase(m.id, 'done', { cleanupPending: pending, targetCleanupPending: targetPending });
     const durationS = Math.max(0, Math.round((this.d.clock.now() - (m.approvedAt ?? m.createdAt)) / 1000));
     this.audit(mv, 'move-done', failure ? 'failed' : 'ok', {
-      phase: 'done', abandoned, ...this.cleanupDetail(src, pending), ...(failure ? { failure } : {}), chunks: counts, bytesDone: mv.bytesDone, bytesTotal: mv.bytesTotal, durationS,
+      phase: 'done', abandoned, ...this.cleanupDetail(src, pending), ...(targetPending ? { targetCleanup: 'pending' } : {}), ...(failure ? { failure } : {}), chunks: counts, bytesDone: mv.bytesDone, bytesTotal: mv.bytesTotal, durationS,
     });
     this.publish(m.id);
   }
@@ -901,7 +948,24 @@ export class Moves {
     tx(this.d.db, () => {
       if (!this.store.get(m.id)?.cleanupPending) return;
       const mv = this.store.setPhase(m.id, 'done', { cleanupPending: false });
-      this.audit(mv, 'move-done', 'ok', { phase: 'done', followUp: true, cleanupAt: this.d.clock.now(), ...this.cleanupDetail(fin, false) }, { actorType: 'proxy', actor: m.sourceProxyId });
+      this.audit(mv, 'move-done', 'ok', { phase: 'done', followUp: true, role: 'source', cleanupAt: this.d.clock.now(), ...this.cleanupDetail(fin, false) }, { actorType: 'proxy', actor: m.sourceProxyId });
+    });
+    this.publish(m.id);
+  }
+
+  // A done move's pending target finish: sent again while the target is online; once answered the marker goes and a
+  // follow-up move-done records it. Reads only until something is due.
+  private targetCleanupStep(m0: Move): void {
+    const m = this.store.get(m0.id);
+    if (!m || !m.targetCleanupPending || !this.online(m.targetProxyId)) return;
+    const fin = this.ensure(m, m.targetProxyId, 'move.finish', { v: 1, moveId: m.id, role: 'target', abandoned: m.reason !== null }, (r) => r.state === 'expired' || r.state === 'unknown');
+    if (!fin || !FINAL_STATES.has(fin.state) || fin.state === 'expired' || fin.state === 'unknown') return;
+    tx(this.d.db, () => {
+      if (!this.store.get(m.id)?.targetCleanupPending) return;
+      const mv = this.store.setPhase(m.id, 'done', { targetCleanupPending: false });
+      this.audit(mv, 'move-done', 'ok', {
+        phase: 'done', followUp: true, role: 'target', cleanupAt: this.d.clock.now(), targetCleanup: fin.state === 'done' ? 'done' : 'not-done', ...(fin.state !== 'done' ? { targetCleanupCode: fin.outcomeCode ?? fin.state } : {}),
+      }, { actorType: 'proxy', actor: m.targetProxyId });
     });
     this.publish(m.id);
   }

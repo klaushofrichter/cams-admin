@@ -32,6 +32,7 @@
     <div class="row" data-testid="move-chunks-{move.id}">{#each CHUNK_ORDER as k}{#if chunks[k]}<span class="badge">{k}: {chunks[k]}</span>{/if}{/each}</div>
   {/if}
   {#if move.cleanupPending}<p class="muted small" data-testid="move-cleanup-pending">Cleanup on {move.source.name} pending</p>{/if}
+  {#if move.targetCleanupPending}<p class="muted small" data-testid="move-target-cleanup-pending">Cleanup on {move.target.name} pending</p>{/if}
   {#if error}<p class="error" data-testid="move-error">{error}</p>{/if}
   {#if cancelable(move.phase)}
     <div class="row">

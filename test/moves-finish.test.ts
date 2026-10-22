@@ -16,7 +16,7 @@ import type { ProxyClient } from '../test-client/client';
 import { AUDIT_ACTIONS } from '../server/audit';
 import { readEpoch } from '../server/db/open';
 import { ApiError } from '../server/registry';
-import { CANCEL_RETRY_MS, PROGRESS_SAVE_MS, RELEASE_RETRY_MS } from '../server/moves/service';
+import { CANCEL_RETRY_MS, ENDED_RETRY_MS, PROGRESS_SAVE_MS, RELEASE_RETRY_MS, RESUME_GAP_MS } from '../server/moves/service';
 import { GIVE_UP_AFTER_MS, RESEND_AFTER_MS } from '../server/commands/service';
 
 const ACTOR = 'admin@example.com';
@@ -509,6 +509,44 @@ describe('end transfer', () => {
     expect(auditFor('move-done')[0].d).toMatchObject({ abandoned: true, cleanup: 'done', deleted: DELETED });
   });
 
+  it('end transfer with the target offline 15+ min: done with the target cleanup pending; the returning target gets its finish again', async () => {
+    const a = await copying();
+    a.src.client.moveResults['move.finish'] = { status: 'ok', result: { deleted: DELETED } };
+    await offline(a.tgt);
+    s.built.moves.endTransfer(ACTOR, a.m.id);
+    await until(() => cmdRows(a.m.id, 'move.finish').some((r) => r.proxy_id === a.src.proxyId && r.state === 'done'), 5000, 'source finish');
+    await settle();
+    expect(move(a.m.id).phase).toBe('cleaning');
+    // The target finish expires unsent: an unanswered target finish never counts as final.
+    clock.advance(GIVE_UP_AFTER_MS);
+    s.built.commands.tick();
+    await until(() => move(a.m.id).phase === 'done', 5000, 'done');
+    expect(cmdRows(a.m.id, 'move.finish').find((r) => r.proxy_id === a.tgt.proxyId)!.state).toBe('expired');
+    expect(move(a.m.id)).toMatchObject({ cleanupPending: false, targetCleanupPending: true });
+    expect(auditFor('move-done')[0].d).toMatchObject({ abandoned: true, cleanup: 'done', targetCleanup: 'pending' });
+    // Nothing is queued to the absent target, and idle ticks write nothing.
+    await settle();
+    const epoch = readEpoch(s.built.db);
+    for (let k = 0; k < 3; k++) {
+      clock.advance(60_000);
+      s.built.moves.tick();
+    }
+    expect(readEpoch(s.built.db)).toBe(epoch);
+    await back(a.tgt);
+    await until(() => move(a.m.id).targetCleanupPending === false, 5000, 'target cleanup landed');
+    expect(cmdRows(a.m.id, 'move.finish').filter((r) => r.proxy_id === a.tgt.proxyId).map((r) => r.state)).toEqual(['expired', 'done']);
+    expect(got(a.tgt.client, 'move.finish', a.m.id).map((c) => c.body.args)).toEqual([{ v: 1, moveId: a.m.id, role: 'target', abandoned: true }]);
+    const all = auditFor('move-done');
+    expect(all).toHaveLength(2);
+    expect(all[1].d).toMatchObject({ moveId: a.m.id, followUp: true, role: 'target', targetCleanup: 'done', cleanupAt: expect.any(Number) });
+    expect(all[1].actor).toBe(a.tgt.proxyId);
+    // Landed: nothing more.
+    clock.advance(60_000);
+    s.built.moves.tick();
+    await settle();
+    expect(cmdRows(a.m.id, 'move.finish').filter((r) => r.proxy_id === a.tgt.proxyId)).toHaveLength(2);
+  });
+
   it('end transfer outside copying is refused', async () => {
     const a = await switching();
     expect(apiErr(() => s.built.moves.endTransfer(ACTOR, a.m.id))).toEqual({ status: 409, code: 'wrong_phase' });
@@ -554,6 +592,35 @@ describe('failures after the switch-over', () => {
     expect(auditFor('move-done')[1].d).toMatchObject({ cleanup: 'done', followUp: true, deleted: DELETED });
   });
 
+  it('a move.release that expires while the source is away is sent again once it is back; the copy completes', async () => {
+    const a = await switching();
+    await offline(a.src);
+    phase(a.tgt, a.m.id, 'target', 'switched');
+    await until(() => move(a.m.id).phase === 'copying' && cmdRows(a.m.id, 'move.release').length === 1, 5000, 'copying');
+    clock.advance(GIVE_UP_AFTER_MS);
+    s.built.commands.tick();
+    await until(() => cmdRows(a.m.id, 'move.release')[0].state === 'expired', 5000, 'release expired');
+    await settle();
+    // Only an answered failed/refused release ends the transfer.
+    expect(move(a.m.id)).toMatchObject({ phase: 'copying', reason: null });
+    expect(auditFor('move-end-transfer')).toHaveLength(0);
+    const epoch = readEpoch(s.built.db);
+    for (let k = 0; k < 3; k++) {
+      clock.advance(RESUME_GAP_MS);
+      s.built.moves.tick();
+    }
+    expect(readEpoch(s.built.db)).toBe(epoch);
+    await back(a.src);
+    await until(() => cmdRows(a.m.id, 'move.release').map((r) => r.state).join() === 'expired,done', 5000, 'release re-sent');
+    a.src.client.moveResults['move.finish'] = { status: 'ok', result: { deleted: DELETED } };
+    phase(a.tgt, a.m.id, 'target', 'copied');
+    await until(() => move(a.m.id).phase === 'done', 5000, 'done');
+    expect(move(a.m.id)).toMatchObject({ reason: null, cleanupPending: false });
+    expect(auditFor('move-end-transfer')).toHaveLength(0);
+    expect(auditFor('move-done')[0].d).toMatchObject({ abandoned: false, cleanup: 'done' });
+    expect(got(a.tgt.client, 'move.finish', a.m.id).map((c) => c.body.args)).toEqual([{ v: 1, moveId: a.m.id, role: 'target', abandoned: false }]);
+  });
+
   it('copied while move.release is still open: the source finish waits for a released source', async () => {
     const a = await switching();
     a.src.client.dropCommands = 1; // move.release in flight
@@ -596,6 +663,29 @@ describe('automatic commands are retried until queued', () => {
     s.built.moves.tick();
     await settle();
     expect(cmdRows(a.m.id, 'move.cancel')).toHaveLength(2);
+  });
+
+  it('a target back after more than a day still gets the cancel of a failed move', async () => {
+    const a = await switching();
+    await offline(a.tgt);
+    phase(a.src, a.m.id, 'source', 'failed', false, 'camera_failed');
+    await until(() => move(a.m.id).phase === 'failed' && cmdRows(a.m.id, 'move.cancel').length === 2, 5000, 'cancels');
+    const tgtCancels = () => cmdRows(a.m.id, 'move.cancel').filter((r) => r.proxy_id === a.tgt.proxyId);
+    clock.advance(ENDED_RETRY_MS + 3600_000);
+    s.built.commands.tick();
+    await until(() => tgtCancels()[0]?.state === 'expired', 5000, 'target cancel expired');
+    s.built.moves.tick(); // the ended sweep no longer covers it
+    await settle();
+    expect(tgtCancels()).toHaveLength(1);
+    await back(a.tgt);
+    await until(() => got(a.tgt.client, 'move.cancel', a.m.id).length === 1, 5000, 'cancel on return');
+    expect(got(a.tgt.client, 'move.cancel', a.m.id)[0].body.args).toEqual({ v: 1, moveId: a.m.id, role: 'target', copied: 'delete' });
+    await until(() => tgtCancels().map((r) => r.state).join() === 'expired,done', 5000, 'taken on');
+    // Done: another return asks nothing.
+    await offline(a.tgt);
+    await back(a.tgt);
+    await settle();
+    expect(tgtCancels()).toHaveLength(2);
   });
 
   it('a lost cancel while cancelling is derived again by resume', async () => {
