@@ -153,7 +153,9 @@ describe('approval', () => {
     expect(mv.approvedAt).toBe(at);
     expect(got(tgt.client, 'move.start', m.id)[0].body.args).toEqual({ v: 1, moveId: m.id, plan: PLAN, settings: m.settings, done: [] });
     expect(auditFor('move-approve').map((a) => a.outcome)).toEqual(['ok']);
-    expect(auditFor('move-approve')[0].d).toMatchObject({ moveId: m.id, camsId: 'cam1', source: src.proxyId, target: tgt.proxyId, phase: 'approved', plan: PLAN });
+    // The plan as audited: the setting paths only (Task 6 ruling), never their values.
+    const { targetSettings, ...rest } = PLAN;
+    expect(auditFor('move-approve')[0].d).toMatchObject({ moveId: m.id, camsId: 'cam1', source: src.proxyId, target: tgt.proxyId, phase: 'approved', plan: { ...rest, targetSettings: Object.keys(targetSettings).sort() } });
   });
 
   it('a repeated approve (same plan) sends nothing new; another plan is refused', async () => {
