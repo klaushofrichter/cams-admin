@@ -259,7 +259,7 @@ export class CamsInstances {
         this.q(`UPDATE cams_instance_keys SET revoked_at = ?, revoked_reason = 'admin' WHERE id = ?`).run(now, r.keyId);
         sys('cams-key-revoke', i, { keyId: r.keyId, fingerprint: k.fingerprint });
       });
-    } else {
+    } else if (r.kind === 'tokens') {
       for (const t of r.tokenIds) revokeToken(t);
     }
   }

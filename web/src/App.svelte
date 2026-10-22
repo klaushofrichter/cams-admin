@@ -12,6 +12,7 @@
   import Moves from './pages/Moves.svelte';
   import Audit from './pages/Audit.svelte';
   import Backup from './pages/Backup.svelte';
+  import Diagnostics from './pages/Diagnostics.svelte';
 
   let me = $state<{ email: string; expiresAt: number } | null>(null);
   let checked = $state(false);
@@ -45,6 +46,7 @@
       <a href="#/moves" data-testid="nav-moves" class:on={route.page === 'moves'}>Moves</a>
       <a href="#/audit" data-testid="nav-audit" class:on={route.page === 'audit'}>Audit</a>
       <a href="#/backup" data-testid="nav-backup" class:on={route.page === 'backup'}>Backup</a>
+      <a href="#/diagnostics" data-testid="nav-diagnostics" class:on={route.page === 'diagnostics'}>Diagnostics</a>
     </nav>
     <span class="who muted hide-phone" data-testid="me">{me.email}</span>
     <button class="btn" data-testid="signout" onclick={signOut}>Sign out</button>
@@ -59,6 +61,7 @@
     {:else if route.page === 'moves'}<Moves />
     {:else if route.page === 'audit'}<Audit />
     {:else if route.page === 'backup'}<Backup />
+    {:else if route.page === 'diagnostics'}<Diagnostics />
     {/if}
   </main>
 {/if}

@@ -14,6 +14,7 @@ import { estimateS, FALLBACK_BPS, hostnameOf, MIN_ESTIMATE_S, OFFER_EXPIRY_MS, R
 import { readEpoch } from '../server/db/open';
 import { AUDIT_ACTIONS } from '../server/audit';
 import { moveToken, targetAddress } from '../server/moves/token';
+import { precheckReport } from '../server/moves/precheck';
 
 const ACTOR = 'admin@example.com';
 const fx = (name: string) => JSON.parse(readFileSync(join(__dirname, '../contract/v1/fixtures', name), 'utf8')).message.body as Record<string, any>;
@@ -194,6 +195,24 @@ describe('move request', () => {
     expect(a.moveId).toMatch(/^mv_/);
     expect(moves()).toHaveLength(0);
     expect(got(other.client, 'move.offer')).toHaveLength(0);
+  });
+
+  it('the precheck report (diagnostics) names the rule and the instance, and agrees with the refusal', async () => {
+    const src = await proxy();
+    const tgt = await proxy({ allow: ['move.send'] });
+    camera(src);
+    const i = s.built.camsInstances.create(ACTOR, { name: 'cluster', displayName: 'Cluster', accounts: [src.accountId] });
+    s.built.camsInstances.setRoute(ACTOR, i.id, src.proxyId, { url: null, hidden: false });
+    const report = () => precheckReport({ db: s.built.db, registry: s.built.registry, status: s.built.status, store: s.built.moves.store }, { accountId: src.accountId, sourceProxyId: src.proxyId, targetProxyId: tgt.proxyId });
+    const rule = (k: string) => report().rules.find((r) => r.rule === k);
+    expect(report()).toMatchObject({ ok: false, reason: 'moves_not_allowed' });
+    expect(rule('target_online')).toMatchObject({ ok: true, detail: 'target online' });
+    expect(rule('target_receives')).toMatchObject({ ok: false, detail: 'commands allowed; move.receive not allowed' });
+    expect(rule('site_ca')).toMatchObject({ ok: true });
+    expect(rule('routed')).toEqual({ rule: 'routed', ok: false, reason: 'not_routed', detail: 'cams instances that see the source but not the target: cluster' });
+    expect(s.built.moves.precheck({ accountId: src.accountId, sourceProxyId: src.proxyId, targetProxyId: tgt.proxyId })).toEqual({ ok: false, reason: 'moves_not_allowed' });
+    s.built.camsInstances.setRoute(ACTOR, i.id, tgt.proxyId, { url: null, hidden: false });
+    expect(rule('routed')).toEqual({ rule: 'routed', ok: true, reason: 'not_routed' });
   });
 
   it('target not routed to the source\'s cams instance is refused not_routed', async () => {

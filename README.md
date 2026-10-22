@@ -150,6 +150,11 @@ It will run at `cams-admin.skylar.technology`. Phase 1 is specified in
   ([docs/restore.md](docs/restore.md)). The cut-over is
   [docs/migration-p4-runbook.md](docs/migration-p4-runbook.md).
 
+A read-only diagnostics API (`/api/v1/diag/…`) answers tools with a
+revocable diagnostics token instead of a sign-in: proxies, cams instances and
+their problems, cameras, moves, the move precheck rule by rule, and the audit
+log ([docs/diagnostics.md](docs/diagnostics.md)).
+
 There is no video: cams-admin is a control plane, not in any data path.
 Camera passwords never pass through it; a managed proxy token passes through
 it exactly once, in the answer that shows it.
