@@ -7,13 +7,13 @@ import { limiter } from '../rateLimit';
 import { precheckReport } from '../moves/precheck';
 import { version } from '../version';
 import type { DiagTokens } from './tokens';
-import { diagAudit, diagCameras, diagCamsInstances, diagMoves, diagProxies } from './views';
+import { diagAudit, diagCameras, diagCamsInstances, diagMoves, diagProxies, diagTokens } from './views';
 
 // The read-only diagnostics API (issue #45), mounted at /api/v1/diag: a
 // diagnostics token (Authorization: Bearer cad_…) or a sysadmin session.
 // GET only; the token opens nothing outside this router.
 
-const ROUTES = ['/diag', '/diag/proxies', '/diag/cams-instances', '/diag/cameras', '/diag/moves?accountId=', '/diag/moves/precheck?source=&target=&camera=', '/diag/audit?account=&actorType=&action=&from=&to=&limit=&cursor='];
+const ROUTES = ['/diag', '/diag/proxies', '/diag/cams-instances', '/diag/cameras', '/diag/tokens', '/diag/moves?accountId=', '/diag/moves/precheck?source=&target=&camera=', '/diag/audit?account=&actorType=&action=&from=&to=&limit=&cursor='];
 
 export function diagAuth(d: Pick<ApiDeps, 'sessions' | 'audit'> & { diag: DiagTokens }): RequestHandler {
   return (req, res, next) => {
@@ -60,6 +60,7 @@ export function diagRouter(d: ApiDeps & { diag: DiagTokens }): express.Router {
   r.get('/proxies', h(() => diagProxies(d)));
   r.get('/cams-instances', h(() => diagCamsInstances(d)));
   r.get('/cameras', h(() => diagCameras(d)));
+  r.get('/tokens', h(() => diagTokens(d)));
   r.get('/moves', h((req) => {
     const acc = q(req, 'accountId');
     if (acc !== undefined) d.registry.getAccount(acc);

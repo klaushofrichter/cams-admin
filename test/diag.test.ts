@@ -1,7 +1,7 @@
 // The read-only diagnostics API and its token (issue #45): issued once and
 // stored as a hash, GET only, never on the other API routes, revocable (and
 // revoked again after a restore), and no secret in any answer.
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import { join } from 'path';
 import { existsSync, readFileSync } from 'fs';
@@ -24,7 +24,7 @@ const issue = async (name: string, days?: number) => {
   return r.body as { token: string; item: { id: string; hashPrefix: string; state: string; expiresAt: number; createdAt: number } };
 };
 const auditOf = (action: string) => a.db.prepare('SELECT * FROM audit_log WHERE action = ? ORDER BY id').all(action) as { detail: string; outcome: string; target_id: string }[];
-const ROUTES = ['/diag', '/diag/proxies', '/diag/cams-instances', '/diag/cameras', '/diag/moves', '/diag/audit'];
+const ROUTES = ['/diag', '/diag/proxies', '/diag/cams-instances', '/diag/cameras', '/diag/tokens', '/diag/moves', '/diag/audit'];
 
 let acc: string, px: string, px2: string;
 beforeAll(() => {
@@ -118,8 +118,8 @@ describe('diagnostics tokens', () => {
 });
 
 describe('diagnostics answers', () => {
-  // The first block left live tokens behind: room for these.
-  beforeAll(() => void a.db.prepare(`UPDATE diag_tokens SET revoked_at = 1, revoked_by = 'test' WHERE revoked_at IS NULL`).run());
+  // Room under the live-token cap for each test.
+  beforeEach(() => void a.db.prepare(`UPDATE diag_tokens SET revoked_at = 1, revoked_by = 'test' WHERE revoked_at IS NULL`).run());
   it('proxies, cameras and cams instances carry the registry fields', async () => {
     const i = a.camsInstances.create('admin@example.com', { name: 'cluster', displayName: 'Cluster', accounts: [acc] });
     a.camsInstances.setRoute('admin@example.com', i.id, px, { url: null, hidden: false });
@@ -130,6 +130,15 @@ describe('diagnostics answers', () => {
     expect(c).toMatchObject({ proxyId: px, proxyCameraId: 'cam1', host: '192.0.2.10', protocol: 'https', moveId: null, online: null });
     const ci = (await bearer('/diag/cams-instances', token)).body.items.find((x: { id: string }) => x.id === i.id);
     expect(ci).toMatchObject({ name: 'cluster', accounts: [acc], routes: [{ proxyId: px, accountId: acc, url: null, hidden: false }], report: null });
+  });
+
+  it('tokens: per proxy, the holder of each token by name, state and age; no hash', async () => {
+    const i = a.camsInstances.list()[0];
+    a.db.prepare(`INSERT INTO proxy_tokens (id,account_id,proxy_id,kind,holder,label,hash,state,issued_revision,created_at,created_by) VALUES ('tok_DIAG0000000000000001',?,?,'client',?,'cams cluster',?,'active',1,5,'admin@example.com')`).run(acc, px, i.id, 'sha256:' + 'cd'.repeat(32));
+    const { token } = await issue('tokens', 1);
+    const p = (await bearer('/diag/tokens', token)).body.items.find((x: { proxyId: string }) => x.proxyId === px);
+    expect(p.tokens).toEqual([expect.objectContaining({ id: 'tok_DIAG0000000000000001', kind: 'client', holder: i.id, holderName: 'cluster', label: 'cams cluster', state: 'active', createdBy: expect.stringMatching(/^email:[0-9a-f]{8}$/) })]);
+    expect(JSON.stringify(p)).not.toContain('cdcdcdcd');
   });
 
   it('the move precheck names every rule: an offline target, and the instance that sees only the source', async () => {

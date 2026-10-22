@@ -87,6 +87,26 @@ export function diagCameras(d: ApiDeps) {
   };
 }
 
+// Every proxy's managed tokens: who holds each (a cams instance by name, or
+// "manual"), its state and age. No hash, not even a prefix; the creator's
+// e-mail is masked like the audit's.
+export function diagTokens(d: ApiDeps) {
+  const names = new Map(d.camsInstances.list().map((i) => [i.id, i.name]));
+  return {
+    items: d.registry.listProxies().map((px) => {
+      const t = d.tokens.list(px.accountId, px.id);
+      return {
+        proxyId: px.id, proxyName: px.name, revision: t.revision, appliedRevision: t.appliedRevision,
+        tokens: t.items.map((x) => ({
+          id: x.id, kind: x.kind, holder: x.holder, holderName: names.get(x.holder) ?? null, label: mask(x.label), state: x.state, onProxy: x.onProxy,
+          createdAt: x.createdAt, createdBy: mask(x.createdBy), retireAt: x.retireAt, revokedAt: x.revokedAt,
+          lastCommand: x.lastCommand && { state: x.lastCommand.state, outcomeCode: x.lastCommand.outcomeCode },
+        })),
+      };
+    }),
+  };
+}
+
 export function diagMoves(d: ApiDeps, accountId: string | undefined) {
   return {
     items: d.moves.store.list(accountId).map((m) => {
