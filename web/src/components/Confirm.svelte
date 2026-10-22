@@ -1,12 +1,13 @@
 <script lang="ts">
   // A confirmation dialog; with `typed`, the user must type that text.
-  let { title, body, typed = '', ok = 'Confirm', onconfirm, oncancel }: { title: string; body: string; typed?: string; ok?: string; onconfirm: () => void; oncancel: () => void } = $props();
+  let { title, body, typed = '', ok = 'Confirm', onconfirm, oncancel, children }: { title: string; body: string; typed?: string; ok?: string; onconfirm: () => void; oncancel: () => void; children?: import('svelte').Snippet } = $props();
   let value = $state('');
 </script>
 <div class="scrim" role="presentation" onclick={oncancel}></div>
 <div class="dialog card" role="dialog" aria-modal="true" aria-label={title} data-testid="confirm">
   <h3>{title}</h3>
   <p>{body}</p>
+  {@render children?.()}
   {#if typed}
     <label>Type <b class="mono">{typed}</b> to confirm<input data-testid="confirm-input" bind:value autocomplete="off" /></label>
   {/if}

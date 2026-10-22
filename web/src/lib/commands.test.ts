@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { commandsText, cmdStateClass, cmdStateText, tokenStateClass, tokenStateText, issueBlocked, aheadText } from './commands';
+import { commandsText, cmdStateClass, cmdStateText, tokenStateClass, tokenStateText, issueBlocked, aheadText, moveArgsText } from './commands';
 
 describe('commands (UI text)', () => {
   it('the proxy\'s command policy', () => {
@@ -40,5 +40,18 @@ describe('commands (UI text)', () => {
     expect(tokenStateText({ state: 'active', onProxy: true })).toBe('active');
     expect(tokenStateClass('revoked', false)).toBe('warn');
     expect(aheadText(12, 3)).toBe('The proxy is at token revision 12, ahead of cams-admin (3): was cams-admin restored from a backup? Check the tokens below (re-revoke what was revoked after the backup), then confirm.');
+  });
+  it('move command args never show a token, its hash or a public key', () => {
+    const secret = { token: 'TOKEN-SECRET', tokenHash: 'sha256:HASH-SECRET', targetPublicKey: 'PUBKEY-SECRET', expectedLeaf: 'LEAF', source: { token: 'TOKEN-SECRET' } };
+    for (const c of ['move.open', 'move.offer', 'move.start', 'move.go', 'move.release', 'move.finish', 'move.cancel', 'move.answer', 'move.targets']) {
+      const t = moveArgsText(c, { moveId: 'mv_1', ...secret });
+      expect(t, c).not.toMatch(/SECRET|PUBKEY/);
+    }
+    expect(moveArgsText('move.go', { moveId: 'mv_1', targetPublicKey: 'PUBKEY-SECRET' })).toBe('move mv_1');
+    expect(moveArgsText('move.cancel', { moveId: 'mv_1', role: 'target', copied: 'delete' })).toBe('move mv_1, target, delete what was copied');
+    expect(moveArgsText('move.finish', { moveId: 'mv_1', role: 'source', abandoned: true })).toBe('move mv_1, source, abandoned');
+    expect(moveArgsText('move.answer', { moveId: 'mv_1', accept: false, reason: 'busy' })).toBe('move mv_1, refused (busy)');
+    expect(moveArgsText('move.open', { moveId: 'mv_1', targetIp: '192.0.2.5' })).toBe('move mv_1');
+    expect(moveArgsText('config.set', {})).toBe('');
   });
 });

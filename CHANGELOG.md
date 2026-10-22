@@ -5,4 +5,4 @@ then empties it on `main`.
 
 ## [Unreleased]
 
-- Camera moves between two proxies of one account: cams-admin runs the move, marks moved cameras for cams, and the cams instance page shows held proxy changes.
+- Camera moves between two proxies of one account: cams-admin runs the move, marks moved cameras for cams, and the cams instance page shows held proxy changes, and a Moves page shows progress with cancel and end transfer.
