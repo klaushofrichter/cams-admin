@@ -104,6 +104,12 @@ export class MoveStore {
     return r ? toMove(r) : null;
   }
 
+  // The move made for a source's request, ended or not (repeated request events).
+  byRequest(sourceProxyId: string, requestId: string): Move | null {
+    const r = this.db.prepare('SELECT * FROM moves WHERE source_proxy_id = ? AND request_id = ? ORDER BY created_at LIMIT 1').get(sourceProxyId, requestId) as Row | undefined;
+    return r ? toMove(r) : null;
+  }
+
   setPhase(id: string, phase: MovePhase, patch: Partial<Move> = {}): Move {
     return tx(this.db, () => {
       const cur = this.get(id);

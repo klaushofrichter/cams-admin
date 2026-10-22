@@ -339,7 +339,7 @@ export class ProxyClient extends EventEmitter {
     const o = this.moveResults[b.command];
     if (o) return o;
     switch (b.command) {
-      case 'move.offer': return { status: 'ok', result: { accept: true, space: { needed: 1000, available: 5000, fits: true, retentionProposal: null }, probeBps: 50_000_000 } };
+      case 'move.offer': return { status: 'ok', result: { accept: true, space: { needed: 1000, available: 5000, fits: true, perKind: {}, retentionProposal: null }, probeBps: 50_000_000 } };
       case 'move.start': return { status: 'ok', result: { publicKey: 'MCowBQYDK2VuAyEA' + 'A'.repeat(43) + '=', leafFingerprint: 'SHA256:' + 'AB'.repeat(32) } };
       case 'move.finish': return { status: 'ok', result: {} };
       default: return { status: 'ok', result: {} };

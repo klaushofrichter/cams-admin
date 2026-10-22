@@ -13,6 +13,7 @@ import { LiveHub } from './live';
 import { StatusStore } from './status/store';
 import { Hub, CONNECT_PATH } from './channel/hub';
 import { Commands } from './commands/service';
+import { Moves } from './moves/service';
 import { Tokens } from './tokens/service';
 import { ProxyConfig } from './config/service';
 import { RemoteActions } from './actions/service';
@@ -35,7 +36,7 @@ import { limiter } from './rateLimit';
 import { version } from './version';
 
 export interface Built {
-  cfg: Config; clock: Clock; db: Db; audit: Audit; registry: Registry; live: LiveHub; status: StatusStore; hub: Hub; commands: Commands; tokens: Tokens; actions: RemoteActions; config: ProxyConfig; enrollment: Enrollment; sessions: Sessions; backup: BackupService;
+  cfg: Config; clock: Clock; db: Db; audit: Audit; registry: Registry; live: LiveHub; status: StatusStore; hub: Hub; commands: Commands; moves: Moves; tokens: Tokens; actions: RemoteActions; config: ProxyConfig; enrollment: Enrollment; sessions: Sessions; backup: BackupService;
   camsInstances: CamsInstances; camsAuth: CamsAuth; importer: Importer; signing: SigningKey;
   app: express.Express; http: Server; epochFile: string;
   tick(): void;
@@ -64,6 +65,9 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
   const hub = new Hub({ db, clock, cfg, registry, audit, status, log, signingKey: signing.key, serverKeyFingerprint: signing.fingerprint });
   const commands = new Commands({ db, clock, audit, registry, status, live, log, hub: () => hub });
   hub.deps.commands = commands;
+  // Camera moves (plan 2026-10-21): the proxies' move events drive the job.
+  const moves = new Moves({ db, clock, audit, registry, status, commands, log });
+  hub.deps.onProxyEvent = (proxyId, accountId, ev) => moves.onEvent(proxyId, accountId, ev);
   const journal = new RevocationJournal(join(cfg.dataDir, 'cams-revocations.jsonl'), log);
   const tokens = new Tokens({ db, clock, audit, registry, commands, live, log, journal: (tokenIds) => journal.append({ kind: 'tokens', tokenIds }, clock.now()) });
   status.onTokens = (proxyId, t) => tokens.onHeartbeat(proxyId, t);
@@ -129,6 +133,7 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
     try {
       status.tick();
       commands.tick();
+      moves.tick();
       tokens.tick();
       camsAuth.sweep();
       config.tick();
@@ -148,7 +153,7 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
   let closed = false;
 
   return {
-    cfg, clock, db, audit, registry, live, status, hub, commands, tokens, actions, config, enrollment, sessions, backup, camsInstances, camsAuth, importer, signing, app, http, epochFile, tick,
+    cfg, clock, db, audit, registry, live, status, hub, commands, moves, tokens, actions, config, enrollment, sessions, backup, camsInstances, camsAuth, importer, signing, app, http, epochFile, tick,
     writeRoutes() {
       const out: string[] = [];
       for (const layer of (api as unknown as { stack: { route?: { path: string; methods: Record<string, boolean> } }[] }).stack) {

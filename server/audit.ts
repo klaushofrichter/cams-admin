@@ -17,6 +17,8 @@ export const AUDIT_ACTIONS = [
   'import-run', 'import-apply', 'export-run', 'camera-override-set', 'camera-override-clear',
   // Camera move: a proxy's move event that was dropped (bad signature, wrong target, strict schema).
   'move-event-refused',
+  // The move job (plan Task 4): a source's request (ok or refused), the offer to the target and its answer, a phase change.
+  'move-request', 'move-offer', 'move-phase',
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 const KNOWN = new Set<string>(AUDIT_ACTIONS);
