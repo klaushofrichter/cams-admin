@@ -42,6 +42,22 @@ describe('moves (UI text)', () => {
     expect(reasonText('some_code')).toBe('some_code');
     expect(reasonText(null)).toBe('');
   });
+  it('reasons cams-admin itself answers and fails with', () => {
+    expect(reasonText('not_registered')).toBe('the camera is not in the registry');
+    expect(reasonText('internal')).toBe('an internal error');
+    expect(reasonText('token_lost')).toBe('cams-admin restarted before the offer went out');
+  });
+  it('failure codes: the step in words, then the code in words (or the code)', () => {
+    expect(reasonText('start:camera_unreachable')).toBe("the target could not start: the target cannot reach the camera");
+    expect(reasonText('source:token_address')).toBe('the source failed: token_address');
+    expect(reasonText('target:disk_full')).toBe('the target failed: disk_full');
+    expect(reasonText('release:unknown')).toBe('the source could not release the camera: no answer');
+    expect(reasonText('go:expired')).toBe('the source could not hand the camera over: not delivered in time');
+    expect(reasonText('open:busy')).toBe('the source could not open the move: a proxy is busy with another move');
+    expect(reasonText('offer:not_enrolled')).toBe('the offer could not be sent: not_enrolled');
+    expect(reasonText('switch:registry_incomplete')).toBe('the switch-over failed: registry_incomplete');
+    expect(reasonText('nostep:x')).toBe('nostep:x');
+  });
   it('which phases offer cancel and end transfer', () => {
     for (const p of ['awaiting-approval', 'approved', 'switching', 'copying']) expect(cancelable(p), p).toBe(true);
     for (const p of ['requested', 'offered', 'cleaning', 'done', 'rejected', 'cancelling', 'cancelled', 'failed']) expect(cancelable(p), p).toBe(false);

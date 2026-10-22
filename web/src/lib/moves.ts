@@ -52,7 +52,33 @@ const REASONS: Record<string, string> = {
   target_failed: 'the target failed',
   offer_expired: 'the offer expired unanswered',
   end_transfer: 'the transfer was ended early',
+  not_registered: 'the camera is not in the registry',
+  internal: 'an internal error',
+  token_lost: 'cams-admin restarted before the offer went out',
+  source_registry_incomplete: "the source's registry entry has no address or TLS name",
+  bad_result: 'a proxy answered something unexpected',
+  unknown: 'no answer',
+  expired: 'not delivered in time',
 };
-export const reasonText = (r: string | null | undefined): string => (r ? REASONS[r] ?? r : '');
+// A failure code is `<step>:<code>` (the step that failed, the proxy's code or the command's end state).
+const STEPS: Record<string, string> = {
+  open: 'the source could not open the move',
+  offer: 'the offer could not be sent',
+  start: 'the target could not start',
+  go: 'the source could not hand the camera over',
+  switch: 'the switch-over failed',
+  release: 'the source could not release the camera',
+  source: 'the source failed',
+  target: 'the target failed',
+};
+export function reasonText(r: string | null | undefined): string {
+  if (!r) return '';
+  if (REASONS[r]) return REASONS[r];
+  const i = r.indexOf(':');
+  const step = i > 0 ? STEPS[r.slice(0, i)] : undefined;
+  if (!step) return r;
+  const code = r.slice(i + 1);
+  return `${step}: ${REASONS[code] ?? code}`;
+}
 
 export const cancelable = (phase: string): boolean => ['awaiting-approval', 'approved', 'switching', 'copying'].includes(phase);
