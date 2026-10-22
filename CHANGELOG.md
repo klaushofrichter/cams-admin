@@ -5,6 +5,5 @@ then empties it on `main`.
 
 ## [Unreleased]
 
-- Fix: a cams instance that reaches its proxy over a plain-http route (cams on the proxy's own host) no longer gets the proxy's TLS name with it; cams refused that pair and kept an old configuration (seen on the mini PC).
-- Diagnostics: `/api/v1/diag/tokens` lists every proxy's managed tokens with their holder and state (no hashes).
+- Fix: the cams configuration revision now includes a snapshot format number, so a server-side change to the configuration (like the previous release's TLS-name fix) reaches every cams at once instead of the old one being kept as unchanged.
 

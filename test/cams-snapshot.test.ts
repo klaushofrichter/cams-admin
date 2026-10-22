@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { buildSnapshot, encodeSnapshot, snapshotRevision, type SnapshotDeps } from '../server/cams/snapshot';
+import { buildSnapshot, encodeSnapshot, snapshotRevision, type SnapshotDeps, SNAPSHOT_FORMAT } from '../server/cams/snapshot';
 import { camsResponseText, publicFromB64, verify, verifyEnvelope } from '../server/crypto/ed25519';
 import { tmpDir } from './helpers/tmp';
 import { startServer, type Running } from './helpers/server';
@@ -109,6 +109,12 @@ describe('the cams snapshot (GET /cams/v1/config)', () => {
       expect(c.revision).toBe(snapshotRevision(d.db, i.id, FP()));
       expect(c.instance).toEqual({ id: i.id, name: i.name, rotateBefore: null });
     }
+  });
+
+  it('revision changes with the snapshot format: a server change to what the snapshot says reaches every cams (no 304 on the old one)', () => {
+    expect(snapshotRevision(d.db, cluster.id, FP(), SNAPSHOT_FORMAT)).toBe(snapshotRevision(d.db, cluster.id, FP()));
+    expect(snapshotRevision(d.db, cluster.id, FP(), SNAPSHOT_FORMAT + 1)).not.toBe(snapshotRevision(d.db, cluster.id, FP()));
+    expect(SNAPSHOT_FORMAT).toBeGreaterThanOrEqual(2); // 2: no TLS name with a plain-http URL (#48)
   });
 
   it('revision changes on a user role change, a route change, a token state change, served accounts, rotate-now, a key change, and not on a heartbeat', async () => {

@@ -28,11 +28,16 @@ const REVOKED_KEEP_MS = 7 * 86400_000;
 type Row = Record<string, unknown>;
 
 // "r:" + 16 hex over the instance, its version, its served accounts' revisions and the signing key (R4-1).
-export function snapshotRevision(db: Db, instanceId: string, keyFp: string): string {
+// The snapshot's format: bump it whenever the server changes what a snapshot
+// says for the same database rows, so the revision moves and every cams
+// fetches the new one instead of getting 304 on the old (2: #48).
+export const SNAPSHOT_FORMAT = 2;
+
+export function snapshotRevision(db: Db, instanceId: string, keyFp: string, format = SNAPSHOT_FORMAT): string {
   const inst = db.prepare('SELECT version FROM cams_instances WHERE id = ?').get(instanceId) as { version: number } | undefined;
   const a = (db.prepare(`SELECT c.account_id id, c.revision rev FROM config_revision c JOIN cams_instance_accounts s ON s.account_id = c.account_id
     WHERE s.instance_id = ? ORDER BY c.account_id`).all(instanceId) as { id: string; rev: number }[]).map((r) => [r.id, r.rev]);
-  return 'r:' + sha256hex(jcs({ i: instanceId, iv: inst?.version ?? 0, a, k: keyFp })).slice(0, 16);
+  return 'r:' + sha256hex(jcs({ i: instanceId, iv: inst?.version ?? 0, a, k: keyFp, f: format })).slice(0, 16);
 }
 
 // camera id → the instance's override of host and camera user (migration 7; null = the camera's value).
