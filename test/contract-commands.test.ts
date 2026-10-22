@@ -148,9 +148,9 @@ describe('move commands', () => {
     expect(JSON.stringify(hb)).toContain('"move.send"');
     expect(JSON.stringify(hb)).toContain('"move.receive"');
   });
-  it('move.offer refuse reasons are the closed list; move.answer adds six', () => {
+  it('move.offer refuse reasons are the closed list; move.answer adds eight', () => {
     const offerReasons = ['moves_not_allowed', 'camera_unreachable', 'camera_limit', 'id_taken', 'busy', 'incompatible', 'no_site_ca', 'ca_does_not_cover_camera', 'external_cert'];
-    const answerReasons = [...offerReasons, 'other_account', 'target_offline', 'not_routed', 'host_overridden', 'target_failed', 'offer_expired'];
+    const answerReasons = [...offerReasons, 'other_account', 'target_offline', 'not_routed', 'host_overridden', 'target_failed', 'offer_expired', 'not_registered', 'internal'];
     for (const reason of offerReasons) expect(resultOk('move.offer', { accept: false, reason }), reason).toBe(true);
     expect(resultOk('move.offer', { accept: false, reason: 'other_account' })).toBe(false);
     for (const reason of answerReasons) expect(argsOk('move.answer', { ...(args('move.answer') as object), accept: false, reason }), reason).toBe(true);

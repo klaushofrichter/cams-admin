@@ -333,6 +333,40 @@ describe('move offer answer', () => {
   });
 });
 
+describe('move request, failures cams-admin answers at once', () => {
+  it('a camera not in the registry is answered not_registered', async () => {
+    const src = await proxy();
+    const tgt = await proxy();
+    const requestId = request(src, tgt.proxyId, { camera: 'nope' });
+    expect(await answerOf(src, requestId)).toMatchObject({ accept: false, reason: 'not_registered' });
+    expect(moves()).toHaveLength(0);
+  });
+
+  it('a move.open that fails with a code outside the reason list is answered internal', async () => {
+    const src = await proxy();
+    const tgt = await proxy();
+    camera(src);
+    src.client.moveResults['move.open'] = { status: 'failed', code: 'disk_on_fire' };
+    const requestId = request(src, tgt.proxyId);
+    expect(await answerOf(src, requestId)).toMatchObject({ accept: false, reason: 'internal' });
+    expect(moves()[0]).toMatchObject({ phase: 'failed', reason: 'open:disk_on_fire' });
+  });
+
+  it('a move.open that never ends (unknown or expired) is answered internal', async () => {
+    const src = await proxy();
+    const tgt = await proxy();
+    camera(src);
+    src.client.dropCommands = 100;
+    const requestId = request(src, tgt.proxyId);
+    await until(() => moves().length === 1, 5000, 'move');
+    clock.advance(GIVE_UP_AFTER_MS + 1000);
+    s.built.tick();
+    expect(await answerOf(src, requestId)).toMatchObject({ accept: false, reason: 'internal' });
+    expect(moves()[0]).toMatchObject({ phase: 'failed' });
+    expect(got(tgt.client, 'move.offer')).toHaveLength(0);
+  });
+});
+
 describe('estimate and audit', () => {
   it('estimateS sums every kind and adds the per-file overhead', () => {
     const k = (files: number, bytes: number) => ({ files, bytes, rows: files, oldest: null, newest: null });

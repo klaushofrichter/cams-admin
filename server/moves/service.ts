@@ -316,8 +316,8 @@ export class Moves {
     const cam = this.d.db.prepare('SELECT id, cams_id FROM cameras WHERE account_id = ? AND proxy_id = ? AND proxy_camera_id = ?')
       .get(accountId, proxyId, ev.camera.proxyCameraId) as { id: string; cams_id: string } | undefined;
     const ctx = { proxyId, accountId, ev, cameraId: cam?.id ?? null, camsId: cam?.cams_id ?? null };
-    // Not in the registry: no move row can name it, and no answer reason says so (the source's request ages out).
-    if (!cam) return this.refuse(ctx, 'unknown_camera');
+    // Not in the registry: no move row can name it; the source is told so at once (not_registered), not left to wait.
+    if (!cam) return this.refuse(ctx, 'not_registered');
     const cand: Candidate = { accountId, sourceProxyId: proxyId, targetProxyId: ev.target, cameraId: cam.id };
     let pc = this.precheck(cand);
     if (!pc.ok) return this.refuse(ctx, pc.reason);
@@ -339,7 +339,7 @@ export class Moves {
         });
         this.audit(mv, 'move-request', 'ok', { phase: 'requested', by: ev.actor }, { actorType: 'proxy', actor: proxyId });
         const open = this.send(accountId, proxyId, 'move.open', { v: 1, moveId: mv.id, requestId: ev.requestId, camera: ev.camera.proxyCameraId, tokenHash, targetIp });
-        if (!open.ok) return this.failIn(mv, `open:${open.code}`, null);
+        if (!open.ok) return this.failIn(mv, `open:${open.code}`, 'internal');
         return mv;
       });
     } catch (e) {
@@ -406,9 +406,10 @@ export class Moves {
     this.pending.delete(m.id);
     if (r.state !== 'done') {
       // The source didn't open its side: the move fails. Its answer names the source's own refusal when it is one the
-      // panel can show (busy, no_site_ca, moves_not_allowed, external_cert); otherwise there is no fitting reason to give.
+      // panel can show (busy, no_site_ca, moves_not_allowed, external_cert); any other failure, and a move.open that
+      // ended unknown or expired, is `internal` (the source's side, not the target's) so its page doesn't wait.
       const code = r.outcomeCode ?? r.state;
-      this.fail(m, `open:${code}`, ANSWER_REASONS.has(code) ? code : null);
+      this.fail(m, `open:${code}`, ANSWER_REASONS.has(code) && code !== 'not_registered' ? code : 'internal');
       return;
     }
     if (!p) return this.fail(m, 'token_lost', 'target_failed');

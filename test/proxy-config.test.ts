@@ -61,6 +61,10 @@ describe('narrow.ts: the contract rules for the pre-check', () => {
     expect(isRemoteSettable('camsAdmin.url', settable)).toBe(false);
     expect(isRemoteSettable('sse.maxClients', settable)).toBe(false);
   });
+  it('cameras.*.moved and moves.* are never remote-settable, even when a proxy reports them settable', () => {
+    const settable = { 'cameras.*.moved': { type: 'boolean' as const }, 'moves.*': { type: 'string' as const }, 'moves.journal': { type: 'string' as const } };
+    for (const p of ['cameras.cam1.moved', 'moves.x', 'moves.journal', 'moves', 'moves.*']) expect(isRemoteSettable(p, settable), p).toBe(false);
+  });
   it('narrowingOk: spending only down (0 = no cap for the two caps), data kept only longer (unset size cap = no cap)', () => {
     expect(narrowingOk('analytics.googleVision.monthlyLimit', 1000, 500)).toBe(true);
     expect(narrowingOk('analytics.googleVision.monthlyLimit', 1000, 5000)).toBe(false);
