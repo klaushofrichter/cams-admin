@@ -375,7 +375,7 @@ export function dashboard(d: ApiDeps) {
     return {
       id: i.id, name: i.name, displayName: i.displayName, state: i.state, lastSeenAt: i.live.lastSeenAt, lastPullAt: i.live.lastPullAt, lastPullStatus: i.live.lastPullStatus,
       mode: rep?.mode ?? null, version: rep?.version ?? null, appliedRevision: rep?.appliedRevision ?? null, current: !!rep && rep.appliedRevision === current,
-      held: rep?.held?.length ?? 0, keptOld: rep?.keptOld?.length ?? 0, diverged: (rep?.keptOld?.length ?? 0) > 0,
+      held: (rep?.held?.length ?? 0) + (rep?.heldProxies?.length ?? 0), heldProxies: rep?.heldProxies?.length ?? 0, keptOld: rep?.keptOld?.length ?? 0, diverged: (rep?.keptOld?.length ?? 0) > 0,
       shadowDifferences: rep?.shadow ? rep.shadow.differences : null, shadowZeroSince: i.live.shadowZeroSince, problems: rep?.problems?.length ?? 0,
       tokens: rep?.tokens ?? null,
     };
