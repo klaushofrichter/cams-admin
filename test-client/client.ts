@@ -335,8 +335,12 @@ export class ProxyClient extends EventEmitter {
 
   // The camera-move commands: a canned result per command (moveResults overrides), the args recorded in receivedCommands.
   moveResults: Record<string, DoneBody> = {};
+  // Moves this proxy released as the source (move.release answered ok): like cam-proxy, the source's move.finish is refused before that.
+  releasedMoves = new Set<string>();
   private runMove(b: Record<string, any>): DoneBody {
+    if (b.command === 'move.finish' && b.args?.role === 'source' && !this.releasedMoves.has(b.args.moveId)) return { status: 'failed', code: 'wrong_phase' };
     const o = this.moveResults[b.command];
+    if (b.command === 'move.release' && (!o || o.status === 'ok')) this.releasedMoves.add(b.args.moveId);
     if (o) return o;
     switch (b.command) {
       case 'move.offer': return { status: 'ok', result: { accept: true, space: { needed: 1000, available: 5000, fits: true, perKind: {}, retentionProposal: null }, probeBps: 50_000_000 } };

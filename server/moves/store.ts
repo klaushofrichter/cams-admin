@@ -22,6 +22,8 @@ export interface Move {
   offeredAt: number | null; approvedAt: number | null; budgetExceededAt: number | null;
   bytesTotal: number | null; bytesDone: number | null; rateBps: number | null; etaS: number | null;
   createdAt: number; updatedAt: number; endedAt: number | null; actor: string | null; version: number;
+  // Done, but the source's cleanup (release, finish) has not landed yet (Task 6 ruling b).
+  cleanupPending: boolean;
 }
 export interface NewMove {
   accountId: string; cameraId: string; sourceProxyId: string; targetProxyId: string; requestId: string;
@@ -42,9 +44,9 @@ const PATCH_COLS: Record<string, string> = {
   reason: 'reason', plan: 'plan', summary: 'summary', settings: 'settings', tokenHash: 'token_hash', targetIp: 'target_ip',
   targetPublicKey: 'target_public_key', leafFingerprint: 'leaf_fingerprint', copiedChoice: 'copied_choice', offeredAt: 'offered_at',
   approvedAt: 'approved_at', budgetExceededAt: 'budget_exceeded_at', bytesTotal: 'bytes_total', bytesDone: 'bytes_done', rateBps: 'rate_bps',
-  etaS: 'eta_s', actor: 'actor',
+  etaS: 'eta_s', actor: 'actor', cleanupPending: 'cleanup_pending',
 };
-const enc = (col: string, v: unknown): SQLInputValue => (v === undefined || v === null ? null : JSON_COLS.has(col) ? JSON.stringify(v) : (v as SQLInputValue));
+const enc = (col: string, v: unknown): SQLInputValue => (v === undefined || v === null ? null : JSON_COLS.has(col) ? JSON.stringify(v) : typeof v === 'boolean' ? (v ? 1 : 0) : (v as SQLInputValue));
 const dec = (v: unknown) => (v === null ? null : JSON.parse(v as string));
 
 const toMove = (r: Row): Move => ({
@@ -55,7 +57,7 @@ const toMove = (r: Row): Move => ({
   copiedChoice: r.copied_choice as string | null, offeredAt: r.offered_at as number | null, approvedAt: r.approved_at as number | null,
   budgetExceededAt: r.budget_exceeded_at as number | null, bytesTotal: r.bytes_total as number | null, bytesDone: r.bytes_done as number | null,
   rateBps: r.rate_bps as number | null, etaS: r.eta_s as number | null, createdAt: r.created_at as number, updatedAt: r.updated_at as number,
-  endedAt: r.ended_at as number | null, actor: r.actor as string | null, version: r.version as number,
+  endedAt: r.ended_at as number | null, actor: r.actor as string | null, version: r.version as number, cleanupPending: r.cleanup_pending === 1,
 });
 
 export class MoveStore {

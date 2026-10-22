@@ -16,7 +16,7 @@ import type { ProxyClient } from '../test-client/client';
 import { AUDIT_ACTIONS } from '../server/audit';
 import { readEpoch } from '../server/db/open';
 import { ApiError } from '../server/registry';
-import { PROGRESS_SAVE_MS } from '../server/moves/service';
+import { CANCEL_RETRY_MS, PROGRESS_SAVE_MS, RELEASE_RETRY_MS } from '../server/moves/service';
 import { RESEND_AFTER_MS } from '../server/commands/service';
 
 const ACTOR = 'admin@example.com';
@@ -45,7 +45,7 @@ afterEach(async () => {
   await s.stop();
 });
 
-interface Px { proxyId: string; accountId: string; client: ProxyClient; name: string; ip: string; site: string }
+interface Px { proxyId: string; accountId: string; client: ProxyClient; name: string; ip: string; site: string; key: any }
 async function proxy(): Promise<Px> {
   const name = `fn${n++}`;
   const p = await enrolled(s, name, 'home');
@@ -58,6 +58,21 @@ async function proxy(): Promise<Px> {
   const cur = s.built.registry.getProxy(p.accountId, p.proxyId);
   s.built.registry.updateProxy(ACTOR, p.accountId, p.proxyId, { url: `http://${addr}:8480`, tlsSite: site, tlsServername: `${name}.${site}.internal`, caFingerprints: [FP], version: cur.version });
   return { ...p, client, name, ip: addr, site };
+}
+// The proxy goes offline (its client stopped) and comes back (a new client with the same key; cam-proxy's journal: its releases and canned answers).
+async function offline(p: Px) {
+  await p.client.stop('shutdown');
+  clients.splice(clients.indexOf(p.client), 1);
+  await until(() => s.built.status.row(p.proxyId)?.connected === false, 5000, 'offline');
+}
+async function back(p: Px) {
+  const c = makeClient(p.key, { commands: { allow: ['move.send', 'move.receive'] }, proxyInfo: () => makeProxyInfo({ now: Date.now(), site: p.site, caFingerprint: [FP] }) });
+  c.releasedMoves = p.client.releasedMoves;
+  c.moveResults = p.client.moveResults;
+  clients.push(c);
+  c.start();
+  await until(() => c.state === 'connected' && s.built.status.row(p.proxyId)?.connected === true, 5000, 'back');
+  p.client = c;
 }
 const got = (c: ProxyClient, command: string, moveId?: string) => c.receivedCommands.filter((m) => m.body.command === command && (!moveId || m.body.args.moveId === moveId));
 const move = (id: string) => s.built.moves.store.get(id)!;
@@ -314,6 +329,54 @@ describe('cancel', () => {
     expect(auditFor('move-switch')).toHaveLength(2);
   });
 
+  it('cancel after switch-over with the source offline holds until the source is back (ruling a)', async () => {
+    const a = await copying();
+    await offline(a.src);
+    s.built.moves.cancel(ACTOR, a.m.id, 'delete');
+    expect(move(a.m.id).phase).toBe('cancelling');
+    await settle();
+    s.built.moves.tick();
+    await settle();
+    // The camera keeps working on the target: no target cancel yet.
+    expect(cmdRows(a.m.id, 'move.cancel')).toHaveLength(0);
+    expect(got(a.tgt.client, 'move.cancel', a.m.id)).toHaveLength(0);
+    expect(s.built.registry.getCamera(a.src.accountId, a.cam.id).proxyId).toBe(a.tgt.proxyId);
+    await back(a.src);
+    await until(() => cmdRows(a.m.id, 'move.cancel').length === 2, 5000, 'cancels');
+    const rows = s.built.db.prepare(`SELECT proxy_id FROM commands WHERE command = 'move.cancel' AND json_extract(args, '$.moveId') = ? ORDER BY rowid`).all(a.m.id) as { proxy_id: string }[];
+    expect(rows.map((r) => r.proxy_id)).toEqual([a.tgt.proxyId, a.src.proxyId]);
+    await until(() => got(a.src.client, 'move.cancel', a.m.id).length === 1, 5000, 'source cancel');
+    expect(got(a.src.client, 'move.cancel', a.m.id)[0].body.args).toEqual({ v: 1, moveId: a.m.id, role: 'source', expectedLeaf: LEAF });
+  });
+
+  it('a source cancel answered failed is asked again with a backoff and audited', async () => {
+    const a = await copying();
+    a.src.client.moveResults['move.cancel'] = { status: 'failed', code: 'camera_unreachable' };
+    s.built.moves.cancel(ACTOR, a.m.id, 'delete');
+    await until(() => cmdRows(a.m.id, 'move.cancel').some((r) => r.proxy_id === a.src.proxyId && r.state === 'failed'), 5000, 'source cancel failed');
+    await until(() => auditFor('move-cancel').some((x) => x.outcome === 'failed'), 5000, 'failure audited');
+    expect(auditFor('move-cancel').find((x) => x.outcome === 'failed')!.d).toMatchObject({ moveId: a.m.id, code: 'camera_unreachable', attempts: 1 });
+    const srcCancels = () => cmdRows(a.m.id, 'move.cancel').filter((r) => r.proxy_id === a.src.proxyId);
+    s.built.moves.tick();
+    await settle();
+    expect(srcCancels()).toHaveLength(1);
+    clock.advance(CANCEL_RETRY_MS);
+    s.built.moves.tick();
+    await until(() => srcCancels().length === 2 && srcCancels()[1].state === 'failed', 5000, 'asked again');
+    // The backoff doubles: not again after one more base interval.
+    clock.advance(CANCEL_RETRY_MS);
+    s.built.moves.tick();
+    await settle();
+    expect(srcCancels()).toHaveLength(2);
+    delete a.src.client.moveResults['move.cancel'];
+    clock.advance(CANCEL_RETRY_MS);
+    s.built.moves.tick();
+    await until(() => srcCancels().length === 3 && srcCancels()[2].state === 'done', 5000, 'taken on');
+    phase(a.src, a.m.id, 'source', 'cancelled');
+    await until(() => move(a.m.id).phase === 'cancelled', 5000, 'cancelled');
+    expect(s.built.registry.getCamera(a.src.accountId, a.cam.id).proxyId).toBe(a.src.proxyId);
+  });
+
   it('cancel in done is refused 409', async () => {
     const a = await copying();
     phase(a.tgt, a.m.id, 'target', 'copied');
@@ -357,8 +420,35 @@ describe('end transfer', () => {
     expect(e[0].d).toMatchObject({ moveId: a.m.id, abandoned: 2, sourceOnline: false });
     const done = auditFor('move-done');
     expect(done).toHaveLength(1);
-    expect(done[0].d).toMatchObject({ abandoned: true, cleanup: 'not-done', chunks: { copied: 1, skipped: 1, failed: 0, abandoned: 2, pending: 0 } });
+    expect(done[0].d).toMatchObject({ abandoned: true, cleanup: 'pending', chunks: { copied: 1, skipped: 1, failed: 0, abandoned: 2, pending: 0 } });
     expect(s.built.registry.getCamera(a.src.accountId, a.cam.id).proxyId).toBe(a.tgt.proxyId);
+    // Ruling (b): the source's cleanup stays pending; tick writes nothing while the source is away.
+    expect(move(a.m.id).cleanupPending).toBe(true);
+    await settle();
+    const epoch = readEpoch(s.built.db);
+    for (let k = 0; k < 3; k++) {
+      clock.advance(60_000);
+      s.built.moves.tick();
+    }
+    expect(readEpoch(s.built.db)).toBe(epoch);
+    // The source comes back: its finish goes out, the cleanup lands and is audited.
+    a.src.client.moveResults['move.finish'] = { status: 'ok', result: { deleted: DELETED } };
+    await back(a.src);
+    await until(() => move(a.m.id).cleanupPending === false, 5000, 'cleanup landed');
+    expect(got(a.src.client, 'move.finish', a.m.id).map((c) => c.body.args)).toEqual([{ v: 1, moveId: a.m.id, role: 'source', abandoned: true }]);
+    const all = auditFor('move-done');
+    expect(all).toHaveLength(2);
+    expect(all[1].d).toMatchObject({ moveId: a.m.id, cleanup: 'done', followUp: true, deleted: DELETED, cleanupAt: expect.any(Number) });
+    expect(move(a.m.id).phase).toBe('done');
+  });
+
+  it('a post-switch failure with the source offline leaves the cleanup pending', async () => {
+    const a = await copying();
+    await offline(a.src);
+    phase(a.tgt, a.m.id, 'target', 'failed', false, 'disk_full');
+    await until(() => move(a.m.id).phase === 'done', 5000, 'done');
+    expect(move(a.m.id).cleanupPending).toBe(true);
+    expect(auditFor('move-done')[0].d).toMatchObject({ failure: 'target:disk_full', cleanup: 'pending' });
   });
 
   it('end transfer with the source online sends move.finish abandoned to both roles', async () => {
@@ -392,13 +482,54 @@ describe('failures after the switch-over', () => {
     expect(done[0].d).toMatchObject({ failure: 'target:disk_full', abandoned: true });
   });
 
-  it('a failing move.release ends the transfer', async () => {
+  it('a failing move.release ends the transfer; the release is derived again before the source finish', async () => {
     const a = await switching();
     a.src.client.moveResults['move.release'] = { status: 'failed', code: 'camera_active' };
     phase(a.tgt, a.m.id, 'target', 'switched');
     await until(() => move(a.m.id).phase === 'done', 5000, 'done');
-    expect(auditFor('move-done')[0].d).toMatchObject({ failure: 'release:camera_active' });
+    expect(auditFor('move-done')[0].d).toMatchObject({ failure: 'release:camera_active', cleanup: 'pending' });
     expect(cmdRows(a.m.id, 'move.cancel')).toHaveLength(0);
+    // No source finish while the source has not released (cam-proxy refuses it: wrong_phase).
+    expect(got(a.src.client, 'move.finish', a.m.id)).toHaveLength(0);
+    expect(move(a.m.id).cleanupPending).toBe(true);
+    // Backoff: not again at once.
+    s.built.moves.tick();
+    await settle();
+    expect(cmdRows(a.m.id, 'move.release')).toHaveLength(1);
+    delete a.src.client.moveResults['move.release'];
+    a.src.client.moveResults['move.finish'] = { status: 'ok', result: { deleted: DELETED } };
+    clock.advance(RELEASE_RETRY_MS);
+    s.built.moves.tick();
+    await until(() => move(a.m.id).cleanupPending === false, 5000, 'cleanup landed');
+    expect(cmdRows(a.m.id, 'move.release')).toHaveLength(2);
+    expect(cmdRows(a.m.id, 'move.finish').filter((r) => r.proxy_id === a.src.proxyId).map((r) => r.state)).toEqual(['done']);
+    expect(auditFor('move-done')[1].d).toMatchObject({ cleanup: 'done', followUp: true, deleted: DELETED });
+  });
+
+  it('copied while move.release is still open: the source finish waits for a released source', async () => {
+    const a = await switching();
+    a.src.client.dropCommands = 1; // move.release in flight
+    phase(a.tgt, a.m.id, 'target', 'switched');
+    await until(() => got(a.src.client, 'move.release', a.m.id).length === 1, 5000, 'release in flight');
+    phase(a.tgt, a.m.id, 'target', 'copied');
+    await until(() => move(a.m.id).phase === 'cleaning', 5000, 'cleaning');
+    // The re-sent release fails.
+    a.src.client.moveResults['move.release'] = { status: 'failed', code: 'camera_active' };
+    clock.advance(RESEND_AFTER_MS);
+    s.built.commands.tick();
+    await until(() => cmdRows(a.m.id, 'move.release')[0].state === 'failed', 5000, 'release failed');
+    await settle();
+    expect(move(a.m.id).phase).toBe('cleaning');
+    expect(cmdRows(a.m.id, 'move.finish').filter((r) => r.proxy_id === a.src.proxyId)).toHaveLength(0);
+    // It is derived again (after the backoff) and the source finish follows.
+    delete a.src.client.moveResults['move.release'];
+    a.src.client.moveResults['move.finish'] = { status: 'ok', result: { deleted: DELETED } };
+    clock.advance(RELEASE_RETRY_MS);
+    s.built.moves.tick();
+    await until(() => move(a.m.id).phase === 'done', 5000, 'done');
+    expect(cmdRows(a.m.id, 'move.finish').filter((r) => r.proxy_id === a.src.proxyId).map((r) => r.state)).toEqual(['done']);
+    expect(auditFor('move-done')[0].d).toMatchObject({ abandoned: false, cleanup: 'done', deleted: DELETED });
+    expect(move(a.m.id).cleanupPending).toBe(false);
   });
 });
 

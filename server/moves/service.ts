@@ -56,6 +56,10 @@ export const PROGRESS_SAVE_MS = 60_000;
 export const ENDED_RETRY_MS = 24 * 3600_000;
 // A cancelling move whose source took the cancel on without reporting `cancelled`: asked again this often (cam-proxy re-emits the terminal phase).
 export const CANCEL_RECHECK_MS = 15 * 60_000;
+// Backoff for a release (before the source's finish) or a cancel the proxy answered failed: base, doubling per attempt, capped.
+export const RELEASE_RETRY_MS = 60_000;
+export const CANCEL_RETRY_MS = 60_000;
+const RETRY_CAP_MS = 3600_000;
 // Chunk states that end a chunk (cam-proxy's `failed` is "copied with failures"); the others are abandoned at an end transfer.
 const FINAL_CHUNK = new Set<ChunkStateName>(['verified', 'skipped', 'failed', 'abandoned']);
 // The reason of a cleaning move ended early by a sysadmin (any other reason there is the failure that ended it).
@@ -194,6 +198,18 @@ export class Moves {
         this.d.log.error({ err: e, moveId: m.id }, 'move_tick_failed');
       }
     }
+    // Done moves whose source cleanup has not landed (ruling b): worked on only while the source is online (nothing is queued to an absent one).
+    for (const r of this.d.db.prepare('SELECT id, source_proxy_id FROM moves WHERE cleanup_pending = 1').all() as { id: string; source_proxy_id: string }[]) {
+      if (!this.online(r.source_proxy_id) || now - (this.resumedAt.get(r.id) ?? 0) < RESUME_GAP_MS) continue;
+      this.resumedAt.set(r.id, now);
+      ids.add(r.id);
+      try {
+        const m = this.store.get(r.id);
+        if (m) this.cleanupStep(m);
+      } catch (e) {
+        this.d.log.error({ err: e, moveId: r.id }, 'move_tick_failed');
+      }
+    }
     for (const id of ended) {
       if (now - (this.resumedAt.get(id) ?? 0) < RESUME_GAP_MS) continue;
       this.resumedAt.set(id, now);
@@ -211,6 +227,11 @@ export class Moves {
   onLive(proxyId: string): void {
     const m = this.store.byProxy(proxyId);
     if (m) this.resume(m.id);
+    // A source back with a done move's cleanup still pending (ruling b).
+    for (const r of this.d.db.prepare('SELECT id FROM moves WHERE cleanup_pending = 1 AND source_proxy_id = ?').all(proxyId) as { id: string }[]) {
+      const mv = this.store.get(r.id);
+      if (mv) this.cleanupStep(mv);
+    }
   }
 
   // Re-derive the next command from the phase and the move's commands (a
@@ -355,11 +376,24 @@ export class Moves {
       case 'move.offer': return this.onOfferFinal(m, r);
       case 'move.start': return this.onStartFinal(m, r);
       case 'move.go': return this.onGoFinal(m, r);
-      case 'move.release': return this.onReleaseFinal(m, r);
-      case 'move.finish': return m.phase === 'cleaning' ? this.checkCleaning(m) : undefined;
+      case 'move.release':
+      case 'move.finish':
+        // The source's finish follows its release (cam-proxy refuses it before); a done move may still have its cleanup pending.
+        if (r.command === 'move.release' && m.phase === 'copying') return this.onReleaseFinal(m, r);
+        if (m.phase === 'cleaning') return this.checkCleaning(m);
+        if (m.cleanupPending && r.proxyId === m.sourceProxyId) return this.cleanupStep(m);
+        return;
       case 'move.cancel':
-        // Not taken on: logged; a cancelling move asks again from resume (an expired or lost one), never in a loop on a refusal.
-        if (r.state !== 'done') this.d.log.warn({ moveId: m.id, proxyId: r.proxyId, state: r.state, code: r.outcomeCode }, 'move_cancel_not_done');
+        if (r.state === 'done') return;
+        this.d.log.warn({ moveId: m.id, proxyId: r.proxyId, state: r.state, code: r.outcomeCode }, 'move_cancel_not_done');
+        // While cancelling, a cancel the proxy did not take on is asked again with a backoff (ensureCancels); each failure audited (throttled).
+        if (m.phase === 'cancelling' && (r.state === 'failed' || r.state === 'refused')) {
+          const role = r.proxyId === m.sourceProxyId ? 'source' : 'target';
+          this.d.audit.throttled(`move-cancel-failed:${m.id}:${role}`, {
+            actorType: 'system', actor: 'system', action: 'move-cancel', accountId: m.accountId, targetType: 'camera', targetId: m.cameraId, targetLabel: this.camsId(m), outcome: 'failed',
+            detail: { moveId: m.id, camsId: this.camsId(m), source: m.sourceProxyId, target: m.targetProxyId, role, phase: m.phase, state: r.state, code: r.outcomeCode, attempts: this.commandCount(m, r.proxyId!, 'move.cancel') },
+          });
+        }
         return;
     }
   }
@@ -643,12 +677,30 @@ export class Moves {
   // A cancel goes to both roles (A17): the target with the choice for copied
   // content, the source (with the target's leaf once move.go went out).
   // Each is created until it is queued (tick, resume); one that expired unsent is sent again while its proxy is online.
+  // While cancelling (after the switch-over) nothing goes out until the source
+  // is online (ruling a): the camera keeps working on the target, which lets go
+  // only when the source can take it back. A cancel answered failed or refused
+  // there is asked again with a backoff.
   private ensureCancels(m: Move): void {
+    const cancelling = m.phase === 'cancelling';
+    if (cancelling && !this.online(m.sourceProxyId)) return;
     const unsent = (p: string) => (r: CommandRow) => (r.state === 'expired' || r.state === 'unknown') && this.online(p);
+    const failedAgain = (p: string) => (r: CommandRow) => cancelling && (r.state === 'failed' || r.state === 'refused') && this.online(p) && this.retryDue(m, p, 'move.cancel', CANCEL_RETRY_MS, r);
     const goSent = m.leafFingerprint !== null && this.lastCommand(m, m.sourceProxyId, 'move.go') !== null;
-    this.ensure(m, m.targetProxyId, 'move.cancel', { v: 1, moveId: m.id, role: 'target', copied: m.copiedChoice === 'age-out' ? 'age-out' : 'delete' }, unsent(m.targetProxyId));
+    this.ensure(m, m.targetProxyId, 'move.cancel', { v: 1, moveId: m.id, role: 'target', copied: m.copiedChoice === 'age-out' ? 'age-out' : 'delete' }, (r) => unsent(m.targetProxyId)(r) || failedAgain(m.targetProxyId)(r));
     this.ensure(m, m.sourceProxyId, 'move.cancel', { v: 1, moveId: m.id, role: 'source', ...(goSent ? { expectedLeaf: m.leafFingerprint } : {}) }, (r) =>
-      unsent(m.sourceProxyId)(r) || (m.phase === 'cancelling' && r.state === 'done' && this.d.clock.now() - (r.finishedAt ?? 0) >= CANCEL_RECHECK_MS && this.online(m.sourceProxyId)));
+      unsent(m.sourceProxyId)(r) || failedAgain(m.sourceProxyId)(r) || (cancelling && r.state === 'done' && this.d.clock.now() - (r.finishedAt ?? 0) >= CANCEL_RECHECK_MS && this.online(m.sourceProxyId)));
+  }
+
+  private commandCount(m: Move, proxyId: string, command: WireCommand): number {
+    return (this.d.db.prepare(`SELECT COUNT(*) AS n FROM commands WHERE proxy_id = ? AND command = ? AND json_extract(args, '$.moveId') = ?`).get(proxyId, command, m.id) as { n: number }).n;
+  }
+
+  // Another try is due: the last one ended BASE · 2^(attempts-1) ago (capped at an hour).
+  private retryDue(m: Move, proxyId: string, command: WireCommand, base: number, last: CommandRow): boolean {
+    const n = this.commandCount(m, proxyId, command);
+    const wait = Math.min(base * 2 ** Math.max(0, n - 1), RETRY_CAP_MS);
+    return this.d.clock.now() - (last.finishedAt ?? last.createdAt) >= wait;
   }
 
   // --- cancel (S §10.3, A17, A35) ---------------------------------------------------------------
@@ -752,22 +804,42 @@ export class Moves {
     return mv;
   }
 
-  // move.finish to both roles (A5), each until queued. A finish that went
-  // unanswered (expired, unknown) is sent again once its proxy is online. An
-  // ended-early move's source that is offline gets none: its cleanup is not done.
-  private ensureFinishes(m: Move): { source: CommandRow | null | 'skipped'; target: CommandRow | null } {
-    const abandoned = m.reason !== null;
-    const args = (role: 'source' | 'target') => ({ v: 1, moveId: m.id, role, abandoned });
+  // move.finish to both roles (A5), each until queued; one that went
+  // unanswered (expired, unknown) is sent again once its proxy is online.
+  private ensureFinishes(m: Move): { source: CommandRow | null; target: CommandRow | null } {
     const unsent = (p: string) => (r: CommandRow) => (r.state === 'expired' || r.state === 'unknown') && this.online(p);
-    const target = this.ensure(m, m.targetProxyId, 'move.finish', args('target'), unsent(m.targetProxyId));
-    const last = this.lastCommand(m, m.sourceProxyId, 'move.finish');
-    const sourceGone = abandoned && !this.online(m.sourceProxyId) && (!last || last.state === 'expired' || last.state === 'unknown');
-    const source = sourceGone ? 'skipped' : this.ensure(m, m.sourceProxyId, 'move.finish', args('source'), unsent(m.sourceProxyId));
-    return { source, target };
+    const target = this.ensure(m, m.targetProxyId, 'move.finish', { v: 1, moveId: m.id, role: 'target', abandoned: m.reason !== null }, unsent(m.targetProxyId));
+    return { source: this.sourceFinish(m), target };
   }
 
-  // The move is done once both finishes are final (or the source's is skipped).
-  // Reads only until then (tick calls it every RESUME_GAP_MS; tx() always writes).
+  // The source's finish, sent only once the source has released the camera
+  // (cam-proxy refuses it before: wrong_phase). Until then the release is
+  // derived: created when missing, again with a backoff when it failed or went
+  // unanswered. Nothing is queued to an offline source (it would only expire).
+  private sourceFinish(m: Move): CommandRow | null {
+    const src = m.sourceProxyId;
+    const last = this.lastCommand(m, src, 'move.finish');
+    if (last && !((last.state === 'expired' || last.state === 'unknown') && this.online(src))) return last;
+    if (!this.online(src)) return last;
+    const rel = this.lastCommand(m, src, 'move.release');
+    if (rel?.state !== 'done') {
+      if (!rel || (FINAL_STATES.has(rel.state) && this.retryDue(m, src, 'move.release', RELEASE_RETRY_MS, rel))) this.ensure(m, src, 'move.release', { v: 1, moveId: m.id }, () => true);
+      return last;
+    }
+    return this.ensure(m, src, 'move.finish', { v: 1, moveId: m.id, role: 'source', abandoned: m.reason !== null }, () => true);
+  }
+
+  // The source's release failed or went unanswered (the last one is final, not done).
+  private releaseFailing(m: Move): boolean {
+    const rel = this.lastCommand(m, m.sourceProxyId, 'move.release');
+    return rel !== null && FINAL_STATES.has(rel.state) && rel.state !== 'done';
+  }
+
+  // The move is done once both finishes are final. A move ended early (end
+  // transfer, a failure after the switch-over) does not wait for a source that
+  // is offline or has not released: it is done with the source cleanup pending
+  // (ruling b), which tick keeps deriving. Reads only until then (tick calls it
+  // every RESUME_GAP_MS; tx() always writes).
   private checkCleaning(m0: Move): void {
     const m = this.store.get(m0.id);
     if (!m || m.phase !== 'cleaning') return;
@@ -776,31 +848,52 @@ export class Moves {
     const final = (r: CommandRow | null) => r !== null && FINAL_STATES.has(r.state) && !((r.state === 'expired' || r.state === 'unknown') && !m.reason);
     // A finish that can never be queued (the allow entry gone) does not hold the move open.
     const never = (proxyId: string) => this.gaveUp.has(`${m.id}:${proxyId}:move.finish`);
-    if (!(final(target) || never(m.targetProxyId)) || (source !== 'skipped' && !(final(source) || never(m.sourceProxyId)))) return;
+    if (!(final(target) || never(m.targetProxyId))) return;
+    const sourceDone = final(source) || never(m.sourceProxyId);
+    const pending = !sourceDone && m.reason !== null && (!this.online(m.sourceProxyId) || this.releaseFailing(m));
+    if (!sourceDone && !pending) return;
     tx(this.d.db, () => {
-      if (this.store.get(m.id)?.phase === 'cleaning') this.done(m, source);
+      if (this.store.get(m.id)?.phase === 'cleaning') this.done(m, pending ? null : source, pending);
     });
   }
 
   // Inside a transaction: done, audited move-done with the totals from the chunk states (S §12).
-  private done(m: Move, source: CommandRow | null | 'skipped'): void {
+  private done(m: Move, src: CommandRow | null, pending: boolean): void {
     const counts = { copied: 0, skipped: 0, failed: 0, abandoned: 0, pending: 0 };
     for (const c of this.chunkStates(m.id)) {
       if (c.state === 'verified') counts.copied++;
       else if (c.state === 'skipped' || c.state === 'failed' || c.state === 'abandoned') counts[c.state]++;
       else counts.pending++;
     }
-    const src = source === 'skipped' ? null : source;
-    const deleted = src?.state === 'done' && src.result?.deleted && typeof src.result.deleted === 'object' ? src.result.deleted : undefined;
-    const cleanup = src?.state === 'done' ? 'done' : 'not-done';
-    const cleanupCode = source === 'skipped' ? 'source_offline' : !src ? 'not_queued' : src.state !== 'done' ? (src.outcomeCode ?? src.state) : null;
     const abandoned = m.reason !== null;
     const failure = abandoned && m.reason !== END_TRANSFER ? m.reason : null;
-    const mv = this.store.setPhase(m.id, 'done');
+    const mv = this.store.setPhase(m.id, 'done', { cleanupPending: pending });
     const durationS = Math.max(0, Math.round((this.d.clock.now() - (m.approvedAt ?? m.createdAt)) / 1000));
     this.audit(mv, 'move-done', failure ? 'failed' : 'ok', {
-      phase: 'done', abandoned, cleanup, ...(cleanupCode ? { cleanupCode } : {}), ...(deleted ? { deleted } : {}), ...(failure ? { failure } : {}),
-      chunks: counts, bytesDone: mv.bytesDone, bytesTotal: mv.bytesTotal, durationS,
+      phase: 'done', abandoned, ...this.cleanupDetail(src, pending), ...(failure ? { failure } : {}), chunks: counts, bytesDone: mv.bytesDone, bytesTotal: mv.bytesTotal, durationS,
+    });
+    this.publish(m.id);
+  }
+
+  private cleanupDetail(src: CommandRow | null, pending: boolean): Record<string, unknown> {
+    if (pending) return { cleanup: 'pending' };
+    const deleted = src?.state === 'done' && src.result?.deleted && typeof src.result.deleted === 'object' ? src.result.deleted : undefined;
+    const cleanupCode = !src ? 'not_queued' : src.state !== 'done' ? (src.outcomeCode ?? src.state) : null;
+    return { cleanup: src?.state === 'done' ? 'done' : 'not-done', ...(cleanupCode ? { cleanupCode } : {}), ...(deleted ? { deleted } : {}) };
+  }
+
+  // A done move's pending source cleanup (ruling b): release, then finish;
+  // when the finish is answered the marker goes and a follow-up move-done
+  // records when (and what) the cleanup landed. Reads only until something is due.
+  private cleanupStep(m0: Move): void {
+    const m = this.store.get(m0.id);
+    if (!m || !m.cleanupPending || !this.online(m.sourceProxyId)) return;
+    const fin = this.sourceFinish(m);
+    if (!fin || !FINAL_STATES.has(fin.state) || fin.state === 'expired' || fin.state === 'unknown') return;
+    tx(this.d.db, () => {
+      if (!this.store.get(m.id)?.cleanupPending) return;
+      const mv = this.store.setPhase(m.id, 'done', { cleanupPending: false });
+      this.audit(mv, 'move-done', 'ok', { phase: 'done', followUp: true, cleanupAt: this.d.clock.now(), ...this.cleanupDetail(fin, false) }, { actorType: 'proxy', actor: m.sourceProxyId });
     });
     this.publish(m.id);
   }

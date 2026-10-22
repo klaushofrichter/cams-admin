@@ -340,6 +340,7 @@ CREATE INDEX cams_overrides_camera ON cams_camera_overrides(camera_id);
   // unique indexes. token_hash holds only 'sha256:<hex>' (never a token).
   // offered_at / approved_at: the 30-minute offer expiry and the budget clock.
   // cameras.move_id is set at the switch-over, never cleared (the next move overwrites).
+  // cleanup_pending: a move done while the source's cleanup has not landed (it ended early with the source away or not released).
   (db) => db.exec(`
 CREATE TABLE moves (
   id TEXT PRIMARY KEY,
@@ -356,6 +357,7 @@ CREATE TABLE moves (
   bytes_total INTEGER, bytes_done INTEGER, rate_bps INTEGER, eta_s INTEGER,
   created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, ended_at INTEGER,
   actor TEXT, version INTEGER NOT NULL DEFAULT 1,
+  cleanup_pending INTEGER NOT NULL DEFAULT 0 CHECK (cleanup_pending IN (0, 1)),
   CHECK (source_proxy_id <> target_proxy_id),
   FOREIGN KEY (account_id, source_proxy_id) REFERENCES proxies(account_id, id),
   FOREIGN KEY (account_id, target_proxy_id) REFERENCES proxies(account_id, id)
@@ -369,6 +371,8 @@ CREATE UNIQUE INDEX moves_one_per_source ON moves(source_proxy_id) WHERE ended_a
 CREATE UNIQUE INDEX moves_one_per_target ON moves(target_proxy_id) WHERE ended_at IS NULL;
 CREATE UNIQUE INDEX moves_one_per_camera ON moves(camera_id) WHERE ended_at IS NULL;
 CREATE INDEX moves_account_created ON moves(account_id, created_at);
+-- Done moves whose source cleanup (move.release, move.finish) still has to land (Task 6 ruling b).
+CREATE INDEX moves_cleanup_pending ON moves(source_proxy_id) WHERE cleanup_pending = 1;
 CREATE TABLE move_chunks (
   move_id TEXT NOT NULL REFERENCES moves(id) ON DELETE CASCADE,
   chunk_id TEXT NOT NULL,
