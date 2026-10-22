@@ -19,6 +19,10 @@
 # uses the protocol test client in bridge mode instead, forwarding the
 # proxy's GET /api/local/health as its heartbeat.
 # LOCALSTACK_CAM_PROXY_REF picks the cam-proxy branch (default origin/main).
+# LOCALSTACK_MOVES=1 prepares beta-1 and beta-2 for camera moves (the move
+# check, move-check.ts): a site CA each (tls.site beta-1 / beta-2, covering
+# 127.0.0.0/16), HTTPS on port+3, their cameras over HTTPS, and beta-1's
+# camera as cam4 (beta-2 has cam1-cam3) with stills on.
 # Each proxy runs under supervise.sh, which starts it again after a
 # requested restart (exit 0), as systemd or docker would.
 #
@@ -36,11 +40,14 @@ for t in jq openssl curl lsof; do command -v "$t" >/dev/null || die "$t is not o
 [ -x "$MEDIAMTX_BIN" ] || die "MediaMTX missing at $MEDIAMTX_BIN (cam-sim scripts/install-mediamtx.sh)"
 [ "$S3" = 0 ] || command -v docker >/dev/null || die "docker is needed for the local S3 (or use --no-s3)"
 HB="${LOCALSTACK_HEARTBEAT_S:-10}"
+MOVES="${LOCALSTACK_MOVES:-0}"
 
 ADMIN_PORT=29000 GOOGLE_PORT=29001 S3_PORT=29010
 # account proxy port camera-count
 PROXIES=("alpha alpha-1 29100 2" "beta beta-1 29200 1" "beta beta-2 29300 3" "gamma gamma-1 29400 1")
 sim_port() { echo $((29500 + 10 * ($1 - 1) + $2)); }
+# With LOCALSTACK_MOVES=1: the proxies that take part in moves.
+moves_proxy() { [ "$MOVES" = 1 ] && { [ "$1" = beta-1 ] || [ "$1" = beta-2 ]; }; }
 
 rm -rf "$RUN" "$PIDS" "$RUN_ENV"
 mkdir -p "$LOGS" "$RUN" "$FIXTURES"
@@ -49,8 +56,9 @@ ports=($ADMIN_PORT $GOOGLE_PORT)
 [ "$S3" = 1 ] && ports+=($S3_PORT)
 n=0
 for p in "${PROXIES[@]}"; do
-  read -r _ _ port cams <<<"$p"
+  read -r _ name port cams <<<"$p"
   ports+=("$port" $((port + 1)) $((port + 2)))
+  moves_proxy "$name" && ports+=($((port + 3)))
   for _ in $(seq 1 "$cams"); do n=$((n + 1)); for o in 0 1 2 3 4 5; do ports+=("$(sim_port $n $o)"); done; done
 done
 require_ports_free "${ports[@]}"
@@ -107,9 +115,19 @@ for p in "${PROXIES[@]}"; do
   unset pw_proxy pw_cams
   cams_json='[]'
   plan_cams='[]'
+  # Moves (LOCALSTACK_MOVES=1): cameras over HTTPS (the site CA pushes its
+  # certificates to them); beta-1's camera is cam4, so it can move to beta-2,
+  # with stills on (content to copy).
+  off=0 proto=http https_port=0 tls='null' cam_extra='{}'
+  if moves_proxy "$name"; then
+    proto=https https_port=$((port + 3))
+    tls="$(jq -nc --arg site "$name" '{ site: $site, cameraSubnet: "127.0.0.0/16", proxyAddresses: "127.0.0.1" }')"
+    [ "$name" = beta-1 ] && off=3 cam_extra='{"stills":{"enabled":true,"intervalS":5}}'
+  fi
   for i in $(seq 1 "$cams"); do
     n=$((n + 1))
-    simname="$name cam$i"
+    cid="cam$((i + off))"
+    simname="$name $cid"
     mkdir -p "$RUN/sim-$n"
     start_bg "cam-sim-$n" env LIVESTACK_CAMSIM_DIR="$WORK/src-cam-sim" \
       CAMSIM_USERS_FILE="$s/camsim_users" CAMSIM_CONTROL_TOKEN_FILE="$s/camsim_control_token" CAMSIM_NAME="$simname" CAMSIM_TZ=America/Chicago \
@@ -119,20 +137,21 @@ for p in "${PROXIES[@]}"; do
       CAMSIM_RTSP_PORT="$(sim_port $n 3)" CAMSIM_ONVIF_PORT="$(sim_port $n 4)" CAMSIM_BAICHUAN_PORT="$(sim_port $n 5)" \
       node "$HERE/sim-local.cjs"
     wait_http "http://127.0.0.1:$(sim_port $n 2)/healthz" 180 "cam-sim $n"
-    cams_json="$(jq -c --arg id "cam$i" --arg nm "$simname" --argjson http "$(sim_port $n 0)" --argjson rtsp "$(sim_port $n 3)" --argjson onvif "$(sim_port $n 4)" --argjson bc "$(sim_port $n 5)" \
-      '. + [{ id: $id, name: $nm, host: ("127.0.0.1:" + ($http|tostring)), protocol: "http", user: "proxy", webUiUrl: "none", onvifPort: $onvif, rtspPort: $rtsp, baichuanPort: $bc, statusPollS: 5 }]' <<<"$cams_json")"
-    plan_cams="$(jq -c --arg id "cam$i" --arg cid "$name-cam$i" --arg nm "$simname" --argjson cp "$(sim_port $n 2)" '. + [{ id: $id, camsId: $cid, name: $nm, controlPort: $cp }]' <<<"$plan_cams")"
+    hport="$(sim_port $n 0)"; [ "$proto" = https ] && hport="$(sim_port $n 1)"
+    cams_json="$(jq -c --arg id "$cid" --arg nm "$simname" --arg proto "$proto" --argjson http "$hport" --argjson rtsp "$(sim_port $n 3)" --argjson onvif "$(sim_port $n 4)" --argjson bc "$(sim_port $n 5)" --argjson extra "$cam_extra" \
+      '. + [{ id: $id, name: $nm, host: ("127.0.0.1:" + ($http|tostring)), protocol: $proto, user: "proxy", webUiUrl: "none", onvifPort: $onvif, rtspPort: $rtsp, baichuanPort: $bc, statusPollS: 5 } + $extra]' <<<"$cams_json")"
+    plan_cams="$(jq -c --arg id "$cid" --arg cid "$name-$cid" --arg nm "$simname" --argjson cp "$(sim_port $n 2)" '. + [{ id: $id, camsId: $cid, name: $nm, controlPort: $cp }]' <<<"$plan_cams")"
   done
   # beta-2 has an NTP server set locally (RFC 5737): the P3 check pushes it to a cam-sim.
   ntp='null'; [ "$name" = beta-2 ] && ntp='{"server":"192.0.2.123"}'
-  jq -n --arg data "$d/data" --arg go2rtc "$GO2RTC_BIN" --argjson port "$port" --argjson cams "$cams_json" --argjson ntp "$ntp" '{
-    server: { port: $port, dataDir: $data, logLevel: "warn" },
+  jq -n --arg data "$d/data" --arg go2rtc "$GO2RTC_BIN" --argjson port "$port" --argjson cams "$cams_json" --argjson ntp "$ntp" --argjson tls "$tls" --argjson https "$https_port" '{
+    server: ({ port: $port, dataDir: $data, logLevel: "warn" } + (if $https > 0 then { tls: { port: $https } } else {} end)),
     go2rtc: { binary: $go2rtc, rtspPort: ($port + 1), apiPort: ($port + 2) },
     stills: { enabled: false, stream: "sub" },
     storage: { maxBytes: 1073741824, minFreeBytes: 1073741824 },
     analytics: { googleVision: { enabled: false } },
     ftp: { enabled: false },
-    cameras: $cams } + (if $ntp == null then {} else { ntp: $ntp } end)' > "$d/config.json"
+    cameras: $cams } + (if $ntp == null then {} else { ntp: $ntp } end) + (if $tls == null then {} else { tls: $tls } end)' > "$d/config.json"
   PXENV=(-u CAMPROXY_GOOGLE_VISION_KEY -u CAMPROXY_ENV_FILE CAMPROXY_CONFIG="$d/config.json" CAMPROXY_TOKENS_FILE="$s/proxy_tokens" CAMPROXY_ADMIN_TOKEN_FILE="$s/proxy_admin_token"
     CAMPROXY_CAMERA_PASSWORD_FILE="$s/camera_password" CAMPROXY_ADMIN_COMMANDS=on LIVESTACK_BIND=127.0.0.1)
   # gamma-1 is cut later (an outage): it runs without the supervisor.
@@ -143,7 +162,7 @@ for p in "${PROXIES[@]}"; do
   PLAN="$(jq -c --arg acc "$acc" --arg name "$name" --argjson port "$port" --argjson cams "$plan_cams" '
     (if any(.accounts[]; .name == $acc) then . else .accounts += [{ name: $acc, displayName: ($acc | ascii_upcase), users: [{ email: ("admin@" + $acc + ".example.com"), role: "admin" }, { email: "viewer@example.com", role: "viewer" }], proxies: [] }] end)
     | (.accounts[] | select(.name == $acc) | .proxies) += [{ name: $name, displayName: $name, port: $port, cameras: $cams }]' <<<"$PLAN")"
-  note "cam-proxy $name on :$port with $cams cam-sim(s)"
+  note "cam-proxy $name on :$port with $cams cam-sim(s)$([ "$https_port" != 0 ] && echo ", site CA $name, HTTPS :$https_port")"
 done
 
 # --- the registry and the enrollments; the bridges --------------------------------------
@@ -187,6 +206,7 @@ else
   awk '$2 != "gamma-1"' "$PIDS" > "$PIDS.tmp" && mv "$PIDS.tmp" "$PIDS"
 fi
 runenv_put ADMIN_URL "http://localhost:$ADMIN_PORT"
+runenv_put MOVES "$MOVES"
 
 # --- P4: two cams instances, enrolled by the reference cams client -------------------------
 ( cd "$REPO" && npx tsx scripts/localstack/cams-setup.ts --url "http://localhost:$ADMIN_PORT" --cookie-file "$RUN/cams-admin/cookie" --keys "$RUN/cams" )
