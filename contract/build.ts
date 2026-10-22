@@ -470,7 +470,7 @@ export const REMOTE_SETTABLE: { v: 1; remote: string[]; narrow: Record<string, '
     'cameras.*.baichuanPort', 'cameras.*.poeSwitch', 'cameras.*.ftp.user', 'cameras.*.webUiUrl', 'cameras.*.storage',
     // Local only in P3 (coordinator ruling, security review I4): capture and listener switches, health thresholds.
     ...LOCAL_ONLY,
-    // cam-proxy marks these local only: the moved marker of a camera and the camera-move journal.
-    'cameras.*.moved', 'moves.*',
+    // cam-proxy marks these local only: the moved marker of a camera and the moves.* settings such as moves.maxCameras.
+    'cameras.*.moved', 'moves',
   ],
 };

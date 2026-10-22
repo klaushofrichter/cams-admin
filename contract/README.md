@@ -157,8 +157,8 @@ that turns capture or a listener on/off) and health thresholds
 LOCAL ONLY in P3. A compromised cams-admin must not be able to blind a proxy
 silently, and `ftp.enabled=true` opens ports (network exposure needs Klaus).
 Cost if wrong: these stay local; adding them later is a contract change.
-`cameras.*.moved` and `moves.*` (the moved marker of a camera and the camera-move
-journal) are also in `denied`: cam-proxy marks them local only, and cams-admin
+`cameras.*.moved` and `moves` (the moved marker of a camera and the `moves.*`
+settings such as `moves.maxCameras`) are also in `denied`: cam-proxy marks them local only, and cams-admin
 refuses to set them (`not_remote_settable`) whatever a proxy reports.
 
 **Camera names** (`CAMERA_NAME_PATTERN`, a `u` regex, from cam-proxy #196):
