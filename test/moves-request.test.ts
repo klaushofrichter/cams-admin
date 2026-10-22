@@ -10,7 +10,8 @@ import { enrolled, makeClient, resetAccounts, startServer, until, type Running }
 import { makeProxyInfo } from '../test-client/summaries';
 import type { ProxyClient } from '../test-client/client';
 import { GIVE_UP_AFTER_MS, RESEND_AFTER_MS } from '../server/commands/service';
-import { estimateS, FALLBACK_BPS, PER_FILE_OVERHEAD_MS } from '../server/moves/service';
+import { estimateS, FALLBACK_BPS, MIN_ESTIMATE_S, OFFER_EXPIRY_MS, RESUME_GAP_MS } from '../server/moves/service';
+import { readEpoch } from '../server/db/open';
 import { AUDIT_ACTIONS } from '../server/audit';
 import { moveToken, targetAddress } from '../server/moves/token';
 
@@ -58,11 +59,11 @@ async function proxy(o: { allow?: string[]; site?: string | null; registrySite?:
 function camera(src: Px, proxyCameraId = 'cam1', camsId = proxyCameraId) {
   return s.built.registry.createCamera(ACTOR, src.accountId, { camsId, name: `Cam ${camsId}`, kind: 'camera', proxyId: src.proxyId, proxyCameraId, host: '192.0.2.10', protocol: 'https' });
 }
-function request(src: Px, target: string, o: { requestId?: string; camera?: string } = {}) {
+function request(src: Px, target: string, o: { requestId?: string; camera?: string; conn?: Record<string, unknown> } = {}) {
   const body = fx('valid-event-move-request.json');
   const { proxyId: _p, connId: _c, ...rest } = body;
   const requestId = o.requestId ?? rq();
-  src.client.emitEvent({ ...rest, requestId, target, camera: { ...rest.camera, proxyCameraId: o.camera ?? 'cam1' } });
+  src.client.emitEvent({ ...rest, requestId, target, camera: { ...rest.camera, proxyCameraId: o.camera ?? 'cam1', ...o.conn } });
   return requestId;
 }
 const got = (c: ProxyClient, command: string) => c.receivedCommands.filter((m) => m.body.command === command);
@@ -274,8 +275,9 @@ describe('move offer answer', () => {
     tgt.client.moveResults['move.offer'] = { status: 'ok', result: { accept: true, space, probeBps: 50_000_000 } };
     const requestId = request(src, tgt.proxyId);
     const a = await answerOf(src, requestId);
-    // The fixture's summary: 4 × 52428800 bytes, 480 files (A25: all kinds plus per-file overhead).
-    const want = Math.ceil((4 * 52428800) / 50_000_000 + (480 * PER_FILE_OVERHEAD_MS) / 1000);
+    // The fixture's summary: 4 × 52428800 bytes, 480 files, 4 kinds over 31 days (124 chunks): bytes at the
+    // probe rate + 150 ms per file + 1 s per chunk + 45 s switch-over.
+    const want = Math.ceil((4 * 52428800) / 50_000_000 + 480 * 0.15 + 124 + 45);
     expect(a).toEqual({ v: 1, moveId: moves()[0].id, requestId, target: { proxyId: tgt.proxyId, name: tgt.name }, accept: true, space, estimateS: want });
     expect(moves()[0]).toMatchObject({ phase: 'awaiting-approval', rateBps: 50_000_000, etaS: want, bytesTotal: 4 * 52428800 });
   });
@@ -286,7 +288,7 @@ describe('move offer answer', () => {
     camera(src);
     tgt.client.moveResults['move.offer'] = { status: 'ok', result: { accept: true, space: { needed: 1, available: 2, fits: true, perKind: {}, retentionProposal: null }, probeBps: 0 } };
     const a = await answerOf(src, request(src, tgt.proxyId));
-    expect(a.estimateS).toBe(Math.ceil((4 * 52428800) / FALLBACK_BPS + (480 * PER_FILE_OVERHEAD_MS) / 1000));
+    expect(a.estimateS).toBe(Math.ceil((4 * 52428800) / FALLBACK_BPS + 480 * 0.15 + 124 + 45));
   });
 
   it('offer that never answers fails', async () => {
@@ -367,12 +369,163 @@ describe('move request, failures cams-admin answers at once', () => {
   });
 });
 
+describe('move request, the camera connection must match the registry', () => {
+  it('a host other than the registry\'s is refused incompatible', async () => {
+    const src = await proxy();
+    const tgt = await proxy();
+    camera(src);
+    const requestId = request(src, tgt.proxyId, { conn: { host: '192.0.2.99' } });
+    expect(await answerOf(src, requestId)).toMatchObject({ accept: false, reason: 'incompatible' });
+    expect(moves()).toHaveLength(0);
+    const d = JSON.parse(auditFor('move-request').at(-1)!.detail);
+    expect(d).toMatchObject({ reason: 'incompatible', detail: 'camera_host', phase: 'rejected' });
+    expect(got(tgt.client, 'move.offer')).toHaveLength(0);
+  });
+
+  it('a protocol other than the registry\'s is refused incompatible', async () => {
+    const src = await proxy();
+    const tgt = await proxy();
+    camera(src);
+    const requestId = request(src, tgt.proxyId, { conn: { protocol: 'http' } });
+    expect(await answerOf(src, requestId)).toMatchObject({ accept: false, reason: 'incompatible' });
+    expect(JSON.parse(auditFor('move-request').at(-1)!.detail)).toMatchObject({ detail: 'camera_protocol' });
+    expect(moves()).toHaveLength(0);
+  });
+
+  it('a registry host "from-proxy" takes the source\'s address', async () => {
+    const src = await proxy();
+    const tgt = await proxy();
+    s.built.registry.createCamera(ACTOR, src.accountId, { camsId: 'cam1', name: 'Cam 1', kind: 'camera', proxyId: src.proxyId, proxyCameraId: 'cam1', host: 'from-proxy', protocol: 'https' });
+    const requestId = request(src, tgt.proxyId);
+    expect(await answerOf(src, requestId)).toMatchObject({ accept: true });
+  });
+});
+
+describe('requested and offered recover (lost results, staleness)', () => {
+  // The command's answer landed but its listener never ran (a crash between the commit and the listener, or a listener throw).
+  const landed = (command: string, state: string, code: string | null = null) =>
+    s.built.db.prepare(`UPDATE commands SET state = ?, outcome_code = ?, finished_at = ? WHERE command = ?`).run(state, code, clock.now(), command);
+  const cmdRows = (moveId: string, command: string) => s.built.db.prepare(`SELECT proxy_id, state FROM commands WHERE command = ? AND json_extract(args, '$.moveId') = ?`).all(command, moveId) as { proxy_id: string; state: string }[];
+
+  it('requested: a done move.open whose result was not handled is picked up by tick', async () => {
+    const src = await proxy();
+    const tgt = await proxy();
+    camera(src);
+    src.client.dropCommands = 1;
+    request(src, tgt.proxyId);
+    await until(() => got(src.client, 'move.open').length === 1, 5000, 'open');
+    landed('move.open', 'done');
+    clock.advance(RESUME_GAP_MS);
+    s.built.moves.tick();
+    await until(() => moves()[0].phase === 'awaiting-approval', 5000, 'awaiting-approval');
+    expect(got(tgt.client, 'move.offer')).toHaveLength(1);
+  });
+
+  it('requested: the same after a restart (token gone) fails token_lost and answers the source', async () => {
+    const src = await proxy();
+    const tgt = await proxy();
+    camera(src);
+    src.client.dropCommands = 1;
+    const requestId = request(src, tgt.proxyId);
+    await until(() => got(src.client, 'move.open').length === 1, 5000, 'open');
+    landed('move.open', 'done');
+    (s.built.moves as unknown as { pending: Map<string, unknown> }).pending.clear();
+    clock.advance(RESUME_GAP_MS);
+    s.built.moves.tick();
+    expect(await answerOf(src, requestId)).toMatchObject({ accept: false, reason: 'target_failed' });
+    expect(moves()[0]).toMatchObject({ phase: 'failed', reason: 'token_lost' });
+    expect(got(tgt.client, 'move.offer')).toHaveLength(0);
+  });
+
+  it('offered: a final move.offer whose result was not handled is picked up by tick', async () => {
+    const src = await proxy();
+    const tgt = await proxy();
+    camera(src);
+    tgt.client.dropCommands = 1;
+    const requestId = request(src, tgt.proxyId);
+    await until(() => got(tgt.client, 'move.offer').length === 1 && moves()[0].phase === 'offered', 5000, 'offered');
+    landed('move.offer', 'failed', 'disk_error');
+    clock.advance(RESUME_GAP_MS);
+    s.built.moves.tick();
+    expect(await answerOf(src, requestId)).toMatchObject({ accept: false, reason: 'target_failed' });
+    expect(moves()[0]).toMatchObject({ phase: 'failed', reason: 'disk_error' });
+  });
+
+  it('requested: a move.open open past the offer expiry fails offer_expired and cancels both', async () => {
+    const src = await proxy();
+    const tgt = await proxy();
+    camera(src);
+    src.client.dropCommands = 1;
+    request(src, tgt.proxyId);
+    await until(() => got(src.client, 'move.open').length === 1, 5000, 'open');
+    await new Promise((r) => setTimeout(r, 250));
+    const epoch = readEpoch(s.built.db);
+    clock.advance(OFFER_EXPIRY_MS - 1000);
+    s.built.moves.tick();
+    expect(readEpoch(s.built.db)).toBe(epoch);
+    expect(moves()[0].phase).toBe('requested');
+    clock.advance(2000);
+    s.built.moves.tick();
+    expect(moves()[0]).toMatchObject({ phase: 'failed', reason: 'offer_expired' });
+    const m = moves()[0];
+    expect(cmdRows(m.id, 'move.cancel').map((r) => r.proxy_id).sort()).toEqual([src.proxyId, tgt.proxyId].sort());
+  });
+
+  it('offered: a move.offer open past the offer expiry fails offer_expired and cancels both', async () => {
+    const src = await proxy();
+    const tgt = await proxy();
+    camera(src);
+    tgt.client.dropCommands = 1;
+    request(src, tgt.proxyId);
+    await until(() => got(tgt.client, 'move.offer').length === 1 && moves()[0].phase === 'offered', 5000, 'offered');
+    await new Promise((r) => setTimeout(r, 250));
+    const epoch = readEpoch(s.built.db);
+    clock.advance(OFFER_EXPIRY_MS - 1000);
+    s.built.moves.tick();
+    expect(readEpoch(s.built.db)).toBe(epoch);
+    clock.advance(2000);
+    s.built.moves.tick();
+    expect(moves()[0]).toMatchObject({ phase: 'failed', reason: 'offer_expired' });
+    const m = moves()[0];
+    await until(() => got(tgt.client, 'move.cancel').some((c) => c.body.args.moveId === m.id), 5000, 'target cancel');
+    expect(cmdRows(m.id, 'move.cancel').map((r) => r.proxy_id).sort()).toEqual([src.proxyId, tgt.proxyId].sort());
+  });
+});
+
 describe('estimate and audit', () => {
-  it('estimateS sums every kind and adds the per-file overhead', () => {
-    const k = (files: number, bytes: number) => ({ files, bytes, rows: files, oldest: null, newest: null });
-    const summary = { stills: k(10, 1_000_000), clips: k(0, 0), events: k(0, 0), checks: k(0, 0), archive: k(10, 9_000_000) };
-    expect(estimateS(summary, 1_000_000)).toBe(Math.ceil(10 + (20 * PER_FILE_OVERHEAD_MS) / 1000));
-    expect(estimateS(summary, 0)).toBe(Math.ceil(10_000_000 / FALLBACK_BPS + (20 * PER_FILE_OVERHEAD_MS) / 1000));
+  const DAY = 86_400_000;
+  const T0 = Date.UTC(2026, 9, 1);
+  const k = (files: number, bytes: number, days = 1) => ({ files, bytes, rows: files, oldest: files ? T0 : null, newest: files ? T0 + (days - 1) * DAY + 3600_000 : null });
+  const none = k(0, 0);
+
+  it('estimateS: bytes at the probe rate, per file, per chunk and the switch-over overhead', () => {
+    // 100 MB over 20 files in 2 chunks (one day each kind) at 1 MB/s: 100 + 3 + 2 + 45.
+    const summary = { stills: k(10, 10_000_000), clips: none, events: none, checks: none, archive: k(10, 90_000_000) };
+    expect(estimateS(summary, 1_000_000)).toBe(150);
+    expect(estimateS(summary, 0)).toBe(Math.ceil(100_000_000 / FALLBACK_BPS + 20 * 0.15 + 2 + 45));
+  });
+
+  it('estimateS: never under the floor; nothing to copy is the floor', () => {
+    expect(estimateS({ stills: none, clips: none, events: none, checks: none, archive: none }, 50_000_000)).toBe(MIN_ESTIMATE_S);
+    expect(MIN_ESTIMATE_S).toBe(60);
+  });
+
+  it('estimateS: a localstack-sized move (≈54 MB, 335 files, fast probe) is at least what it took (40–60 s)', () => {
+    const summary = { stills: k(35, 4_000_000), clips: k(280, 49_000_000, 3), events: k(20, 1_000_000, 3), checks: none, archive: none };
+    expect(estimateS(summary, 100_000_000)).toBeGreaterThanOrEqual(60);
+  });
+
+  it('estimateS: a big move is still dominated by its bytes', () => {
+    const summary = { stills: none, clips: k(20_000, 50_000_000_000, 30), events: none, checks: none, archive: none };
+    const est = estimateS(summary, 10_000_000);
+    expect(est).toBeGreaterThanOrEqual(5000);
+    expect(5000 / est).toBeGreaterThan(0.6);
+  });
+
+  it('estimateS: the chunks of a kind never outnumber its files', () => {
+    // One file whose oldest and newest are a year apart (inconsistent summary): one chunk, not 366.
+    const summary = { stills: k(1, 1_000_000, 366), clips: none, events: none, checks: none, archive: none };
+    expect(estimateS(summary, 1_000_000)).toBe(MIN_ESTIMATE_S);
   });
 
   it('targetAddress: the url host, a name resolved once, nothing without an address', async () => {

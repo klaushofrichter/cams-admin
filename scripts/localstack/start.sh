@@ -140,7 +140,7 @@ for p in "${PROXIES[@]}"; do
     hport="$(sim_port $n 0)"; [ "$proto" = https ] && hport="$(sim_port $n 1)"
     cams_json="$(jq -c --arg id "$cid" --arg nm "$simname" --arg proto "$proto" --argjson http "$hport" --argjson rtsp "$(sim_port $n 3)" --argjson onvif "$(sim_port $n 4)" --argjson bc "$(sim_port $n 5)" --argjson extra "$cam_extra" \
       '. + [{ id: $id, name: $nm, host: ("127.0.0.1:" + ($http|tostring)), protocol: $proto, user: "proxy", webUiUrl: "none", onvifPort: $onvif, rtspPort: $rtsp, baichuanPort: $bc, statusPollS: 5 } + $extra]' <<<"$cams_json")"
-    plan_cams="$(jq -c --arg id "$cid" --arg cid "$name-$cid" --arg nm "$simname" --argjson cp "$(sim_port $n 2)" '. + [{ id: $id, camsId: $cid, name: $nm, controlPort: $cp }]' <<<"$plan_cams")"
+    plan_cams="$(jq -c --arg id "$cid" --arg cid "$name-$cid" --arg nm "$simname" --arg proto "$proto" --argjson cp "$(sim_port $n 2)" '. + [{ id: $id, camsId: $cid, name: $nm, protocol: $proto, controlPort: $cp }]' <<<"$plan_cams")"
   done
   # beta-2 has an NTP server set locally (RFC 5737): the P3 check pushes it to a cam-sim.
   ntp='null'; [ "$name" = beta-2 ] && ntp='{"server":"192.0.2.123"}'

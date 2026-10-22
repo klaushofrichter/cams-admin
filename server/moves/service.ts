@@ -35,13 +35,24 @@ import type { MoveApproveEvent, MoveCameraConn, MoveCancelEvent, MoveEvent, Move
 
 // A25: the estimate before any plan exists: every kind of the source's summary,
 // at the target's measured rate, plus a per-file overhead (one request, a hash,
-// a catalog row). The probe reports 0 when it failed (the target still accepts):
-// then a conservative 1 MB/s, well under any LAN path (100 Mbit/s ≈ 12 MB/s).
-export const PER_FILE_OVERHEAD_MS = 50;
+// a catalog row), a per-chunk overhead (a manifest, a verify; a chunk is one
+// kind's day) and a fixed switch-over overhead: the budget clock starts at the
+// approval, so start, go, the certificate, FTP and `switched` count too (the
+// local stack measured 40–60 s for 54 MB). Never under a minute. The probe
+// reports 0 when it failed (the target still accepts): then a conservative
+// 1 MB/s, well under any LAN path (100 Mbit/s ≈ 12 MB/s).
+export const PER_FILE_OVERHEAD_MS = 150;
+export const PER_CHUNK_OVERHEAD_MS = 1000;
+export const SWITCH_OVERHEAD_S = 45;
+export const MIN_ESTIMATE_S = 60;
 export const FALLBACK_BPS = 1_000_000;
+const DAY_MS = 86_400_000;
 const SEEN_KEEP_MS = 60 * 60_000;
-// S §7: an offer not approved within 30 minutes expires (cam-proxy closes its side itself after 35).
+// S §7: an offer not approved within 30 minutes expires (cam-proxy closes its side itself after 35). A move still
+// requested (move.open) or offered (move.offer) that long is stale too: it fails the same way (a lost result must
+// not hold both proxies and the camera for good).
 export const OFFER_EXPIRY_MS = 30 * 60_000;
+const UNAPPROVED = new Set(['requested', 'offered', 'awaiting-approval']);
 // tick() resumes each move at most this often (a command that can't be queued is not retried every second).
 export const RESUME_GAP_MS = 10_000;
 // A command that can never be queued for this move: retrying won't help.
@@ -95,13 +106,19 @@ const isCount = (x: unknown): x is number => Number.isSafeInteger(x) && (x as nu
 export function estimateS(summary: unknown, probeBps: number): number {
   let bytes = 0;
   let files = 0;
-  const s = (summary && typeof summary === 'object' ? summary : {}) as Record<string, { bytes?: unknown; files?: unknown } | undefined>;
+  let chunks = 0;
+  const s = (summary && typeof summary === 'object' ? summary : {}) as Record<string, { bytes?: unknown; files?: unknown; oldest?: unknown; newest?: unknown } | undefined>;
   for (const k of MOVE_KINDS) {
-    if (isCount(s[k]?.bytes)) bytes += s[k]!.bytes as number;
-    if (isCount(s[k]?.files)) files += s[k]!.files as number;
+    const e = s[k];
+    if (isCount(e?.bytes)) bytes += e.bytes;
+    if (!isCount(e?.files) || e.files === 0) continue;
+    files += e.files;
+    // The kind's days (its chunks), from oldest to newest; never more than its files.
+    const days = isCount(e.oldest) && isCount(e.newest) && e.newest >= e.oldest ? Math.floor(e.newest / DAY_MS) - Math.floor(e.oldest / DAY_MS) + 1 : 1;
+    chunks += Math.min(days, e.files);
   }
   const bps = isCount(probeBps) && probeBps > 0 ? probeBps : FALLBACK_BPS;
-  return Math.ceil(bytes / bps + (files * PER_FILE_OVERHEAD_MS) / 1000);
+  return Math.max(MIN_ESTIMATE_S, Math.ceil(bytes / bps + (files * PER_FILE_OVERHEAD_MS + chunks * PER_CHUNK_OVERHEAD_MS) / 1000 + SWITCH_OVERHEAD_S));
 }
 const bytesOf = (summary: unknown) => MOVE_KINDS.reduce((n, k) => {
   const b = (summary as Record<string, { bytes?: unknown }> | null)?.[k]?.bytes;
@@ -189,7 +206,7 @@ export class Moves {
     for (const id of this.prog.keys()) if (!active.some((m) => m.id === id)) this.prog.delete(id);
     for (const m of active) {
       try {
-        if (m.phase === 'awaiting-approval' && this.expired(m)) this.failMove(m, 'offer_expired');
+        if (UNAPPROVED.has(m.phase) && this.expired(m)) this.failMove(m, 'offer_expired');
         else {
           const p = this.prog.get(m.id);
           if (m.phase === 'copying' && p?.changed && now - p.savedAt >= PROGRESS_SAVE_MS) this.saveProgress(m);
@@ -274,9 +291,15 @@ export class Moves {
       if (!r) return create();
       if (FINAL_STATES.has(r.state)) final(r);
     };
+    // A step's command is created with the phase itself (move.open with the row, move.offer with `offered`): none means it could not be queued, and the move already failed.
+    const none = () => undefined;
+    if (UNAPPROVED.has(m.phase) && this.expired(m)) return this.failMove(m, 'offer_expired');
     switch (m.phase) {
+      case 'requested':
+        return step(m.sourceProxyId, 'move.open', none, (r) => this.onOpenFinal(m, r));
+      case 'offered':
+        return step(m.targetProxyId, 'move.offer', none, (r) => this.onOfferFinal(m, r));
       case 'awaiting-approval':
-        if (this.expired(m)) this.failMove(m, 'offer_expired');
         return;
       case 'approved':
         return step(m.targetProxyId, 'move.start', () => this.queueStep(m, 'start', () => this.sendStart(m)), (r) => this.onStartFinal(m, r));
@@ -289,7 +312,7 @@ export class Moves {
       case 'cancelling':
         return this.cancellingStep(m);
       default:
-        return; // requested and offered: the command queue and Task 4
+        return;
     }
   }
 
@@ -308,8 +331,10 @@ export class Moves {
     });
   }
 
+  // From the offer (offered, awaiting approval) or, before it went out, from the request.
   private expired(m: Move): boolean {
-    return m.offeredAt !== null && this.d.clock.now() - m.offeredAt > OFFER_EXPIRY_MS;
+    const from = m.phase === 'requested' ? m.createdAt : m.offeredAt;
+    return from !== null && this.d.clock.now() - from > OFFER_EXPIRY_MS;
   }
 
   private once(key: string): boolean {
@@ -340,11 +365,15 @@ export class Moves {
 
   private async onRequest(proxyId: string, accountId: string, ev: MoveRequestEvent): Promise<void> {
     if (this.store.byRequest(proxyId, ev.requestId) || !this.once(`r:${proxyId}:${ev.requestId}`)) return;
-    const cam = this.d.db.prepare('SELECT id, cams_id FROM cameras WHERE account_id = ? AND proxy_id = ? AND proxy_camera_id = ?')
-      .get(accountId, proxyId, ev.camera.proxyCameraId) as { id: string; cams_id: string } | undefined;
+    const cam = this.d.db.prepare('SELECT id, cams_id, host, protocol FROM cameras WHERE account_id = ? AND proxy_id = ? AND proxy_camera_id = ?')
+      .get(accountId, proxyId, ev.camera.proxyCameraId) as { id: string; cams_id: string; host: string | null; protocol: string | null } | undefined;
     const ctx = { proxyId, accountId, ev, cameraId: cam?.id ?? null, camsId: cam?.cams_id ?? null };
     // Not in the registry: no move row can name it; the source is told so at once (not_registered), not left to wait.
     if (!cam) return this.refuse(ctx, 'not_registered');
+    // The offer hands the target the camera's address and protocol as the source reports them: they must be the
+    // registry's (a host "from-proxy" is whatever the source reports). Otherwise the proxies disagree: incompatible.
+    if (cam.host !== 'from-proxy' && cam.host !== ev.camera.host) return this.refuse(ctx, 'incompatible', 'camera_host');
+    if (cam.protocol !== ev.camera.protocol) return this.refuse(ctx, 'incompatible', 'camera_protocol');
     const cand: Candidate = { accountId, sourceProxyId: proxyId, targetProxyId: ev.target, cameraId: cam.id };
     let pc = this.precheck(cand);
     if (!pc.ok) return this.refuse(ctx, pc.reason);
