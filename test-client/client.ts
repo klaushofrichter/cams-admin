@@ -262,11 +262,22 @@ export class ProxyClient extends EventEmitter {
     this.send('error', { code: 'unsupported_type', message: `type ${m.type} is not supported` }, { re: m.id });
   }
 
-  private sendSigned(type: 'result' | 'event', body: Record<string, unknown>, extra: Record<string, unknown> = {}): void {
+  private sendSigned(type: 'result' | 'event', body: Record<string, unknown>, extra: Record<string, unknown> = {}, forge = false): void {
     this.seqOut++;
     const m: Record<string, unknown> = { v: 1, type, id: ulid(Date.now()), seq: this.seqOut, ts: this.now(), ...extra, body };
     m.sig = signEnvelope(privateFromB64(this.o.key.privateKey), m);
+    // A forged signature: the same bytes signed by another key.
+    if (forge) m.sig = signEnvelope(privateFromB64(generateKeyPair().privateKeyPkcs8B64), m);
     this.ws?.send(JSON.stringify(m));
+  }
+
+  // A proxy-originated event (the camera-move kinds carry no cmdId): signed with
+  // this proxy's key; proxyId and connId are filled in unless the body has them.
+  // `forge` signs with a different key (tests). Returns false when not connected.
+  emitEvent(body: Record<string, unknown>, o: { forge?: boolean } = {}): boolean {
+    if (this.state !== 'connected' || !this.connId) return false;
+    this.sendSigned('event', { proxyId: this.o.key.proxyId, connId: this.connId, ...body }, {}, o.forge === true);
+    return true;
   }
 
   // The proxy side of a command (P2 contract, check order 1–12).
@@ -302,7 +313,7 @@ export class ProxyClient extends EventEmitter {
     this.sendSigned('result', { ...head, phase: 'received' }, { re: m.id });
     this.executed.push(b.cmdId);
     this.journalEntries.push({ cmdId: b.cmdId, command: b.command, at: this.now() + this.serverOffset, ...(b.command === 'camera.action' ? { action: b.args.action } : {}) });
-    const d: DoneBody = b.command === 'tokens.apply' ? this.applyTokens(b.args) : this.runP3(b);
+    const d: DoneBody = b.command === 'tokens.apply' ? this.applyTokens(b.args) : b.command.startsWith('move.') ? this.runMove(b) : this.runP3(b);
     this.journal.set(b.cmdId, d);
     if (this.dropAfterReceived > 0) {
       this.dropAfterReceived--;
@@ -320,6 +331,19 @@ export class ProxyClient extends EventEmitter {
       this.tokensRevision = args.revision;
     }
     return { status: 'ok', result: { revision: this.tokensRevision, applied: !stale, stale, ...this.tokenCounts() } };
+  }
+
+  // The camera-move commands: a canned result per command (moveResults overrides), the args recorded in receivedCommands.
+  moveResults: Record<string, DoneBody> = {};
+  private runMove(b: Record<string, any>): DoneBody {
+    const o = this.moveResults[b.command];
+    if (o) return o;
+    switch (b.command) {
+      case 'move.offer': return { status: 'ok', result: { accept: true, space: { needed: 1000, available: 5000, fits: true, retentionProposal: null }, probeBps: 50_000_000 } };
+      case 'move.start': return { status: 'ok', result: { publicKey: 'MCowBQYDK2VuAyEA' + 'A'.repeat(43) + '=', leafFingerprint: 'SHA256:' + 'AB'.repeat(32) } };
+      case 'move.finish': return { status: 'ok', result: {} };
+      default: return { status: 'ok', result: {} };
+    }
   }
 
   private runP3(b: Record<string, any>): DoneBody {

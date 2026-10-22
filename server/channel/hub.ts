@@ -12,6 +12,7 @@ import type { Logger } from '../log';
 import { Buckets } from './limits';
 import { CLOSE, Connection, type ConnectionHost } from './connection';
 import type { Commands } from '../commands/service';
+import type { MoveEvent } from '../moves/types';
 
 export const SUBPROTOCOL = 'cams-admin.v1';
 export const CONNECT_PATH = '/proxy/v1/connect';
@@ -28,6 +29,8 @@ export interface HubDeps {
   serverKeyFingerprint: string;
   refused?: (proxyId: string | null, reason: string) => void;
   commands?: Commands;
+  // A verified, strictly valid move event from a proxy (no cmdId). Duplicates are normal: the receiver dedupes.
+  onProxyEvent?: (proxyId: string, accountId: string, body: MoveEvent) => void;
 }
 
 function reject(socket: Duplex, status: number, text: string, body?: object): void {
