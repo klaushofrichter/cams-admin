@@ -399,6 +399,29 @@ export class Registry {
     }));
   }
 
+  // The camera-move switch-over (plan Task 5, S §9.1 step 7): the camera now
+  // runs on the target proxy under its new TLS name, and names the move
+  // (cameras.move_id, never cleared: A16). The cams id, host and protocol stay.
+  // One transaction, one audit record (move-switch, by the system).
+  moveCamera(actor: string, accountId: string, cameraId: string, to: { proxyId: string; proxyCameraId: string; tlsServername: string; moveId: string }): Camera {
+    return guard(() => tx(this.db, () => {
+      const f = cameraInput({ proxyId: to.proxyId, proxyCameraId: to.proxyCameraId, tlsServername: to.tlsServername }, true);
+      const old = this.getCamera(accountId, cameraId);
+      this.getProxy(accountId, to.proxyId); // 404 for another account's proxy
+      this.db.prepare('UPDATE cameras SET proxy_id = ?, proxy_camera_id = ?, tls_servername = ?, move_id = ?, updated_at = ?, version = version + 1 WHERE id = ? AND account_id = ?')
+        .run(f.proxyId!, f.proxyCameraId!, f.tlsServername!, to.moveId, this.clock.now(), cameraId, accountId);
+      this.audit.write({
+        actorType: 'system', actor, action: 'move-switch', accountId, targetType: 'camera', targetId: cameraId, targetLabel: old.camsId, outcome: 'ok',
+        detail: {
+          moveId: to.moveId, camsId: old.camsId,
+          from: { proxyId: old.proxyId, proxyCameraId: old.proxyCameraId, tlsServername: old.tlsServername },
+          to: { proxyId: f.proxyId, proxyCameraId: f.proxyCameraId, tlsServername: f.tlsServername },
+        },
+      });
+      return this.getCamera(accountId, cameraId);
+    }));
+  }
+
   deleteCamera(actor: string, accountId: string, id: string): void {
     guard(() => tx(this.db, () => {
       const c = this.getCamera(accountId, id);

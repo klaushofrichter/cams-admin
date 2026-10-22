@@ -54,6 +54,12 @@ const pick = (args: Record<string, unknown>, keys: string[]) => Object.fromEntri
 // Args that carry or derive from a move secret: never shown, never kept after the command is final.
 const MOVE_SECRET_ARGS = ['token', 'tokenHash', 'targetPublicKey'];
 
+function moveStartPublic(result: unknown): boolean {
+  if (!validateResultPayload('move.start', result)) return false;
+  const { publicKey: _k, ...rest } = result as Record<string, unknown>;
+  return !redactSecrets(rest).changed;
+}
+
 // What a person may see of a command's args: never a full hash (8 hex
 // digits), never a setting value over 200 characters (R3-19).
 export function summariseArgs(command: string, args: Record<string, unknown>): Record<string, unknown> {
@@ -330,7 +336,10 @@ export class Commands {
     // I2: nothing secret-shaped from a proxy is stored or served. A redacted
     // result loses its signature (the signed bytes held the secret).
     let stored: Record<string, unknown> = m as unknown as Record<string, unknown>;
-    if (r.command !== 'tokens.apply' && b.result !== undefined) {
+    // move.start's publicKey is the target's X25519 public key (public, S §9.3; its name only looks secret): kept when
+    // the result is the contract's and nothing else in it looks secret.
+    const keepAsIs = r.command === 'tokens.apply' || (r.command === 'move.start' && state === 'done' && moveStartPublic(b.result));
+    if (!keepAsIs && b.result !== undefined) {
       const red = redactSecrets(b.result);
       if (red.changed) {
         const { sig: _sig, ...rest } = stored;

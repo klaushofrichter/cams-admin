@@ -252,6 +252,16 @@ export class Connection {
     d.status.hello(b.proxyId, typeof b.version === 'string' ? b.version : null, b.ts, this.capabilities);
     this.send('welcome', { heartbeatS: d.cfg.heartbeatS, offlineAfterS: d.cfg.offlineAfterS, maxMessageBytes: d.cfg.limits.frameBytes, serverTime: d.clock.now() });
     d.commands?.onLive(this);
+    if (d.onProxyLive) {
+      const id = b.proxyId;
+      queueMicrotask(() => {
+        try {
+          d.onProxyLive!(id);
+        } catch (e) {
+          d.log.error({ err: e, proxyId: id }, 'proxy_live_hook_failed');
+        }
+      });
+    }
     this.pingTimer = setInterval(() => {
       if (!this.alive) return this.ws.terminate();
       this.alive = false;

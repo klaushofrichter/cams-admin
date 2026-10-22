@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import type { Clock } from '../clock';
 import { tx, type Db } from '../db/open';
 import type { Audit } from '../audit';
@@ -11,14 +12,19 @@ import { newId } from '../ids';
 import { MoveBusy, MoveStore, type Move } from './store';
 import { eligibleTargets, precheck, type Candidate, type EligibleTarget, type PrecheckDeps } from './precheck';
 import { moveToken, targetAddress, type Resolve } from './token';
-import type { MoveCameraConn, MoveEvent, MoveRequestEvent, MoveTargetsEvent } from './types';
+import type { MoveApproveEvent, MoveCameraConn, MoveEvent, MovePhaseEvent, MoveRequestEvent, MoveTargetsEvent } from './types';
 
 // The move job, its start (plan Task 4; S §4, §6, §7, §8.1): a source's
 // move.targets and move.request events, cams-admin's precheck, move.open to the
 // source, then (only once that is done, A15) move.offer to the target, and the
-// target's answer relayed to the source as move.answer. The later phases are
-// Tasks 5–6. Events repeat (cam-proxy re-emits after every welcome): every
-// handler here is idempotent.
+// target's answer relayed to the source as move.answer. Then (plan Task 5,
+// S §7, §9.1, §10.2) the source's approval, move.start to the target, move.go
+// with the target's key and leaf to the source, the registry switch-over at
+// the target's `switched`, move.release, offer expiry and the automatic
+// cancel when a side fails before the camera moved. Copying and the end are
+// Task 6. Events repeat (cam-proxy re-emits after every welcome): every
+// handler here is idempotent, and `resume` re-derives the next command from
+// the phase and the move's commands.
 
 // A25: the estimate before any plan exists: every kind of the source's summary,
 // at the target's measured rate, plus a per-file overhead (one request, a hash,
@@ -27,9 +33,27 @@ import type { MoveCameraConn, MoveEvent, MoveRequestEvent, MoveTargetsEvent } fr
 export const PER_FILE_OVERHEAD_MS = 50;
 export const FALLBACK_BPS = 1_000_000;
 const SEEN_KEEP_MS = 60 * 60_000;
+// S §7: an offer not approved within 30 minutes expires (cam-proxy closes its side itself after 35).
+export const OFFER_EXPIRY_MS = 30 * 60_000;
+// tick() resumes each move at most this often (a command that can't be queued is not retried every second).
+export const RESUME_GAP_MS = 10_000;
+// A command that can never be queued for this move: retrying won't help.
+const PERMANENT = new Set(['invalid_args', 'not_allowed_on_proxy', 'not_enrolled', 'not_found']);
+// Phases before the camera moved: a failure there cancels both sides (S §10.2, A17).
+const PRE_SWITCH = new Set(['awaiting-approval', 'approved', 'switching']);
+// The target's phases from the switch-over on: one of them while cams-admin is
+// still `switching` means the `switched` event was missed (the target re-emits its current phase only).
+const TARGET_SWITCHED = new Set(['switched', 'copying', 'copied']);
+const FINAL_STATES = new Set(['done', 'refused', 'failed', 'expired', 'unknown']);
+const DONE_MAX = 512;
 const SEEN_MAX = 2000;
 
 const ANSWER_REASONS = new Set<string>(MOVE_ANSWER_REASONS);
+// Plans compared by value: key order is not meaning.
+const canonical = (x: unknown): string => JSON.stringify(x, (_k, v) => (v && typeof v === 'object' && !Array.isArray(v) ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, v[k]])) : v));
+const samePlan = (a: unknown, b: unknown) => a !== null && a !== undefined && canonical(a) === canonical(b);
+// The fingerprint of the target's X25519 public key (as cam-proxy audits it): never the key itself in an audit record.
+const keyFingerprint = (spkiB64: string) => `SHA256:${createHash('sha256').update(Buffer.from(spkiB64, 'base64')).digest('hex').toUpperCase()}`;
 const isCount = (x: unknown): x is number => Number.isSafeInteger(x) && (x as number) >= 0;
 
 export function estimateS(summary: unknown, probeBps: number): number {
@@ -69,6 +93,8 @@ export class Moves {
   private pending = new Map<string, Pending>();
   // Requests already handled (or in flight), by source and requestId: a repeated event answers nothing new.
   private seen = new Map<string, number>();
+  // When tick() last resumed each move (memory).
+  private resumedAt = new Map<string, number>();
 
   constructor(private d: MovesDeps) {
     this.store = new MoveStore(d.db, d.clock);
@@ -94,8 +120,12 @@ export class Moves {
       case 'move.request':
         this.onRequest(proxyId, accountId, ev).catch((e) => this.d.log.error({ err: e, proxyId }, 'move_request_failed'));
         return;
+      case 'move.approve':
+        return this.onApprove(proxyId, accountId, ev);
+      case 'move.phase':
+        return this.onPhase(proxyId, accountId, ev);
       default:
-        return; // approve, cancel, phase, progress: Tasks 5–6
+        return; // cancel, progress: Task 6
     }
   }
 
@@ -103,6 +133,70 @@ export class Moves {
     const now = this.d.clock.now();
     for (const [k, at] of this.seen) if (now - at > SEEN_KEEP_MS) this.seen.delete(k);
     for (const id of this.pending.keys()) if (this.store.get(id)?.phase !== 'requested') this.pending.delete(id);
+    const active = this.store.active();
+    const ids = new Set(active.map((m) => m.id));
+    for (const id of this.resumedAt.keys()) if (!ids.has(id)) this.resumedAt.delete(id);
+    for (const m of active) {
+      try {
+        if (m.phase === 'awaiting-approval' && this.expired(m)) this.failMove(m, 'offer_expired');
+        else if (now - (this.resumedAt.get(m.id) ?? 0) >= RESUME_GAP_MS) this.resume(m.id);
+      } catch (e) {
+        this.d.log.error({ err: e, moveId: m.id }, 'move_tick_failed');
+      }
+    }
+  }
+
+  // The hub's "proxy live" hook: the move this proxy takes part in re-derives its next step.
+  onLive(proxyId: string): void {
+    const m = this.store.byProxy(proxyId);
+    if (m) this.resume(m.id);
+  }
+
+  // Re-derive the next command from the phase and the move's commands (a
+  // restart, a lost write, a reconnect): a missing command is created, a final
+  // one whose result was not handled is handled now, an open one is left to the
+  // command queue (it re-sends with the same cmdId). Never a second command for a step.
+  resume(moveId: string): void {
+    const m = this.store.get(moveId);
+    if (!m || m.endedAt !== null) return;
+    this.resumedAt.set(m.id, this.d.clock.now());
+    const step = (proxyId: string, command: WireCommand, create: () => void, final: (r: CommandRow) => void) => {
+      const r = this.lastCommand(m, proxyId, command);
+      if (!r) return create();
+      if (FINAL_STATES.has(r.state)) final(r);
+    };
+    switch (m.phase) {
+      case 'awaiting-approval':
+        if (this.expired(m)) this.failMove(m, 'offer_expired');
+        return;
+      case 'approved':
+        return step(m.targetProxyId, 'move.start', () => this.queueStep(m, 'start', () => this.sendStart(m)), (r) => this.onStartFinal(m, r));
+      case 'switching':
+        return step(m.sourceProxyId, 'move.go', () => this.queueStep(m, 'go', () => this.sendGo(m)), (r) => this.onGoFinal(m, r));
+      case 'copying':
+        return step(m.sourceProxyId, 'move.release', () => this.queueStep(m, 'release', () => this.sendRelease(m)), (r) => this.onReleaseFinal(m, r));
+      default:
+        return; // requested and offered: the command queue and Task 4; cleaning on: Task 6
+    }
+  }
+
+  // The newest command of this name for this move on this proxy.
+  private lastCommand(m: Move, proxyId: string, command: WireCommand): CommandRow | null {
+    const r = this.d.db.prepare(`SELECT id FROM commands WHERE proxy_id = ? AND command = ? AND json_extract(args, '$.moveId') = ? ORDER BY rowid DESC LIMIT 1`)
+      .get(proxyId, command, m.id) as { id: string } | undefined;
+    return r ? this.d.commands.get(m.accountId, proxyId, r.id) : null;
+  }
+
+  // A step's command; one that can never be queued fails the move (and cancels both), a passing refusal waits for the next resume.
+  private queueStep(m: Move, step: string, send: () => { ok: true } | { ok: false; code: string }): void {
+    tx(this.d.db, () => {
+      const r = send();
+      if (!r.ok && PERMANENT.has(r.code)) this.failMoveIn(m, `${step}:${r.code}`);
+    });
+  }
+
+  private expired(m: Move): boolean {
+    return m.offeredAt !== null && this.d.clock.now() - m.offeredAt > OFFER_EXPIRY_MS;
   }
 
   private once(key: string): boolean {
@@ -187,12 +281,17 @@ export class Moves {
   // --- command results ----------------------------------------------------------------------
 
   private onFinal(r: CommandRow): void {
-    if (r.command !== 'move.open' && r.command !== 'move.offer') return;
+    if (!['move.open', 'move.offer', 'move.start', 'move.go', 'move.release'].includes(r.command)) return;
     const moveId = r.args.moveId;
     const m = typeof moveId === 'string' ? this.store.get(moveId) : null;
     if (!m) return;
-    if (r.command === 'move.open') this.onOpenFinal(m, r);
-    else this.onOfferFinal(m, r);
+    switch (r.command) {
+      case 'move.open': return this.onOpenFinal(m, r);
+      case 'move.offer': return this.onOfferFinal(m, r);
+      case 'move.start': return this.onStartFinal(m, r);
+      case 'move.go': return this.onGoFinal(m, r);
+      case 'move.release': return this.onReleaseFinal(m, r);
+    }
   }
 
   private onOpenFinal(m: Move, r: CommandRow): void {
@@ -243,6 +342,139 @@ export class Moves {
     this.fail(m, r.state === 'done' ? 'bad_result' : r.outcomeCode ?? r.state, 'target_failed');
   }
 
+  // --- approval, start, go, switch-over (plan Task 5) -------------------------------------------
+
+  private onApprove(proxyId: string, accountId: string, ev: MoveApproveEvent): void {
+    const m = this.store.get(ev.moveId);
+    if (!m || m.accountId !== accountId) return this.approveRefused(proxyId, accountId, ev.moveId, null, 'unknown_move');
+    // Approving is the only approval (S §7): the source's own page, nowhere else.
+    if (proxyId !== m.sourceProxyId) return this.approveRefused(proxyId, accountId, ev.moveId, m, 'not_source');
+    if (m.phase !== 'awaiting-approval') {
+      if (samePlan(m.plan, ev.plan)) return; // the same approval again (re-sent by the source): nothing new
+      return this.approveRefused(proxyId, accountId, ev.moveId, m, m.plan !== null ? 'plan_changed' : 'wrong_phase');
+    }
+    tx(this.d.db, () => {
+      if (this.expired(m)) {
+        this.audit(m, 'move-approve', 'refused', { reason: 'offer_expired', phase: m.phase }, { actorType: 'proxy', actor: proxyId });
+        this.failMoveIn(m, 'offer_expired');
+        return;
+      }
+      // The plan as the source approved it, unchanged: move.go must carry exactly this one (plan_mismatch otherwise).
+      const mv = this.store.setPhase(m.id, 'approved', { plan: ev.plan, approvedAt: this.d.clock.now() });
+      this.audit(mv, 'move-approve', 'ok', { phase: 'approved', plan: ev.plan }, { actorType: 'proxy', actor: proxyId });
+      const r = this.sendStart(mv);
+      if (!r.ok && PERMANENT.has(r.code)) this.failMoveIn(mv, `start:${r.code}`);
+    });
+  }
+
+  private approveRefused(proxyId: string, accountId: string, moveId: string, m: Move | null, reason: string): void {
+    this.d.audit.throttled(`move-approve:${proxyId}:${moveId}:${reason}`, {
+      actorType: 'proxy', actor: proxyId, action: 'move-approve', accountId, targetType: 'camera', targetId: m?.cameraId ?? null, targetLabel: m ? this.camsId(m) : null, outcome: 'refused',
+      detail: { moveId, reason, ...(m ? { camsId: this.camsId(m), source: m.sourceProxyId, target: m.targetProxyId, phase: m.phase } : {}) },
+    });
+  }
+
+  private sendStart(m: Move) {
+    // B34: the chunks cams-admin already knows as verified (none on a first start), newest last.
+    const done = this.store.chunks(m.id).filter((c) => c.state === 'verified').map((c) => c.id).slice(-DONE_MAX);
+    return this.send(m.accountId, m.targetProxyId, 'move.start', { v: 1, moveId: m.id, plan: m.plan, settings: m.settings ?? {}, done });
+  }
+  private sendGo(m: Move) {
+    return this.send(m.accountId, m.sourceProxyId, 'move.go', { v: 1, moveId: m.id, plan: m.plan, targetPublicKey: m.targetPublicKey, expectedLeaf: m.leafFingerprint });
+  }
+  private sendRelease(m: Move) {
+    return this.send(m.accountId, m.sourceProxyId, 'move.release', { v: 1, moveId: m.id });
+  }
+
+  private onStartFinal(m: Move, r: CommandRow): void {
+    if (m.phase !== 'approved' || r.proxyId !== m.targetProxyId) return;
+    if (r.state !== 'done') return this.failMove(m, `start:${r.outcomeCode ?? r.state}`); // X15
+    const res = r.result;
+    if (!res || typeof res.publicKey !== 'string' || typeof res.leafFingerprint !== 'string' || !validateResultPayload('move.start', res)) return this.failMove(m, 'start:bad_result');
+    const publicKey = res.publicKey;
+    const leaf = res.leafFingerprint;
+    tx(this.d.db, () => {
+      const mv = this.store.setPhase(m.id, 'switching', { targetPublicKey: publicKey, leafFingerprint: leaf });
+      this.audit(mv, 'move-phase', 'ok', { phase: 'switching', leafFingerprint: leaf, publicKeyFingerprint: keyFingerprint(publicKey) });
+      const go = this.sendGo(mv);
+      if (!go.ok && PERMANENT.has(go.code)) this.failMoveIn(mv, `go:${go.code}`);
+    });
+  }
+
+  private onGoFinal(m: Move, r: CommandRow): void {
+    if (m.phase !== 'switching' || r.proxyId !== m.sourceProxyId) return;
+    if (r.state !== 'done') this.failMove(m, `go:${r.outcomeCode ?? r.state}`);
+    // done: the source lets the target take the camera; the target reports `switched`.
+  }
+
+  private onReleaseFinal(m: Move, r: CommandRow): void {
+    if (m.phase !== 'copying' || r.proxyId !== m.sourceProxyId) return;
+    // After the switch-over: the camera stays on the target; no automatic cancel (Task 6 owns a cancel back).
+    if (r.state !== 'done') this.failMove(m, `release:${r.outcomeCode ?? r.state}`);
+  }
+
+  private onPhase(proxyId: string, accountId: string, ev: MovePhaseEvent): void {
+    const m = this.store.get(ev.moveId);
+    if (!m || m.accountId !== accountId) return;
+    // Each side speaks for its own role only.
+    if (proxyId !== (ev.role === 'source' ? m.sourceProxyId : m.targetProxyId)) return;
+    // X15: an ended move stays ended; a re-emitted phase or failure changes nothing.
+    if (m.endedAt !== null) return;
+    if (!ev.ok || ev.phase === 'failed') return this.failMove(m, `${ev.role}:${ev.code ?? 'internal'}`);
+    if (ev.role === 'target' && TARGET_SWITCHED.has(ev.phase) && m.phase === 'switching') return this.switchOver(m);
+    if (ev.role === 'source' && ev.phase === 'released' && m.phase === 'copying') return this.released(m);
+    // Other phases: Task 6 (copied, finished, cancelled), or nothing new.
+  }
+
+  // S §9.1 step 7: the target has the camera. The registry names the target
+  // (its site's TLS name for the camera, the move id) and the source releases
+  // the camera; the target copies right after `switched` (cam-proxy P12).
+  private switchOver(m: Move): void {
+    const tgt = this.d.registry.proxyById(m.targetProxyId);
+    const cam = this.d.db.prepare('SELECT proxy_camera_id FROM cameras WHERE id = ?').get(m.cameraId) as { proxy_camera_id: string | null } | undefined;
+    if (!tgt?.tlsSite || !cam?.proxy_camera_id) return this.failMove(m, 'switch:registry_incomplete');
+    const proxyCameraId = cam.proxy_camera_id;
+    try {
+      tx(this.d.db, () => {
+        this.d.registry.moveCamera('system', m.accountId, m.cameraId, { proxyId: tgt.id, proxyCameraId, tlsServername: `${proxyCameraId}.${tgt.tlsSite}.internal`, moveId: m.id });
+        const mv = this.store.setPhase(m.id, 'copying');
+        this.audit(mv, 'move-phase', 'ok', { phase: 'copying', switched: true });
+        const r = this.sendRelease(mv);
+        if (!r.ok && PERMANENT.has(r.code)) this.failMoveIn(mv, `release:${r.code}`);
+      });
+    } catch (e) {
+      if (!(e instanceof ApiError)) throw e;
+      this.failMove(m, `switch:${e.code}`);
+    }
+  }
+
+  // The source let go of the camera (hidden live): the end of the switch-over, recorded once.
+  private released(m: Move): void {
+    const seen = this.d.db.prepare(`SELECT 1 FROM audit_log WHERE action = 'move-phase' AND target_id = ? AND json_extract(detail, '$.moveId') = ? AND json_extract(detail, '$.phase') = 'released' LIMIT 1`)
+      .get(m.cameraId, m.id);
+    if (seen) return;
+    tx(this.d.db, () => this.audit(m, 'move-phase', 'ok', { phase: 'released' }, { actorType: 'proxy', actor: m.sourceProxyId }));
+  }
+
+  // A move that fails from approval on is terminal (X15). Before the camera
+  // moved both sides are cancelled (S §10.2, A17): the source only closes its
+  // journal (or, once move.go went out, takes the camera back expecting the
+  // target's leaf), the target deletes what it took (copied 'delete').
+  private failMove(m: Move, code: string): void {
+    tx(this.d.db, () => this.failMoveIn(m, code));
+  }
+  private failMoveIn(m: Move, code: string): Move {
+    const cancel = PRE_SWITCH.has(m.phase);
+    const mv = this.store.setPhase(m.id, 'failed', { reason: code.slice(0, 64), ...(cancel ? { copiedChoice: 'delete' } : {}) });
+    this.audit(mv, 'move-phase', 'failed', { phase: 'failed', from: m.phase, ...(cancel ? { cancel: 'both' } : {}) });
+    if (cancel) {
+      const goSent = m.leafFingerprint !== null && this.lastCommand(m, m.sourceProxyId, 'move.go') !== null;
+      this.send(m.accountId, m.sourceProxyId, 'move.cancel', { v: 1, moveId: m.id, role: 'source', ...(goSent ? { expectedLeaf: m.leafFingerprint } : {}) });
+      this.send(m.accountId, m.targetProxyId, 'move.cancel', { v: 1, moveId: m.id, role: 'target', copied: 'delete' });
+    }
+    return mv;
+  }
+
   // --- endings ---------------------------------------------------------------------------------
 
   private reject(m: Move, reason: string): void {
@@ -275,7 +507,7 @@ export class Moves {
   }
 
   // Detail: moveId, camsId, source, target, reason (never a token or its hash).
-  private audit(m: Move, action: 'move-request' | 'move-offer' | 'move-phase', outcome: 'ok' | 'refused' | 'failed', extra: Record<string, unknown>, who?: { actorType: 'proxy' | 'system'; actor: string }): void {
+  private audit(m: Move, action: 'move-request' | 'move-offer' | 'move-phase' | 'move-approve', outcome: 'ok' | 'refused' | 'failed', extra: Record<string, unknown>, who?: { actorType: 'proxy' | 'system'; actor: string }): void {
     const camsId = this.camsId(m);
     this.d.audit.write({
       actorType: who?.actorType ?? 'system', actor: who?.actor ?? 'system', action, accountId: m.accountId, targetType: 'camera', targetId: m.cameraId, targetLabel: camsId, outcome,

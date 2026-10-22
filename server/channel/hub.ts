@@ -31,6 +31,8 @@ export interface HubDeps {
   commands?: Commands;
   // A verified, strictly valid move event from a proxy (no cmdId). Duplicates are normal: the receiver dedupes.
   onProxyEvent?: (proxyId: string, accountId: string, body: MoveEvent) => void;
+  // A proxy's connection is live (after its welcome): a move it takes part in re-derives its next step.
+  onProxyLive?: (proxyId: string) => void;
 }
 
 function reject(socket: Duplex, status: number, text: string, body?: object): void {

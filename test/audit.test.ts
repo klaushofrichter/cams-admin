@@ -25,7 +25,8 @@ describe('audit log', () => {
     const OVERRIDES = ['camera-override-set', 'camera-override-clear'];
     for (const a of OVERRIDES) expect(AUDIT_ACTIONS).toContain(a);
     expect(AUDIT_ACTIONS).toContain('move-event-refused');
-    expect(AUDIT_ACTIONS).toHaveLength(37 + P4.length + OVERRIDES.length + 1 + 3);
+    // Camera move: move-event-refused; Task 4: request, offer, phase; Task 5: approve, switch.
+    expect(AUDIT_ACTIONS).toHaveLength(37 + P4.length + OVERRIDES.length + 1 + 3 + 2);
     expect(new Set(AUDIT_ACTIONS).size).toBe(AUDIT_ACTIONS.length);
   });
 

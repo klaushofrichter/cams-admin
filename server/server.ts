@@ -68,6 +68,7 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
   // Camera moves (plan 2026-10-21): the proxies' move events drive the job.
   const moves = new Moves({ db, clock, audit, registry, status, commands, log });
   hub.deps.onProxyEvent = (proxyId, accountId, ev) => moves.onEvent(proxyId, accountId, ev);
+  hub.deps.onProxyLive = (proxyId) => moves.onLive(proxyId);
   const journal = new RevocationJournal(join(cfg.dataDir, 'cams-revocations.jsonl'), log);
   const tokens = new Tokens({ db, clock, audit, registry, commands, live, log, journal: (tokenIds) => journal.append({ kind: 'tokens', tokenIds }, clock.now()) });
   status.onTokens = (proxyId, t) => tokens.onHeartbeat(proxyId, t);

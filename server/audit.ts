@@ -19,6 +19,8 @@ export const AUDIT_ACTIONS = [
   'move-event-refused',
   // The move job (plan Task 4): a source's request (ok or refused), the offer to the target and its answer, a phase change.
   'move-request', 'move-offer', 'move-phase',
+  // Plan Task 5: the source's approval (ok or refused) and the registry switch-over to the target.
+  'move-approve', 'move-switch',
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 const KNOWN = new Set<string>(AUDIT_ACTIONS);
