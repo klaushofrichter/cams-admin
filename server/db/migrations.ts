@@ -334,4 +334,41 @@ CREATE TABLE cams_camera_overrides (
 ) STRICT;
 CREATE INDEX cams_overrides_camera ON cams_camera_overrides(camera_id);
 `),
+  // 8: camera moves (plan 2026-10-21, Task 2): the move job and its chunk
+  // states. Same account for source and target is enforced by the composite
+  // FKs; one non-ended move per source, per target and per camera by partial
+  // unique indexes. token_hash holds only 'sha256:<hex>' (never a token).
+  // offered_at / approved_at: the 30-minute offer expiry and the budget clock.
+  // cameras.move_id is set by the move, never cleared (the next move overwrites).
+  (db) => db.exec(`
+CREATE TABLE moves (
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL,
+  camera_id TEXT NOT NULL REFERENCES cameras(id),
+  source_proxy_id TEXT NOT NULL,
+  target_proxy_id TEXT NOT NULL,
+  request_id TEXT NOT NULL,
+  phase TEXT NOT NULL CHECK (phase IN ('requested','offered','awaiting-approval','approved','switching','copying','cleaning','done','rejected','cancelling','cancelled','failed')),
+  reason TEXT, plan TEXT, summary TEXT, settings TEXT,
+  token_hash TEXT CHECK (token_hash IS NULL OR token_hash GLOB 'sha256:*'),
+  target_ip TEXT, target_public_key TEXT, leaf_fingerprint TEXT, copied_choice TEXT,
+  offered_at INTEGER, approved_at INTEGER, budget_exceeded_at INTEGER,
+  bytes_total INTEGER, bytes_done INTEGER, rate_bps INTEGER, eta_s INTEGER,
+  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, ended_at INTEGER,
+  actor TEXT, version INTEGER NOT NULL DEFAULT 1,
+  FOREIGN KEY (account_id, source_proxy_id) REFERENCES proxies(account_id, id),
+  FOREIGN KEY (account_id, target_proxy_id) REFERENCES proxies(account_id, id)
+) STRICT;
+CREATE UNIQUE INDEX moves_one_per_source ON moves(source_proxy_id) WHERE ended_at IS NULL;
+CREATE UNIQUE INDEX moves_one_per_target ON moves(target_proxy_id) WHERE ended_at IS NULL;
+CREATE UNIQUE INDEX moves_one_per_camera ON moves(camera_id) WHERE ended_at IS NULL;
+CREATE INDEX moves_account_created ON moves(account_id, created_at);
+CREATE TABLE move_chunks (
+  move_id TEXT NOT NULL REFERENCES moves(id) ON DELETE CASCADE,
+  chunk_id TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('pending','copied','verified','skipped','failed','abandoned')),
+  PRIMARY KEY (move_id, chunk_id)
+) STRICT;
+ALTER TABLE cameras ADD COLUMN move_id TEXT;
+`),
 ];
