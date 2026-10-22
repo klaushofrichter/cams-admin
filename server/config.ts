@@ -8,6 +8,7 @@ export interface Limits {
   frameBytes: number; // ws maxPayload
   bytesPerMin: number; // inbound per connection
   msgPerMin: number; // per connection
+  moveEventsPerMin: number; // per connection: the proxy's camera-move events, apart from msgPerMin (a copy reports progress)
   heartbeatMinGapMs: number; // faster heartbeats are dropped
   dropsBeforeClose: number;
   helloPerProxyPerMin: number;
@@ -167,6 +168,7 @@ export function loadConfig(env: Env = process.env): Config {
       frameBytes: 256 * 1024,
       bytesPerMin: 1024 * 1024,
       msgPerMin: num(env, 'LIMIT_MSG_PER_MIN', 20, 1, 100_000),
+      moveEventsPerMin: num(env, 'LIMIT_MOVE_EVENTS_PER_MIN', 120, 1, 100_000),
       heartbeatMinGapMs: num(env, 'HEARTBEAT_MIN_GAP_MS', Math.min(10_000, Math.floor((heartbeatS * 1000) / 3)), 0, 60_000),
       dropsBeforeClose: 3,
       helloPerProxyPerMin: num(env, 'LIMIT_HELLO_PER_PROXY', 6, 1, 10_000),

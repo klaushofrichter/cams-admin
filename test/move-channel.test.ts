@@ -103,6 +103,33 @@ describe('proxy move events', () => {
     expect(auditFor('command-result')).toHaveLength(0);
   });
 
+  it('move events have their own budget: a copy\'s progress never uses up the message limit (localstack Task 10)', async () => {
+    // The default LIMIT_MSG_PER_MIN (20): a target's move.progress and move.phase
+    // events used to count against it, and the 4429 close lost the next event.
+    await s.stop();
+    s = await startServer(dir, { HEARTBEAT_MIN_GAP_MS: '0', LIMIT_MSG_PER_MIN: '20', LIMIT_HELLO_PER_PROXY: '1000', TICK_MS: '60000' });
+    s.built.hub.deps.onProxyEvent = (proxyId, accountId, body) => { seen.push({ proxyId, accountId, body: body as unknown as Record<string, any> }); };
+    const p = await proxy(['move.send']);
+    const connects = p.client.stats.connects;
+    for (let i = 0; i < 40; i++) p.client.emitEvent(i % 2 ? eventBody('phase') : eventBody('progress'));
+    p.client.emitEvent(eventBody('targets'));
+    await until(() => seen.length === 41, 5000, 'events');
+    expect(seen.at(-1)!.body.kind).toBe('move.targets');
+    expect(p.client.state).toBe('connected');
+    expect(p.client.stats.connects).toBe(connects);
+  });
+
+  it('move events are still rate limited, by their own limit (LIMIT_MOVE_EVENTS_PER_MIN)', async () => {
+    await s.stop();
+    s = await startServer(dir, { HEARTBEAT_MIN_GAP_MS: '0', LIMIT_MSG_PER_MIN: '10000', LIMIT_MOVE_EVENTS_PER_MIN: '5', LIMIT_HELLO_PER_PROXY: '1000', TICK_MS: '60000' });
+    s.built.hub.deps.onProxyEvent = (proxyId, accountId, body) => { seen.push({ proxyId, accountId, body: body as unknown as Record<string, any> }); };
+    const p = await proxy(['move.send']);
+    const errors = p.client.stats.errors;
+    for (let i = 0; i < 6; i++) p.client.emitEvent(eventBody('progress'));
+    await until(() => p.client.stats.errors > errors || p.client.state !== 'connected', 5000, 'rate limited');
+    expect(seen.length).toBe(5);
+  });
+
   it('a throwing hook does not close the connection', async () => {
     const p = await proxy(['move.send']);
     s.built.hub.deps.onProxyEvent = () => { throw new Error('boom'); };

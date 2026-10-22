@@ -53,6 +53,9 @@ export class Connection {
   private pingTimer: NodeJS.Timeout | null = null;
   private alive = true;
   private msgs: Buckets;
+  // The proxy's move events (no cmdId) have their own budget: a target's progress and phases
+  // during a copy must not use up msgPerMin, whose 4429 close would lose the next event.
+  private moveEvents: Buckets;
   private bytes = { start: 0, n: 0 };
   private lastHeartbeat = 0;
   private drops: number[] = [];
@@ -62,6 +65,7 @@ export class Connection {
     const d = host.deps;
     this.challengeAt = d.clock.now();
     this.msgs = new Buckets({ capacity: d.cfg.limits.msgPerMin, windowMs: 60_000 });
+    this.moveEvents = new Buckets({ capacity: d.cfg.limits.moveEventsPerMin, windowMs: 60_000 });
     ws.on('message', (data, isBinary) => this.safe(() => this.onMessage(data, isBinary)));
     ws.on('close', (code, reason) => this.onClose(code, String(reason)));
     ws.on('error', () => undefined);
@@ -147,11 +151,12 @@ export class Connection {
     const seq = (m as { seq?: unknown } | null)?.seq;
     if (seq !== this.seqIn + 1) return this.close(CLOSE.bad_message, 'bad_message');
     this.seqIn++;
-    const t = this.msgs.take('m', now);
+    const moveEvent = this.state === 'live' && isCmdlessEvent(m);
+    const t = moveEvent ? this.moveEvents.take('e', now) : this.msgs.take('m', now);
     if (!t.ok) return this.rateLimited(t.retryAfterS);
-    const v = validateMessage(m);
     // Events without a cmdId are the proxy's camera-move events: never the command path (which would drop them as unknown commands).
-    if (this.state === 'live' && isCmdlessEvent(m)) return this.onMoveEvent(m as Envelope);
+    if (moveEvent) return this.onMoveEvent(m as Envelope);
+    const v = validateMessage(m);
     if (!v.ok) {
       if (v.code === 'unsupported_type' && this.state === 'live') {
         this.send('error', { code: 'unsupported_type', message: `type ${String(v.type).slice(0, 32)} is not supported` }, v.id ? { re: v.id } : {});
