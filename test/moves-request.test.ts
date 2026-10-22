@@ -10,7 +10,7 @@ import { enrolled, makeClient, resetAccounts, startServer, until, type Running }
 import { makeProxyInfo } from '../test-client/summaries';
 import type { ProxyClient } from '../test-client/client';
 import { GIVE_UP_AFTER_MS, RESEND_AFTER_MS } from '../server/commands/service';
-import { estimateS, FALLBACK_BPS, MIN_ESTIMATE_S, OFFER_EXPIRY_MS, RESUME_GAP_MS } from '../server/moves/service';
+import { estimateS, FALLBACK_BPS, hostnameOf, MIN_ESTIMATE_S, OFFER_EXPIRY_MS, RESUME_GAP_MS } from '../server/moves/service';
 import { readEpoch } from '../server/db/open';
 import { AUDIT_ACTIONS } from '../server/audit';
 import { moveToken, targetAddress } from '../server/moves/token';
@@ -390,6 +390,51 @@ describe('move request, the camera connection must match the registry', () => {
     expect(await answerOf(src, requestId)).toMatchObject({ accept: false, reason: 'incompatible' });
     expect(JSON.parse(auditFor('move-request').at(-1)!.detail)).toMatchObject({ detail: 'camera_protocol' });
     expect(moves()).toHaveLength(0);
+  });
+
+  const camWith = (src: Px, f: { host: string | null; protocol: string | null }) =>
+    s.built.registry.createCamera(ACTOR, src.accountId, { camsId: 'cam1', name: 'Cam 1', kind: 'camera', proxyId: src.proxyId, proxyCameraId: 'cam1', ...f } as any);
+
+  it('an adopted camera (host from-proxy, protocol NULL) moves', async () => {
+    const src = await proxy();
+    const tgt = await proxy();
+    camWith(src, { host: 'from-proxy', protocol: null });
+    expect(await answerOf(src, request(src, tgt.proxyId))).toMatchObject({ accept: true });
+  });
+
+  it('a camera with a NULL registry host moves', async () => {
+    const src = await proxy();
+    const tgt = await proxy();
+    camWith(src, { host: null, protocol: 'https' });
+    expect(await answerOf(src, request(src, tgt.proxyId))).toMatchObject({ accept: true });
+  });
+
+  it('hostnameOf: lowercase, no port, IPv6 without brackets', () => {
+    expect(hostnameOf('192.0.2.10:443')).toBe('192.0.2.10');
+    expect(hostnameOf('Cam.Example.test')).toBe('cam.example.test');
+    expect(hostnameOf('[2001:DB8::1]:443')).toBe('2001:db8::1');
+    expect(hostnameOf('2001:db8::1')).toBe('2001:db8::1');
+  });
+
+  it('hostnames compare without the port and case-insensitively', async () => {
+    const src = await proxy();
+    const tgt = await proxy();
+    camWith(src, { host: 'Cam-1.Example.test', protocol: 'https' });
+    expect(await answerOf(src, request(src, tgt.proxyId, { conn: { host: 'cam-1.example.test:443' } }))).toMatchObject({ accept: true });
+  });
+
+  it('a registry host without a port equals the reported host with one', async () => {
+    const src = await proxy();
+    const tgt = await proxy();
+    camera(src);
+    expect(await answerOf(src, request(src, tgt.proxyId, { conn: { host: '192.0.2.10:443' } }))).toMatchObject({ accept: true });
+  });
+
+  it('a different hostname with a port is still refused incompatible', async () => {
+    const src = await proxy();
+    const tgt = await proxy();
+    camera(src);
+    expect(await answerOf(src, request(src, tgt.proxyId, { conn: { host: '192.0.2.11:443' } }))).toMatchObject({ accept: false, reason: 'incompatible' });
   });
 
   it('a registry host "from-proxy" takes the source\'s address', async () => {

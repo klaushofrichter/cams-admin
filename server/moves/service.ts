@@ -120,6 +120,13 @@ export function estimateS(summary: unknown, probeBps: number): number {
   const bps = isCount(probeBps) && probeBps > 0 ? probeBps : FALLBACK_BPS;
   return Math.max(MIN_ESTIMATE_S, Math.ceil(bytes / bps + (files * PER_FILE_OVERHEAD_MS + chunks * PER_CHUNK_OVERHEAD_MS) / 1000 + SWITCH_OVERHEAD_S));
 }
+// A camera host's hostname: lowercase, without a port (an IPv6 address without its brackets).
+export function hostnameOf(host: string): string {
+  const h = host.trim().toLowerCase();
+  if (h.startsWith('[')) return h.slice(1, h.indexOf(']') > 0 ? h.indexOf(']') : undefined);
+  const i = h.indexOf(':');
+  return i >= 0 && h.indexOf(':', i + 1) < 0 ? h.slice(0, i) : h;
+}
 const bytesOf = (summary: unknown) => MOVE_KINDS.reduce((n, k) => {
   const b = (summary as Record<string, { bytes?: unknown }> | null)?.[k]?.bytes;
   return n + (isCount(b) ? b : 0);
@@ -371,9 +378,10 @@ export class Moves {
     // Not in the registry: no move row can name it; the source is told so at once (not_registered), not left to wait.
     if (!cam) return this.refuse(ctx, 'not_registered');
     // The offer hands the target the camera's address and protocol as the source reports them: they must be the
-    // registry's (a host "from-proxy" is whatever the source reports). Otherwise the proxies disagree: incompatible.
-    if (cam.host !== 'from-proxy' && cam.host !== ev.camera.host) return this.refuse(ctx, 'incompatible', 'camera_host');
-    if (cam.protocol !== ev.camera.protocol) return this.refuse(ctx, 'incompatible', 'camera_protocol');
+    // registry's. A NULL registry host or protocol, and a host "from-proxy", are whatever the source reports; hosts
+    // compare by hostname only (case-insensitive, port ignored). Otherwise the proxies disagree: incompatible.
+    if (cam.host !== null && cam.host !== 'from-proxy' && hostnameOf(cam.host) !== hostnameOf(ev.camera.host)) return this.refuse(ctx, 'incompatible', 'camera_host');
+    if (cam.protocol !== null && cam.protocol !== ev.camera.protocol) return this.refuse(ctx, 'incompatible', 'camera_protocol');
     const cand: Candidate = { accountId, sourceProxyId: proxyId, targetProxyId: ev.target, cameraId: cam.id };
     let pc = this.precheck(cand);
     if (!pc.ok) return this.refuse(ctx, pc.reason);
