@@ -35,8 +35,10 @@ why a move was refused) had to come from Klaus as a screenshot, because every
   bearer token is answered 401 and audited `diag-auth-refused`, throttled.
 - Last use is kept in memory only (the write budget: reads never write the
   database); the list shows it since the last restart.
-- Rate limit: 120 requests a minute per token hash (sessions keep the API's
-  own per-session limit). Never per client address.
+- Rate limit: 120 requests a minute per token (a session gets its own
+  120-a-minute bucket here). Never per client address.
+- Only a `Bearer` Authorization header is a token attempt; any other header
+  falls back to the session.
 
 ## Routes (all GET, `Cache-Control: no-store`)
 
@@ -45,10 +47,10 @@ why a move was refused) had to come from Klaus as a screenshot, because every
 | `/diag` | the index: route list, server time, version |
 | `/diag/proxies` | registry fields (url, TLS site and server name, CA fingerprints, runs on), state, version, pin, clock skew, problem count and the problem items of the last summary, reported site / CA fingerprints / commands policy / allow list / token counts, last heartbeat, reconcile |
 | `/diag/cams-instances` | state, accounts served, routes (proxy, url, hidden), the live report: mode, applied vs current revision, held changes and held proxies (field names), kept-old, shadow, token counts, **problems with code and detail** |
-| `/diag/cameras` | registry fields (cams id, name, proxy, proxy camera id, host, protocol, kind, move id), online |
+| `/diag/cameras` | registry fields (cams id, name, model, proxy, proxy camera id, host, protocol, TLS name, kind, move id), online |
 | `/diag/moves` | recent moves (the moves view) with chunk counts |
 | `/diag/moves/precheck?source=&target=&camera=` | every precheck rule in order with pass/fail and a detail (e.g. the instances that see the source but not the target) |
-| `/diag/audit` | the audit list with the UI's filters |
+| `/diag/audit` | the audit list with the UI's filters; every e-mail address (actor, target, detail) becomes `email:` + 8 hex of its SHA-256 |
 
 ## UI
 

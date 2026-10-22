@@ -7,7 +7,7 @@ import { limiter } from '../rateLimit';
 import { precheckReport } from '../moves/precheck';
 import { version } from '../version';
 import type { DiagTokens } from './tokens';
-import { diagCameras, diagCamsInstances, diagMoves, diagProxies } from './views';
+import { diagAudit, diagCameras, diagCamsInstances, diagMoves, diagProxies } from './views';
 
 // The read-only diagnostics API (issue #45), mounted at /api/v1/diag: a
 // diagnostics token (Authorization: Bearer cad_…) or a sysadmin session.
@@ -17,10 +17,10 @@ const ROUTES = ['/diag', '/diag/proxies', '/diag/cams-instances', '/diag/cameras
 
 export function diagAuth(d: Pick<ApiDeps, 'sessions' | 'audit'> & { diag: DiagTokens }): RequestHandler {
   return (req, res, next) => {
-    const auth = req.headers.authorization;
-    if (auth !== undefined) {
-      const m = /^Bearer (\S+)$/.exec(auth);
-      const id = m ? d.diag.verify(m[1]) : null;
+    // Only a Bearer header is a token attempt (an ingress's Basic header is not).
+    const m = /^Bearer\s+(\S+)$/i.exec(req.headers.authorization ?? '');
+    if (m) {
+      const id = d.diag.verify(m[1]);
       if (!id) {
         // Never keyed on the client address: one throttled record for all refusals.
         d.audit.throttled('diag-auth-refused', { actorType: 'system', actor: 'system', action: 'diag-auth-refused', outcome: 'refused' });
@@ -81,7 +81,7 @@ export function diagRouter(d: ApiDeps & { diag: DiagTokens }): express.Router {
     }
     return { source, target, cameraId, ...precheckReport({ db: d.db, registry: d.registry, status: d.status, store: d.moves.store }, { accountId: src.accountId, sourceProxyId: source, targetProxyId: target, cameraId }) };
   }));
-  r.get('/audit', h((req) => d.audit.list({ account: q(req, 'account'), actorType: q(req, 'actorType'), action: q(req, 'action'), from: n(req, 'from'), to: n(req, 'to'), limit: n(req, 'limit'), cursor: q(req, 'cursor') })));
+  r.get('/audit', h((req) => diagAudit(d, { account: q(req, 'account'), actorType: q(req, 'actorType'), action: q(req, 'action'), from: n(req, 'from'), to: n(req, 'to'), limit: n(req, 'limit'), cursor: q(req, 'cursor') })));
   r.use((_req, res) => void res.status(404).json({ error: 'not_found' }));
   return r;
 }

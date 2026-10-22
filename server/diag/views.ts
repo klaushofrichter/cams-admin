@@ -1,6 +1,8 @@
 import type { ApiDeps } from '../api/router';
 import { reconcile } from '../status/derive';
 import { snapshotRevision } from '../cams/snapshot';
+import { createHash } from 'crypto';
+import type { AuditFilter } from '../audit';
 import { chunkCounts, moveView } from '../moves/view';
 
 // What the diagnostics API shows (issue #45). Every field is named one by
@@ -47,6 +49,8 @@ export function diagProxies(d: ApiDeps) {
   };
 }
 
+const trust = (h: { accountId: string; camsId: string; fields: string[] }) => ({ accountId: h.accountId, camsId: h.camsId, fields: [...h.fields] });
+
 export function diagCamsInstances(d: ApiDeps) {
   const fp = d.serverKeyFingerprints[0] ?? '';
   return {
@@ -60,8 +64,9 @@ export function diagCamsInstances(d: ApiDeps) {
         report: rep && {
           mode: rep.mode, version: rep.version ?? null, appliedRevision: rep.appliedRevision ?? null, currentRevision: current, current: rep.appliedRevision === current,
           cacheVerifiedAt: rep.cacheVerifiedAt ?? null, lastPullAt: rep.lastPullAt ?? null,
-          held: rep.held ?? [], heldProxies: rep.heldProxies ?? [], keptOld: rep.keptOld ?? [],
-          shadow: rep.shadow ?? null, tokens: rep.tokens ?? null,
+          held: (rep.held ?? []).map(trust), heldProxies: (rep.heldProxies ?? []).map((h) => ({ accountId: h.accountId, proxyId: h.proxyId, fields: [...h.fields] })), keptOld: (rep.keptOld ?? []).map(trust),
+          shadow: rep.shadow ? { accountId: rep.shadow.accountId, differences: rep.shadow.differences, items: [...rep.shadow.items] } : null,
+          tokens: rep.tokens ? { managed: rep.tokens.managed, pending: rep.tokens.pending, legacy: rep.tokens.legacy } : null,
           problems: (rep.problems ?? []).map((p) => ({ code: p.code, accountId: p.accountId ?? null, detail: p.detail ?? null })),
         },
       };
@@ -75,7 +80,7 @@ export function diagCameras(d: ApiDeps) {
   return {
     items: d.registry.listCameras().map((c) => ({
       id: c.id, accountId: c.accountId, camsId: c.camsId, name: c.name, kind: c.kind, model: c.model, proxyId: c.proxyId, proxyCameraId: c.proxyCameraId,
-      host: c.host, protocol: c.protocol, tlsServername: c.tlsServername, cameraUser: c.cameraUser, webUiUrl: c.webUiUrl,
+      host: c.host, protocol: c.protocol, tlsServername: c.tlsServername,
       moveId: moveIds.get(c.id) ?? null,
       online: c.proxyId ? (view.get(c.proxyId)?.cameras.find((x) => x.ref === c.proxyCameraId)?.online ?? null) : null,
     })),
@@ -89,4 +94,20 @@ export function diagMoves(d: ApiDeps, accountId: string | undefined) {
       return { ...moveView(d.db, cur), chunks: chunkCounts(d.moves.chunkStates(cur.id)) };
     }),
   };
+}
+
+// The audit log without e-mail addresses (sysadmins as actors, users as
+// targets or in details): each becomes "email:" + 8 hex of its SHA-256, so
+// records of one person still match each other.
+const EMAIL_RE = /[^\s@"<>()]+@[^\s@"<>()]+\.[^\s@"<>()]+/g;
+const mask = (s: string) => s.replace(EMAIL_RE, (e) => `email:${createHash('sha256').update(e.toLowerCase()).digest('hex').slice(0, 8)}`);
+function redact(v: unknown): unknown {
+  if (typeof v === 'string') return mask(v);
+  if (Array.isArray(v)) return v.map(redact);
+  if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, redact(x)]));
+  return v;
+}
+export function diagAudit(d: ApiDeps, f: AuditFilter) {
+  const r = d.audit.list(f);
+  return { items: r.items.map((i) => redact(i)), nextCursor: r.nextCursor };
 }

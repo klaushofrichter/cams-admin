@@ -10,6 +10,8 @@ import { testApp } from './helpers/app';
 import { buildServer } from '../server/server';
 import { writeSigningKey } from './helpers/signingKey';
 import { MAX_LIVE } from '../server/diag/tokens';
+import { readEpoch } from '../server/db/open';
+import { makeProxyInfo, makeSummary } from '../test-client/summaries';
 
 const dir = tmpDir();
 const a = testApp(dir);
@@ -73,7 +75,6 @@ describe('diagnostics tokens', () => {
     const before = auditOf('diag-auth-refused').length;
     expect((await bearer('/diag/proxies', 'cad_' + 'x'.repeat(43))).status).toBe(401);
     expect((await bearer('/diag/proxies', 'not-a-diag-token')).status).toBe(401);
-    expect((await request(a.app).get('/api/v1/diag/proxies').set('Authorization', 'Basic abc')).status).toBe(401);
     // Throttled: one record for the burst.
     expect(auditOf('diag-auth-refused').length).toBe(before + 1);
   });
@@ -166,16 +167,46 @@ describe('diagnostics answers', () => {
     a.db.prepare(`UPDATE cams_instances SET notes = ?`).run(MARK);
     a.db.prepare(`UPDATE diag_tokens SET hash = 'sha256:' || ? || substr(hash, 16) WHERE name <> 'guard'`).run(MARK);
     const hash = (a.db.prepare(`SELECT hash FROM diag_tokens WHERE name = 'guard'`).get() as { hash: string }).hash;
-    for (const r of [...ROUTES.filter((x) => x !== '/diag/audit'), `/diag/moves/precheck?source=${px}&target=${px2}&camera=porch`]) {
+    // The leak-prone sources filled: a proxy summary and its reported info, a cams report, a move with its secret columns.
+    a.db.prepare(`UPDATE proxies SET state = 'enrolled' WHERE id = ?`).run(px);
+    a.status.hello(px, 'v2', Date.now(), ['status', 'commands']);
+    a.status.heartbeat(px, { summary: makeSummary({ cameras: 2, now: Date.now() }), proxy: makeProxyInfo({ now: Date.now() }), truncated: false }, Date.now());
+    a.camsInstances.report(i.id, { v: 1, mode: 'cams-admin', held: [{ accountId: acc, camsId: 'porch', fields: ['host'] }], heldProxies: [], keptOld: [], shadow: null, tokens: { managed: 1, pending: 0, legacy: 1 }, problems: [{ code: 'token_retire_failed', accountId: acc, detail: `proxy ${px}` }] }, Date.now());
+    const cam = (a.db.prepare(`SELECT id FROM cameras WHERE cams_id = 'porch'`).get() as { id: string }).id;
+    a.db.prepare(`INSERT INTO moves (id, account_id, camera_id, source_proxy_id, target_proxy_id, request_id, phase, token_hash, target_ip, target_public_key, leaf_fingerprint, created_at, updated_at, ended_at)
+      VALUES ('mv_GUARD000000000000000', ?, ?, ?, ?, 'rq_guard', 'done', ?, ?, ?, ?, 1, 1, 2)`).run(acc, cam, px, px2, 'sha256:' + MARK.repeat(8), `192.0.2.${MARK.length}`, MARK, MARK);
+    expect((await bearer('/diag/proxies', token)).body.items.find((x: { id: string }) => x.id === px).reported).not.toBeNull();
+    expect((await bearer('/diag/cams-instances', token)).body.items.find((x: { id: string }) => x.id === i.id).report.problems).toEqual([{ code: 'token_retire_failed', accountId: acc, detail: `proxy ${px}` }]);
+    expect((await bearer('/diag/moves', token)).body.items.some((m: { id: string }) => m.id === 'mv_GUARD000000000000000')).toBe(true);
+    for (const r of [...ROUTES, '/diag/audit?limit=200', `/diag/moves/precheck?source=${px}&target=${px2}&camera=porch`]) {
       const body = JSON.stringify((await bearer(r, token)).body);
       expect(body, r).not.toContain(MARK);
       expect(body, r).not.toContain(token);
       expect(body, r).not.toContain(hash.slice(7));
+      expect(body, r).not.toContain('@example.com');
     }
-    // The audit answer: the token and its full hash never, the e-mail of the user record is the audit's own business.
-    const audit = JSON.stringify((await bearer('/diag/audit?limit=200', token)).body);
-    expect(audit).not.toContain(token);
-    expect(audit).not.toContain(hash.slice(7));
+  });
+
+  it('the audit answer names people by a hash prefix of their e-mail', async () => {
+    const { token } = await issue('audit', 1);
+    const items = (await bearer('/diag/audit?action=diag-token-issue&limit=5', token)).body.items;
+    expect(items[0].actor).toMatch(/^email:[0-9a-f]{8}$/);
+    expect(new Set(items.map((x: { actor: string }) => x.actor)).size).toBe(1);
+  });
+
+  it('reads never write the database; HEAD and upper-case paths stay in the diag router', async () => {
+    const { token } = await issue('budget', 1);
+    const before = readEpoch(a.db);
+    for (const r of [...ROUTES, `/diag/moves/precheck?source=${px}&target=${px2}`]) expect((await bearer(r, token)).status, r).toBe(200);
+    expect(readEpoch(a.db)).toBe(before);
+    expect((await request(a.app).head('/api/v1/diag/proxies').set('Authorization', `Bearer ${token}`)).status).toBe(200);
+    expect((await request(a.app).get('/API/V1/DIAG/proxies').set('Authorization', `Bearer ${token}`)).status).toBe(200);
+    expect((await request(a.app).get('/API/V1/DASHBOARD').set('Authorization', `Bearer ${token}`)).status).toBe(401);
+  });
+
+  it('a Basic header is not a token attempt: the session still works', async () => {
+    const r = await request(a.app).get('/api/v1/diag').set('Cookie', a.cookie).set('Authorization', 'Basic abc');
+    expect(r.status).toBe(200);
   });
 });
 
