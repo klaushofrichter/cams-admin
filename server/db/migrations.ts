@@ -339,7 +339,7 @@ CREATE INDEX cams_overrides_camera ON cams_camera_overrides(camera_id);
   // FKs; one non-ended move per source, per target and per camera by partial
   // unique indexes. token_hash holds only 'sha256:<hex>' (never a token).
   // offered_at / approved_at: the 30-minute offer expiry and the budget clock.
-  // cameras.move_id is set by the move, never cleared (the next move overwrites).
+  // cameras.move_id is set at the switch-over, never cleared (the next move overwrites).
   (db) => db.exec(`
 CREATE TABLE moves (
   id TEXT PRIMARY KEY,
@@ -356,9 +356,15 @@ CREATE TABLE moves (
   bytes_total INTEGER, bytes_done INTEGER, rate_bps INTEGER, eta_s INTEGER,
   created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, ended_at INTEGER,
   actor TEXT, version INTEGER NOT NULL DEFAULT 1,
+  CHECK (source_proxy_id <> target_proxy_id),
   FOREIGN KEY (account_id, source_proxy_id) REFERENCES proxies(account_id, id),
   FOREIGN KEY (account_id, target_proxy_id) REFERENCES proxies(account_id, id)
 ) STRICT;
+-- One active move per proxy in either role (the partial indexes below only
+-- cover the same role).
+CREATE TRIGGER moves_proxy_busy BEFORE INSERT ON moves
+WHEN EXISTS (SELECT 1 FROM moves WHERE ended_at IS NULL AND (source_proxy_id IN (NEW.source_proxy_id, NEW.target_proxy_id) OR target_proxy_id IN (NEW.source_proxy_id, NEW.target_proxy_id)))
+BEGIN SELECT RAISE(ABORT, 'moves: proxy busy'); END;
 CREATE UNIQUE INDEX moves_one_per_source ON moves(source_proxy_id) WHERE ended_at IS NULL;
 CREATE UNIQUE INDEX moves_one_per_target ON moves(target_proxy_id) WHERE ended_at IS NULL;
 CREATE UNIQUE INDEX moves_one_per_camera ON moves(camera_id) WHERE ended_at IS NULL;

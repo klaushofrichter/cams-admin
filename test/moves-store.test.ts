@@ -13,7 +13,7 @@ function setup() {
   db.exec(`INSERT INTO accounts (id,name,display_name,created_at,updated_at) VALUES ('acc_a','alpha','A',1,1),('acc_b','beta','B',1,1);
     INSERT INTO proxies (id,account_id,name,display_name,runs_on,state,created_at,updated_at) VALUES
       ('prx_1','acc_a','p1','P1','cluster','enrolled',1,1),('prx_2','acc_a','p2','P2','cluster','enrolled',1,1),
-      ('prx_3','acc_a','p3','P3','cluster','enrolled',1,1),('prx_x','acc_b','px','PX','cluster','enrolled',1,1);
+      ('prx_3','acc_a','p3','P3','cluster','enrolled',1,1),('prx_4','acc_a','p4','P4','cluster','enrolled',1,1),('prx_x','acc_b','px','PX','cluster','enrolled',1,1);
     INSERT INTO cameras (id,account_id,proxy_id,cams_id,proxy_camera_id,name,kind,host,created_at,updated_at) VALUES
       ('cam_1','acc_a','prx_1','c1','pc1','C1','camera','192.0.2.1',1,1),('cam_2','acc_a','prx_3','c2','pc2','C2','camera','192.0.2.2',1,1);`);
   const clock = fakeClock();
@@ -35,7 +35,7 @@ describe('MoveStore', () => {
     expect(store.byProxy('prx_1')?.id).toBe(m.id);
     expect(store.byProxy('prx_2')?.id).toBe(m.id);
     expect(store.byProxy('prx_3')).toBeNull();
-    expect(db.prepare(`SELECT move_id FROM cameras WHERE id='cam_1'`).get()).toEqual({ move_id: m.id });
+    expect(db.prepare(`SELECT move_id FROM cameras WHERE id='cam_1'`).get()).toEqual({ move_id: null });
     expect(store.list('acc_a').length).toBe(1);
     expect(store.list('acc_b').length).toBe(0);
   });
@@ -45,7 +45,20 @@ describe('MoveStore', () => {
     store.create(nm());
     expect(() => store.create(nm({ cameraId: 'cam_2', targetProxyId: 'prx_3' }))).toThrow(MoveBusy); // same source
     expect(() => store.create(nm({ cameraId: 'cam_2', sourceProxyId: 'prx_3' }))).toThrow(MoveBusy); // same target
-    expect(() => store.create(nm({ sourceProxyId: 'prx_3', targetProxyId: 'prx_3' }))).toThrow(MoveBusy); // same camera
+    expect(() => store.create(nm({ sourceProxyId: 'prx_3', targetProxyId: 'prx_4' }))).toThrow(MoveBusy); // same camera
+  });
+
+  it('one active move per proxy across roles: P->Q then R->P and Q->R are busy', () => {
+    const { store } = setup();
+    store.create(nm()); // prx_1 -> prx_2
+    expect(() => store.create(nm({ cameraId: 'cam_2', sourceProxyId: 'prx_3', targetProxyId: 'prx_1' }))).toThrow(MoveBusy);
+    expect(() => store.create(nm({ cameraId: 'cam_2', sourceProxyId: 'prx_2', targetProxyId: 'prx_3' }))).toThrow(MoveBusy);
+    expect(store.create(nm({ cameraId: 'cam_2', sourceProxyId: 'prx_3', targetProxyId: 'prx_4' })).phase).toBe('requested');
+  });
+
+  it('a move to the same proxy violates the CHECK', () => {
+    const { store } = setup();
+    expect(() => store.create(nm({ targetProxyId: 'prx_1' }))).toThrow(/CHECK/);
   });
 
   it('a move between proxies of two accounts violates the FK', () => {
@@ -59,11 +72,14 @@ describe('MoveStore', () => {
     clock.advance(1000);
     const done = store.setPhase(a.id, 'done');
     expect(done).toMatchObject({ phase: 'done', endedAt: clock.now(), updatedAt: clock.now(), version: 2 });
+    store.markCamera(a.id);
     expect(db.prepare(`SELECT move_id FROM cameras WHERE id='cam_1'`).get()).toEqual({ move_id: a.id });
     expect(store.active()).toEqual([]);
     expect(store.byProxy('prx_1')).toBeNull();
     const b = store.create(nm({ requestId: 'req-2' }));
+    store.markCamera(b.id);
     expect(db.prepare(`SELECT move_id FROM cameras WHERE id='cam_1'`).get()).toEqual({ move_id: b.id });
+    expect(() => store.markCamera('mv_NOPE')).toThrow(/not_found/);
     expect(store.list().length).toBe(2);
   });
 

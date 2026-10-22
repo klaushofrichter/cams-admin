@@ -7,7 +7,7 @@ import { ApiError } from '../registry';
 
 // The move job's rows (plan Task 2). Every write is one transaction. Never
 // holds a token, password, sealed blob or private key: tokenHash is
-// 'sha256:<hex>' only. cameras.move_id is set at create and never cleared.
+// 'sha256:<hex>' only. cameras.move_id is set by markCamera at the switch-over and never cleared.
 
 export type MovePhase = 'requested' | 'offered' | 'awaiting-approval' | 'approved' | 'switching' | 'copying' | 'cleaning' | 'done' | 'rejected' | 'cancelling' | 'cancelled' | 'failed';
 export type ChunkStateName = 'pending' | 'copied' | 'verified' | 'skipped' | 'failed' | 'abandoned';
@@ -72,11 +72,20 @@ export class MoveStore {
         ).run(id, m.accountId, m.cameraId, m.sourceProxyId, m.targetProxyId, m.requestId, m.reason ?? null, enc('plan', m.plan), enc('summary', m.summary),
           enc('settings', m.settings), m.tokenHash ?? null, m.targetIp ?? null, now, now, m.actor ?? null);
       } catch (e) {
-        if (/UNIQUE constraint failed: moves\./.test(String((e as Error).message))) throw new MoveBusy();
+        if (/UNIQUE constraint failed: moves\.|moves: proxy busy/.test(String((e as Error).message))) throw new MoveBusy();
         throw e;
       }
-      this.db.prepare('UPDATE cameras SET move_id = ? WHERE id = ?').run(id, m.cameraId);
       return this.get(id)!;
+    });
+  }
+
+  // Called at the switch-over (with the registry change): the camera now
+  // names this move. Never cleared; the next move overwrites it.
+  markCamera(moveId: string): void {
+    tx(this.db, () => {
+      const m = this.get(moveId);
+      if (!m) throw new ApiError(404, 'not_found');
+      this.db.prepare('UPDATE cameras SET move_id = ? WHERE id = ?').run(moveId, m.cameraId);
     });
   }
 
