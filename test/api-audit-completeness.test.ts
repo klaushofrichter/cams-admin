@@ -67,6 +67,9 @@ describe('audit completeness', () => {
     ['post', '/accounts/:accountId/proxies/:proxyId/block', () => `/accounts/${ids.acc}/proxies/${ids.prx}/block`, () => ({}), 'proxy-block'],
     ['delete', '/accounts/:accountId/proxies/:proxyId', () => `/accounts/${ids.acc}/proxies/${ids.prx}`, () => ({}), 'proxy-delete'],
     ['delete', '/accounts/:accountId/users/:userId', () => `/accounts/${ids.acc}/users/${ids.usr}`, () => ({}), 'user-delete'],
+    // Camera moves (Task 8): one record each; the moves are made by hand in the matching phase.
+    ['post', '/moves/:moveId/cancel', () => `/moves/${ids.mvCancel}/cancel`, () => ({ copied: 'delete', confirm: 'cancel' }), 'move-cancel'],
+    ['post', '/moves/:moveId/end-transfer', () => `/moves/${ids.mvEnd}/end-transfer`, () => ({ confirm: 'end transfer' }), 'move-end-transfer'],
     ['post', '/backup/now', () => '/backup/now', () => ({}), 'backup-now'],
     ['delete', '/accounts/:accountId', () => `/accounts/${ids.acc}`, () => ({ confirmName: 'home' }), 'account-delete'],
     // Last: it ends every session, this test's too.
@@ -118,6 +121,21 @@ describe('audit completeness', () => {
       a.db.prepare(`UPDATE proxy_tokens SET state = 'active' WHERE id = ?`).run(ids.tok); // as if the proxy confirmed it
     }
     if (action === 'camera-create') ids.cam = r.body.id;
+    if (action === 'camera-create') {
+      // Two moves for the move rows: proxies and cameras of their own, in copying.
+      const mk = (tag: string) => {
+        const px = [`prx_${tag}s`, `prx_${tag}t`];
+        for (const [i, id] of px.entries()) a.db.prepare(`INSERT INTO proxies (id, account_id, name, display_name, runs_on, state, created_at, updated_at) VALUES (?, ?, ?, ?, 'cluster', 'enrolled', 1, 1)`).run(id, ids.acc, `${tag}${i}`, `${tag}${i}`);
+        a.db.prepare(`INSERT INTO cameras (id, account_id, proxy_id, cams_id, proxy_camera_id, name, kind, created_at, updated_at) VALUES (?, ?, ?, ?, 'pc', 'M', 'camera', 1, 1)`).run(`cam_${tag}`, ids.acc, px[0], `m${tag}`);
+        const id = `mv_${tag.padEnd(20, '0')}`;
+        a.db.prepare(`INSERT INTO moves (id, account_id, camera_id, source_proxy_id, target_proxy_id, request_id, phase, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'copying', 1, 1)`).run(id, ids.acc, `cam_${tag}`, px[0], px[1], `rq_${tag}`);
+        return id;
+      };
+      ids.mvCancel = mk('c');
+      ids.mvEnd = mk('e');
+    }
+    // The account goes next: its moves must end first (an active one refuses the delete); ended ones go with it.
+    if (action === 'backup-now') a.db.exec('UPDATE moves SET ended_at = 1 WHERE ended_at IS NULL');
     if (actions.includes('import-apply')) ids.impcam = (a.db.prepare(`SELECT id FROM cameras WHERE cams_id = 'imp1'`).get() as { id: string }).id;
     expect(count() - before).toBe(actions.length);
     expect(a.audit.list({ limit: actions.length }).items.map((x) => x.action).sort()).toEqual([...actions].sort());

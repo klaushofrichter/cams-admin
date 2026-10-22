@@ -17,6 +17,8 @@ import { exportForInstance } from '../import/export';
 import { snapshotRevision } from '../cams/snapshot';
 import type { ProxyConfig } from '../config/service';
 import type { RemoteActions } from '../actions/service';
+import type { Moves } from '../moves/service';
+import { chunkCounts, moveView } from '../moves/view';
 import { SESSION_COOKIE, type Sessions } from '../auth/session';
 import { requireCsrf, requireSysadmin, writeLimiter } from '../auth/middleware';
 import { reconcile } from '../status/derive';
@@ -45,7 +47,7 @@ export interface BackupService { state(): BackupState; backupNow(actor: string):
 
 export interface ApiDeps {
   db: Db; clock: Clock; cfg: Config; audit: Audit; registry: Registry; enrollment: Enrollment; hub: Hub; status: StatusStore; live: LiveHub; sessions: Sessions; backup: BackupService;
-  commands: Commands; tokens: Tokens; camsInstances: CamsInstances; serverKeyFingerprints: string[]; importer: Importer; config: ProxyConfig; actions: RemoteActions;
+  commands: Commands; tokens: Tokens; camsInstances: CamsInstances; serverKeyFingerprints: string[]; importer: Importer; config: ProxyConfig; actions: RemoteActions; moves: Moves;
 }
 
 type H = (req: Request, res: Response) => unknown;
@@ -222,6 +224,37 @@ export function apiRouter(d: ApiDeps): express.Router {
   r.post(`${proxyBase}/cameras/:camera/name`, h((req, res) => accepted(res, d.actions.rename(actor(res), p(req, 'accountId'), p(req, 'proxyId'), p(req, 'camera'), req.body))));
   r.post(`${proxyBase}/restart`, h((req, res) => accepted(res, d.actions.restart(actor(res), p(req, 'accountId'), p(req, 'proxyId'), req.body))));
 
+  // --- camera moves (plan 2026-10-21 Task 8) ---------------------------------------------------
+  const moveOf = (id: string) => {
+    const m = d.moves.current(id);
+    if (!m) throw new ApiError(404, 'not_found');
+    return m;
+  };
+  const typed = (req: Request, word: string) => {
+    if (req.body?.confirm !== word) throw new ApiError(400, 'confirm_mismatch', 'confirm');
+  };
+  r.get('/moves', h((req) => {
+    const acc = req.query.accountId === undefined ? undefined : String(req.query.accountId);
+    if (acc !== undefined) d.registry.getAccount(acc);
+    return { items: d.moves.store.list(acc).map((m) => moveView(d.db, d.moves.current(m.id) ?? m)) };
+  }));
+  r.get('/moves/:moveId', h((req) => {
+    const m = moveOf(p(req, 'moveId'));
+    return { ...moveView(d.db, m), chunks: chunkCounts(d.moves.chunkStates(m.id)) };
+  }));
+  r.post('/moves/:moveId/cancel', h((req, res) => {
+    typed(req, 'cancel');
+    moveOf(p(req, 'moveId'));
+    res.locals.status = 202;
+    return moveView(d.db, d.moves.cancel(actor(res), p(req, 'moveId'), req.body?.copied));
+  }));
+  r.post('/moves/:moveId/end-transfer', h((req, res) => {
+    typed(req, 'end transfer');
+    moveOf(p(req, 'moveId'));
+    res.locals.status = 202;
+    return moveView(d.db, d.moves.endTransfer(actor(res), p(req, 'moveId')));
+  }));
+
   r.get(`${proxyBase}/status-events`, h((req) => {
     d.registry.getProxy(p(req, 'accountId'), p(req, 'proxyId'));
     return d.status.events(p(req, 'proxyId'), limit(req), req.query.cursor ? Number(req.query.cursor) : undefined);
@@ -375,7 +408,7 @@ export function dashboard(d: ApiDeps) {
     return {
       id: i.id, name: i.name, displayName: i.displayName, state: i.state, lastSeenAt: i.live.lastSeenAt, lastPullAt: i.live.lastPullAt, lastPullStatus: i.live.lastPullStatus,
       mode: rep?.mode ?? null, version: rep?.version ?? null, appliedRevision: rep?.appliedRevision ?? null, current: !!rep && rep.appliedRevision === current,
-      held: rep?.held?.length ?? 0, keptOld: rep?.keptOld?.length ?? 0, diverged: (rep?.keptOld?.length ?? 0) > 0,
+      held: (rep?.held?.length ?? 0) + (rep?.heldProxies?.length ?? 0), heldProxies: rep?.heldProxies?.length ?? 0, keptOld: rep?.keptOld?.length ?? 0, diverged: (rep?.keptOld?.length ?? 0) > 0,
       shadowDifferences: rep?.shadow ? rep.shadow.differences : null, shadowZeroSince: i.live.shadowZeroSince, problems: rep?.problems?.length ?? 0,
       tokens: rep?.tokens ?? null,
     };

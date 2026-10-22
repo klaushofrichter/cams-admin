@@ -36,7 +36,8 @@
             "adminUiUrl": null,
             "tlsServername": null,
             "caFingerprints": [],
-            "tokens": []
+            "tokens": [],
+            "site": null
           }
         ],
         "cameras": [
@@ -51,7 +52,8 @@
             "tlsServername": null,
             "cameraUser": "cams",
             "webUiUrl": null,
-            "webUiNote": null
+            "webUiNote": null,
+            "moveId": null
           }
         ]
       },
@@ -90,7 +92,8 @@
                 "state": "retiring",
                 "retireAt": 1791360000000
               }
-            ]
+            ],
+            "site": "garage"
           },
           {
             "id": "prx_00000000000000000001",
@@ -107,7 +110,8 @@
                 "state": "active",
                 "retireAt": null
               }
-            ]
+            ],
+            "site": null
           }
         ],
         "cameras": [
@@ -122,7 +126,8 @@
             "tlsServername": "cam1.example.net",
             "cameraUser": "cams",
             "webUiUrl": null,
-            "webUiNote": null
+            "webUiNote": null,
+            "moveId": null
           },
           {
             "id": "cam_00000000000000000002",
@@ -135,7 +140,8 @@
             "tlsServername": null,
             "cameraUser": "cams",
             "webUiUrl": "https://192.0.2.31",
-            "webUiNote": "LAN only"
+            "webUiNote": "LAN only",
+            "moveId": "mv_0123456789ABCDEFGHJK"
           }
         ]
       }

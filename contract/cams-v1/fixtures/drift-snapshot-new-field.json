@@ -37,7 +37,8 @@
             "adminUiUrl": null,
             "tlsServername": null,
             "caFingerprints": [],
-            "tokens": []
+            "tokens": [],
+            "site": null
           }
         ],
         "cameras": [
@@ -52,7 +53,8 @@
             "tlsServername": null,
             "cameraUser": "cams",
             "webUiUrl": null,
-            "webUiNote": null
+            "webUiNote": null,
+            "moveId": null
           }
         ]
       },
@@ -91,7 +93,8 @@
                 "state": "retiring",
                 "retireAt": 1791360000000
               }
-            ]
+            ],
+            "site": "garage"
           },
           {
             "id": "prx_00000000000000000001",
@@ -108,7 +111,8 @@
                 "state": "active",
                 "retireAt": null
               }
-            ]
+            ],
+            "site": null
           }
         ],
         "cameras": [
@@ -124,6 +128,7 @@
             "cameraUser": "cams",
             "webUiUrl": null,
             "webUiNote": null,
+            "moveId": null,
             "newThing": 1
           },
           {
@@ -137,11 +142,12 @@
             "tlsServername": null,
             "cameraUser": "cams",
             "webUiUrl": "https://192.0.2.31",
-            "webUiNote": "LAN only"
+            "webUiNote": "LAN only",
+            "moveId": "mv_0123456789ABCDEFGHJK"
           }
         ]
       }
     ],
-    "sig": "s2xfccDADwcZ4cfode5x+xnovHq6s3eGIZbnB+W7DBRDT7przwo+ISXgMMkpbDFq6Db5CT7+TJHrT4wheWXXDg=="
+    "sig": "JeMXIuZ4NT0UW1ftxxee2Vdkjg7W4gIcFWSwbma8OaUcAx23GaG2hTWSAAVBUzWEnH591re3vmpIVhHt/yNsDA=="
   }
 }

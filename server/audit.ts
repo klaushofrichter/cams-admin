@@ -15,6 +15,14 @@ export const AUDIT_ACTIONS = [
   'cams-instance-create', 'cams-instance-update', 'cams-instance-delete', 'cams-instance-block', 'cams-enrollment-code-create', 'cams-enrollment-code-cancel',
   'cams-enrolled', 'cams-enroll-refused', 'cams-key-confirmed', 'cams-key-revoke', 'cams-auth-refused', 'route-update', 'cams-rotate',
   'import-run', 'import-apply', 'export-run', 'camera-override-set', 'camera-override-clear',
+  // Camera move: a proxy's move event that was dropped (bad signature, wrong target, strict schema).
+  'move-event-refused',
+  // The move job (plan Task 4): a source's request (ok or refused), the offer to the target and its answer, a phase change.
+  'move-request', 'move-offer', 'move-phase',
+  // Plan Task 5: the source's approval (ok or refused) and the registry switch-over to the target.
+  'move-approve', 'move-switch',
+  // Plan Task 6: the end of the move: the time budget ran out (once), a cancel, the transfer ended early, the move done.
+  'move-budget-exceeded', 'move-cancel', 'move-end-transfer', 'move-done',
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 const KNOWN = new Set<string>(AUDIT_ACTIONS);

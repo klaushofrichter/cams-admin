@@ -18,6 +18,16 @@
       }
     ],
     "keptOld": [],
+    "heldProxies": [
+      {
+        "accountId": "acc_00000000000000000001",
+        "proxyId": "prx_00000000000000000002",
+        "fields": [
+          "proxyUrl",
+          "caFingerprints"
+        ]
+      }
+    ],
     "shadow": null,
     "tokens": {
       "managed": 2,

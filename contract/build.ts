@@ -133,8 +133,6 @@ export function buildSchemas(mode: Mode): Record<string, S> {
     // done needs a status (both modes: a result without one is unusable).
     if: { properties: { phase: { const: 'done' } }, required: ['phase'] }, then: { properties: { status: resultCore.status }, required: ['status'] },
   };
-  const eventBody = obj({ ...resultCore, kind: en(['command.done']), phase: { const: 'done' } },
-    ['proxyId', 'connId', 'kind', 'cmdId', 'phase', 'status'], ['code', 'retryAfterS', 'duplicate', 'result']);
   const tokensArgs = obj({
     v: { const: 1 }, revision: int(1),
     tokens: arr(obj({ id: tokId, kind: en(['client', 'admin']), hash, label, retireAt: nullable(int()) }, ['id', 'kind', 'hash', 'label', 'retireAt']), 64),
@@ -220,6 +218,110 @@ export function buildSchemas(mode: Mode): Record<string, S> {
     p3Schemas[`commands/${c}.result`] = { $id: BASE + `commands/${c}.result.schema.json`, title: `${c} result v1`, ...p3Results[c] };
   }
 
+  // --- camera moves (contract amendments of the camera-move plan) ----------------
+  // Commands (cams-admin -> proxy) are short; long work is announced by events
+  // (proxy -> cams-admin, no cmdId). `all` closes an object and requires every
+  // property in strict (lenient: the listed ones, open).
+  const all = (props: Record<string, S>): S => obj(props, Object.keys(props));
+  const optionalOnly = (props: Record<string, S>): S => obj(props, [], Object.keys(props));
+  const mvId = id('mv');
+  const requestId = id('rq');
+  const prxId = id('prx');
+  const site: S = { type: 'string', pattern: SITE_PATTERN };
+  const kindEn = en([...MOVE_KINDS]);
+  const kindMap = <T extends S>(of: T): Record<string, S> => Object.fromEntries(MOVE_KINDS.map((k) => [k, of]));
+  const cameraName: S = { type: 'string', minLength: 1, maxLength: 64, pattern: CAMERA_NAME_PATTERN };
+  const nameS = str(64, { minLength: 1 });
+  const port = int(1, { maximum: 65535 });
+  const chunkId: S = { type: 'string', pattern: `^(${MOVE_KINDS.join('|')}):[0-9]{4}-[0-9]{2}-[0-9]{2}$` };
+  // X25519 public key as SPKI DER (44 bytes), base64; the fixed prefix MCowBQYDK2VuAyEA refuses any other key type (an Ed25519 SPKI starts MCowBQYDK2Vw).
+  const x25519: S = { type: 'string', pattern: '^MCowBQYDK2VuAyEA[A-Za-z0-9+/]{43}=$' };
+  const pathMap: S = { type: 'object', propertyNames: { pattern: PATH_PATTERN }, additionalProperties: leafValue, maxProperties: 64 };
+  const moveSummary = all(kindMap(all({ files: int(), bytes: int(), rows: int(), oldest: nullable(int()), newest: nullable(int()) })));
+  // The camera node of the cam-proxy config, as a move carries it: every leaf optional (cam-proxy leaves most unset), no nulls.
+  const moveSettings = optionalOnly({
+    name: cameraName, statusPollS: int(1),
+    ftp: optionalOnly({ enabled: bool, stream: en(['main', 'sub']) }),
+    stills: optionalOnly({ enabled: bool, stream: en(['sub', 'main']), intervalS: { type: 'number', exclusiveMinimum: 0 } }),
+    storage: optionalOnly({ sharePercent: { type: 'number', minimum: 0, maximum: 100 } }),
+    analytics: optionalOnly({ kinds: optionalOnly({ person: bool, vehicle: bool, pet: bool }) }),
+    events: optionalOnly({ poll: optionalOnly({ enabled: bool }) }),
+  });
+  const movePlan = all({
+    transfer: bool, kinds: arr(kindEn, MOVE_KINDS.length, { uniqueItems: true }), space: en(MOVE_SPACE_CHOICES as unknown as string[]),
+    targetSettings: nullable(pathMap), budgetS: int(), estimateS: int(),
+  });
+  const moveSpace = all({ needed: int(), available: int(), fits: bool, perKind: optionalOnly(kindMap(int())), retentionProposal: nullable(pathMap) });
+  // What the camera is, as the target needs it to add it (never a password: those travel sealed, never in cams-admin's messages).
+  const connectionFields: Record<string, S> = { name: cameraName, host: str(255, { minLength: 1 }), protocol: en(['https', 'http']), user: str(64), onvifPort: port, rtspPort: port, baichuanPort: port };
+  const moveCameraEvent = all({ proxyCameraId: camId, ...connectionFields });
+  const moveCameraOffer = all({ camsId: camId, proxyCameraId: camId, ...connectionFields });
+  const offerReason = en([...MOVE_OFFER_REASONS]);
+  const answerReason = en([...MOVE_ANSWER_REASONS]);
+  const empty = obj({}, []);
+  const mv = { v: { const: 1 }, moveId: mvId };
+  const copiedChoice = en(['delete', 'age-out']);
+  const moveArgs: Record<(typeof MOVE_COMMANDS)[number], S> = {
+    'move.targets': all({ v: { const: 1 }, requestId, targets: arr(all({ proxyId: prxId, name: nameS, site: nullable(site) }), 64) }),
+    'move.open': all({ ...mv, requestId, camera: camId, tokenHash: hash, targetIp: str(45, { pattern: '^[0-9A-Fa-f:.]{2,45}$' }) }),
+    // The plaintext token goes to the target in the first offer only (it is not stored once the command is final).
+    'move.offer': all({
+      ...mv, token: str(256, { minLength: 8, pattern: '^[\\x21-\\x7e]+$' }),
+      source: all({ proxyId: prxId, name: nameS, url: str(300, { pattern: '^https?://' }), caFingerprints: arr(fp, 2), tlsServername: str(253, { minLength: 1 }) }),
+      camera: moveCameraOffer, summary: moveSummary, settings: moveSettings,
+    }),
+    'move.answer': obj({
+      ...mv, requestId, target: all({ proxyId: prxId, name: nameS }), accept: bool, reason: answerReason, space: moveSpace, estimateS: int(),
+    }, ['v', 'moveId', 'requestId', 'target', 'accept'], ['reason', 'space', 'estimateS']),
+    'move.start': all({ ...mv, plan: movePlan, settings: moveSettings, done: arr(chunkId, 512) }),
+    'move.go': all({ ...mv, plan: movePlan, targetPublicKey: x25519, expectedLeaf: fp }),
+    'move.release': all(mv),
+    // role: which side ends (a move ends on both; the target stops its copier and closes its journal).
+    'move.finish': all({ ...mv, role: en(['source', 'target']), abandoned: bool }),
+    // copied (what to do with content already copied) is required only for the target.
+    'move.cancel': {
+      ...obj({ ...mv, role: en(['source', 'target']), copied: copiedChoice, expectedLeaf: fp }, ['v', 'moveId', 'role'], ['copied', 'expectedLeaf']),
+      if: { properties: { role: { const: 'target' } }, required: ['role'] }, then: { properties: { copied: copiedChoice }, required: ['copied'] },
+    },
+  };
+  const moveResults: Record<(typeof MOVE_COMMANDS)[number], S> = {
+    'move.targets': empty, 'move.open': empty, 'move.answer': empty, 'move.go': empty, 'move.release': empty, 'move.cancel': empty,
+    'move.offer': { anyOf: [all({ accept: { const: true }, space: moveSpace, probeBps: int() }), all({ accept: { const: false }, reason: offerReason })] },
+    'move.start': all({ publicKey: x25519, leafFingerprint: fp }),
+    // Only the five kinds: the recordings cache is not content.
+    'move.finish': all({ deleted: optionalOnly(kindMap(all({ files: int(), bytes: int() }))) }),
+  };
+  const moveSchemas: Record<string, S> = {};
+  for (const c of MOVE_COMMANDS) {
+    moveSchemas[`commands/${c}.args`] = { $id: BASE + `commands/${c}.args.schema.json`, title: `${c} args v1`, ...moveArgs[c] };
+    moveSchemas[`commands/${c}.result`] = { $id: BASE + `commands/${c}.result.schema.json`, title: `${c} result v1`, ...moveResults[c] };
+  }
+
+  // --- events (proxy -> cams-admin): command.done and the move kinds ---------------
+  const doneEvent = obj({ ...resultCore, kind: en(['command.done']), phase: { const: 'done' } },
+    ['proxyId', 'connId', 'kind', 'cmdId', 'phase', 'status'], ['code', 'retryAfterS', 'duplicate', 'result']);
+  const moveEvent = (kind: (typeof MOVE_EVENT_KINDS)[number], props: Record<string, S>, optional: string[] = []): S =>
+    obj({ proxyId: prxId, connId: id('con'), kind: { const: kind }, ...props }, ['proxyId', 'connId', 'kind', ...Object.keys(props).filter((k) => !optional.includes(k))], optional);
+  const eventBody: S = {
+    anyOf: [
+      doneEvent,
+      moveEvent('move.targets', { requestId, camera: camId }),
+      moveEvent('move.request', {
+        requestId, camera: moveCameraEvent, target: prxId, actor: all({ origin: en(['local', 'managed']), label }), summary: moveSummary, settings: moveSettings,
+      }),
+      moveEvent('move.approve', { moveId: mvId, plan: movePlan }),
+      moveEvent('move.cancel', { moveId: mvId, copied: copiedChoice }),
+      {
+        ...moveEvent('move.phase', { moveId: mvId, role: en(['source', 'target']), phase: en([...MOVE_PHASES]), ok: bool, code: str(64), detail: str() }, ['code', 'detail']),
+        // a failed phase says why
+        if: { properties: { phase: { const: 'failed' } }, required: ['phase'] }, then: { properties: { code: str(64) }, required: ['code'] },
+      },
+      moveEvent('move.progress', {
+        moveId: mvId, chunks: arr(all({ id: chunkId, state: en([...CHUNK_STATES]) }), 4096), bytesDone: int(), bytesTotal: int(), rateBps: int(), etaS: int(),
+      }),
+    ],
+  };
+
   const schemas: Record<string, S> = {
     envelope: {
       $id: BASE + 'envelope.schema.json', title: 'cams-admin v1 envelope (any message)',
@@ -265,6 +367,7 @@ export function buildSchemas(mode: Mode): Record<string, S> {
     'health-summary': summary,
     'health-summary-truncated': truncated,
     ...p3Schemas,
+    ...moveSchemas,
   };
   if (strict) for (const s of Object.values(schemas)) s.$id = (s.$id as string).replace(BASE, BASE + 'strict/');
   return Object.fromEntries(Object.entries(schemas).map(([k, v]) => [k, { $schema: 'https://json-schema.org/draft/2020-12/schema', ...v }]));
@@ -274,8 +377,23 @@ export const MESSAGE_TYPES = ['challenge', 'hello', 'welcome', 'heartbeat', 'ack
 // Reserved: defined, not implemented; answered with unsupported_type.
 export const RESERVED_TYPES = ['key.rotate'] as const;
 
+// --- camera moves -------------------------------------------------------------
+// The nine commands (role -> allow entry: targets, open, answer, go, release and finish need `move.send`; offer and start `move.receive`;
+// finish and cancel by `args.role`: source `move.send`, target `move.receive`).
+export const MOVE_COMMANDS = ['move.targets', 'move.open', 'move.offer', 'move.answer', 'move.start', 'move.go', 'move.release', 'move.finish', 'move.cancel'] as const;
+export const MOVE_EVENT_KINDS = ['move.targets', 'move.request', 'move.approve', 'move.cancel', 'move.phase', 'move.progress'] as const;
+export const MOVE_KINDS = ['stills', 'clips', 'events', 'checks', 'archive'] as const;
+export const MOVE_OFFER_REASONS = ['moves_not_allowed', 'camera_unreachable', 'camera_limit', 'id_taken', 'busy', 'incompatible', 'no_site_ca', 'ca_does_not_cover_camera', 'external_cert'] as const;
+export const MOVE_ANSWER_REASONS = [...MOVE_OFFER_REASONS, 'other_account', 'target_offline', 'not_routed', 'host_overridden', 'target_failed', 'offer_expired', 'not_registered', 'internal'] as const;
+export const MOVE_PHASES = ['opened', 'switching', 'switched', 'released', 'copying', 'copied', 'finished', 'cancelled', 'failed'] as const;
+// `failed` = copied with failures.
+export const CHUNK_STATES = ['pending', 'copied', 'verified', 'skipped', 'failed'] as const;
+export const MOVE_SPACE_CHOICES = ['all', 'omit', 'fit', 'retention'] as const;
+// A TLS site name, as cam-proxy's tls.site (also the cams-v1 snapshot's proxies[].site).
+export const SITE_PATTERN = '^[a-z0-9][a-z0-9-]{0,30}$';
+
 // The command names on the wire (strict enum). P2 implements tokens.apply.
-export const WIRE_COMMANDS = ['tokens.apply', 'config.get', 'config.set', 'config.unset', 'config.rollback', 'camera.action', 'camera.name.set', 'proxy.restart'] as const;
+export const WIRE_COMMANDS = ['tokens.apply', 'config.get', 'config.set', 'config.unset', 'config.rollback', 'camera.action', 'camera.name.set', 'proxy.restart', ...MOVE_COMMANDS] as const;
 // The camera actions a proxy may allow for remote use (camera.action:<a>).
 export const REMOTE_ACTIONS = [
   'camera-test', 'onvif-resubscribe', 'camera-ftp-test', 'poe-switch-read', 'inventory', 'inventory-cancel', 'retention-run', 'restart',
@@ -284,6 +402,8 @@ export const REMOTE_ACTIONS = [
 // The proxy's allow-list entries (camsAdmin.allowCommands); anything else is a load error on the proxy.
 export const ALLOW_ENTRIES: readonly string[] = [
   'tokens.apply', 'tokens.apply.admin', 'config.get', 'config.set', 'config.unset', 'config.rollback', 'camera.name.set', 'proxy.restart',
+  // Camera moves: both local, off by default. move.send starts a move from a proxy (the source's commands); move.receive accepts one (the target's).
+  'move.send', 'move.receive',
   ...REMOTE_ACTIONS.map((a) => `camera.action:${a}`),
 ];
 
@@ -350,5 +470,7 @@ export const REMOTE_SETTABLE: { v: 1; remote: string[]; narrow: Record<string, '
     'cameras.*.baichuanPort', 'cameras.*.poeSwitch', 'cameras.*.ftp.user', 'cameras.*.webUiUrl', 'cameras.*.storage',
     // Local only in P3 (coordinator ruling, security review I4): capture and listener switches, health thresholds.
     ...LOCAL_ONLY,
+    // cam-proxy marks these local only: the moved marker of a camera and the moves.* settings such as moves.maxCameras.
+    'cameras.*.moved', 'moves',
   ],
 };

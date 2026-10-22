@@ -22,6 +22,25 @@ import configRollbackResult from '../contract/v1/commands/config.rollback.result
 import cameraActionResult from '../contract/v1/commands/camera.action.result.schema.json';
 import cameraNameSetResult from '../contract/v1/commands/camera.name.set.result.schema.json';
 import proxyRestartResult from '../contract/v1/commands/proxy.restart.result.schema.json';
+import moveTargetsArgsStrict from '../contract/v1/strict/commands/move.targets.args.schema.json';
+import moveTargetsResult from '../contract/v1/commands/move.targets.result.schema.json';
+import moveOpenArgsStrict from '../contract/v1/strict/commands/move.open.args.schema.json';
+import moveOpenResult from '../contract/v1/commands/move.open.result.schema.json';
+import moveOfferArgsStrict from '../contract/v1/strict/commands/move.offer.args.schema.json';
+import moveOfferResult from '../contract/v1/commands/move.offer.result.schema.json';
+import moveAnswerArgsStrict from '../contract/v1/strict/commands/move.answer.args.schema.json';
+import moveAnswerResult from '../contract/v1/commands/move.answer.result.schema.json';
+import moveStartArgsStrict from '../contract/v1/strict/commands/move.start.args.schema.json';
+import moveStartResult from '../contract/v1/commands/move.start.result.schema.json';
+import moveGoArgsStrict from '../contract/v1/strict/commands/move.go.args.schema.json';
+import moveGoResult from '../contract/v1/commands/move.go.result.schema.json';
+import moveReleaseArgsStrict from '../contract/v1/strict/commands/move.release.args.schema.json';
+import moveReleaseResult from '../contract/v1/commands/move.release.result.schema.json';
+import moveFinishArgsStrict from '../contract/v1/strict/commands/move.finish.args.schema.json';
+import moveFinishResult from '../contract/v1/commands/move.finish.result.schema.json';
+import moveCancelArgsStrict from '../contract/v1/strict/commands/move.cancel.args.schema.json';
+import moveCancelResult from '../contract/v1/commands/move.cancel.result.schema.json';
+import eventStrict from '../contract/v1/strict/event.schema.json';
 import { jcs } from './crypto/jcs';
 import enrollRequest from '../contract/v1/enroll-request.schema.json';
 import camsEnrollRequest from '../contract/cams-v1/enroll-request.schema.json';
@@ -87,6 +106,7 @@ const vArgs: Record<string, ValidateFunction> = {
   'config.get': compile(configGetArgs), 'config.set': compile(configSetArgs), 'config.unset': compile(configUnsetArgs),
   'config.rollback': compile(configRollbackArgs), 'camera.action': compile(cameraActionArgs), 'camera.name.set': compile(cameraNameSetArgs),
   'proxy.restart': compile(proxyRestartArgs),
+  'move.targets': compile(moveTargetsArgsStrict), 'move.open': compile(moveOpenArgsStrict), 'move.offer': compile(moveOfferArgsStrict), 'move.answer': compile(moveAnswerArgsStrict), 'move.start': compile(moveStartArgsStrict), 'move.go': compile(moveGoArgsStrict), 'move.release': compile(moveReleaseArgsStrict), 'move.finish': compile(moveFinishArgsStrict), 'move.cancel': compile(moveCancelArgsStrict),
 };
 // A proxy's result payload, leniently (unknown fields ignored).
 const vResult: Record<string, ValidateFunction> = {
@@ -94,6 +114,7 @@ const vResult: Record<string, ValidateFunction> = {
   'config.get': compile(configGetResult), 'config.set': compile(configSetResult), 'config.unset': compile(configUnsetResult),
   'config.rollback': compile(configRollbackResult), 'camera.action': compile(cameraActionResult), 'camera.name.set': compile(cameraNameSetResult),
   'proxy.restart': compile(proxyRestartResult),
+  'move.targets': compile(moveTargetsResult), 'move.open': compile(moveOpenResult), 'move.offer': compile(moveOfferResult), 'move.answer': compile(moveAnswerResult), 'move.start': compile(moveStartResult), 'move.go': compile(moveGoResult), 'move.release': compile(moveReleaseResult), 'move.finish': compile(moveFinishResult), 'move.cancel': compile(moveCancelResult),
 };
 export function validateCommandArgs(command: string, args: unknown): { ok: true } | { ok: false; detail: string } {
   const v = Object.hasOwn(vArgs, command) ? vArgs[command] : undefined;
@@ -160,4 +181,13 @@ export function validateCams(name: CamsSchema, value: unknown): { ok: true } | {
   const v = vCams[name];
   if (!v) return { ok: false, detail: `no schema ${name}` };
   return v(value) ? { ok: true } : { ok: false, detail: errText(v).slice(0, TEXT_MAX) };
+}
+
+// --- camera-move events (proxy -> cams-admin, no cmdId) ---------------------------
+// The strict event schema (closed objects, `code` on a failed phase); a body that
+// passes the lenient anyOf at run time but not this is refused and audited.
+const vMoveEvent = compile(eventStrict.properties.body);
+export function validateMoveEvent(body: unknown): { ok: true } | { ok: false; detail: string } {
+  if (!isRecord(body) || body.cmdId !== undefined) return { ok: false, detail: 'not a move event' };
+  return vMoveEvent(body) ? { ok: true } : { ok: false, detail: errText(vMoveEvent).slice(0, TEXT_MAX) };
 }

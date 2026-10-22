@@ -2,8 +2,9 @@ import { randomBytes, type KeyObject } from 'crypto';
 import type { WebSocket, RawData } from 'ws';
 import type { HubDeps } from './hub';
 import { newId, ulid } from '../ids';
-import { publicFromB64, sign, signEnvelope, signedText, verify } from '../crypto/ed25519';
-import { validateMessage, type Envelope } from '../contract';
+import { publicFromB64, sign, signEnvelope, signedText, verify, verifyEnvelope } from '../crypto/ed25519';
+import { validateMessage, validateMoveEvent, type Envelope } from '../contract';
+import type { MoveEvent } from '../moves/types';
 import { Buckets } from './limits';
 import { pendingExpired } from '../registry';
 import type { HeartbeatBody } from '../status/store';
@@ -13,6 +14,13 @@ import type { HeartbeatBody } from '../status/store';
 export const CLOSE = {
   bad_message: 4400, unauthorized: 4401, revoked: 4403, timeout: 4408, replaced: 4409, too_large: 4413, rate_limited: 4429, going_away: 1001, internal_error: 1011,
 } as const;
+
+const BAD_EVENTS_BEFORE_CLOSE = 20;
+
+const isCmdlessEvent = (m: unknown): boolean => {
+  const x = m as { type?: unknown; body?: unknown } | null;
+  return x?.type === 'event' && typeof x.body === 'object' && x.body !== null && !Array.isArray(x.body) && (x.body as { cmdId?: unknown }).cmdId === undefined;
+};
 
 export interface ConnectionHost {
   deps: HubDeps;
@@ -45,14 +53,19 @@ export class Connection {
   private pingTimer: NodeJS.Timeout | null = null;
   private alive = true;
   private msgs: Buckets;
+  // The proxy's move events (no cmdId) have their own budget: a target's progress and phases
+  // during a copy must not use up msgPerMin, whose 4429 close would lose the next event.
+  private moveEvents: Buckets;
   private bytes = { start: 0, n: 0 };
   private lastHeartbeat = 0;
   private drops: number[] = [];
+  private badEvents = 0;
 
   constructor(private ws: WebSocket, private host: ConnectionHost) {
     const d = host.deps;
     this.challengeAt = d.clock.now();
     this.msgs = new Buckets({ capacity: d.cfg.limits.msgPerMin, windowMs: 60_000 });
+    this.moveEvents = new Buckets({ capacity: d.cfg.limits.moveEventsPerMin, windowMs: 60_000 });
     ws.on('message', (data, isBinary) => this.safe(() => this.onMessage(data, isBinary)));
     ws.on('close', (code, reason) => this.onClose(code, String(reason)));
     ws.on('error', () => undefined);
@@ -138,8 +151,11 @@ export class Connection {
     const seq = (m as { seq?: unknown } | null)?.seq;
     if (seq !== this.seqIn + 1) return this.close(CLOSE.bad_message, 'bad_message');
     this.seqIn++;
-    const t = this.msgs.take('m', now);
+    const moveEvent = this.state === 'live' && isCmdlessEvent(m);
+    const t = moveEvent ? this.moveEvents.take('e', now) : this.msgs.take('m', now);
     if (!t.ok) return this.rateLimited(t.retryAfterS);
+    // Events without a cmdId are the proxy's camera-move events: never the command path (which would drop them as unknown commands).
+    if (moveEvent) return this.onMoveEvent(m as Envelope);
     const v = validateMessage(m);
     if (!v.ok) {
       if (v.code === 'unsupported_type' && this.state === 'live') {
@@ -164,6 +180,32 @@ export class Connection {
         return;
       default:
         return this.close(CLOSE.bad_message, 'bad_message');
+    }
+  }
+
+  // A proxy-originated move event: signed by this connection's key, bound to this proxy and connection, strictly valid. Anything else
+  // is dropped and audited (throttled per proxy); a flood of bad ones closes the connection.
+  private onMoveEvent(m: Envelope): void {
+    const d = this.host.deps;
+    const b = m.body;
+    const refuse = (reason: string) => {
+      d.audit.throttled(`moveev:${this.proxyId}`, {
+        actorType: 'proxy', actor: this.proxyId!, action: 'move-event-refused', outcome: 'refused', targetType: 'proxy', targetId: this.proxyId,
+        detail: { reason, kind: typeof b.kind === 'string' ? b.kind.slice(0, 40) : null },
+      });
+      this.badEvents++;
+      if (this.badEvents > BAD_EVENTS_BEFORE_CLOSE) this.close(CLOSE.bad_message, 'bad_message');
+    };
+    if (!this.proxyKey || typeof m.sig !== 'string' || !verifyEnvelope(this.proxyKey, m as unknown as Record<string, unknown>)) return refuse('bad_signature');
+    if (b.proxyId !== this.proxyId || b.connId !== this.connId) return refuse('wrong_target');
+    if (!validateMoveEvent(b).ok) return refuse('invalid_event');
+    if (!d.onProxyEvent) return refuse('unsupported');
+    const row = d.db.prepare('SELECT account_id FROM proxies WHERE id = ?').get(this.proxyId!) as { account_id: string } | undefined;
+    if (!row) return refuse('unknown_proxy');
+    try {
+      d.onProxyEvent(this.proxyId!, row.account_id, b as unknown as MoveEvent);
+    } catch (e) {
+      d.log.error({ err: e, proxyId: this.proxyId }, 'move_event_handler_failed');
     }
   }
 
@@ -215,6 +257,16 @@ export class Connection {
     d.status.hello(b.proxyId, typeof b.version === 'string' ? b.version : null, b.ts, this.capabilities);
     this.send('welcome', { heartbeatS: d.cfg.heartbeatS, offlineAfterS: d.cfg.offlineAfterS, maxMessageBytes: d.cfg.limits.frameBytes, serverTime: d.clock.now() });
     d.commands?.onLive(this);
+    if (d.onProxyLive) {
+      const id = b.proxyId;
+      queueMicrotask(() => {
+        try {
+          d.onProxyLive!(id);
+        } catch (e) {
+          d.log.error({ err: e, proxyId: id }, 'proxy_live_hook_failed');
+        }
+      });
+    }
     this.pingTimer = setInterval(() => {
       if (!this.alive) return this.ws.terminate();
       this.alive = false;

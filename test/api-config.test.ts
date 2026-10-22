@@ -84,6 +84,8 @@ describe('the P3 API', () => {
     expect(await call('POST', `${p.base}/config/preview`, { set: { 'cameras.cam1.host': '192.0.2.9' } })).toEqual({ status: 400, body: { error: 'not_remote_settable', field: 'cameras.cam1.host' } });
     expect(await call('POST', `${p.base}/config/preview`, { set: { 'storage.maxPercent': 10 } })).toEqual({ status: 400, body: { error: 'not_remote_settable', field: 'storage settings are local only' } });
     expect((await call('POST', `${p.base}/config/preview`, { set: { 'retention.clipsDays': 1 } })).body).toEqual({ error: 'widening_local_only', field: 'retention.clipsDays: a remote change may only keep data longer' });
+    expect(await call('POST', `${p.base}/config/preview`, { set: { 'cameras.cam1.moved': true } })).toEqual({ status: 400, body: { error: 'not_remote_settable', field: 'cameras.cam1.moved' } });
+    expect(await call('POST', `${p.base}/config/preview`, { set: { 'moves.x': 'y' } })).toEqual({ status: 400, body: { error: 'not_remote_settable', field: 'moves.x' } });
     expect((await call('POST', `${p.base}/config/preview`, { set: {} })).status).toBe(400);
     expect((await call('POST', `${p.base}/config/apply`, {})).body).toEqual({ error: 'invalid', field: 'previewId' });
     expect((await call('POST', `${p.base}/config/apply`, { previewId: 'cmd_0123456789ABCDEFGHJK' })).status).toBe(404);

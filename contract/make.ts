@@ -5,7 +5,7 @@
 import { mkdirSync, rmSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 import type { KeyObject } from 'crypto';
-import { ALLOW_ENTRIES, buildSchemas, DISRUPTIVE_ACTIONS, REMOTE_SETTABLE } from './build';
+import { ALLOW_ENTRIES, buildSchemas, MOVE_KINDS, DISRUPTIVE_ACTIONS, REMOTE_SETTABLE } from './build';
 import { buildCamsSchemas, camsFixtures, camsVectors } from './cams-build';
 import { keyFromSeed, privateFromB64, sign, signEnvelope, signedText } from '../server/crypto/ed25519';
 import { makeProxyInfo, makeSummary, truncateSummary } from '../test-client/summaries';
@@ -137,6 +137,61 @@ export function fixtures(): Record<string, unknown> {
     'refused-proxy-restart-paused': p3Refused('paused', 'proxy.restart', { v: 1 }, ['proxy.restart'], 'commands paused on the proxy', { paused: true }),
   };
 
+  // --- camera moves: one valid command per command, the proxy's refusals, and the six event kinds.
+  // Commands name the entry they need: move.send on the source side, move.receive on the target side
+  // (move.finish and move.cancel by args.role). No password anywhere: the camera's passwords travel sealed, out of band.
+  const MV = 'mv_0123456789ABCDEFGHJK';
+  const RQ = 'rq_0123456789ABCDEFGHJK';
+  const PRX_T = 'prx_1123456789ABCDEFGHJK';
+  const LEAF = `SHA256:${'AB'.repeat(32)}`;
+  // A fixed X25519 SPKI public key (the 12-byte prefix and 32 bytes: RFC 8410), base64.
+  const X25519 = Buffer.concat([Buffer.from('302a300506032b656e032100', 'hex'), Buffer.alloc(32, 7)]).toString('base64');
+  const summary = Object.fromEntries(MOVE_KINDS.map((k) => [k, k === 'archive'
+    ? { files: 0, bytes: 0, rows: 0, oldest: null, newest: null }
+    : { files: 120, bytes: 52_428_800, rows: 130, oldest: NOW - 86_400_000 * 30, newest: NOW - 60_000 }]));
+  const settings = { name: 'Garage Süd', statusPollS: 30, ftp: { enabled: true, stream: 'main' }, stills: { stream: 'sub', intervalS: 1 }, storage: { sharePercent: 40 }, events: { poll: { enabled: true } } };
+  const plan = { transfer: true, kinds: ['clips', 'events', 'checks'], space: 'all', targetSettings: null, budgetS: 7200, estimateS: 1800 };
+  const space = { needed: 52_428_800, available: 10_737_418_240, fits: true, perKind: { clips: 50_000_000, events: 2_428_800 }, retentionProposal: null };
+  const camConn = { name: 'Garage Süd', host: '192.0.2.10', protocol: 'https', user: 'cams', onvifPort: 8000, rtspPort: 554, baichuanPort: 9000 };
+  const offerArgs = {
+    v: 1, moveId: MV, token: 'example-move-token-not-a-secret',
+    source: { proxyId: PRX, name: 'Garage', url: 'https://192.0.2.1:8480', caFingerprints: [LEAF], tlsServername: 'garage.example.net' },
+    camera: { camsId: 'cam1', proxyCameraId: 'cam1', ...camConn }, summary, settings,
+  };
+  const moveValid = (name: string, allow: string[], args: object, note: string) =>
+    ({ $note: note, schema: 'command', $context: ctx({ allow }), message: command(3, name, args) });
+  const moveRefused = (code: string, name: string, args: object, allow: string[], note: string) => refused(code, command(3, name, args), ctx({ allow }), note);
+  const moveEvent = (seq: number, body: object, note: string) =>
+    valid('event', signed(env('event', seq, { proxyId: PRX, connId: CON, ...body }), PROXY), note);
+  const moves = {
+    'valid-command-move-targets': moveValid('move.targets', ['move.send'], { v: 1, requestId: RQ, targets: [{ proxyId: PRX_T, name: 'Pi', site: 'garage' }, { proxyId: 'prx_2123456789ABCDEFGHJK', name: 'Mini PC', site: null }] },
+      'the proxies the source may move to (source side)'),
+    'valid-command-move-open': moveValid('move.open', ['move.send'], { v: 1, moveId: MV, requestId: RQ, camera: 'cam1', tokenHash: HASH(9), targetIp: '192.0.2.20' }, 'the source accepts one bearer token (its hash), bound to the target address'),
+    'valid-command-move-offer': moveValid('move.offer', ['move.receive'], offerArgs, 'the target (move.receive) is offered a camera; the plaintext token is in non-final args only'),
+    'valid-command-move-answer': moveValid('move.answer', ['move.send'], { v: 1, moveId: MV, requestId: RQ, target: { proxyId: PRX_T, name: 'Pi' }, accept: true, space, estimateS: 1800 }, 'the target accepted'),
+    'valid-command-move-start': moveValid('move.start', ['move.receive'], { v: 1, moveId: MV, plan, settings, done: ['clips:2026-10-20'] }, 'the approved plan; the target answers with its public key and leaf fingerprint'),
+    'valid-command-move-go': moveValid('move.go', ['move.send'], { v: 1, moveId: MV, plan, targetPublicKey: X25519, expectedLeaf: LEAF }, 'the source switches the camera over'),
+    'valid-command-move-release': moveValid('move.release', ['move.send'], { v: 1, moveId: MV }, 'the source drops the camera'),
+    'valid-command-move-finish': moveValid('move.finish', ['move.send'], { v: 1, moveId: MV, role: 'source', abandoned: false }, 'the source side ends; a target side is role target (move.receive)'),
+    'valid-command-move-cancel': moveValid('move.cancel', ['move.receive'], { v: 1, moveId: MV, role: 'target', copied: 'age-out' }, 'cancel on the target, with what to do with copied content (a source cancel has no copied)'),
+    'refused-move-offer-not-allowed': moveRefused('not_allowed', 'move.offer', offerArgs, ['move.send'], 'move.offer needs move.receive; move.send does not cover it'),
+    'refused-move-cancel-target-no-copied': moveRefused('invalid_args', 'move.cancel', { v: 1, moveId: MV, role: 'target' }, ['move.receive'], 'a target cancel names what to do with copied content (strict args refuse)'),
+    'valid-event-move-targets': moveEvent(3, { kind: 'move.targets', requestId: RQ, camera: 'cam1' }, 'the source asks for the targets of one camera'),
+    'valid-event-move-request': moveEvent(3, {
+      kind: 'move.request', requestId: RQ, camera: { proxyCameraId: 'cam1', ...camConn }, target: PRX_T, actor: { origin: 'local', label: 'admin' }, summary, settings,
+    }, 'the source asks to move a camera: connection fields from its config, never a password'),
+    'valid-event-move-approve': moveEvent(3, { kind: 'move.approve', moveId: MV, plan }, 'the user approved the plan on the source'),
+    'valid-event-move-cancel': moveEvent(3, { kind: 'move.cancel', moveId: MV, copied: 'delete' }, 'cancelled from the source page'),
+    'valid-event-move-phase': moveEvent(3, { kind: 'move.phase', moveId: MV, role: 'target', phase: 'failed', ok: false, code: 'token_address', detail: 'the source refused the bound peer' }, 'a phase change; failed carries a code'),
+    'valid-event-move-progress': moveEvent(3, {
+      kind: 'move.progress', moveId: MV, chunks: [{ id: 'clips:2026-10-20', state: 'verified' }, { id: 'clips:2026-10-21', state: 'pending' }, { id: 'events:2026-10-20', state: 'failed' }],
+      bytesDone: 10_485_760, bytesTotal: 52_428_800, rateBps: 1_048_576, etaS: 40,
+    }, 'copy progress; a chunk id is <kind>:<date>, failed = copied with failures'),
+    'invalid-event-move-progress-bad-chunk': invalid('event', 'bad_message', signed(env('event', 3, {
+      proxyId: PRX, connId: CON, kind: 'move.progress', moveId: MV, chunks: [{ id: 'clips', state: 'copied' }], bytesDone: 0, bytesTotal: 1, rateBps: 0, etaS: 0,
+    }), PROXY), 'a chunk id without a date'),
+  };
+
   return {
     'valid-heartbeat-4cam': valid('heartbeat', hb(four, false, makeProxyInfo({ now: NOW, site: 'garage', publicUrl: 'https://proxy.example.net' })), 'four cameras, site CA, cam3 offline'),
     'valid-heartbeat-1cam-pi': valid('heartbeat', hb(pi), 'the Pi: one camera, host stats'),
@@ -203,6 +258,7 @@ export function fixtures(): Record<string, unknown> {
     'invalid-enroll-v2': invalid('enroll-request', 'unsupported_version', { v: 2, code, publicKey: proxyKey.publicKeySpkiB64, proof: 'AAAA' }, ''),
     'invalid-enroll-no-proof': invalid('enroll-request', 'bad_request', { v: 1, code, publicKey: proxyKey.publicKeySpkiB64 }, ''),
     ...p3,
+    ...moves,
   };
 }
 

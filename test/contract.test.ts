@@ -95,7 +95,7 @@ describe('the v1 contract', () => {
   it('every proxy-receiver fixture has a $context and a runtime code from the nack list', () => {
     const NACKS = ['bad_signature', 'wrong_target', 'expired', 'replayed', 'not_allowed', 'paused', 'rate_limited', 'invalid_args', 'unsupported_version', 'busy'];
     const proxyFixtures = allFixtures().filter((x) => x.$expect?.receiver === 'proxy');
-    expect(proxyFixtures.length).toBe(31);
+    expect(proxyFixtures.length).toBe(33);
     for (const f of proxyFixtures) {
       expect(f.$context, f.name).toMatchObject({ now: expect.any(Number), proxyId: expect.stringMatching(/^prx_/), connId: expect.stringMatching(/^con_/), serverKeys: [vectors.keys.server.publicKey] });
       expect(NACKS, f.name).toContain(f.$expect.runtime);
@@ -212,6 +212,13 @@ describe('the v1 contract', () => {
       expect(r.remote, p).not.toContain(p);
       expect(r.denied.some((d: string) => under(p, d)), p).toBe(true);
     }
+    // cam-proxy marks these local only (the camera-move journal and the moved marker): cams-admin never sets them.
+    for (const p of ['cameras.*.moved', 'moves']) {
+      expect(r.remote, p).not.toContain(p);
+      expect(r.denied, p).toContain(p);
+    }
+    expect(r.denied.some((d: string) => under('moves.maxCameras', d))).toBe(true);
+    expect(r.denied.some((d: string) => under('cameras.*.moved', d))).toBe(true);
     for (const p of r.remote) expect(p.endsWith('.enabled'), p).toBe(false);
     // No remote path looks secret; the secret pattern catches the usual names.
     const secret = new RegExp(SECRET_KEY_PATTERN, 'i');

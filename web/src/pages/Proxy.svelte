@@ -3,6 +3,7 @@
   import { api, errorText } from '../lib/api';
   import { coalesced, live } from '../lib/live';
   import { camClass, keyState, when } from '../lib/format';
+  import { phaseText } from '../lib/moves';
   import { summaryLeaves } from '../lib/summaryTree';
   import StateChip from '../components/StateChip.svelte';
   import Ago from '../components/Ago.svelte';
@@ -22,12 +23,14 @@
   let lifetimeH = $state(24);
   let confirm = $state<null | { kind: 'revoke' | 'block' | 'delete'; keyId?: string }>(null);
   let showAll = $state(false);
+  let activeMove = $state<any>(null);
   let refresh = $state(0); // bumps after every load: the command and token cards reload with it
 
   async function load() {
     try {
       d = await api('GET', `/accounts/${accountId}/proxies/${proxyId}/status`);
       events = (await api('GET', `/accounts/${accountId}/proxies/${proxyId}/status-events?limit=30`)).items;
+      activeMove = (await api('GET', `/moves?accountId=${accountId}`)).items.find((m: any) => m.endedAt === null && (m.source.id === proxyId || m.target.id === proxyId)) ?? null;
       refresh++;
     } catch (e: any) {
       if (e?.status === 404) gone = true;
@@ -110,6 +113,7 @@
       {#if d.view.version}<span class="mono">· {d.view.version}</span>{/if}
       {#if d.view.skewMs !== null}<span class:warn={d.view.skewProblem} data-testid="skew">· clock {d.view.skewMs > 0 ? '+' : ''}{Math.round(d.view.skewMs / 1000)} s</span>{/if}
     </div>
+    {#if activeMove}<p data-testid="proxy-active-move">Camera move in progress: <a href="#/moves">{activeMove.cameraName} from {activeMove.source.name} to {activeMove.target.name}</a> ({phaseText(activeMove.phase)}).</p>{/if}
     {#if error}<p class="error" data-testid="proxy-error">{error}</p>{/if}
   </section>
 
