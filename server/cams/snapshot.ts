@@ -57,7 +57,8 @@ export function buildSnapshot(d: SnapshotDeps, instanceId: string): Snapshot {
       JOIN cams_instance_routes r ON r.proxy_id = p.id AND r.instance_id = ? WHERE p.account_id = ? AND r.hidden = 0 ORDER BY p.name, p.id`).all(instanceId, accountId) as Row[])
       .map((p): SnapProxy => ({
         id: p.id as string, name: p.name as string, displayName: p.display_name as string, url: p.url as string | null, adminUiUrl: p.admin_ui_url as string | null,
-        tlsServername: p.tls_servername as string | null, caFingerprints: (JSON.parse(p.ca_fingerprints as string) as unknown[]).filter((x): x is string => typeof x === 'string'),
+        // A TLS name only goes with an https URL: a route's plain-http override (cams on the proxy's own host) drops it, or cams refuses the account part.
+        tlsServername: typeof p.url === 'string' && p.url.startsWith('https:') ? (p.tls_servername as string | null) : null, caFingerprints: (JSON.parse(p.ca_fingerprints as string) as unknown[]).filter((x): x is string => typeof x === 'string'),
         tokens: (q(`SELECT id, kind, state, retire_at FROM proxy_tokens WHERE proxy_id = ? AND holder = ?
           AND (state IN ('pending','active','retiring') OR (state = 'revoked' AND revoked_at > ?)) ORDER BY created_at, id`).all(p.id as string, instanceId, now - REVOKED_KEEP_MS) as Row[])
           .map((t) => ({ id: t.id as string, kind: t.kind as SnapToken['kind'], state: t.state as SnapToken['state'], retireAt: t.retire_at as number | null })),

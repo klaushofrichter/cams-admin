@@ -5,5 +5,6 @@ then empties it on `main`.
 
 ## [Unreleased]
 
-- A Diagnostics page issues read-only diagnostics tokens: tools on the sysadmin's machine read proxies, cams instances and their problems, cameras, moves, the move precheck rule by rule, and the audit log without a sign-in; revocable, and they never open a write.
+- Fix: a cams instance that reaches its proxy over a plain-http route (cams on the proxy's own host) no longer gets the proxy's TLS name with it; cams refused that pair and kept an old configuration (seen on the mini PC).
+- Diagnostics: `/api/v1/diag/tokens` lists every proxy's managed tokens with their holder and state (no hashes).
 

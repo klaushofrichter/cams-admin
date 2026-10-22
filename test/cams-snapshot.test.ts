@@ -146,6 +146,15 @@ describe('the cams snapshot (GET /cams/v1/config)', () => {
     expect(JSON.stringify(p)).not.toContain('Gate');
   });
 
+  it('a plain-http route URL carries no TLS server name (cams refuses the pair); https ones keep it', () => {
+    s.built.db.prepare('UPDATE proxies SET tls_servername = ? WHERE id = ?').run('proxy.pi.internal', piProxy.id);
+    const viaRoute = buildSnapshot(d, pi.id).accounts[0].proxies.find((x) => x.name === 'pi')!;
+    expect([viaRoute.url, viaRoute.tlsServername]).toEqual(['http://127.0.0.1:8480', null]);
+    const direct = buildSnapshot(d, cluster.id).accounts.find((a) => a.name === 'home')!.proxies.find((x) => x.name === 'pi')!;
+    expect([direct.url, direct.tlsServername]).toEqual(['https://proxy.example.net:8480', 'proxy.pi.internal']);
+    s.built.db.prepare('UPDATE proxies SET tls_servername = NULL WHERE id = ?').run(piProxy.id);
+  });
+
   it('snapshot carries proxy site and camera moveId', () => {
     const db = s.built.db;
     db.prepare('UPDATE proxies SET tls_site = ? WHERE id = ?').run('yard-1', piProxy.id);
