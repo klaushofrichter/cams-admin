@@ -23,6 +23,8 @@ export const AUDIT_ACTIONS = [
   'move-approve', 'move-switch',
   // Plan Task 6: the end of the move: the time budget ran out (once), a cancel, the transfer ended early, the move done.
   'move-budget-exceeded', 'move-cancel', 'move-end-transfer', 'move-done',
+  // Read-only diagnostics tokens (issue #45): issued, revoked, and a bearer token refused (throttled).
+  'diag-token-issue', 'diag-token-revoke', 'diag-auth-refused',
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 const KNOWN = new Set<string>(AUDIT_ACTIONS);

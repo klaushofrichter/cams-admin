@@ -31,6 +31,7 @@ import { join } from 'path';
 import { writeHeapSnapshot } from 'v8';
 import { readEpoch } from '../db/open';
 import { bodyErrors } from '../bodyErrors';
+import type { DiagTokens } from '../diag/tokens';
 
 export interface ManualBackup { at: number; ok: boolean; litestream: { ok: boolean; status?: string; error?: string }; snapshot: { ok: boolean; key?: string; bytes?: number; error?: string } }
 export interface BackupState {
@@ -47,7 +48,7 @@ export interface BackupService { state(): BackupState; backupNow(actor: string):
 
 export interface ApiDeps {
   db: Db; clock: Clock; cfg: Config; audit: Audit; registry: Registry; enrollment: Enrollment; hub: Hub; status: StatusStore; live: LiveHub; sessions: Sessions; backup: BackupService;
-  commands: Commands; tokens: Tokens; camsInstances: CamsInstances; serverKeyFingerprints: string[]; importer: Importer; config: ProxyConfig; actions: RemoteActions; moves: Moves;
+  commands: Commands; tokens: Tokens; camsInstances: CamsInstances; serverKeyFingerprints: string[]; importer: Importer; config: ProxyConfig; actions: RemoteActions; moves: Moves; diag: DiagTokens;
 }
 
 type H = (req: Request, res: Response) => unknown;
@@ -341,6 +342,11 @@ export function apiRouter(d: ApiDeps): express.Router {
     res.set({ 'Cache-Control': 'no-store', 'Content-Disposition': `attachment; filename="cameras-${a.name}-${i.name}.json"` });
     return out;
   }));
+
+  // --- diagnostics tokens (issue #45): issued and revoked by a signed-in sysadmin -------------
+  r.get('/diag-tokens', h(() => d.diag.list()));
+  r.post('/diag-tokens', h((req, res) => { created(res); return d.diag.issue(actor(res), req.body); }));
+  r.post('/diag-tokens/:tokenId/revoke', h((req, res) => d.diag.revoke(actor(res), p(req, 'tokenId'))));
 
   // --- audit -------------------------------------------------------------------------------
   r.get('/audit', h((req) => {

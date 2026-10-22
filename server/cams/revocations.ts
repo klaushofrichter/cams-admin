@@ -10,7 +10,9 @@ import type { Logger } from '../log';
 export type Revocation =
   | { at: number; kind: 'block'; instanceId: string }
   | { at: number; kind: 'key'; instanceId: string; keyId: string }
-  | { at: number; kind: 'tokens'; tokenIds: string[] };
+  | { at: number; kind: 'tokens'; tokenIds: string[] }
+  // Diagnostics tokens (issue #45) share the journal.
+  | { at: number; kind: 'diag-token'; tokenId: string };
 export type RevocationEntry = Revocation extends infer R ? (R extends Revocation ? Omit<R, 'at'> : never) : never;
 
 export class RevocationJournal {

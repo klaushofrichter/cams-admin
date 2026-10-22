@@ -1,5 +1,5 @@
-// A hash router: #/, #/accounts, #/accounts/:id[/tab], #/accounts/:id/proxies/:pid[?camera=c], #/cams-instances[/:id], #/moves, #/audit, #/backup.
-export interface Route { page: 'dashboard' | 'accounts' | 'account' | 'proxy' | 'cams-instances' | 'cams-instance' | 'moves' | 'audit' | 'backup'; accountId?: string; proxyId?: string; instanceId?: string; tab?: string; camera?: string }
+// A hash router: #/, #/accounts, #/accounts/:id[/tab], #/accounts/:id/proxies/:pid[?camera=c], #/cams-instances[/:id], #/moves, #/audit, #/backup, #/diagnostics.
+export interface Route { page: 'dashboard' | 'accounts' | 'account' | 'proxy' | 'cams-instances' | 'cams-instance' | 'moves' | 'audit' | 'backup' | 'diagnostics'; accountId?: string; proxyId?: string; instanceId?: string; tab?: string; camera?: string }
 
 export function parse(hash: string): Route {
   const [path, query = ''] = hash.split('?');
@@ -15,5 +15,6 @@ export function parse(hash: string): Route {
   if (p[0] === 'moves') return { page: 'moves' };
   if (p[0] === 'audit') return { page: 'audit' };
   if (p[0] === 'backup') return { page: 'backup' };
+  if (p[0] === 'diagnostics') return { page: 'diagnostics' };
   return { page: 'dashboard' };
 }
