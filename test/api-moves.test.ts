@@ -39,7 +39,7 @@ describe('moves API', () => {
     expect(r.status).toBe(200);
     expect(r.body.items).toHaveLength(1);
     expect(r.body.items[0]).toEqual({
-      id: m1.mv, accountId: acc, camsId: expect.stringMatching(/^porch/), cameraName: expect.stringMatching(/^Porch/), source: { id: m1.s, name: expect.stringMatching(/^src/) }, target: { id: m1.t, name: expect.stringMatching(/^tgt/) },
+      id: m1.mv, accountId: acc, camsId: expect.stringMatching(/^porch/), cameraName: expect.stringMatching(/^Porch/), source: { id: m1.s, name: expect.stringMatching(/^Source /) }, target: { id: m1.t, name: expect.stringMatching(/^Target /) },
       phase: 'copying', reason: null, plan: { transfer: true, kinds: ['clips'], space: 'all', budgetS: 60 }, bytesTotal: 1000, bytesDone: 400, rateBps: 50, etaS: 12, budgetExceeded: false,
       cleanupPending: false, createdAt: expect.any(Number), updatedAt: expect.any(Number), endedAt: null,
     });
@@ -99,5 +99,37 @@ describe('moves API', () => {
     const noCsrf = await request(a.app).post(`/api/v1/moves/${m.mv}/end-transfer`).set('Cookie', a.cookie).send({ confirm: 'end transfer' });
     expect(noCsrf.status).toBeGreaterThanOrEqual(400);
     expect(a.moves.store.get(m.mv)!.phase).toBe('copying');
+  });
+
+  it('deleting a camera, proxy or account: refused 409 move_active while a move is active, removes ended moves', async () => {
+    const act = fixture(acc, 'copying');
+    expect(await a.api('delete', `/accounts/${acc}/cameras/${act.cam}`)).toMatchObject({ status: 409, body: { error: 'move_active' } });
+    expect(await a.api('delete', `/accounts/${acc}/proxies/${act.t}`)).toMatchObject({ status: 409, body: { error: 'move_active' } });
+    expect(await a.api('delete', `/accounts/${acc}/proxies/${act.s}`)).toMatchObject({ status: 409, body: { error: 'move_active' } });
+    expect((await a.api('delete', `/accounts/${acc}`, { confirmName: 'home' })).body).toEqual({ error: 'move_active' });
+    const gone = fixture(acc, 'done');
+    a.db.prepare('UPDATE moves SET ended_at = 5 WHERE id = ?').run(gone.mv);
+    chunk(gone.mv, 'c1', 'verified');
+    expect((await a.api('delete', `/accounts/${acc}/cameras/${gone.cam}`)).status).toBe(204);
+    expect(a.moves.store.get(gone.mv)).toBeNull();
+    const p = fixture(acc, 'failed');
+    a.db.prepare('UPDATE moves SET ended_at = 5 WHERE id = ?').run(p.mv);
+    expect((await a.api('delete', `/accounts/${acc}/proxies/${p.t}`)).status).toBe(204);
+    expect(a.moves.store.get(p.mv)).toBeNull();
+    // The account: its other (ended) moves go with it once the active one ended.
+    a.db.prepare('UPDATE moves SET ended_at = 5 WHERE id = ?').run(act.mv);
+    const e = fixture(other, 'cancelled');
+    a.db.prepare('UPDATE moves SET ended_at = 5 WHERE id = ?').run(e.mv);
+    a.db.prepare(`UPDATE moves SET ended_at = 5 WHERE account_id = ?`).run(other);
+    expect((await a.api('delete', `/accounts/${other}`, { confirmName: 'away' })).status).toBe(204);
+    expect(a.moves.store.get(e.mv)).toBeNull();
+  });
+
+  it('source and target show the proxy display name', async () => {
+    const m = fixture(acc, 'approved');
+    const r = await a.api('get', `/moves/${m.mv}`);
+    expect(r.body.source.name).toMatch(/^Source /);
+    a.db.prepare(`UPDATE proxies SET display_name = '' WHERE id = ?`).run(m.t);
+    expect((await a.api('get', `/moves/${m.mv}`)).body.target.name).toMatch(/^tgt/);
   });
 });

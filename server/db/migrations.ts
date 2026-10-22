@@ -344,8 +344,8 @@ CREATE INDEX cams_overrides_camera ON cams_camera_overrides(camera_id);
   (db) => db.exec(`
 CREATE TABLE moves (
   id TEXT PRIMARY KEY,
-  account_id TEXT NOT NULL,
-  camera_id TEXT NOT NULL REFERENCES cameras(id),
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  camera_id TEXT NOT NULL REFERENCES cameras(id) ON DELETE CASCADE,
   source_proxy_id TEXT NOT NULL,
   target_proxy_id TEXT NOT NULL,
   request_id TEXT NOT NULL,
@@ -359,8 +359,8 @@ CREATE TABLE moves (
   actor TEXT, version INTEGER NOT NULL DEFAULT 1,
   cleanup_pending INTEGER NOT NULL DEFAULT 0 CHECK (cleanup_pending IN (0, 1)),
   CHECK (source_proxy_id <> target_proxy_id),
-  FOREIGN KEY (account_id, source_proxy_id) REFERENCES proxies(account_id, id),
-  FOREIGN KEY (account_id, target_proxy_id) REFERENCES proxies(account_id, id)
+  FOREIGN KEY (account_id, source_proxy_id) REFERENCES proxies(account_id, id) ON DELETE CASCADE,
+  FOREIGN KEY (account_id, target_proxy_id) REFERENCES proxies(account_id, id) ON DELETE CASCADE
 ) STRICT;
 -- One active move per proxy in either role (the partial indexes below only
 -- cover the same role).

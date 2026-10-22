@@ -13,8 +13,11 @@ export type ChunkCounts = Record<ChunkStateName, number>;
 
 export function moveView(db: Db, m: Move): MoveView {
   const cam = db.prepare('SELECT cams_id, name FROM cameras WHERE id = ?').get(m.cameraId) as { cams_id: string; name: string } | undefined;
-  const px = db.prepare('SELECT name FROM proxies WHERE id = ?');
-  const name = (id: string) => (px.get(id) as { name: string } | undefined)?.name ?? id;
+  const px = db.prepare('SELECT name, display_name FROM proxies WHERE id = ?');
+  const name = (id: string) => {
+    const r = px.get(id) as { name: string; display_name: string } | undefined;
+    return r?.display_name || r?.name || id;
+  };
   return {
     id: m.id, accountId: m.accountId, camsId: cam?.cams_id ?? '', cameraName: cam?.name ?? '', source: { id: m.sourceProxyId, name: name(m.sourceProxyId) },
     target: { id: m.targetProxyId, name: name(m.targetProxyId) }, phase: m.phase, reason: m.reason, plan: m.plan, bytesTotal: m.bytesTotal, bytesDone: m.bytesDone,

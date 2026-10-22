@@ -169,6 +169,7 @@ export class Registry {
     return guard(() => tx(this.db, () => {
       const a = this.getAccount(id);
       if (confirmName !== a.name) throw new ApiError(400, 'confirm_mismatch', 'confirmName');
+      if (this.db.prepare('SELECT 1 FROM moves WHERE account_id = ? AND ended_at IS NULL LIMIT 1').get(id)) throw new ApiError(409, 'move_active');
       const proxyIds = (this.db.prepare('SELECT id FROM proxies WHERE account_id = ? ORDER BY id').all(id) as Row[]).map((r) => r.id as string);
       this.db.prepare('DELETE FROM accounts WHERE id = ?').run(id);
       this.log(actor, 'account-delete', id, 'account', id, a.name, { proxies: proxyIds.length });
@@ -280,6 +281,7 @@ export class Registry {
   deleteProxy(actor: string, accountId: string, id: string): { keyIds: string[] } {
     return guard(() => tx(this.db, () => {
       const p = this.getProxy(accountId, id);
+      if (this.db.prepare('SELECT 1 FROM moves WHERE ended_at IS NULL AND (source_proxy_id = ? OR target_proxy_id = ?) LIMIT 1').get(id, id)) throw new ApiError(409, 'move_active');
       const keyIds = this.revokeActiveKeys(id, 'proxy-deleted', this.clock.now());
       this.db.prepare('DELETE FROM proxies WHERE id = ?').run(id);
       this.log(actor, 'proxy-delete', accountId, 'proxy', id, p.name);
@@ -427,6 +429,7 @@ export class Registry {
   deleteCamera(actor: string, accountId: string, id: string): void {
     guard(() => tx(this.db, () => {
       const c = this.getCamera(accountId, id);
+      if (this.db.prepare('SELECT 1 FROM moves WHERE ended_at IS NULL AND camera_id = ? LIMIT 1').get(id)) throw new ApiError(409, 'move_active');
       this.db.prepare('DELETE FROM cameras WHERE id = ?').run(id);
       this.log(actor, 'camera-delete', accountId, 'camera', id, c.camsId);
     }));

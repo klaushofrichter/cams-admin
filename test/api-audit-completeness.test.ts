@@ -134,8 +134,8 @@ describe('audit completeness', () => {
       ids.mvCancel = mk('c');
       ids.mvEnd = mk('e');
     }
-    // The account goes next: the move history goes with it (a move row blocks the delete of its camera and proxies).
-    if (action === 'backup-now') a.db.exec('DELETE FROM moves');
+    // The account goes next: its moves must end first (an active one refuses the delete); ended ones go with it.
+    if (action === 'backup-now') a.db.exec('UPDATE moves SET ended_at = 1 WHERE ended_at IS NULL');
     if (actions.includes('import-apply')) ids.impcam = (a.db.prepare(`SELECT id FROM cameras WHERE cams_id = 'imp1'`).get() as { id: string }).id;
     expect(count() - before).toBe(actions.length);
     expect(a.audit.list({ limit: actions.length }).items.map((x) => x.action).sort()).toEqual([...actions].sort());
