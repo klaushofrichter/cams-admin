@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cancelable, etaText, phaseClass, phaseText, progressText, reasonText, boundsText, startBody, refusalText } from './moves';
+import { cancelable, etaText, phaseClass, phaseText, progressText, reasonText, boundsText, startBody, refusalText, cameraLabel } from './moves';
 
 const PHASES = ['requested', 'offered', 'awaiting-approval', 'approved', 'switching', 'copying', 'cleaning', 'done', 'rejected', 'cancelling', 'cancelled', 'failed'];
 
@@ -92,5 +92,20 @@ describe('startBody and refusalText', () => {
     expect(refusalText({ error: 'source_offline' })).toBeTruthy();
     expect(refusalText({ error: 'zzz_unknown' })).toBe('zzz_unknown');
     expect(refusalText(null)).toBeTruthy();
+  });
+});
+
+describe('cameraLabel (Start move camera list)', () => {
+  it('name, then the alias and the address', () => {
+    expect(cameraLabel({ name: 'Backyard', camsId: 'cam4', proxyCameraId: 'cam4', host: '192.0.2.85' })).toBe('Backyard (cam4, 192.0.2.85)');
+  });
+  it('the proxy\'s own id when it differs from the alias', () => {
+    expect(cameraLabel({ name: 'Gate', camsId: 'gate', proxyCameraId: 'cam1', host: null })).toBe('Gate (gate, cam1)');
+  });
+  it('no address for a camera reached through its proxy', () => {
+    expect(cameraLabel({ name: 'Gate', camsId: 'cam1', proxyCameraId: 'cam1', host: 'from-proxy' })).toBe('Gate (cam1)');
+  });
+  it('the alias alone when there is no name', () => {
+    expect(cameraLabel({ name: '', camsId: 'cam2', proxyCameraId: null, host: null })).toBe('cam2');
   });
 });

@@ -113,3 +113,12 @@ export function refusalText(answer: unknown): string {
   const code = typeof a.error === 'string' ? a.error : '';
   return code ? (REFUSALS[code] ?? reasonText(code)) : 'the move was refused';
 }
+
+// A camera in the Start move list: its name, then its alias (camsId), the
+// proxy's own id when that differs, and its address unless it is reached
+// through the proxy ("from-proxy").
+export function cameraLabel(c: { name?: string | null; camsId: string; proxyCameraId?: string | null; host?: string | null }): string {
+  const extra = [c.camsId, c.proxyCameraId && c.proxyCameraId !== c.camsId ? c.proxyCameraId : null, c.host && c.host !== 'from-proxy' ? c.host : null].filter(Boolean);
+  if (!c.name) return [c.camsId, ...extra.slice(1)].join(', ');
+  return `${c.name} (${extra.join(', ')})`;
+}
