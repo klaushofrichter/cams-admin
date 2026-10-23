@@ -84,6 +84,26 @@ describe('moves API', () => {
     expect((await a.api('get', `/moves/${m.mv}`)).body.chunks.abandoned).toBe(1);
   });
 
+  it('give up: sysadmin only, typed, only while returning; closes the return and finishes both sides, deletes nothing', async () => {
+    const copying = fixture(acc, 'copying');
+    expect((await a.api('post', `/moves/${copying.mv}/give-up`, { confirm: 'give up' })).status).toBe(409);
+    const m = fixture(acc, 'returning');
+    expect((await a.api('post', `/moves/${m.mv}/give-up`, {})).body).toEqual({ error: 'confirm_mismatch', field: 'confirm' });
+    expect((await a.api('post', `/moves/${m.mv}/give-up`, { confirm: 'cancel' })).status).toBe(400);
+    expect((await a.api('post', '/moves/mv_NOPE/give-up', { confirm: 'give up' })).status).toBe(404);
+    // An operations token (even one with the moves scope) is refused; the move is untouched.
+    const tok = (await a.api('post', '/ops-tokens', { name: 'giveup', scopes: ['moves'], days: 1 })).body.token as string;
+    const viaToken = await request(a.app).post(`/api/v1/moves/${m.mv}/give-up`).set('Authorization', `Bearer ${tok}`).set('Content-Type', 'application/json').send({ confirm: 'give up' });
+    expect(viaToken.status).toBe(403);
+    expect(a.moves.store.get(m.mv)!.phase).toBe('returning');
+    const ok = await a.api('post', `/moves/${m.mv}/give-up`, { confirm: 'give up' });
+    expect(ok.status).toBe(202);
+    expect(ok.body).toMatchObject({ id: m.mv, phase: 'returned', reason: 'given_up' });
+    const au = a.db.prepare(`SELECT actor_type, actor, outcome FROM audit_log WHERE action = 'move-give-up'`).all();
+    expect(au).toEqual([{ actor_type: 'sysadmin', actor: 'admin@example.com', outcome: 'ok' }]);
+    expect((await a.api('post', `/moves/${m.mv}/give-up`, { confirm: 'give up' })).status).toBe(409);
+  });
+
   it('no move view field contains token, hash or publicKey', async () => {
     const m = fixture(acc, 'copying');
     const texts = [(await a.api('get', '/moves')).text, (await a.api('get', `/moves/${m.mv}`)).text];

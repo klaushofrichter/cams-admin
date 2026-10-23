@@ -368,6 +368,25 @@ describe('the return runs', () => {
     await until(() => move(a.r.id).phase === 'returned', 5000, 'returned');
   });
 
+  it('give up: returned with reason given_up, move.finish {return, abandoned} to both sides, nothing deleted', async () => {
+    const a = await returning();
+    const mv = s.built.moves.giveUp(ACTOR, a.r.id);
+    expect(mv).toMatchObject({ phase: 'returned', reason: 'given_up' });
+    await until(() => got(a.tgt.client, 'move.finish', a.r.id).length === 1 && got(a.src.client, 'move.finish', a.r.id).length === 1, 5000, 'both finishes');
+    // The new proxy is the return's source, the original its target.
+    expect(got(a.tgt.client, 'move.finish', a.r.id)[0].body.args).toEqual({ v: 1, moveId: a.r.id, role: 'source', abandoned: true, return: true });
+    expect(got(a.src.client, 'move.finish', a.r.id)[0].body.args).toEqual({ v: 1, moveId: a.r.id, role: 'target', abandoned: true, return: true });
+    expect(auditFor('move-give-up')).toHaveLength(1);
+    expect(auditFor('move-give-up')[0].d).toMatchObject({ moveId: a.r.id, phase: 'returned' });
+    await settle();
+    s.built.moves.tick();
+    await settle();
+    expect(got(a.tgt.client, 'move.finish', a.r.id)).toHaveLength(1);
+    expect(got(a.src.client, 'move.finish', a.r.id)).toHaveLength(1);
+    expect(s.built.moves.returnTokens.has(a.r.id)).toBe(false);
+    expect(apiErr(() => s.built.moves.giveUp(ACTOR, a.r.id))).toEqual({ status: 409, code: 'wrong_phase' });
+  });
+
   it('no token in any command row, audit row or view', async () => {
     const a = await returning();
     await until(() => cmdRows(a.r.id, 'move.return.start')[0]?.state === 'done', 5000, 'started');

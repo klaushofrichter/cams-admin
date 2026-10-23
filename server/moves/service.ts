@@ -71,6 +71,7 @@ export const PROGRESS_SAVE_MS = 60_000;
 // Ended moves whose automatic cancels tick() still derives when one could not be queued (after that, a target's
 // return still derives its cancel: onLive).
 export const ENDED_RETRY_MS = 24 * 3600_000;
+const GIVEN_UP = 'given_up';
 // A cancelling move whose source took the cancel on without reporting `cancelled`: asked again this often (cam-proxy re-emits the terminal phase).
 export const CANCEL_RECHECK_MS = 15 * 60_000;
 // Backoff for a release (before the source's finish) or a cancel the proxy answered failed: base, doubling per attempt, capped.
@@ -280,6 +281,14 @@ export class Moves {
         this.d.log.error({ err: e, moveId: r.id }, 'move_tick_failed');
       }
     }
+    // Given-up returns whose finishes were not queued or went unanswered: derived again.
+    for (const m of this.givenUp()) {
+      try {
+        this.giveUpFinishes(m);
+      } catch (e) {
+        this.d.log.error({ err: e, moveId: m.id }, 'move_tick_failed');
+      }
+    }
     for (const id of ended) {
       if (now - (this.resumedAt.get(id) ?? 0) < RESUME_GAP_MS) continue;
       this.resumedAt.set(id, now);
@@ -297,6 +306,7 @@ export class Moves {
   onLive(proxyId: string): void {
     const m = this.store.byProxy(proxyId);
     if (m) this.resume(m.id);
+    for (const g of this.givenUp(proxyId)) this.giveUpFinishes(g);
     // A source back with a done move's cleanup still pending (ruling b).
     for (const r of this.d.db.prepare('SELECT id FROM moves WHERE cleanup_pending = 1 AND source_proxy_id = ?').all(proxyId) as { id: string }[]) {
       const mv = this.store.get(r.id);
@@ -976,6 +986,37 @@ export class Moves {
       });
     }
     return tx(this.d.db, () => this.endTransferIn(m, END_TRANSFER, { actorType: 'sysadmin', actor }));
+  }
+
+  // Give up copy back (ruling 11, spec decision 3): the sysadmin ends a return that cannot finish. The return is
+  // `returned` with reason given_up; move.finish {return, abandoned} goes to both sides (each while online, derived
+  // again by tick and onLive until answered). Nothing is deleted: the content on either proxy stays as it is.
+  giveUp(actor: string, moveId: string): Move {
+    const m = this.store.get(moveId);
+    if (!m) throw new ApiError(404, 'not_found');
+    if (m.phase !== 'returning') throw new ApiError(409, 'wrong_phase');
+    const mv = tx(this.d.db, () => {
+      const v = this.store.setPhase(m.id, 'returned', { ...this.flushIn(m.id), reason: GIVEN_UP });
+      this.audit(v, 'move-give-up', 'ok', { phase: 'returned', returnOf: m.returnOf, bytesDone: v.bytesDone, bytesTotal: v.bytesTotal }, { actorType: 'sysadmin', actor });
+      return v;
+    });
+    this.returnTokens.delete(m.id);
+    this.giveUpFinishes(mv);
+    this.publish(m.id);
+    return mv;
+  }
+
+  // move.finish {return, abandoned} to both sides of a given-up return, each until queued, again when it went unanswered.
+  private giveUpFinishes(m: Move): void {
+    const unsent = (p: string) => (r: CommandRow) => (r.state === 'expired' || r.state === 'unknown') && this.online(p);
+    this.ensure(m, m.sourceProxyId, 'move.finish', { v: 1, moveId: m.id, role: 'source', abandoned: true, return: true }, unsent(m.sourceProxyId));
+    this.ensure(m, m.targetProxyId, 'move.finish', { v: 1, moveId: m.id, role: 'target', abandoned: true, return: true }, unsent(m.targetProxyId));
+  }
+
+  private givenUp(proxyId?: string): Move[] {
+    const rows = this.d.db.prepare(`SELECT id FROM moves WHERE phase = 'returned' AND reason = ? AND ended_at >= ?${proxyId ? ' AND (source_proxy_id = ? OR target_proxy_id = ?)' : ''}`)
+      .all(...(proxyId ? [GIVEN_UP, this.d.clock.now() - ENDED_RETRY_MS, proxyId, proxyId] : [GIVEN_UP, this.d.clock.now() - ENDED_RETRY_MS])) as { id: string }[];
+    return rows.map((r) => this.store.get(r.id)).filter((x): x is Move => x !== null);
   }
 
   private archiveChunks(moveId: string): ChunkState[] {

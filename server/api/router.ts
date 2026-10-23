@@ -283,6 +283,15 @@ export function apiRouter(d: ApiDeps): express.Router {
     return moveView(d.db, d.moves.endTransfer(actor(res), p(req, 'moveId')));
   }));
 
+  // Sysadmin only (ruling 11): not in OPS_ROUTES, and an operations token is refused here too, fail closed.
+  r.post('/moves/:moveId/give-up', h((req, res) => {
+    if (actor(res).startsWith('ops-token:')) throw new ApiError(403, 'sysadmin_only');
+    typed(req, 'give up');
+    moveOf(p(req, 'moveId'));
+    res.locals.status = 202;
+    return moveView(d.db, d.moves.giveUp(actor(res), p(req, 'moveId')));
+  }));
+
   r.get(`${proxyBase}/status-events`, h((req) => {
     d.registry.getProxy(p(req, 'accountId'), p(req, 'proxyId'));
     return d.status.events(p(req, 'proxyId'), limit(req), req.query.cursor ? Number(req.query.cursor) : undefined);
