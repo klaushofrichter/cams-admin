@@ -4,6 +4,7 @@ import type { Db } from '../db/open';
 import { tx } from '../db/open';
 import { newId } from '../ids';
 import { ApiError } from '../registry';
+import type { MoveBounds } from './types';
 
 // The move job's rows (plan Task 2). Every write is one transaction. Never
 // holds a token, password, sealed blob or private key: tokenHash is
@@ -26,11 +27,13 @@ export interface Move {
   cleanupPending: boolean;
   // Done, but the target's finish has not landed yet (a move ended early while the target was away).
   targetCleanupPending: boolean;
+  // The pre-approval bounds the request carried; null when it carried none.
+  bounds: MoveBounds | null;
 }
 export interface NewMove {
   accountId: string; cameraId: string; sourceProxyId: string; targetProxyId: string; requestId: string;
   reason?: string | null; plan?: unknown; summary?: unknown; settings?: unknown; tokenHash?: string | null;
-  targetIp?: string | null; actor?: string | null;
+  targetIp?: string | null; actor?: string | null; bounds?: MoveBounds | null;
 }
 
 export class MoveBusy extends Error {
@@ -40,7 +43,7 @@ export class MoveBusy extends Error {
 }
 
 type Row = Record<string, unknown>;
-const JSON_COLS = new Set(['plan', 'summary', 'settings']);
+const JSON_COLS = new Set(['plan', 'summary', 'settings', 'bounds']);
 // Patchable Move fields -> columns (id, account, camera, proxies, request id and timestamps are not patchable).
 const PATCH_COLS: Record<string, string> = {
   reason: 'reason', plan: 'plan', summary: 'summary', settings: 'settings', tokenHash: 'token_hash', targetIp: 'target_ip',
@@ -60,7 +63,7 @@ const toMove = (r: Row): Move => ({
   budgetExceededAt: r.budget_exceeded_at as number | null, bytesTotal: r.bytes_total as number | null, bytesDone: r.bytes_done as number | null,
   rateBps: r.rate_bps as number | null, etaS: r.eta_s as number | null, createdAt: r.created_at as number, updatedAt: r.updated_at as number,
   endedAt: r.ended_at as number | null, actor: r.actor as string | null, version: r.version as number, cleanupPending: r.cleanup_pending === 1,
-  targetCleanupPending: r.target_cleanup_pending === 1,
+  targetCleanupPending: r.target_cleanup_pending === 1, bounds: dec(r.bounds),
 });
 
 export class MoveStore {
@@ -72,10 +75,10 @@ export class MoveStore {
       const now = this.clock.now();
       try {
         this.db.prepare(
-          `INSERT INTO moves (id, account_id, camera_id, source_proxy_id, target_proxy_id, request_id, phase, reason, plan, summary, settings, token_hash, target_ip, created_at, updated_at, actor, version)
-           VALUES (?,?,?,?,?,?,'requested',?,?,?,?,?,?,?,?,?,1)`,
+          `INSERT INTO moves (id, account_id, camera_id, source_proxy_id, target_proxy_id, request_id, phase, reason, plan, summary, settings, token_hash, target_ip, created_at, updated_at, actor, bounds, version)
+           VALUES (?,?,?,?,?,?,'requested',?,?,?,?,?,?,?,?,?,?,1)`,
         ).run(id, m.accountId, m.cameraId, m.sourceProxyId, m.targetProxyId, m.requestId, m.reason ?? null, enc('plan', m.plan), enc('summary', m.summary),
-          enc('settings', m.settings), m.tokenHash ?? null, m.targetIp ?? null, now, now, m.actor ?? null);
+          enc('settings', m.settings), m.tokenHash ?? null, m.targetIp ?? null, now, now, m.actor ?? null, enc('bounds', m.bounds));
       } catch (e) {
         if (/UNIQUE constraint failed: moves\.|moves: proxy busy/.test(String((e as Error).message))) throw new MoveBusy();
         throw e;

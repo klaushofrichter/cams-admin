@@ -128,7 +128,7 @@ describe('database write budget', () => {
     expect(s2.view(p.id)).toMatchObject({ state: 'online', stale: true, cameras: [{ ref: 'cam1', online: true }, { ref: 'cam2', online: true }, { ref: 'cam3', online: true }] });
   });
 
-  it('P4: 100 snapshot pulls (200 and 304) and 10 reports from a cams instance → 0 write transactions', () => {
+  it('P4: 100 snapshot pulls (200 and 304) and 10 identical reports from a cams instance → 1 write transaction (the first report is stored)', () => {
     const r = makeRegistry(dir);
     const kp = generateKeyPair();
     const fp = fingerprint(kp.publicKeySpkiB64);
@@ -145,6 +145,6 @@ describe('database write budget', () => {
       if (n % 10 === 0) inst.report(i.id, { v: 1, mode: 'shadow', appliedRevision: rev, shadow: { accountId: acc.id, differences: 0, items: [] } }, r.clock.now());
       r.clock.advance(60_000);
     }
-    expect(readEpoch(r.db)).toBe(start);
+    expect(readEpoch(r.db)).toBe(start + 1);
   });
 });

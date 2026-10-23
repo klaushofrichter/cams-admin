@@ -26,7 +26,7 @@ function receives(d: PrecheckDeps, p: Proxy): boolean {
   const v = d.status.viewOf(p);
   return v.commands === 'allowed' && v.allow.includes('move.receive');
 }
-const online = (d: PrecheckDeps, p: Proxy) => p.state === 'enrolled' && d.status.viewOf(p).state === 'online';
+export const online = (d: PrecheckDeps, p: Proxy) => p.state === 'enrolled' && d.status.viewOf(p).state === 'online';
 
 // The cams instances that see this proxy: a visible route, the account served, the instance not revoked.
 function seenBy(d: PrecheckDeps, proxyId: string): Set<string> {
@@ -39,9 +39,12 @@ function seenBy(d: PrecheckDeps, proxyId: string): Set<string> {
 // R7: every cams instance that sees the source must see the target too, or
 // the camera would vanish from it at the switch-over.
 export function routed(d: PrecheckDeps, sourceProxyId: string, targetProxyId: string): boolean {
+  return unseen(d, sourceProxyId, targetProxyId).length === 0;
+}
+// The cams instances that see the source but not the target (R7's failures).
+export function unseen(d: PrecheckDeps, sourceProxyId: string, targetProxyId: string): string[] {
   const t = seenBy(d, targetProxyId);
-  for (const i of seenBy(d, sourceProxyId)) if (!t.has(i)) return false;
-  return true;
+  return [...seenBy(d, sourceProxyId)].filter((i) => !t.has(i));
 }
 
 // R7: a per-instance host for the camera would point at the old place after the switch-over.
@@ -52,7 +55,8 @@ export function hostOverridden(d: PrecheckDeps, cameraId: string): boolean {
 // Every rule in the order precheck applies them, with a detail where one helps
 // (diagnostics, issue #45). After a failed proxy lookup the proxy rules are not run.
 export interface PrecheckRule { rule: string; ok: boolean; reason: PrecheckReason; detail?: string }
-export function precheckReport(d: PrecheckDeps, m: Candidate): { ok: boolean; reason: PrecheckReason | null; rules: PrecheckRule[] } {
+export interface PrecheckReport { ok: boolean; reason: PrecheckReason | null; rules: PrecheckRule[] }
+export function precheckReport(d: PrecheckDeps, m: Candidate): PrecheckReport {
   const rules: PrecheckRule[] = [];
   const add = (rule: string, ok: boolean, reason: PrecheckReason, detail?: string) => rules.push({ rule, ok, reason, ...(detail ? { detail } : {}) });
   const done = () => {
@@ -73,9 +77,8 @@ export function precheckReport(d: PrecheckDeps, m: Candidate): { ok: boolean; re
   add('not_busy', !busy, 'busy', busy ? `a move is open on the ${busy}` : undefined);
   const siteDetail = (p: Proxy) => `${p.id}: registry ${p.tlsSite ?? 'none'}, reported ${d.status.row(p.id)?.reported?.site ?? 'none'}`;
   add('site_ca', !!siteOf(d, src) && !!siteOf(d, t), 'no_site_ca', [siteOf(d, src) ? null : siteDetail(src), siteOf(d, t) ? null : siteDetail(t)].filter(Boolean).join('; ') || undefined);
-  const tSeen = seenBy(d, t.id);
-  const unseen = [...seenBy(d, src.id)].filter((i) => !tSeen.has(i));
-  add('routed', unseen.length === 0, 'not_routed', unseen.length ? `cams instances that see the source but not the target: ${unseen.map((i) => instanceName(d, i)).join(', ')}` : undefined);
+  const missed = unseen(d, src.id, t.id);
+  add('routed', missed.length === 0, 'not_routed', missed.length ? `cams instances that see the source but not the target: ${missed.map((i) => instanceName(d, i)).join(', ')}` : undefined);
   if (m.cameraId) add('no_host_override', !hostOverridden(d, m.cameraId), 'host_overridden');
   return done();
 }

@@ -202,6 +202,13 @@ describe('diagnostics answers', () => {
     expect((await bearer('/diag/proxies', token)).body.items.find((x: { id: string }) => x.id === px).reported).not.toBeNull();
     expect((await bearer('/diag/cams-instances', token)).body.items.find((x: { id: string }) => x.id === i.id).report.problems).toEqual([{ code: 'token_retire_failed', accountId: acc, detail: `proxy ${px}` }]);
     expect((await bearer('/diag/moves', token)).body.items.some((m: { id: string }) => m.id === 'mv_GUARD000000000000000')).toBe(true);
+    const B = { transfer: true, kinds: ['clips'], space: 'fit', maxBudgetS: 600 };
+    a.db.prepare(`UPDATE moves SET bounds = ? WHERE id = 'mv_GUARD000000000000000'`).run(JSON.stringify(B));
+    expect((await bearer('/diag/moves', token)).body.items.find((m: { id: string }) => m.id === 'mv_GUARD000000000000000')).toMatchObject({ autoApprove: true, bounds: B });
+    // A move is found by its request id; an unknown one is an empty list (the request has no move yet).
+    const byReq = await bearer('/diag/moves?requestId=rq_guard', token);
+    expect(byReq.body.items.map((m: { id: string; requestId: string }) => [m.id, m.requestId])).toEqual([['mv_GUARD000000000000000', 'rq_guard']]);
+    expect((await bearer('/diag/moves?requestId=rq_nope', token)).body).toEqual({ items: [] });
     for (const r of [...ROUTES, '/diag/audit?limit=200', `/diag/moves/precheck?source=${px}&target=${px2}&camera=porch`]) {
       const body = JSON.stringify((await bearer(r, token)).body);
       expect(body, r).not.toContain(MARK);

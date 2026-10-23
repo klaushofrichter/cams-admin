@@ -189,7 +189,7 @@ describe('cams tokens: write budget', () => {
   const dir = tmpDir();
   let s: Running;
   afterAll(() => s.stop());
-  it('a registration costs one transaction; pulls and reports cost none', async () => {
+  it('a registration costs one transaction; pulls cost none and ten identical reports cost one', async () => {
     // No ticks: the status store's own timers write on their schedule, not ours.
     s = await startServer(dir, { TICK_MS: '60000' });
     const acc = await s.api('POST', '/accounts', { name: 'home', displayName: 'Home' });
@@ -213,7 +213,7 @@ describe('cams tokens: write budget', () => {
       etag = x.headers.get('etag') ?? etag;
       if (i % 10 === 9) await signedFetch(s, key, 'POST', '/cams/v1/report', { v: 1, mode: 'cams-admin', version: 't', appliedRevision: null, cacheVerifiedAt: null, lastPullAt: null, held: [], keptOld: [], shadow: null, tokens: { managed: 0, pending: 0, legacy: 0 }, problems: [] });
     }
-    expect(readEpoch(s.built.db)).toBe(e2);
+    expect(readEpoch(s.built.db)).toBe(e2 + 1); // only the first report is stored
   });
 
   it('the command audit says who acted, never guessed from the actor text (review M7)', async () => {

@@ -1,7 +1,7 @@
 <script lang="ts">
   // One move: chunk counts, the cleanup note, Cancel move… and End transfer… behind typed confirms.
   import { api, errorText } from '../lib/api';
-  import { cancelable, reasonText, phaseText } from '../lib/moves';
+  import { boundsText, cancelable, reasonText, phaseText } from '../lib/moves';
   import Confirm from './Confirm.svelte';
 
   let { move, onchange }: { move: any; onchange: () => void } = $props();
@@ -28,6 +28,7 @@
     <span>{move.camsId}: {move.source.name} → {move.target.name}</span>
     <span>· {phaseText(move.phase)}{move.reason ? ` (${reasonText(move.reason)})` : ''}</span>
   </div>
+  <p class="muted small" data-testid="move-bounds">{boundsText(move.bounds ?? null)}</p>
   {#if chunks && CHUNK_ORDER.some((k) => chunks![k])}
     <div class="row" data-testid="move-chunks-{move.id}">{#each CHUNK_ORDER as k}{#if chunks[k]}<span class="badge">{k}: {chunks[k]}</span>{/if}{/each}</div>
   {/if}

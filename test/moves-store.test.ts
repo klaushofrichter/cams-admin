@@ -127,4 +127,21 @@ describe('MoveStore', () => {
     expect(db.prepare('SELECT count(*) n FROM moves').get()).toEqual({ n: 0 });
     expect(db.prepare(`SELECT strict FROM pragma_table_list WHERE name IN ('moves','move_chunks')`).all()).toEqual([{ strict: 1 }, { strict: 1 }]);
   });
+
+  it('migration 11 on a DB at version 10 keeps existing moves with bounds NULL', () => {
+    const f = join(tmpDir(), 'm11.db');
+    const raw = new DatabaseSync(f);
+    for (let i = 0; i < 10; i++) MIGRATIONS[i](raw);
+    raw.exec('PRAGMA user_version = 10');
+    raw.exec(`INSERT INTO accounts (id,name,display_name,created_at,updated_at) VALUES ('acc_a','alpha','A',1,1);
+      INSERT INTO proxies (id,account_id,name,display_name,runs_on,state,created_at,updated_at) VALUES
+        ('prx_1','acc_a','p1','P1','cluster','enrolled',1,1),('prx_2','acc_a','p2','P2','cluster','enrolled',1,1);
+      INSERT INTO cameras (id,account_id,proxy_id,cams_id,proxy_camera_id,name,kind,host,created_at,updated_at) VALUES ('cam_1','acc_a','prx_1','c1','pc1','C1','camera','192.0.2.1',1,1);
+      INSERT INTO moves (id,account_id,camera_id,source_proxy_id,target_proxy_id,request_id,phase,created_at,updated_at,version) VALUES ('mv_OLD','acc_a','cam_1','prx_1','prx_2','rq_old','requested',1,1,1);`);
+    raw.close();
+    const db = openDb(f);
+    expect(LATEST_VERSION).toBeGreaterThanOrEqual(11);
+    expect(db.prepare('SELECT id, bounds FROM moves').all()).toEqual([{ id: 'mv_OLD', bounds: null }]);
+    expect(new MoveStore(db, fakeClock()).get('mv_OLD')!.bounds).toBeNull();
+  });
 });

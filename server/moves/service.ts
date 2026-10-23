@@ -12,6 +12,8 @@ import { MOVE_ANSWER_REASONS, MOVE_KINDS } from '../../contract/build';
 import { newId } from '../ids';
 import { MoveBusy, MoveStore, type ChunkState, type ChunkStateName, type Move } from './store';
 import { eligibleTargets, precheck, type Candidate, type EligibleTarget, type PrecheckDeps } from './precheck';
+import { begin, type BeginResult } from './begin';
+import type { CamsInstances } from '../cams/instances';
 import { moveToken, targetAddress, type Resolve } from './token';
 import type { MoveApproveEvent, MoveCameraConn, MoveCancelEvent, MoveEvent, MovePhaseEvent, MoveProgressEvent, MoveRequestEvent, MoveTargetsEvent } from './types';
 
@@ -141,7 +143,8 @@ function answerSpace(x: unknown): Record<string, unknown> | null {
   return { needed: s.needed, available: s.available, fits: s.fits, perKind, retentionProposal: s.retentionProposal ?? null };
 }
 
-export interface MovesDeps { db: Db; clock: Clock; audit: Audit; registry: Registry; status: StatusStore; commands: Commands; log: Logger; resolve?: Resolve; live?: LiveHub }
+// camsInstances: a getter (built after the moves; only begin() uses it, for the route and override fixes).
+export interface MovesDeps { db: Db; clock: Clock; audit: Audit; registry: Registry; status: StatusStore; commands: Commands; log: Logger; camsInstances: () => CamsInstances; resolve?: Resolve; live?: LiveHub }
 
 // The target's latest progress (R8): memory, saved by `flushIn`.
 interface Progress { chunks: Map<string, ChunkStateName>; dirty: Set<string>; bytesDone: number; bytesTotal: number; rateBps: number; etaS: number; savedAt: number; changed: boolean }
@@ -180,6 +183,11 @@ export class Moves {
 
   precheck(m: Candidate) {
     return precheck(this.pd, m);
+  }
+
+  // A move started from cams-admin (move.begin plan Task 3): the fixable precheck failures fixed, move.begin queued to the source.
+  begin(actor: string, body: unknown): BeginResult {
+    return begin({ ...this.pd, audit: this.d.audit, commands: this.d.commands, camsInstances: this.d.camsInstances() }, actor, body);
   }
 
   onEvent(proxyId: string, accountId: string, ev: MoveEvent): void {
@@ -399,9 +407,9 @@ export class Moves {
       m = tx(this.d.db, () => {
         const mv = this.store.create({
           accountId, cameraId: cam.id, sourceProxyId: proxyId, targetProxyId: ev.target, requestId: ev.requestId, summary: ev.summary, settings: ev.settings,
-          tokenHash, targetIp, actor: `${ev.actor.origin}:${ev.actor.label}`.slice(0, 100),
+          tokenHash, targetIp, actor: `${ev.actor.origin}:${ev.actor.label}`.slice(0, 100), bounds: ev.bounds ?? null,
         });
-        this.audit(mv, 'move-request', 'ok', { phase: 'requested', by: ev.actor }, { actorType: 'proxy', actor: proxyId });
+        this.audit(mv, 'move-request', 'ok', { phase: 'requested', by: ev.actor, autoApprove: (ev.bounds ?? null) !== null }, { actorType: 'proxy', actor: proxyId });
         const open = this.send(accountId, proxyId, 'move.open', { v: 1, moveId: mv.id, requestId: ev.requestId, camera: ev.camera.proxyCameraId, tokenHash, targetIp });
         if (!open.ok) return this.failIn(mv, `open:${open.code}`, 'internal');
         return mv;
@@ -431,6 +439,29 @@ export class Moves {
   // --- command results ----------------------------------------------------------------------
 
   private onFinal(r: CommandRow): void {
+    // move.begin has no move yet (the source's move.request makes it): a refusal or failure is audited only (A10), the fixes stay.
+    // Attributed like its ok row: the requester (the command's actor) and the camera.
+    if (r.command === 'move.begin') {
+      if (r.state !== 'done') {
+        const cam = this.d.db.prepare('SELECT id, cams_id FROM cameras WHERE account_id = ? AND proxy_id = ? AND proxy_camera_id = ?')
+          .get(r.accountId, r.proxyId, String(r.args.camera)) as { id: string; cams_id: string } | undefined;
+        this.d.audit.write({
+          actorType: 'sysadmin', actor: r.actor, action: 'move-begin', accountId: r.accountId, targetType: 'camera', targetId: cam?.id ?? null, targetLabel: cam?.cams_id ?? null, outcome: 'failed',
+          detail: { cmdId: r.id, source: r.proxyId, code: r.outcomeCode ?? r.state },
+        });
+      }
+      // The link from the command to its move: the source answered {requestId}, the move.request carries the same id.
+      else {
+        const requestId = typeof r.result?.requestId === 'string' ? r.result.requestId : null;
+        const cam = this.d.db.prepare('SELECT id, cams_id FROM cameras WHERE account_id = ? AND proxy_id = ? AND proxy_camera_id = ?')
+          .get(r.accountId, r.proxyId, String(r.args.camera)) as { id: string; cams_id: string } | undefined;
+        this.d.audit.write({
+          actorType: 'sysadmin', actor: r.actor, action: 'move-begin', accountId: r.accountId, targetType: 'camera', targetId: cam?.id ?? null, targetLabel: cam?.cams_id ?? null, outcome: 'ok',
+          detail: { cmdId: r.id, source: r.proxyId, requestId },
+        });
+      }
+      return;
+    }
     if (!['move.open', 'move.offer', 'move.start', 'move.go', 'move.release', 'move.finish', 'move.cancel'].includes(r.command)) return;
     const moveId = r.args.moveId;
     const m = typeof moveId === 'string' ? this.store.get(moveId) : null;

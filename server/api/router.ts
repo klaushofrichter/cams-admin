@@ -251,6 +251,16 @@ export function apiRouter(d: ApiDeps): express.Router {
   const typed = (req: Request, word: string) => {
     if (req.body?.confirm !== word) throw new ApiError(400, 'confirm_mismatch', 'confirm');
   };
+  r.post('/moves', h((req, res) => {
+    const out = d.moves.begin(actor(res), req.body);
+    if (out.ok) {
+      res.locals.status = 202;
+      return { commandId: out.commandId, fixed: out.fixed, report: out.report };
+    }
+    res.locals.status = out.status;
+    const { ok: _ok, status: _status, ...rest } = out;
+    return rest;
+  }));
   r.get('/moves', h((req) => {
     const acc = req.query.accountId === undefined ? undefined : String(req.query.accountId);
     if (acc !== undefined) d.registry.getAccount(acc);

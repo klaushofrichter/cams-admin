@@ -23,11 +23,11 @@ describe('cams status reports (POST /cams/v1/report)', () => {
   });
   afterAll(() => s.stop());
 
-  it('a valid report is kept in memory (no write) and answers changed when the applied revision differs', async () => {
+  it('a valid report answers changed when the applied revision differs', async () => {
     const e = readEpoch(s.built.db);
     const a = await post({ ...REPORT, appliedRevision: 'r:0000000000000000' });
     expect(a).toEqual({ status: 200, json: { changed: true, revision: expect.stringMatching(/^r:[0-9a-f]{16}$/) } });
-    expect(readEpoch(s.built.db)).toBe(e);
+    expect(readEpoch(s.built.db)).toBe(e + 1); // the first report is stored
     expect(s.built.camsInstances.live(inst.id)).toMatchObject({ report: { mode: 'cams-admin' }, reportAt: expect.any(Number) });
     const b = await post({ ...REPORT, appliedRevision: a.json.revision });
     expect(b.json).toEqual({ changed: false, revision: a.json.revision });
