@@ -112,7 +112,7 @@ export function moveArgsOk(command: string, a: unknown): boolean {
   return moveValidators.get(command)!(a) as boolean;
 }
 // The allow entry a move command needs: the source's commands move.send, the target's move.receive; move.finish and move.cancel by args.role.
-const MOVE_ENTRY: Record<string, string> = { 'move.targets': 'move.send', 'move.open': 'move.send', 'move.answer': 'move.send', 'move.go': 'move.send', 'move.release': 'move.send', 'move.offer': 'move.receive', 'move.start': 'move.receive' };
+const MOVE_ENTRY: Record<string, string> = { 'move.begin': 'move.send', 'move.targets': 'move.send', 'move.open': 'move.send', 'move.answer': 'move.send', 'move.go': 'move.send', 'move.release': 'move.send', 'move.offer': 'move.receive', 'move.start': 'move.receive' };
 const moveEntryOf = (command: string, a: Record<string, any>): string => MOVE_ENTRY[command] ?? (a.role === 'target' ? 'move.receive' : 'move.send');
 const isMoveByRole = (c: string) => c === 'move.finish' || c === 'move.cancel';
 

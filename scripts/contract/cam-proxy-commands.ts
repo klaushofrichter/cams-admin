@@ -49,8 +49,9 @@ const countSince = (entries: JournalEntry[]) => (pred: (e: JournalEntry) => bool
 const P3 = ['config.get', 'config.set', 'config.unset', 'config.rollback', 'camera.action', 'camera.name.set', 'proxy.restart'];
 const P3_STARTED = P3.some(implemented);
 // The camera-move group (same rule, per group): pending until cam-proxy implements any move command.
-const MOVE = ['move.targets', 'move.open', 'move.offer', 'move.answer', 'move.start', 'move.go', 'move.release', 'move.finish', 'move.cancel'];
-const MOVE_STARTED = MOVE.some(implemented);
+const MOVE = ['move.begin', 'move.targets', 'move.open', 'move.offer', 'move.answer', 'move.start', 'move.go', 'move.release', 'move.finish', 'move.cancel'];
+// move.begin (added later) is pending on its own until cam-proxy implements it; the rest of the group is already implemented and stays strict.
+const MOVE_STARTED = MOVE.filter((c) => c !== 'move.begin').some(implemented);
 const DIR = join(__dirname, '../../contract/v1/fixtures');
 const ctxOf = (c: Ctx, journal: (id: string) => unknown = () => undefined) => {
   const seen = new SeenIds();
@@ -73,7 +74,8 @@ for (const f of cmds) {
   // pending only while cam-proxy implements no command of the fixture's group at
   // all (P3, or camera moves): once it has one, every fixture of the group must
   // match (a forgotten IMPLEMENTED entry is drift).
-  const group = MOVE.includes(f.message.body.command) ? MOVE_STARTED : P3_STARTED;
+  const cmd = f.message.body.command;
+  const group = cmd === 'move.begin' ? false : MOVE.includes(cmd) ? MOVE_STARTED : P3_STARTED;
   if (got !== want && !implemented(f.message.body.command) && !group) {
     pending++;
     console.log(`pending ${f.name} (cam-proxy does not implement ${f.message.body.command} yet)`);
