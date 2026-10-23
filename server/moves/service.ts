@@ -15,6 +15,7 @@ import { eligibleTargets, precheck, type Candidate, type EligibleTarget, type Pr
 import { begin, type BeginResult } from './begin';
 import type { CamsInstances } from '../cams/instances';
 import { moveToken, targetAddress, type Resolve } from './token';
+import { Returns, type ReturnKey } from './returns';
 import type { MoveCheck, MoveApproveEvent, MoveCameraConn, MoveCancelEvent, MoveEvent, MovePhaseEvent, MoveProgressEvent, MoveRequestEvent, MoveTargetsEvent } from './types';
 
 // The move job, its start (plan Task 4; S §4, §6, §7, §8.1): a source's
@@ -167,9 +168,26 @@ export class Moves {
   private prog = new Map<string, Progress>();
   // Automatic commands that can never be queued (moveId:proxyId:command): not tried again.
   private gaveUp = new Set<string>();
+  // A return's token (plaintext, memory only; a restart re-keys) and the commands sent with it, by return id.
+  readonly returnTokens = new Map<string, ReturnKey>();
+  private returns: Returns;
 
   constructor(private d: MovesDeps) {
     this.store = new MoveStore(d.db, d.clock);
+    this.returns = new Returns({
+      db: d.db, clock: d.clock, log: d.log, registry: d.registry, commands: d.commands, store: this.store, resolve: d.resolve,
+      send: (m, proxyId, command, args) => {
+        const r = this.send(m.accountId, proxyId, command, args);
+        const last = r.ok ? this.lastCommand(m, proxyId, command) : null;
+        return r.ok && last ? { ok: true, id: last.id } : { ok: false, code: r.ok ? 'not_found' : r.code };
+      },
+      audit: (m, action, outcome, extra, who) => this.audit(m, action, outcome, extra, who),
+      online: (proxyId) => this.online(proxyId),
+      retryDue: (m, proxyId, command, base, last) => this.retryDue(m, proxyId, command, base, last),
+      chunkStates: (id) => this.chunkStates(id),
+      flushIn: (id) => this.flushIn(id),
+      publish: (id) => this.publish(id),
+    }, this.returnTokens, CANCEL_RETRY_MS);
     d.commands.onFinal((r) => this.onFinal(r));
   }
 
@@ -213,8 +231,9 @@ export class Moves {
     for (const [k, at] of this.seen) if (now - at > SEEN_KEEP_MS) this.seen.delete(k);
     for (const id of this.pending.keys()) if (this.store.get(id)?.phase !== 'requested') this.pending.delete(id);
     const active = this.store.active();
-    // Recently ended moves whose automatic cancel went out (copied_choice set): a cancel that could not be queued is derived again.
-    const ended = (this.d.db.prepare(`SELECT id FROM moves WHERE ended_at >= ? AND phase IN ('failed', 'cancelled') AND copied_choice IS NOT NULL`)
+    // Recently ended moves whose automatic cancel went out (copied_choice set, or switched over: a cancel after the
+    // switch-over stores no choice): a cancel that could not be queued is derived again.
+    const ended = (this.d.db.prepare(`SELECT id FROM moves WHERE ended_at >= ? AND phase IN ('failed', 'cancelled') AND (copied_choice IS NOT NULL OR switched_at IS NOT NULL)`)
       .all(now - ENDED_RETRY_MS) as { id: string }[]).map((r) => r.id);
     const ids = new Set([...active.map((m) => m.id), ...ended]);
     for (const id of this.resumedAt.keys()) if (!ids.has(id)) this.resumedAt.delete(id);
@@ -224,7 +243,7 @@ export class Moves {
         if (UNAPPROVED.has(m.phase) && this.expired(m)) this.failMove(m, 'offer_expired');
         else {
           const p = this.prog.get(m.id);
-          if (m.phase === 'copying' && p?.changed && now - p.savedAt >= PROGRESS_SAVE_MS) this.saveProgress(m);
+          if ((m.phase === 'copying' || m.phase === 'returning') && p?.changed && now - p.savedAt >= PROGRESS_SAVE_MS) this.saveProgress(m);
           if (now - (this.resumedAt.get(m.id) ?? 0) >= RESUME_GAP_MS) this.resume(m.id);
         }
       } catch (e) {
@@ -285,7 +304,7 @@ export class Moves {
     }
     // A target back with an ended move's cancel not taken on (also after the ended sweep's ENDED_RETRY_MS): the
     // target must let go of the camera, or it runs on both proxies.
-    const cancelsDue = this.d.db.prepare(`SELECT m.id FROM moves m WHERE m.target_proxy_id = ? AND m.phase IN ('failed', 'cancelled') AND m.copied_choice IS NOT NULL
+    const cancelsDue = this.d.db.prepare(`SELECT m.id FROM moves m WHERE m.target_proxy_id = ? AND m.phase IN ('failed', 'cancelled') AND (m.copied_choice IS NOT NULL OR m.switched_at IS NOT NULL)
       AND NOT EXISTS (SELECT 1 FROM commands c WHERE c.proxy_id = m.target_proxy_id AND c.command = 'move.cancel' AND c.state = 'done' AND json_extract(c.args, '$.moveId') = m.id)`).all(proxyId) as { id: string }[];
     for (const r of cancelsDue) {
       const mv = this.store.get(r.id);
@@ -326,6 +345,8 @@ export class Moves {
         return this.checkCleaning(m);
       case 'cancelling':
         return this.cancellingStep(m);
+      case 'returning':
+        return this.returns.step(m);
       default:
         return;
     }
@@ -462,10 +483,11 @@ export class Moves {
       }
       return;
     }
-    if (!['move.open', 'move.offer', 'move.start', 'move.go', 'move.release', 'move.finish', 'move.cancel'].includes(r.command)) return;
+    if (!['move.open', 'move.offer', 'move.start', 'move.go', 'move.release', 'move.finish', 'move.cancel', 'move.return.open', 'move.return.start'].includes(r.command)) return;
     const moveId = r.args.moveId;
     const m = typeof moveId === 'string' ? this.store.get(moveId) : null;
     if (!m) return;
+    if (m.returnOf !== null) return m.phase === 'returning' ? this.returns.onFinal(m, r) : undefined;
     switch (r.command) {
       case 'move.open': return this.onOpenFinal(m, r);
       case 'move.offer': return this.onOfferFinal(m, r);
@@ -634,6 +656,8 @@ export class Moves {
     this.noteKeepDays(m, ev);
     // X15: an ended move stays ended; a re-emitted phase or failure changes nothing.
     if (m.endedAt !== null) return;
+    // A return (copy back) has its own steps; it never fails or cancels.
+    if (m.phase === 'returning') return this.returns.onPhase(m, ev);
     // A cancel after the switch-over ends when the source has the camera back (cam-proxy reports it only then).
     if (m.phase === 'cancelling') return ev.role === 'source' && ev.phase === 'cancelled' && ev.ok ? this.cancelledBack(m) : undefined;
     // The end is under way: the finish answers decide; a side's `finished` may come before its answer.
@@ -694,7 +718,7 @@ export class Moves {
   }
   private failMoveIn(m: Move, code: string): Move {
     if (m.phase === 'copying') return this.endTransferIn(m, code, SYSTEM);
-    if (m.phase === 'cleaning' || m.phase === 'cancelling' || m.endedAt !== null) {
+    if (m.phase === 'cleaning' || m.phase === 'cancelling' || m.phase === 'returning' || m.endedAt !== null) {
       this.d.log.warn({ moveId: m.id, phase: m.phase, code }, 'move_failure_ignored');
       return m;
     }
@@ -724,7 +748,7 @@ export class Moves {
   // The target's move.progress: memory and the live view at once; the DB at most once a minute (R8), and once when the budget runs out.
   private onProgress(proxyId: string, accountId: string, ev: MoveProgressEvent): void {
     const m = this.store.get(ev.moveId);
-    if (!m || m.accountId !== accountId || proxyId !== m.targetProxyId || m.phase !== 'copying') return;
+    if (!m || m.accountId !== accountId || proxyId !== m.targetProxyId || (m.phase !== 'copying' && m.phase !== 'returning')) return;
     const now = this.d.clock.now();
     let p = this.prog.get(m.id);
     if (!p) {
@@ -738,7 +762,8 @@ export class Moves {
     }
     Object.assign(p, { bytesDone: ev.bytesDone, bytesTotal: ev.bytesTotal, rateBps: ev.rateBps, etaS: ev.etaS, changed: true });
     const budgetS = (m.plan as { budgetS?: unknown } | null)?.budgetS;
-    if (m.budgetExceededAt === null && m.approvedAt !== null && isCount(budgetS) && now > m.approvedAt + budgetS * 1000 && p.bytesDone < p.bytesTotal) {
+    // A return has no budget (ruling 8): its plan's budgetS only paces the copier.
+    if (m.returnOf === null && m.budgetExceededAt === null && m.approvedAt !== null && isCount(budgetS) && now > m.approvedAt + budgetS * 1000 && p.bytesDone < p.bytesTotal) {
       // S §8.3: the copy goes on (never faster); audited once.
       tx(this.d.db, () => {
         const mv = this.store.setPhase(m.id, m.phase, { ...this.flushIn(m.id), budgetExceededAt: now });
@@ -834,13 +859,14 @@ export class Moves {
 
   // --- cancel (S §10.3, A17, A35) ---------------------------------------------------------------
 
-  // The sysadmin's cancel (the API). 404 unknown, 409 outside awaiting-approval|approved|switching|copying.
+  // The sysadmin's cancel (the API). 404 unknown, 409 outside awaiting-approval|approved|switching|copying (a return
+  // is never cancellable). In copying `copied` is ignored (ruling 18: the content is copied back), so not checked.
   cancel(actor: string, moveId: string, copied: unknown): Move {
-    if (copied !== 'delete' && copied !== 'age-out') throw new ApiError(400, 'invalid_copied');
     const m = this.store.get(moveId);
+    if (m?.phase !== 'copying' && copied !== 'delete' && copied !== 'age-out') throw new ApiError(400, 'invalid_copied');
     if (!m) throw new ApiError(404, 'not_found');
     if (!CANCELLABLE.has(m.phase)) throw new ApiError(409, 'wrong_phase');
-    return tx(this.d.db, () => this.cancelIn(m, copied, { actorType: 'sysadmin', actor }));
+    return tx(this.d.db, () => this.cancelIn(m, copied as 'delete' | 'age-out', { actorType: 'sysadmin', actor }));
   }
 
   // The source page's cancel (cam-proxy's POST /control/moves/:id/cancel). Only the source may; outside the phases refused (audited, throttled).
@@ -859,11 +885,14 @@ export class Moves {
 
   // Before the switch-over the registry still names the source: the move ends
   // at once (`cancelled`), the cancels go out. In copying the camera comes back
-  // first (`cancelling`); the registry follows the source's `cancelled`.
+  // first (`cancelling`); the registry follows the source's `cancelled`, and a
+  // return copies back what the target captured: the copied choice is ignored
+  // there (stored as null, ruling 18; the target's cancel says 'delete', which
+  // cam-proxy ignores after the switch-over).
   private cancelIn(m: Move, copied: 'delete' | 'age-out', who: Who): Move {
     const back = m.phase === 'copying';
-    const mv = this.store.setPhase(m.id, back ? 'cancelling' : 'cancelled', { ...this.flushIn(m.id), copiedChoice: copied });
-    this.audit(mv, 'move-cancel', 'ok', { phase: mv.phase, from: m.phase, copied }, who);
+    const mv = this.store.setPhase(m.id, back ? 'cancelling' : 'cancelled', { ...this.flushIn(m.id), copiedChoice: back ? null : copied });
+    this.audit(mv, 'move-cancel', 'ok', { phase: mv.phase, from: m.phase, copied: back ? null : copied, ...(back ? { copyBack: true } : {}) }, who);
     this.ensureCancels(mv);
     this.publish(m.id);
     return mv;
@@ -875,25 +904,33 @@ export class Moves {
   }
 
   // The source has the camera back (its `cancelled`): the registry names the
-  // source again under its own site's TLS name (move_id stays, A16); the move is cancelled.
+  // source again under its own site's TLS name (move_id stays, A16); the move is
+  // cancelled and its return (the copy back) created in the same transaction: a
+  // cancelled switched-over move is never without its return (prune keeps it).
   private cancelledBack(m: Move): void {
     const src = this.d.registry.proxyById(m.sourceProxyId);
     const cam = this.d.db.prepare('SELECT proxy_camera_id FROM cameras WHERE id = ?').get(m.cameraId) as { proxy_camera_id: string | null } | undefined;
     if (!src || !cam?.proxy_camera_id) return void this.d.log.error({ moveId: m.id }, 'move_cancel_registry_incomplete');
     const proxyCameraId = cam.proxy_camera_id;
+    let ret: Move | null;
     try {
-      tx(this.d.db, () => {
+      ret = tx(this.d.db, () => {
         this.d.registry.moveCamera('system', m.accountId, m.cameraId, { proxyId: src.id, proxyCameraId, tlsServername: src.tlsSite ? `${proxyCameraId}.${src.tlsSite}.internal` : null, moveId: m.id });
         const mv = this.store.setPhase(m.id, 'cancelled');
         this.audit(mv, 'move-phase', 'ok', { phase: 'cancelled', from: 'cancelling', switchedBack: true }, { actorType: 'proxy', actor: m.sourceProxyId });
+        return this.returns.createReturn(mv);
       });
     } catch (e) {
-      if (!(e instanceof ApiError)) throw e;
+      if (!(e instanceof ApiError) && !(e instanceof MoveBusy)) throw e;
       // Stays cancelling: the source's next `cancelled` (a re-asked cancel) tries again.
-      this.d.log.error({ moveId: m.id, code: e.code }, 'move_cancel_registry_failed');
+      this.d.log.error({ moveId: m.id, code: e instanceof ApiError ? e.code : 'busy' }, 'move_cancel_registry_failed');
       return;
     }
     this.publish(m.id);
+    if (ret) {
+      this.publish(ret.id);
+      this.resume(ret.id);
+    }
   }
 
   // --- finish, end transfer, done (S §10.4, §11, A5, A9) ----------------------------------------
