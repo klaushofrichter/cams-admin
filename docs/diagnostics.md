@@ -160,8 +160,19 @@ Answers:
 proxy decides: it approves its own offer when the target's answer fits the
 bounds, and otherwise it waits for a person to approve, as for any move.
 
-Follow the move: the command's result is at
-`GET /api/v1/accounts/:accountId/proxies/:proxyId/commands/:cmdId` (it holds the
-`requestId`, or the source's refusal code), and the move itself, with
-`autoApprove` and `bounds`, at `GET /api/v1/diag/moves?accountId=…`, matched by
-that `requestId`.
+Follow the move with the diagnostics token (the command's own result is
+session-only):
+
+1. The 202 gives `commandId`. When the source has taken the command, the audit
+   has a second `move-begin` row with outcome `ok` and the same `cmdId` plus the
+   `requestId`: `GET /api/v1/diag/audit?action=move-begin`. A refusal or failure
+   is a `move-begin` row with outcome `failed` and its `code`.
+2. The move with that request: `GET /api/v1/diag/moves?requestId=rq_…`. It
+   returns an empty list until the source's request has arrived. Each move
+   carries its `requestId`, `autoApprove` and `bounds`.
+
+The source must run a cam-proxy that knows `move.begin`: an older one allows
+`move.send` but answers `not_allowed`, and the fixes stay. Errors from queuing the
+command (429 `rate_limited`, 400 `invalid_args`, 409 `paused_on_proxy` or
+`not_allowed_on_proxy`) also undo the fixes; the token's limit of 60 writes a
+minute applies.

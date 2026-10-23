@@ -450,6 +450,16 @@ export class Moves {
           detail: { cmdId: r.id, source: r.proxyId, code: r.outcomeCode ?? r.state },
         });
       }
+      // The link from the command to its move: the source answered {requestId}, the move.request carries the same id.
+      else {
+        const requestId = typeof r.result?.requestId === 'string' ? r.result.requestId : null;
+        const cam = this.d.db.prepare('SELECT id, cams_id FROM cameras WHERE account_id = ? AND proxy_id = ? AND proxy_camera_id = ?')
+          .get(r.accountId, r.proxyId, String(r.args.camera)) as { id: string; cams_id: string } | undefined;
+        this.d.audit.write({
+          actorType: 'sysadmin', actor: r.actor, action: 'move-begin', accountId: r.accountId, targetType: 'camera', targetId: cam?.id ?? null, targetLabel: cam?.cams_id ?? null, outcome: 'ok',
+          detail: { cmdId: r.id, source: r.proxyId, requestId },
+        });
+      }
       return;
     }
     if (!['move.open', 'move.offer', 'move.start', 'move.go', 'move.release', 'move.finish', 'move.cancel'].includes(r.command)) return;

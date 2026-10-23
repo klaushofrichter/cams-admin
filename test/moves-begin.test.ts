@@ -91,6 +91,10 @@ describe('move.begin from cams-admin', () => {
     expect(m.bounds).toEqual(BOUNDS);
     expect(m.cameraId).toBe(cam.id);
     await until(() => got(tgt.client, 'move.offer').length === 1, 5000, 'offer');
+    // The link from the command to the move: the view and the audit carry the request id, the begin's audit row the cmdId too.
+    expect(m.requestId).toMatch(/^rq_/);
+    await until(() => auditFor('move-begin').length === 2, 5000, 'begin result row');
+    expect(auditFor('move-begin')[1]).toMatchObject({ outcome: 'ok', detail: { cmdId: r.ok && r.commandId, source: src.proxyId, requestId: m.requestId } });
   });
 
   it('not_routed is fixed with a visible route, url null', async () => {
