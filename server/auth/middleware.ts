@@ -3,6 +3,9 @@ import type { Config } from '../config';
 import type { Clock } from '../clock';
 import { SESSION_COOKIE, type Sessions } from './session';
 import { Buckets } from '../channel/limits';
+import type { Audit } from '../audit';
+import type { OpsTokens } from '../ops/tokens';
+import { opsScopeFor } from '../ops/scopes';
 
 const SAFE = new Set(['GET', 'HEAD', 'OPTIONS']);
 
@@ -51,5 +54,65 @@ export function writeLimiter(cfg: Config, clock: Clock): RequestHandler {
     const t = b.take(`session:${res.locals.session.idHash}`, clock.now());
     if (!t.ok) return void res.status(429).set('Retry-After', String(t.retryAfterS)).json({ error: 'rate_limited', retryAfterS: t.retryAfterS });
     next();
+  };
+}
+
+// A Bearer header's token: '' when the header names Bearer without one, null
+// without a Bearer header (an ingress's Basic header is not a token attempt).
+export function bearerOf(req: Request): string | null {
+  const h = req.headers.authorization ?? '';
+  if (!/^Bearer(\s|$)/i.test(h)) return null;
+  return /^Bearer\s+(\S+)\s*$/i.exec(h)?.[1] ?? '';
+}
+
+type AuthDeps = { sessions: Sessions; ops: OpsTokens; audit: Audit; cfg: Config; clock: Clock };
+
+// A bad token: 401, never keyed on the client address (one throttled record for all refusals).
+function refuseToken(audit: Audit, res: Response): void {
+  audit.throttled('ops-auth-refused', { actorType: 'system', actor: 'system', action: 'ops-auth-refused', outcome: 'refused' });
+  res.status(401).json({ error: 'unauthorized' });
+}
+
+// The API's auth: a sysadmin session (with the CSRF check and its write
+// limit), or an operations token on a write route its scopes cover. With a
+// Bearer header the token decides; a session cookie is ignored. Sets
+// res.locals.actor (the e-mail, or ops-token:<8hex>).
+export function requireAuth(d: AuthDeps): RequestHandler[] {
+  // 60 writes a minute per token (bearer only: no CSRF check to pass).
+  const tokenWrites = new Buckets({ capacity: 60, windowMs: 60_000 });
+  const auth: RequestHandler = (req, res, next) => {
+    const token = bearerOf(req);
+    if (token === null) {
+      const s = d.sessions.get(req.cookies?.[SESSION_COOKIE]);
+      if (!s) return void res.status(401).json({ error: 'unauthorized' });
+      res.locals.session = s;
+      res.locals.actor = s.email;
+      return next();
+    }
+    const t = token === '' ? null : d.ops.verifyScoped(token);
+    if (!t) return refuseToken(d.audit, res);
+    // Writes only; reads use the diag token.
+    const scope = SAFE.has(req.method) ? null : opsScopeFor(req.method, req.path);
+    if (!scope || !t.scopes.includes(scope)) return void res.status(403).json({ error: 'scope' });
+    const b = tokenWrites.take(`ops:${t.id}`, d.clock.now());
+    if (!b.ok) return void res.status(429).set('Retry-After', String(b.retryAfterS)).json({ error: 'rate_limited', retryAfterS: b.retryAfterS });
+    res.locals.actor = `ops-token:${t.hashPrefix}`;
+    next();
+  };
+  // The session's own checks; a token request passed its own above.
+  const sessionOnly = (m: RequestHandler): RequestHandler => (req, res, next) => (res.locals.session ? m(req, res, next) : next());
+  return [auth, sessionOnly(requireCsrf(d.cfg)), sessionOnly(writeLimiter(d.cfg, d.clock))];
+}
+
+// Before a route's own big body parser (the import's 1 MiB): a token request
+// is refused unread (401, or 403 `scope`: no token opens such a route), and a
+// session must be signed in. requireAuth runs after the body.
+export function sessionBeforeBody(d: AuthDeps): RequestHandler {
+  const session = requireSysadmin(d.sessions);
+  return (req, res, next) => {
+    const token = bearerOf(req);
+    if (token === null) return session(req, res, next);
+    if (token === '' || !d.ops.verifyScoped(token)) return refuseToken(d.audit, res);
+    res.status(403).json({ error: 'scope' });
   };
 }
