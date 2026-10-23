@@ -79,7 +79,7 @@ actor `ops-token:<8 hex>`. The list is also at `/diag/ops-tokens`.
 | `moves` | `POST /moves/:moveId/cancel` |
 | `moves` | `POST /moves/:moveId/end-transfer` |
 
-Paths must be exactly as listed: lowercase, no trailing slash. Anything else,
+Paths must be exactly as listed (the fixed words in lower case, ids as issued, no trailing slash). Anything else,
 and every route not in the table, gets 403 `scope`. No token can issue proxy
 tokens, cams enrollment codes, diagnostics tokens or operations tokens, read
 or set camera passwords, or reach a GET route under `/api/v1`: reads go
