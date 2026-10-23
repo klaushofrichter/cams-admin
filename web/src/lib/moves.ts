@@ -89,3 +89,27 @@ export function boundsText(b: { transfer: boolean; kinds: string[]; space: strin
   const what = b.transfer ? `${b.kinds.join(', ')}; space ${b.space}` : 'no content';
   return `Auto-approved within: ${what}; at most ${Math.ceil(b.maxBudgetS / 60)} min`;
 }
+
+// The Start move form: the request body with the default bounds (copy everything, space as it fits, one day).
+export function startBody(sourceProxyId: string, targetProxyId: string, cameraId: string) {
+  return {
+    sourceProxyId, targetProxyId, cameraId,
+    bounds: { transfer: true, kinds: ['clips', 'stills', 'events', 'checks', 'archive'], space: 'fit', maxBudgetS: 86400 },
+  };
+}
+
+const REFUSALS: Record<string, string> = {
+  not_found: 'the proxy or the camera was not found',
+  camera_not_on_source: 'the camera is not on the source proxy',
+  source_offline: 'the source is offline',
+  target_registry_incomplete: "the target's registry entry has no address",
+  invalid: 'the request is not valid',
+};
+// Why a Start move request was refused: the failed precheck rules (their detail, else the reason in words), else the error code in words.
+export function refusalText(answer: unknown): string {
+  const a = (typeof answer === 'object' && answer !== null ? answer : {}) as { error?: unknown; report?: { rules?: { ok?: boolean; reason?: string; rule?: string; detail?: string }[] } };
+  const failed = (a.report?.rules ?? []).filter((r) => r.ok === false).map((r) => r.detail || reasonText(r.reason) || r.rule || '');
+  if (failed.filter(Boolean).length) return failed.filter(Boolean).join('; ');
+  const code = typeof a.error === 'string' ? a.error : '';
+  return code ? (REFUSALS[code] ?? reasonText(code)) : 'the move was refused';
+}
