@@ -15,6 +15,7 @@ import { readEpoch } from '../server/db/open';
 import { AUDIT_ACTIONS } from '../server/audit';
 import { moveToken, targetAddress } from '../server/moves/token';
 import { precheckReport } from '../server/moves/precheck';
+import { moveView } from '../server/moves/view';
 
 const ACTOR = 'admin@example.com';
 const fx = (name: string) => JSON.parse(readFileSync(join(__dirname, '../contract/v1/fixtures', name), 'utf8')).message.body as Record<string, any>;
@@ -60,11 +61,12 @@ async function proxy(o: { allow?: string[]; site?: string | null; registrySite?:
 function camera(src: Px, proxyCameraId = 'cam1', camsId = proxyCameraId) {
   return s.built.registry.createCamera(ACTOR, src.accountId, { camsId, name: `Cam ${camsId}`, kind: 'camera', proxyId: src.proxyId, proxyCameraId, host: '192.0.2.10', protocol: 'https' });
 }
-function request(src: Px, target: string, o: { requestId?: string; camera?: string; conn?: Record<string, unknown> } = {}) {
+function request(src: Px, target: string, o: { requestId?: string; camera?: string; conn?: Record<string, unknown>; bounds?: Record<string, unknown> | null } = {}) {
   const body = fx('valid-event-move-request.json');
   const { proxyId: _p, connId: _c, ...rest } = body;
   const requestId = o.requestId ?? rq();
-  src.client.emitEvent({ ...rest, requestId, target, camera: { ...rest.camera, proxyCameraId: o.camera ?? 'cam1', ...o.conn } });
+  const { bounds: _b, ...noBounds } = rest;
+  src.client.emitEvent({ ...noBounds, ...(o.bounds !== undefined ? { bounds: o.bounds } : {}), requestId, target, camera: { ...rest.camera, proxyCameraId: o.camera ?? 'cam1', ...o.conn } });
   return requestId;
 }
 const got = (c: ProxyClient, command: string) => c.receivedCommands.filter((m) => m.body.command === command);
@@ -97,6 +99,44 @@ describe('move targets', () => {
     const args = got(src.client, 'move.targets')[0].body.args;
     expect(args).toEqual({ v: 1, requestId: 'rq_0123456789ABCDEFGHJK', targets: [{ proxyId: tgt.proxyId, name: tgt.name, site: `site-${tgt.name}` }] });
     for (const p of [sendOnly, noSite, other, off]) expect(JSON.stringify(args)).not.toContain(p.proxyId);
+  });
+});
+
+describe('move request, pre-approval bounds', () => {
+  const BOUNDS = { transfer: true, kinds: ['clips', 'stills'], space: 'fit', maxBudgetS: 3600 };
+  it('request with bounds stores them and the view shows autoApprove', async () => {
+    const src = await proxy();
+    const tgt = await proxy();
+    camera(src);
+    request(src, tgt.proxyId, { bounds: BOUNDS });
+    await until(() => moves().length === 1, 5000, 'move row');
+    const m = moves()[0];
+    expect(m.bounds).toEqual(BOUNDS);
+    const v = moveView(s.built.db, m);
+    expect(v.autoApprove).toBe(true);
+    expect(v.bounds).toEqual(BOUNDS);
+    expect(JSON.parse(auditFor('move-request').at(-1)!.detail)).toMatchObject({ autoApprove: true });
+  });
+  it('request without bounds stores null', async () => {
+    const src = await proxy();
+    const tgt = await proxy();
+    camera(src);
+    request(src, tgt.proxyId);
+    await until(() => moves().length === 1, 5000, 'move row');
+    const m = moves()[0];
+    expect(m.bounds).toBeNull();
+    expect(moveView(s.built.db, m)).toMatchObject({ autoApprove: false, bounds: null });
+    expect(JSON.parse(auditFor('move-request').at(-1)!.detail)).toMatchObject({ autoApprove: false });
+  });
+  it('the request flow is unchanged with bounds', async () => {
+    const src = await proxy();
+    const tgt = await proxy();
+    camera(src);
+    request(src, tgt.proxyId, { bounds: BOUNDS });
+    await until(() => got(tgt.client, 'move.offer').length === 1, 5000, 'offer');
+    expect(got(src.client, 'move.open')).toHaveLength(1);
+    expect(JSON.stringify(got(src.client, 'move.open')[0].body.args)).not.toContain('bounds');
+    expect(JSON.stringify(got(tgt.client, 'move.offer')[0].body.args)).not.toContain('bounds');
   });
 });
 

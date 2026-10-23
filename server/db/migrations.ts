@@ -410,4 +410,7 @@ CREATE TABLE ops_tokens (
   scopes TEXT NOT NULL
 ) STRICT;
 `),
+  // 11: the pre-approval bounds a move.request carried (JSON, or NULL when the
+  // source sent none): the move view shows them; the source does the approving.
+  (db) => db.exec(`ALTER TABLE moves ADD COLUMN bounds TEXT;`),
 ];

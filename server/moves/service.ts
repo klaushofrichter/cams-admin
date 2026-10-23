@@ -399,9 +399,9 @@ export class Moves {
       m = tx(this.d.db, () => {
         const mv = this.store.create({
           accountId, cameraId: cam.id, sourceProxyId: proxyId, targetProxyId: ev.target, requestId: ev.requestId, summary: ev.summary, settings: ev.settings,
-          tokenHash, targetIp, actor: `${ev.actor.origin}:${ev.actor.label}`.slice(0, 100),
+          tokenHash, targetIp, actor: `${ev.actor.origin}:${ev.actor.label}`.slice(0, 100), bounds: ev.bounds ?? null,
         });
-        this.audit(mv, 'move-request', 'ok', { phase: 'requested', by: ev.actor }, { actorType: 'proxy', actor: proxyId });
+        this.audit(mv, 'move-request', 'ok', { phase: 'requested', by: ev.actor, autoApprove: (ev.bounds ?? null) !== null }, { actorType: 'proxy', actor: proxyId });
         const open = this.send(accountId, proxyId, 'move.open', { v: 1, moveId: mv.id, requestId: ev.requestId, camera: ev.camera.proxyCameraId, tokenHash, targetIp });
         if (!open.ok) return this.failIn(mv, `open:${open.code}`, 'internal');
         return mv;
