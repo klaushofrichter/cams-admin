@@ -160,6 +160,11 @@ Answers:
 proxy decides: it approves its own offer when the target's answer fits the
 bounds, and otherwise it waits for a person to approve, as for any move.
 
+The Moves page has a Start move form (account, source proxy, camera, target
+proxy; one click) that sends this same `POST /moves` with the default bounds
+(everything, space `fit`, 24 h). A 409 or 422 answer is shown as the failed
+precheck rules.
+
 Follow the move with the diagnostics token (the command's own result is
 session-only):
 

@@ -53,7 +53,8 @@
             "cameraUser": "cams",
             "webUiUrl": null,
             "webUiNote": null,
-            "moveId": null
+            "moveId": null,
+            "move": null
           }
         ]
       },
@@ -127,7 +128,8 @@
             "cameraUser": "cams",
             "webUiUrl": null,
             "webUiNote": null,
-            "moveId": null
+            "moveId": null,
+            "move": null
           },
           {
             "id": "cam_00000000000000000002",
@@ -141,7 +143,13 @@
             "cameraUser": "cams",
             "webUiUrl": "https://192.0.2.31",
             "webUiNote": "LAN only",
-            "moveId": "mv_0123456789ABCDEFGHJK"
+            "moveId": "mv_0123456789ABCDEFGHJK",
+            "move": {
+              "id": "mv_0123456789ABCDEFGHJK",
+              "sourceProxyId": "prx_00000000000000000001",
+              "targetProxyId": "prx_00000000000000000002",
+              "expiresAt": 1791360000000
+            }
           }
         ]
       }

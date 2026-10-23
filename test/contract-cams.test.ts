@@ -6,7 +6,7 @@ import { jcs } from '../server/crypto/jcs';
 import { validateCams, CAMS_SCHEMAS } from '../server/contract';
 import { buildCamsSchemas, camsFixtures, TRUST_FIELDS } from '../contract/cams-build';
 import vectors from '../contract/cams-v1/vectors.json';
-import { strictCamsValidator } from './helpers/contract';
+import { strictCamsValidator, strictCamsErrors } from './helpers/contract';
 
 const ROOT = join(__dirname, '../contract/cams-v1');
 const DIR = join(ROOT, 'fixtures');
@@ -103,6 +103,23 @@ describe('cams-v1 contract', () => {
       expect(validateCams('snapshot', snap).ok, `${key} missing, run time`).toBe(true);
       list[0][key] = keep;
     }
+  });
+  it('move attestation: strict requires cameras[].move (nullable), lenient accepts it absent; the camera with a moveId carries one', () => {
+    const snap = structuredClone(fixtures.find((f) => f.name === 'valid-snapshot-two-accounts')!.message);
+    const strict = strictCamsValidator('snapshot');
+    const cameras = snap.accounts.flatMap((a: { cameras: Record<string, unknown>[] }) => a.cameras);
+    const held = cameras.find((c: { moveId: unknown }) => c.moveId !== null);
+    expect(held.move).toEqual({ id: held.moveId, sourceProxyId: expect.stringMatching(/^prx_/), targetProxyId: expect.stringMatching(/^prx_/), expiresAt: expect.any(Number) });
+    expect(cameras.filter((c: { move: unknown }) => c.move === null).length).toBeGreaterThan(0);
+    expect(strict(snap), strictCamsErrors()).toBe(true);
+    expect(validateCams('snapshot', snap).ok).toBe(true);
+    const keep = cameras[0].move;
+    delete cameras[0].move;
+    expect(strict(snap), 'move missing').toBe(false);
+    expect(validateCams('snapshot', snap).ok, 'move missing, run time').toBe(true);
+    cameras[0].move = keep;
+    const bad = [{ ...held.move, id: 'mv_0123456789ABCDEFGHJI' }, { ...held.move, sourceProxyId: 'cam_0123456789ABCDEFGHJK' }, { ...held.move, expiresAt: 1.5 }, { ...held.move, extra: 1 }, 'x'];
+    for (const b of bad) { held.move = b; expect(strict(snap), JSON.stringify(b)).toBe(false); }
   });
   it('camera moves: site is null or ^[a-z0-9][a-z0-9-]{0,30}$ (X21, C14); moveId is null or mv_ + 20', () => {
     const snap = structuredClone(fixtures.find((f) => f.name === 'valid-snapshot-two-accounts')!.message);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cancelable, etaText, phaseClass, phaseText, progressText, reasonText, boundsText } from './moves';
+import { cancelable, etaText, phaseClass, phaseText, progressText, reasonText, boundsText, startBody, refusalText } from './moves';
 
 const PHASES = ['requested', 'offered', 'awaiting-approval', 'approved', 'switching', 'copying', 'cleaning', 'done', 'rejected', 'cancelling', 'cancelled', 'failed'];
 
@@ -69,5 +69,28 @@ describe('boundsText', () => {
     expect(boundsText(null)).toBe('Approval on the source proxy');
     expect(boundsText({ transfer: true, kinds: ['clips', 'stills'], space: 'fit', maxBudgetS: 3600 })).toBe('Auto-approved within: clips, stills; space fit; at most 60 min');
     expect(boundsText({ transfer: false, kinds: [], space: 'all', maxBudgetS: 90 })).toBe('Auto-approved within: no content; at most 2 min');
+  });
+});
+
+describe('startBody and refusalText', () => {
+  it('startBody carries the default bounds', () => {
+    expect(startBody('prx_a', 'prx_b', 'porch')).toEqual({
+      sourceProxyId: 'prx_a', targetProxyId: 'prx_b', cameraId: 'porch',
+      bounds: { transfer: true, kinds: ['clips', 'stills', 'events', 'checks', 'archive'], space: 'fit', maxBudgetS: 86400 },
+    });
+  });
+  it('refusalText joins the failed precheck rules', () => {
+    const report = { ok: false, reason: 'target_offline', rules: [
+      { rule: 'online', ok: false, reason: 'target_offline', detail: 'target offline' },
+      { rule: 'x', ok: true, reason: 'busy' },
+      { rule: 'busy', ok: false, reason: 'busy' },
+    ] };
+    expect(refusalText({ error: 'precheck', report })).toBe('target offline; a proxy is busy with another move');
+  });
+  it('refusalText falls back to the error code in words', () => {
+    expect(refusalText({ error: 'busy' })).toBe('a proxy is busy with another move');
+    expect(refusalText({ error: 'source_offline' })).toBeTruthy();
+    expect(refusalText({ error: 'zzz_unknown' })).toBe('zzz_unknown');
+    expect(refusalText(null)).toBeTruthy();
   });
 });

@@ -416,4 +416,7 @@ CREATE TABLE ops_tokens (
   // 12: a cams instance's last status report (JSON) and when it last changed,
   // so a restart does not lose it (issue #58). Written only on a changed report.
   (db) => db.exec(`ALTER TABLE cams_instances ADD COLUMN last_report TEXT; ALTER TABLE cams_instances ADD COLUMN last_report_at INTEGER;`),
+  // 13: when the move switched the camera over (ms): the cams attestation expires
+  // 24 h after it. NULL for moves from before this migration (no attestation).
+  (db) => db.exec(`ALTER TABLE moves ADD COLUMN switched_at INTEGER;`),
 ];

@@ -114,7 +114,7 @@ describe('the cams snapshot (GET /cams/v1/config)', () => {
   it('revision changes with the snapshot format: a server change to what the snapshot says reaches every cams (no 304 on the old one)', () => {
     expect(snapshotRevision(d.db, cluster.id, FP(), SNAPSHOT_FORMAT)).toBe(snapshotRevision(d.db, cluster.id, FP()));
     expect(snapshotRevision(d.db, cluster.id, FP(), SNAPSHOT_FORMAT + 1)).not.toBe(snapshotRevision(d.db, cluster.id, FP()));
-    expect(SNAPSHOT_FORMAT).toBeGreaterThanOrEqual(2); // 2: no TLS name with a plain-http URL (#48)
+    expect(SNAPSHOT_FORMAT).toBe(3); // 2: no TLS name with a plain-http URL (#48); 3: cameras[].move attestation
   });
 
   it('revision changes on a user role change, a route change, a token state change, served accounts, rotate-now, a key change, and not on a heartbeat', async () => {
@@ -179,6 +179,60 @@ describe('the cams snapshot (GET /cams/v1/config)', () => {
     expect(cams.find((c) => c.camsId === 'cam2')!.moveId).toBeNull();
     expect(strictCamsValidator('snapshot')(snap), strictCamsErrors()).toBe(true);
     db.prepare('UPDATE proxies SET tls_site = NULL WHERE account_id = ?').run(home.id);
+  });
+
+  describe('move attestation (format 3)', () => {
+    const T = 1_790_000_000_000;
+    const setup = (phase: string, opts: { onTarget?: boolean; switchedAt?: number | null } = {}) => {
+      const db = s.built.db;
+      const cam1 = (db.prepare("SELECT id FROM cameras WHERE cams_id = 'cam1' AND account_id = ?").get(home.id) as { id: string }).id;
+      const store = new MoveStore(db, s.built.clock);
+      const m = store.create({ accountId: home.id, cameraId: cam1, sourceProxyId: piProxy.id, targetProxyId: clusterProxy.id, requestId: 'req-att-' + phase + Math.random() });
+      store.markCamera(m.id);
+      db.prepare('UPDATE moves SET phase = ?, switched_at = ? WHERE id = ?').run(phase, opts.switchedAt === undefined ? T : opts.switchedAt, m.id);
+      db.prepare('UPDATE cameras SET proxy_id = ? WHERE id = ?').run(opts.onTarget === false ? piProxy.id : clusterProxy.id, cam1);
+      const cleanup = () => {
+        db.prepare('UPDATE cameras SET proxy_id = ?, move_id = NULL WHERE id = ?').run(piProxy.id, cam1);
+        db.prepare('DELETE FROM moves WHERE id = ?').run(m.id);
+      };
+      const camera = () => buildSnapshot(d, cluster.id).accounts.find((a) => a.name === 'home')!.cameras.find((c) => c.camsId === 'cam1')!;
+      return { m, camera, cleanup };
+    };
+    it('a camera on its move\'s target carries the attestation', () => {
+      const { m, camera, cleanup } = setup('copying');
+      expect(camera().move).toEqual({ id: m.id, sourceProxyId: piProxy.id, targetProxyId: clusterProxy.id, expiresAt: T + 86_400_000 });
+      expect(strictCamsValidator('snapshot')(buildSnapshot(d, cluster.id)), strictCamsErrors()).toBe(true);
+      cleanup();
+    });
+    it.each(['switching', 'copying', 'cleaning', 'done'])('phase %s emits', (ph) => {
+      const { camera, cleanup } = setup(ph);
+      expect(camera().move).not.toBeNull();
+      cleanup();
+    });
+    it.each(['requested', 'offered', 'awaiting-approval', 'approved', 'rejected', 'cancelling', 'cancelled', 'failed'])('phase %s does not emit', (ph) => {
+      const { camera, cleanup } = setup(ph);
+      expect(camera().move).toBeNull();
+      cleanup();
+    });
+    it('no attestation after a cancel: the camera is back on the source, moveId stays set', () => {
+      const { m, camera, cleanup } = setup('cancelled', { onTarget: false });
+      expect(camera()).toMatchObject({ move: null, moveId: m.id });
+      cleanup();
+    });
+    it('no attestation for a camera not on the target', () => {
+      const { camera, cleanup } = setup('copying', { onTarget: false });
+      expect(camera().move).toBeNull();
+      cleanup();
+    });
+    it('no attestation without switched_at (rows from before migration 13)', () => {
+      const { camera, cleanup } = setup('copying', { switchedAt: null });
+      expect(camera().move).toBeNull();
+      cleanup();
+    });
+    it('cameras without a move carry move: null', () => {
+      const cams = buildSnapshot(d, cluster.id).accounts.flatMap((a) => a.cameras);
+      expect(cams.every((c) => c.move === null)).toBe(true);
+    });
   });
 
   it('snapshot has no token: an active move\'s token, token hash and keys never appear', () => {
