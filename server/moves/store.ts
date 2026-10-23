@@ -4,17 +4,17 @@ import type { Db } from '../db/open';
 import { tx } from '../db/open';
 import { newId } from '../ids';
 import { ApiError } from '../registry';
-import type { MoveBounds } from './types';
+import type { MoveBounds, MoveCheck } from './types';
 
 // The move job's rows (plan Task 2). Every write is one transaction. Never
 // holds a token, password, sealed blob or private key: tokenHash is
 // 'sha256:<hex>' only. cameras.move_id and moves.switched_at are set by Registry.moveCamera at the switch-over; move_id is never cleared.
 
-export type MovePhase = 'requested' | 'offered' | 'awaiting-approval' | 'approved' | 'switching' | 'copying' | 'cleaning' | 'done' | 'rejected' | 'cancelling' | 'cancelled' | 'failed';
+export type MovePhase = 'requested' | 'offered' | 'awaiting-approval' | 'approved' | 'switching' | 'copying' | 'cleaning' | 'done' | 'rejected' | 'cancelling' | 'cancelled' | 'failed' | 'returning' | 'returned';
 export type ChunkStateName = 'pending' | 'copied' | 'verified' | 'skipped' | 'failed' | 'abandoned';
 export interface ChunkState { id: string; state: ChunkStateName }
 
-const ENDED: MovePhase[] = ['done', 'rejected', 'cancelled', 'failed'];
+const ENDED: MovePhase[] = ['done', 'rejected', 'cancelled', 'failed', 'returned'];
 
 export interface Move {
   id: string; accountId: string; cameraId: string; sourceProxyId: string; targetProxyId: string; requestId: string; phase: MovePhase;
@@ -29,11 +29,21 @@ export interface Move {
   targetCleanupPending: boolean;
   // The pre-approval bounds the request carried; null when it carried none.
   bounds: MoveBounds | null;
+  // A copy back: the cancelled move it returns the content of (its row is phase 'returning' -> 'returned').
+  returnOf: string | null;
+  // The receiving side's completeness check; null until it reported one.
+  check: MoveCheck | null;
+  // Days the ended move is kept (the proxy's longest content retention); null = the default.
+  keepDays: number | null;
+  // An End transfer waiting for Archive to land.
+  endRequested: { at: number; actorType: string; actor: string } | null;
 }
 export interface NewMove {
   accountId: string; cameraId: string; sourceProxyId: string; targetProxyId: string; requestId: string;
   reason?: string | null; plan?: unknown; summary?: unknown; settings?: unknown; tokenHash?: string | null;
   targetIp?: string | null; actor?: string | null; bounds?: MoveBounds | null;
+  // A return starts at 'returning' and names the cancelled move.
+  returnOf?: string; phase?: 'requested' | 'returning';
 }
 
 export class MoveBusy extends Error {
@@ -43,13 +53,14 @@ export class MoveBusy extends Error {
 }
 
 type Row = Record<string, unknown>;
-const JSON_COLS = new Set(['plan', 'summary', 'settings', 'bounds']);
+const JSON_COLS = new Set(['plan', 'summary', 'settings', 'bounds', 'check_result', 'end_requested']);
 // Patchable Move fields -> columns (id, account, camera, proxies, request id and timestamps are not patchable).
 const PATCH_COLS: Record<string, string> = {
   reason: 'reason', plan: 'plan', summary: 'summary', settings: 'settings', tokenHash: 'token_hash', targetIp: 'target_ip',
   targetPublicKey: 'target_public_key', leafFingerprint: 'leaf_fingerprint', copiedChoice: 'copied_choice', offeredAt: 'offered_at',
   approvedAt: 'approved_at', budgetExceededAt: 'budget_exceeded_at', bytesTotal: 'bytes_total', bytesDone: 'bytes_done', rateBps: 'rate_bps',
   etaS: 'eta_s', actor: 'actor', cleanupPending: 'cleanup_pending', targetCleanupPending: 'target_cleanup_pending',
+  check: 'check_result', keepDays: 'keep_days', endRequested: 'end_requested',
 };
 const enc = (col: string, v: unknown): SQLInputValue => (v === undefined || v === null ? null : JSON_COLS.has(col) ? JSON.stringify(v) : typeof v === 'boolean' ? (v ? 1 : 0) : (v as SQLInputValue));
 const dec = (v: unknown) => (v === null ? null : JSON.parse(v as string));
@@ -64,6 +75,7 @@ const toMove = (r: Row): Move => ({
   rateBps: r.rate_bps as number | null, etaS: r.eta_s as number | null, createdAt: r.created_at as number, updatedAt: r.updated_at as number,
   endedAt: r.ended_at as number | null, actor: r.actor as string | null, version: r.version as number, cleanupPending: r.cleanup_pending === 1,
   targetCleanupPending: r.target_cleanup_pending === 1, bounds: dec(r.bounds),
+  returnOf: r.return_of as string | null, check: dec(r.check_result), keepDays: r.keep_days as number | null, endRequested: dec(r.end_requested),
 });
 
 export class MoveStore {
@@ -75,10 +87,10 @@ export class MoveStore {
       const now = this.clock.now();
       try {
         this.db.prepare(
-          `INSERT INTO moves (id, account_id, camera_id, source_proxy_id, target_proxy_id, request_id, phase, reason, plan, summary, settings, token_hash, target_ip, created_at, updated_at, actor, bounds, version)
-           VALUES (?,?,?,?,?,?,'requested',?,?,?,?,?,?,?,?,?,?,1)`,
-        ).run(id, m.accountId, m.cameraId, m.sourceProxyId, m.targetProxyId, m.requestId, m.reason ?? null, enc('plan', m.plan), enc('summary', m.summary),
-          enc('settings', m.settings), m.tokenHash ?? null, m.targetIp ?? null, now, now, m.actor ?? null, enc('bounds', m.bounds));
+          `INSERT INTO moves (id, account_id, camera_id, source_proxy_id, target_proxy_id, request_id, phase, reason, plan, summary, settings, token_hash, target_ip, created_at, updated_at, actor, bounds, return_of, version)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)`,
+        ).run(id, m.accountId, m.cameraId, m.sourceProxyId, m.targetProxyId, m.requestId, m.phase ?? 'requested', m.reason ?? null, enc('plan', m.plan), enc('summary', m.summary),
+          enc('settings', m.settings), m.tokenHash ?? null, m.targetIp ?? null, now, now, m.actor ?? null, enc('bounds', m.bounds), m.returnOf ?? null);
       } catch (e) {
         if (/UNIQUE constraint failed: moves\.|moves: proxy busy/.test(String((e as Error).message))) throw new MoveBusy();
         throw e;
@@ -117,6 +129,24 @@ export class MoveStore {
   byRequest(sourceProxyId: string, requestId: string): Move | null {
     const r = this.db.prepare('SELECT * FROM moves WHERE source_proxy_id = ? AND request_id = ? ORDER BY created_at LIMIT 1').get(sourceProxyId, requestId) as Row | undefined;
     return r ? toMove(r) : null;
+  }
+
+  // The return (copy back) of a cancelled move, ended or not; the latest if there were several.
+  returnFor(moveId: string): Move | null {
+    const r = this.db.prepare('SELECT * FROM moves WHERE return_of = ? ORDER BY created_at DESC, id DESC LIMIT 1').get(moveId) as Row | undefined;
+    return r ? toMove(r) : null;
+  }
+
+  // Deletes ended moves older than their keepDays (defaultDays when the proxy
+  // reported none); never one whose source or target cleanup is pending or that
+  // a return names. Chunk states go with the row (ON DELETE CASCADE). Returns the
+  // deleted ids. cameras.move_id may keep naming a pruned move (it has no FK).
+  prune(now: number, defaultDays: number): string[] {
+    return tx(this.db, () => (this.db.prepare(
+      `DELETE FROM moves WHERE ended_at IS NOT NULL AND cleanup_pending = 0 AND target_cleanup_pending = 0
+         AND ended_at + COALESCE(keep_days, ?) * 86400000 < ?
+         AND NOT EXISTS (SELECT 1 FROM moves r WHERE r.return_of = moves.id) RETURNING id`,
+    ).all(defaultDays, now) as Row[]).map((r) => r.id as string));
   }
 
   setPhase(id: string, phase: MovePhase, patch: Partial<Move> = {}): Move {

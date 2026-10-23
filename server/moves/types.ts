@@ -24,7 +24,14 @@ export interface MoveRequestEvent extends Head {
 }
 export interface MoveApproveEvent extends Head { kind: 'move.approve'; moveId: string; plan: MovePlan }
 export interface MoveCancelEvent extends Head { kind: 'move.cancel'; moveId: string; copied: 'delete' | 'age-out' }
-export interface MovePhaseEvent extends Head { kind: 'move.phase'; moveId: string; role: MoveRole; phase: MoveEventPhase; ok: boolean; code?: string; detail?: string }
+// The completeness check (contract moveCheck): counts of files per kind; a row that could not be imported counts as failed.
+export interface MoveCheck {
+  complete: boolean; missing: Partial<Record<MoveKind, number>>; recovered: Partial<Record<MoveKind, number>>; failed: Partial<Record<MoveKind, number>>; expired: Partial<Record<MoveKind, number>>;
+}
+export interface MovePhaseEvent extends Head {
+  kind: 'move.phase'; moveId: string; role: MoveRole; phase: MoveEventPhase; ok: boolean; code?: string; detail?: string;
+  check?: MoveCheck; keepDays?: number; returnPending?: boolean;
+}
 export interface MoveProgressEvent extends Head {
   kind: 'move.progress'; moveId: string; chunks: { id: string; state: 'pending' | 'copied' | 'verified' | 'skipped' | 'failed' }[]; bytesDone: number; bytesTotal: number; rateBps: number; etaS: number;
 }

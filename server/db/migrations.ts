@@ -419,4 +419,71 @@ CREATE TABLE ops_tokens (
   // 13: when the move switched the camera over (ms): the cams attestation expires
   // 24 h after it. NULL for moves from before this migration (no attestation).
   (db) => db.exec(`ALTER TABLE moves ADD COLUMN switched_at INTEGER;`),
+  // 14: camera move step 4 (spec 2026-10-23): a copy back after a cancel is its
+  // own move row (return_of names the cancelled move; phases 'returning' ->
+  // 'returned'), the completeness check (check_result, JSON), the days an ended
+  // move is kept (keep_days, reported by the proxy) and an End transfer waiting
+  // for Archive (end_requested, JSON {at, actorType, actor}). The phase CHECK
+  // needs a table rebuild. migrate() runs with foreign_keys ON (it can't be
+  // switched inside the transaction), so DROP TABLE moves would cascade into
+  // move_chunks: the chunk states are set aside first and copied back. Indexes
+  // and the trigger are migration 8's, verbatim (test/db.test.ts compares them).
+  (db) => db.exec(`
+CREATE TABLE move_chunks_m14 AS SELECT * FROM move_chunks;
+DROP TABLE move_chunks;
+CREATE TABLE moves_m14 (
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  camera_id TEXT NOT NULL REFERENCES cameras(id) ON DELETE CASCADE,
+  source_proxy_id TEXT NOT NULL,
+  target_proxy_id TEXT NOT NULL,
+  request_id TEXT NOT NULL,
+  phase TEXT NOT NULL CHECK (phase IN ('requested','offered','awaiting-approval','approved','switching','copying','cleaning','done','rejected','cancelling','cancelled','failed','returning','returned')),
+  reason TEXT, plan TEXT, summary TEXT, settings TEXT,
+  token_hash TEXT CHECK (token_hash IS NULL OR token_hash GLOB 'sha256:*'),
+  target_ip TEXT, target_public_key TEXT, leaf_fingerprint TEXT, copied_choice TEXT,
+  offered_at INTEGER, approved_at INTEGER, budget_exceeded_at INTEGER,
+  bytes_total INTEGER, bytes_done INTEGER, rate_bps INTEGER, eta_s INTEGER,
+  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, ended_at INTEGER,
+  actor TEXT, version INTEGER NOT NULL DEFAULT 1,
+  cleanup_pending INTEGER NOT NULL DEFAULT 0 CHECK (cleanup_pending IN (0, 1)),
+  target_cleanup_pending INTEGER NOT NULL DEFAULT 0 CHECK (target_cleanup_pending IN (0, 1)),
+  bounds TEXT,
+  switched_at INTEGER,
+  return_of TEXT,
+  check_result TEXT,
+  keep_days INTEGER CHECK (keep_days IS NULL OR keep_days BETWEEN 7 AND 3650),
+  end_requested TEXT,
+  CHECK (source_proxy_id <> target_proxy_id),
+  FOREIGN KEY (account_id, source_proxy_id) REFERENCES proxies(account_id, id) ON DELETE CASCADE,
+  FOREIGN KEY (account_id, target_proxy_id) REFERENCES proxies(account_id, id) ON DELETE CASCADE
+) STRICT;
+INSERT INTO moves_m14 (id, account_id, camera_id, source_proxy_id, target_proxy_id, request_id, phase, reason, plan, summary, settings, token_hash,
+  target_ip, target_public_key, leaf_fingerprint, copied_choice, offered_at, approved_at, budget_exceeded_at, bytes_total, bytes_done, rate_bps, eta_s,
+  created_at, updated_at, ended_at, actor, version, cleanup_pending, target_cleanup_pending, bounds, switched_at)
+  SELECT id, account_id, camera_id, source_proxy_id, target_proxy_id, request_id, phase, reason, plan, summary, settings, token_hash,
+  target_ip, target_public_key, leaf_fingerprint, copied_choice, offered_at, approved_at, budget_exceeded_at, bytes_total, bytes_done, rate_bps, eta_s,
+  created_at, updated_at, ended_at, actor, version, cleanup_pending, target_cleanup_pending, bounds, switched_at FROM moves;
+DROP TABLE moves;
+ALTER TABLE moves_m14 RENAME TO moves;
+CREATE TRIGGER moves_proxy_busy BEFORE INSERT ON moves
+WHEN EXISTS (SELECT 1 FROM moves WHERE ended_at IS NULL AND (source_proxy_id IN (NEW.source_proxy_id, NEW.target_proxy_id) OR target_proxy_id IN (NEW.source_proxy_id, NEW.target_proxy_id)))
+BEGIN SELECT RAISE(ABORT, 'moves: proxy busy'); END;
+CREATE UNIQUE INDEX moves_one_per_source ON moves(source_proxy_id) WHERE ended_at IS NULL;
+CREATE UNIQUE INDEX moves_one_per_target ON moves(target_proxy_id) WHERE ended_at IS NULL;
+CREATE UNIQUE INDEX moves_one_per_camera ON moves(camera_id) WHERE ended_at IS NULL;
+CREATE INDEX moves_account_created ON moves(account_id, created_at);
+CREATE INDEX moves_cleanup_pending ON moves(source_proxy_id) WHERE cleanup_pending = 1;
+CREATE INDEX moves_target_cleanup_pending ON moves(target_proxy_id) WHERE target_cleanup_pending = 1;
+-- The return of a cancelled move (MoveStore.returnFor; prune keeps a move a return names).
+CREATE INDEX moves_return_of ON moves(return_of);
+CREATE TABLE move_chunks (
+  move_id TEXT NOT NULL REFERENCES moves(id) ON DELETE CASCADE,
+  chunk_id TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('pending','copied','verified','skipped','failed','abandoned')),
+  PRIMARY KEY (move_id, chunk_id)
+) STRICT;
+INSERT INTO move_chunks (move_id, chunk_id, state) SELECT move_id, chunk_id, state FROM move_chunks_m14;
+DROP TABLE move_chunks_m14;
+`),
 ];
