@@ -34,7 +34,9 @@ import type { MoveCheck, MoveApproveEvent, MoveCameraConn, MoveCancelEvent, Move
 // re-emits after every welcome, and again for a repeated finish or cancel):
 // every handler here is idempotent, and `resume` re-derives the next command
 // from the phase and the move's commands; tick() also derives the automatic
-// cancels of ended moves until they are queued.
+// cancels of ended moves until they are queued. Step 4 (Task 16): an End
+// transfer waits while Archive is still being copied (End after Archive), and
+// the source's move.finish goes out only once the target's is final.
 
 // A25: the estimate before any plan exists: every kind of the source's summary,
 // at the target's measured rate, plus a per-file overhead (one request, a hash,
@@ -244,7 +246,10 @@ export class Moves {
         else {
           const p = this.prog.get(m.id);
           if ((m.phase === 'copying' || m.phase === 'returning') && p?.changed && now - p.savedAt >= PROGRESS_SAVE_MS) this.saveProgress(m);
-          if (now - (this.resumedAt.get(m.id) ?? 0) >= RESUME_GAP_MS) this.resume(m.id);
+          if (now - (this.resumedAt.get(m.id) ?? 0) >= RESUME_GAP_MS) {
+            this.maybeEndAfterArchive(m);
+            this.resume(m.id);
+          }
         }
       } catch (e) {
         this.d.log.error({ err: e, moveId: m.id }, 'move_tick_failed');
@@ -499,7 +504,11 @@ export class Moves {
         if (r.command === 'move.release' && m.phase === 'copying') return this.onReleaseFinal(m, r);
         if (m.phase === 'cleaning') return this.checkCleaning(m);
         if (m.cleanupPending && r.proxyId === m.sourceProxyId) return this.cleanupStep(m);
-        if (r.command === 'move.finish' && m.targetCleanupPending && r.proxyId === m.targetProxyId) return this.targetCleanupStep(m);
+        if (r.command === 'move.finish' && m.targetCleanupPending && r.proxyId === m.targetProxyId) {
+          this.targetCleanupStep(m);
+          // The source's finish waited for this one (ruling 6).
+          if (m.cleanupPending) this.cleanupStep(m);
+        }
         return;
       case 'move.cancel':
         if (r.state === 'done') return;
@@ -770,6 +779,7 @@ export class Moves {
         this.audit(mv, 'move-budget-exceeded', 'ok', { phase: mv.phase, budgetS, approvedAt: m.approvedAt, bytesDone: p.bytesDone, bytesTotal: p.bytesTotal, rateBps: p.rateBps, etaS: p.etaS });
       });
     } else if (now - p.savedAt >= PROGRESS_SAVE_MS) this.saveProgress(m);
+    this.maybeEndAfterArchive(m);
     this.publish(m.id);
   }
 
@@ -948,12 +958,48 @@ export class Moves {
     this.publish(m.id);
   }
 
-  // The sysadmin ends the transfer early (S §10.4): only in copying.
+  // The sysadmin ends the transfer early (S §10.4): only in copying. While
+  // Archive is still being copied the end waits for it ("End after Archive",
+  // step-4 §2, ruling 12): the request is stored (once) and the move stays
+  // copying; maybeEndAfterArchive ends it when the Archive chunks are final.
   endTransfer(actor: string, moveId: string): Move {
     const m = this.store.get(moveId);
     if (!m) throw new ApiError(404, 'not_found');
     if (m.phase !== 'copying') throw new ApiError(409, 'wrong_phase');
+    if (this.archivePending(m)) {
+      if (m.endRequested) return m;
+      return tx(this.d.db, () => {
+        const mv = this.store.setPhase(m.id, 'copying', { ...this.flushIn(m.id), endRequested: { at: this.d.clock.now(), actorType: 'sysadmin', actor } });
+        this.audit(mv, 'move-end-after-archive', 'ok', { phase: 'copying', archiveChunks: this.archiveChunks(m.id).length }, { actorType: 'sysadmin', actor });
+        this.publish(m.id);
+        return mv;
+      });
+    }
     return tx(this.d.db, () => this.endTransferIn(m, END_TRANSFER, { actorType: 'sysadmin', actor }));
+  }
+
+  private archiveChunks(moveId: string): ChunkState[] {
+    return this.chunkStates(moveId).filter((c) => c.id.startsWith('archive:'));
+  }
+
+  // Archive still to be copied: the plan copies it, the source's summary has Archive files, and an Archive chunk is
+  // not final yet (or none is known yet: the target lists them as it goes).
+  archivePending(m: Move): boolean {
+    const kinds = (m.plan as { kinds?: unknown } | null)?.kinds;
+    if (!Array.isArray(kinds) || !kinds.includes('archive')) return false;
+    const files = (m.summary as { archive?: { files?: unknown } } | null)?.archive?.files;
+    if (!isCount(files) || files === 0) return false;
+    const chunks = this.archiveChunks(m.id);
+    return chunks.length === 0 || chunks.some((c) => !FINAL_CHUNK.has(c.state));
+  }
+
+  // A stored End transfer whose Archive is now final: the transfer ends, by the one who asked (from onProgress and tick).
+  private maybeEndAfterArchive(m0: Move): void {
+    const m = this.store.get(m0.id);
+    if (!m || m.phase !== 'copying' || !m.endRequested || this.archivePending(m)) return;
+    const { actorType, actor } = m.endRequested;
+    const who: Who = { actorType: actorType === 'sysadmin' || actorType === 'proxy' ? actorType : 'system', actor };
+    tx(this.d.db, () => this.endTransferIn(m, END_TRANSFER, who));
   }
 
   // Inside a transaction: the chunks not final yet are abandoned (stored as
@@ -982,7 +1028,9 @@ export class Moves {
   }
 
   // The source's finish, sent only once the source has released the camera
-  // (cam-proxy refuses it before: wrong_phase). Until then the release is
+  // (cam-proxy refuses it before: wrong_phase) and the target's finish is
+  // final (ruling 6, every move: the target's outcome, its keep list, lands on
+  // the source before the source deletes). Until then the release is
   // derived: created when missing, again with a backoff when it failed or went
   // unanswered. Nothing is queued to an offline source (it would only expire).
   private sourceFinish(m: Move): CommandRow | null {
@@ -990,12 +1038,20 @@ export class Moves {
     const last = this.lastCommand(m, src, 'move.finish');
     if (last && !((last.state === 'expired' || last.state === 'unknown') && this.online(src))) return last;
     if (!this.online(src)) return last;
+    if (!this.targetFinishFinal(m)) return last;
     const rel = this.lastCommand(m, src, 'move.release');
     if (rel?.state !== 'done') {
       if (!rel || (FINAL_STATES.has(rel.state) && this.retryDue(m, src, 'move.release', RELEASE_RETRY_MS, rel))) this.ensure(m, src, 'move.release', { v: 1, moveId: m.id }, () => true);
       return last;
     }
     return this.ensure(m, src, 'move.finish', { v: 1, moveId: m.id, role: 'source', abandoned: m.reason !== null }, () => true);
+  }
+
+  // The target's newest finish is final: answered (done, failed, refused) or gone unanswered (expired, unknown); or it
+  // can never be queued (the allow entry gone).
+  private targetFinishFinal(m: Move): boolean {
+    const t = this.lastCommand(m, m.targetProxyId, 'move.finish');
+    return t ? FINAL_STATES.has(t.state) : this.gaveUp.has(`${m.id}:${m.targetProxyId}:move.finish`);
   }
 
   // The source's release failed or went unanswered (the last one is final, not done).

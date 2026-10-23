@@ -26,6 +26,9 @@ const rq = () => 'rq_' + Array.from({ length: 20 }, () => CROCK[randomInt(32)]).
 const FP = 'SHA256:' + 'CD'.repeat(32);
 const LEAF = 'SHA256:' + 'AB'.repeat(32);
 const PLAN = { transfer: true, kinds: ['clips', 'events', 'checks'], space: 'retention', targetSettings: { 'storage.maxBytes': 21474836480, 'storage.maxGB': 20 }, budgetS: 7200, estimateS: 1800 };
+// A camera with Archive items and a plan that copies them (Task 16).
+const ARCHIVE = { archive: { files: 5, bytes: 5000, rows: 5, oldest: 1788681600000, newest: 1791273540000 } };
+const PLAN_ARCHIVE = { ...PLAN, kinds: ['archive', 'clips', 'events', 'checks'] };
 const DELETED = { stills: { files: 1, bytes: 10 }, clips: { files: 4, bytes: 4000 }, events: { files: 0, bytes: 0 }, checks: { files: 2, bytes: 20 }, archive: { files: 0, bytes: 0 } };
 
 const dir = tmpDir();
@@ -82,13 +85,13 @@ const cmdRows = (moveId: string, command: string) => (s.built.db.prepare(`SELECT
 const moveIdOf = (cameraId: string) => (s.built.db.prepare('SELECT move_id FROM cameras WHERE id = ?').get(cameraId) as { move_id: string | null }).move_id;
 const settle = () => new Promise((r) => setTimeout(r, 250));
 
-async function awaiting(camsId = 'cam1') {
+async function awaiting(camsId = 'cam1', summary?: Record<string, unknown>) {
   const src = await proxy();
   const tgt = await proxy();
   const cam = s.built.registry.createCamera(ACTOR, src.accountId, { camsId, name: 'Cam 1', kind: 'camera', proxyId: src.proxyId, proxyCameraId: 'cam1', host: '192.0.2.10', protocol: 'https' });
   const { proxyId: _p, connId: _c, ...rest } = fx('valid-event-move-request.json');
   const requestId = rq();
-  src.client.emitEvent({ ...rest, requestId, target: tgt.proxyId, camera: { ...rest.camera, proxyCameraId: 'cam1' } });
+  src.client.emitEvent({ ...rest, requestId, target: tgt.proxyId, camera: { ...rest.camera, proxyCameraId: 'cam1' }, ...(summary ? { summary: { ...rest.summary, ...summary } } : {}) });
   await until(() => s.built.moves.store.byRequest(src.proxyId, requestId)?.phase === 'awaiting-approval', 5000, 'awaiting-approval');
   const m = s.built.moves.store.byRequest(src.proxyId, requestId)!;
   return { src, tgt, cam, m };
@@ -103,14 +106,14 @@ async function approved() {
   await until(() => got(a.tgt.client, 'move.start', a.m.id).length === 1 && move(a.m.id).phase === 'approved', 5000, 'approved');
   return a;
 }
-async function switching(camsId?: string) {
-  const a = await awaiting(camsId);
-  approve(a.src, a.m.id);
+async function switching(camsId?: string, summary?: Record<string, unknown>, plan: Record<string, unknown> = PLAN) {
+  const a = await awaiting(camsId, summary);
+  approve(a.src, a.m.id, plan);
   await until(() => got(a.src.client, 'move.go', a.m.id).length === 1 && move(a.m.id).phase === 'switching', 5000, 'move.go');
   return a;
 }
-async function copying(camsId?: string) {
-  const a = await switching(camsId);
+async function copying(camsId?: string, summary?: Record<string, unknown>, plan: Record<string, unknown> = PLAN) {
+  const a = await switching(camsId, summary, plan);
   phase(a.tgt, a.m.id, 'target', 'switched');
   await until(() => got(a.src.client, 'move.release', a.m.id).length === 1 && move(a.m.id).phase === 'copying', 5000, 'move.release');
   return a;
@@ -560,12 +563,14 @@ describe('end transfer', () => {
     a.src.client.moveResults['move.finish'] = { status: 'ok', result: { deleted: DELETED } };
     await offline(a.tgt);
     s.built.moves.endTransfer(ACTOR, a.m.id);
-    await until(() => cmdRows(a.m.id, 'move.finish').some((r) => r.proxy_id === a.src.proxyId && r.state === 'done'), 5000, 'source finish');
     await settle();
     expect(move(a.m.id).phase).toBe('cleaning');
-    // The target finish expires unsent: an unanswered target finish never counts as final.
+    // Ruling 6: the source's finish waits for the target's to be final.
+    expect(cmdRows(a.m.id, 'move.finish').map((r) => r.proxy_id)).toEqual([a.tgt.proxyId]);
+    // The target finish expires unsent: final for the source's finish, which goes out now; never answered for the target.
     clock.advance(GIVE_UP_AFTER_MS);
     s.built.commands.tick();
+    await until(() => cmdRows(a.m.id, 'move.finish').some((r) => r.proxy_id === a.src.proxyId && r.state === 'done'), 5000, 'source finish');
     await until(() => move(a.m.id).phase === 'done', 5000, 'done');
     expect(cmdRows(a.m.id, 'move.finish').find((r) => r.proxy_id === a.tgt.proxyId)!.state).toBe('expired');
     expect(move(a.m.id)).toMatchObject({ cleanupPending: false, targetCleanupPending: true });
@@ -596,6 +601,126 @@ describe('end transfer', () => {
   it('end transfer outside copying is refused', async () => {
     const a = await switching();
     expect(apiErr(() => s.built.moves.endTransfer(ACTOR, a.m.id))).toEqual({ status: 409, code: 'wrong_phase' });
+  });
+});
+
+describe('end after Archive (Task 16, ruling 12)', () => {
+  const ok = { status: 'ok', result: { deleted: DELETED } } as const;
+  it('End transfer with an Archive chunk pending waits; the end follows once Archive is verified', async () => {
+    const a = await copying(undefined, ARCHIVE, PLAN_ARCHIVE);
+    a.src.client.moveResults['move.finish'] = ok;
+    progress(a, [{ id: 'archive:2026-10-20', state: 'copied' }, { id: 'clips:2026-10-01', state: 'verified' }, { id: 'clips:2026-10-02', state: 'pending' }], 500);
+    const at = clock.now();
+    expect(s.built.moves.endTransfer(ACTOR, a.m.id).phase).toBe('copying');
+    expect(move(a.m.id)).toMatchObject({ phase: 'copying', reason: null, endRequested: { at, actorType: 'sysadmin', actor: ACTOR } });
+    const e = auditFor('move-end-after-archive');
+    expect(e).toHaveLength(1);
+    expect(e[0]).toMatchObject({ outcome: 'ok', actor_type: 'sysadmin', actor: ACTOR });
+    expect(e[0].d).toMatchObject({ moveId: a.m.id, phase: 'copying' });
+    expect(auditFor('move-end-transfer')).toHaveLength(0);
+    // A second End transfer while waiting changes nothing.
+    expect(s.built.moves.endTransfer(ACTOR, a.m.id).phase).toBe('copying');
+    expect(auditFor('move-end-after-archive')).toHaveLength(1);
+    await settle();
+    expect(cmdRows(a.m.id, 'move.finish')).toHaveLength(0);
+    // Progress without Archive verified: still waiting.
+    progress(a, [{ id: 'clips:2026-10-02', state: 'copied' }], 600);
+    expect(move(a.m.id).phase).toBe('copying');
+    // Archive verified: the transfer ends now, by the sysadmin who asked.
+    progress(a, [{ id: 'archive:2026-10-20', state: 'verified' }], 700);
+    expect(move(a.m.id)).toMatchObject({ phase: 'cleaning', reason: 'end_transfer' });
+    await until(() => move(a.m.id).phase === 'done', 5000, 'done');
+    expect(got(a.tgt.client, 'move.finish', a.m.id).map((c) => c.body.args)).toEqual([{ v: 1, moveId: a.m.id, role: 'target', abandoned: true }]);
+    expect(got(a.src.client, 'move.finish', a.m.id).map((c) => c.body.args)).toEqual([{ v: 1, moveId: a.m.id, role: 'source', abandoned: true }]);
+    // Abandoned: never an Archive chunk.
+    expect(s.built.moves.store.chunks(a.m.id)).toEqual([
+      { id: 'archive:2026-10-20', state: 'verified' }, { id: 'clips:2026-10-01', state: 'verified' }, { id: 'clips:2026-10-02', state: 'abandoned' },
+    ]);
+    const end = auditFor('move-end-transfer');
+    expect(end).toHaveLength(1);
+    expect(end[0]).toMatchObject({ outcome: 'ok', actor_type: 'sysadmin', actor: ACTOR });
+    expect(end[0].d).toMatchObject({ abandoned: 1 });
+  });
+
+  it('End transfer before any Archive chunk is known waits; tick ends it once the stored chunks are final', async () => {
+    const a = await copying(undefined, ARCHIVE, PLAN_ARCHIVE);
+    progress(a, [{ id: 'clips:2026-10-01', state: 'pending' }], 0);
+    s.built.moves.endTransfer(ACTOR, a.m.id);
+    expect(move(a.m.id).phase).toBe('copying');
+    // Archive skipped (did not fit): final, so the next progress or tick ends the transfer.
+    s.built.moves.store.saveChunks(a.m.id, [{ id: 'archive:2026-10-20', state: 'skipped' }]);
+    clock.advance(RESUME_GAP_MS);
+    s.built.moves.tick();
+    expect(move(a.m.id)).toMatchObject({ phase: 'cleaning', reason: 'end_transfer' });
+    expect(auditFor('move-end-transfer')[0]).toMatchObject({ actor_type: 'sysadmin', actor: ACTOR });
+  });
+
+  it('End transfer with the Archive chunks verified ends at once', async () => {
+    const a = await copying(undefined, ARCHIVE, PLAN_ARCHIVE);
+    progress(a, [{ id: 'archive:2026-10-20', state: 'verified' }, { id: 'archive:2026-10-19', state: 'failed' }, { id: 'clips:2026-10-01', state: 'pending' }], 500);
+    expect(s.built.moves.endTransfer(ACTOR, a.m.id).phase).toBe('cleaning');
+    expect(auditFor('move-end-after-archive')).toHaveLength(0);
+  });
+
+  it('End transfer of a plan without archive, or a camera without Archive items, ends at once', async () => {
+    const a = await copying(undefined, ARCHIVE);
+    expect(s.built.moves.endTransfer(ACTOR, a.m.id).phase).toBe('cleaning');
+    const b = await copying('cam2', undefined, PLAN_ARCHIVE);
+    expect(s.built.moves.endTransfer(ACTOR, b.m.id).phase).toBe('cleaning');
+    expect(auditFor('move-end-after-archive')).toHaveLength(0);
+  });
+
+  it('a failure in copying with Archive pending ends the transfer at once', async () => {
+    const a = await copying(undefined, ARCHIVE, PLAN_ARCHIVE);
+    progress(a, [{ id: 'archive:2026-10-20', state: 'copied' }], 100);
+    s.built.moves.endTransfer(ACTOR, a.m.id);
+    expect(move(a.m.id).phase).toBe('copying');
+    phase(a.tgt, a.m.id, 'target', 'failed', false, 'disk_full');
+    await until(() => move(a.m.id).phase !== 'copying', 5000, 'ended');
+    expect(move(a.m.id).reason).toBe('target:disk_full');
+    expect(s.built.moves.store.chunks(a.m.id)).toEqual([{ id: 'archive:2026-10-20', state: 'abandoned' }]);
+    expect(auditFor('move-end-transfer')[0]).toMatchObject({ outcome: 'failed', actor_type: 'system' });
+  });
+
+  it('the target reporting copied while the end waits finishes the move normally', async () => {
+    const a = await copying(undefined, ARCHIVE, PLAN_ARCHIVE);
+    progress(a, [{ id: 'archive:2026-10-20', state: 'copied' }], 100);
+    s.built.moves.endTransfer(ACTOR, a.m.id);
+    progress(a, [{ id: 'archive:2026-10-20', state: 'verified' }, { id: 'clips:2026-10-01', state: 'verified' }], 10_000);
+    expect(move(a.m.id).phase).toBe('cleaning');
+    phase(a.tgt, a.m.id, 'target', 'copied');
+    await until(() => move(a.m.id).phase === 'done', 5000, 'done');
+  });
+});
+
+describe('the source finishes after the target (ruling 6)', () => {
+  it('a normal finish: the source move.finish is created only once the target finish is answered', async () => {
+    const a = await copying();
+    a.src.client.moveResults['move.finish'] = { status: 'ok', result: { deleted: DELETED } };
+    a.tgt.client.dropCommands = 1; // the target finish stays unanswered for now
+    phase(a.tgt, a.m.id, 'target', 'copied');
+    await until(() => got(a.tgt.client, 'move.finish', a.m.id).length === 1, 5000, 'target finish');
+    await settle();
+    clock.advance(RESUME_GAP_MS);
+    s.built.moves.tick();
+    await settle();
+    expect(move(a.m.id).phase).toBe('cleaning');
+    expect(cmdRows(a.m.id, 'move.finish').map((r) => r.proxy_id)).toEqual([a.tgt.proxyId]);
+    clock.advance(RESEND_AFTER_MS);
+    s.built.commands.tick();
+    await until(() => move(a.m.id).phase === 'done', 5000, 'done');
+    const rows = s.built.db.prepare(`SELECT proxy_id, state FROM commands WHERE command = 'move.finish' AND json_extract(args, '$.moveId') = ? ORDER BY rowid`).all(a.m.id);
+    expect(rows).toEqual([{ proxy_id: a.tgt.proxyId, state: 'done' }, { proxy_id: a.src.proxyId, state: 'done' }]);
+    expect(auditFor('move-done')[0].d).toMatchObject({ cleanup: 'done', deleted: DELETED });
+  });
+
+  it('an end transfer: the source finish follows a target finish answered failed', async () => {
+    const a = await copying();
+    a.tgt.client.moveResults['move.finish'] = { status: 'failed', code: 'internal' };
+    s.built.moves.endTransfer(ACTOR, a.m.id);
+    await until(() => move(a.m.id).phase === 'done', 5000, 'done');
+    const rows = s.built.db.prepare(`SELECT proxy_id, state FROM commands WHERE command = 'move.finish' AND json_extract(args, '$.moveId') = ? ORDER BY rowid`).all(a.m.id);
+    expect(rows).toEqual([{ proxy_id: a.tgt.proxyId, state: 'failed' }, { proxy_id: a.src.proxyId, state: 'done' }]);
   });
 });
 
