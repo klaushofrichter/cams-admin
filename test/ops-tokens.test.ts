@@ -1,9 +1,13 @@
 // Operations tokens (the store): scoped bearer tokens, issued once and stored
 // as a hash, bounded in number and lifetime, revocable and replayed at start.
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { join } from 'path';
 import { tmpDir } from './helpers/tmp';
 import { testApp } from './helpers/app';
 import { fakeClock } from './helpers/clock';
+import { writeSigningKey } from './helpers/signingKey';
+import { buildServer } from '../server/server';
+import { hashOf } from '../server/auth/bearer-tokens';
 import { OpsTokens, OPS_MAX_LIVE } from '../server/ops/tokens';
 import { DiagTokens } from '../server/diag/tokens';
 import { ApiError } from '../server/registry';
@@ -58,6 +62,11 @@ describe('OpsTokens', () => {
     expect(ops.verify(token)).toBe(item.id);
     expect(ops.verifyScoped('cao_' + 'A'.repeat(43))).toBeNull();
     expect(ops.verifyScoped('cad_' + 'A'.repeat(43))).toBeNull();
+    // A live row whose hash matches an over-long string: only the length cap refuses it.
+    const long = 'cao_' + 'A'.repeat(130);
+    a.db.prepare('INSERT INTO ops_tokens (id, name, hash, created_at, created_by, expires_at, scopes) VALUES (?,?,?,?,?,?,?)')
+      .run('opt_long', 'long', hashOf(long), clock.now(), 'test', clock.now() + DAY, '["routes"]');
+    expect(ops.verifyScoped(long)).toBeNull();
     expect(ops.verifyScoped('cao_' + 'A'.repeat(130))).toBeNull();
     const dg = new DiagTokens({ db: a.db, clock, audit: a.audit }).issue('admin@example.com', { name: 'd' });
     expect(ops.verifyScoped(dg.token)).toBeNull();
@@ -78,13 +87,51 @@ describe('OpsTokens', () => {
     expect(row.revoked_at).not.toBeNull();
     expect(row.revoked_by).toBe('system');
     expect(journal).toEqual([item.id]);
+    expect(a.db.prepare(`SELECT actor_type, actor, detail FROM audit_log WHERE action = 'ops-token-revoke' AND target_id = ?`).get(b.id))
+      .toMatchObject({ actor_type: 'system', actor: 'system', detail: expect.stringContaining('"replayed":true') });
+    // Replaying an already revoked row changes nothing.
+    const audits = () => (a.db.prepare(`SELECT count(*) n FROM audit_log WHERE action = 'ops-token-revoke'`).get() as { n: number }).n;
+    const n = audits();
+    ops.replay(item.id);
+    expect(audits()).toBe(n);
+    expect(a.db.prepare('SELECT revoked_by FROM ops_tokens WHERE id = ?').get(item.id)).toEqual({ revoked_by: 'admin@example.com' });
+  });
+
+  it('a corrupt scopes column fails closed', () => {
+    const { token, item } = issue('corrupt');
+    a.db.prepare('UPDATE ops_tokens SET scopes = ? WHERE id = ?').run('not json', item.id);
+    expect(ops.verifyScoped(token)).toBeNull();
+    expect(ops.list().items.find((i) => i.id === item.id)?.scopes).toEqual([]);
   });
 
   it('no row or audit detail contains the token string', () => {
+    const issued = () => (a.db.prepare(`SELECT count(*) n FROM audit_log WHERE action = 'ops-token-issue'`).get() as { n: number }).n;
+    const before = issued();
     const { token } = issue('secret-check');
+    expect(issued()).toBe(before + 1);
     const dump = JSON.stringify([a.db.prepare('SELECT * FROM ops_tokens').all(), a.db.prepare('SELECT * FROM audit_log').all()]);
     expect(dump).not.toContain(token);
     expect(dump).not.toContain(token.slice(4));
-    expect(a.db.prepare(`SELECT count(*) n FROM audit_log WHERE action = 'ops-token-issue'`).get()).toMatchObject({ n: expect.any(Number) });
+  });
+});
+
+describe('revocation journal', () => {
+  it('a restore from an older backup does not bring a revoked ops token back', async () => {
+    const d2 = tmpDir();
+    process.env.ALLOWED_EMAILS = 'admin@example.com';
+    const env = { PUBLIC_URL: 'https://cams-admin.example.net', DB_FILE: join(d2, 'app.db'), SERVER_SIGNING_KEY_FILE: writeSigningKey(join(d2, 'sk.pem')), NODE_ENV: 'test' };
+    const b1 = buildServer(env);
+    const { token, item } = b1.ops.issue('admin@example.com', { name: 'restored', scopes: ['routes'] });
+    b1.ops.revoke('admin@example.com', item.id);
+    // What an older backup would hold: the token not revoked.
+    b1.db.prepare('UPDATE ops_tokens SET revoked_at = NULL, revoked_by = NULL WHERE id = ?').run(item.id);
+    await b1.close();
+    const b2 = buildServer(env);
+    try {
+      expect(b2.ops.verifyScoped(token)).toBeNull();
+      expect(b2.ops.list().items[0]).toMatchObject({ id: item.id, state: 'revoked', revokedBy: 'system' });
+    } finally {
+      await b2.close();
+    }
   });
 });

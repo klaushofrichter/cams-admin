@@ -25,11 +25,20 @@ export class OpsTokens extends BearerTokens<OpsTokenView> {
     return { cols: { scopes: JSON.stringify(s) }, detail: { scopes: s } };
   }
 
-  protected viewExtra(r: Row) { return { scopes: JSON.parse(r.scopes as string) as OpsScope[] }; }
+  // A corrupt column fails closed: no scopes.
+  private scopesOf(r: Row): OpsScope[] {
+    try {
+      const s: unknown = JSON.parse(r.scopes as string);
+      return Array.isArray(s) && s.every((x) => (OPS_SCOPES as readonly unknown[]).includes(x)) ? (s as OpsScope[]) : [];
+    } catch { return []; }
+  }
+
+  protected viewExtra(r: Row) { return { scopes: this.scopesOf(r) }; }
 
   verifyScoped(token: string): { id: string; hashPrefix: string; scopes: OpsScope[] } | null {
     const r = this.find(token);
-    if (!r) return null;
-    return { id: r.id as string, hashPrefix: (r.hash as string).slice(7, 15), scopes: JSON.parse(r.scopes as string) as OpsScope[] };
+    const scopes = r ? this.scopesOf(r) : [];
+    if (!r || scopes.length === 0) return null;
+    return { id: r.id as string, hashPrefix: (r.hash as string).slice(7, 15), scopes };
   }
 }
