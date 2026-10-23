@@ -194,8 +194,8 @@ differs, is reported `pending` (not a failure) by
 match (nothing pending).
 ## Camera moves
 
-Additive: the envelope stays v1, signatures and JCS unchanged. Nine commands
-(`move.targets`, `move.open`, `move.offer`, `move.answer`, `move.start`,
+Additive: the envelope stays v1, signatures and JCS unchanged. Ten commands
+(`move.begin`, `move.targets`, `move.open`, `move.offer`, `move.answer`, `move.start`,
 `move.go`, `move.release`, `move.finish`, `move.cancel`; all `v:1`, in the strict
 `command` enum, each with `commands/<name>.args` and `.result` schemas) and six
 `event` kinds without a `cmdId` (`move.targets`, `move.request`,
@@ -205,7 +205,7 @@ Additive: the envelope stays v1, signatures and JCS unchanged. Nine commands
 `docs/superpowers/specs/2026-10-21-camera-move-design.md`.
 
 **Allow entries** (new in the strict heartbeat enum, both local, off by default):
-`move.send` (the source side: `move.targets`, `move.open`, `move.answer`,
+`move.send` (the source side: `move.begin`, `move.targets`, `move.open`, `move.answer`,
 `move.go`, `move.release`, and `move.finish` / `move.cancel` with `args.role` =
 `source`) and `move.receive` (the target side: `move.offer`, `move.start`, and
 `move.finish` / `move.cancel` with `args.role` = `target`).
@@ -245,6 +245,16 @@ Rulings of the camera-move plan that the schemas carry:
   stored once the command is final); `move.open` carries its `tokenHash`.
 - `settings` is the camera node of the proxy's config: every leaf optional,
   never null, closed objects. `summary` has all five kinds, times nullable.
+- `move.begin` (cams-admin → source, entry `move.send`) starts a move from cams-admin:
+  args `{v: 1, camera: <proxy camera id>, target: <proxy id>, bounds: MoveBounds | null}`,
+  all required, closed. `MoveBounds` is `{transfer, kinds (unique, at most five),
+  space (all | omit | fit | retention), maxBudgetS (integer, 60 to 604800)}`: what
+  the source may approve on its own. No password, token or key travels. The result
+  is `{requestId}`; the source then emits the usual `move.request` event. A refusal
+  is the command's `failed` status with one of `no_site_ca`, `external_cert`,
+  `moves_not_allowed`, `busy`, `unknown_camera` (`MOVE_BEGIN_REFUSALS`).
+- `move.request` carries `bounds` (`MoveBounds | null`), optional in both schemas:
+  a proxy that does not send it is valid and means null.
 - `move.request` also carries `actor` `{origin: local | managed, label}`; the
   camera's connection fields come from the source's config, never a password.
 - `move.phase` `failed` carries a `code` (for example `token_address`); the target

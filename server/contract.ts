@@ -22,6 +22,8 @@ import configRollbackResult from '../contract/v1/commands/config.rollback.result
 import cameraActionResult from '../contract/v1/commands/camera.action.result.schema.json';
 import cameraNameSetResult from '../contract/v1/commands/camera.name.set.result.schema.json';
 import proxyRestartResult from '../contract/v1/commands/proxy.restart.result.schema.json';
+import moveBeginArgsStrict from '../contract/v1/strict/commands/move.begin.args.schema.json';
+import moveBeginResult from '../contract/v1/commands/move.begin.result.schema.json';
 import moveTargetsArgsStrict from '../contract/v1/strict/commands/move.targets.args.schema.json';
 import moveTargetsResult from '../contract/v1/commands/move.targets.result.schema.json';
 import moveOpenArgsStrict from '../contract/v1/strict/commands/move.open.args.schema.json';
@@ -106,7 +108,7 @@ const vArgs: Record<string, ValidateFunction> = {
   'config.get': compile(configGetArgs), 'config.set': compile(configSetArgs), 'config.unset': compile(configUnsetArgs),
   'config.rollback': compile(configRollbackArgs), 'camera.action': compile(cameraActionArgs), 'camera.name.set': compile(cameraNameSetArgs),
   'proxy.restart': compile(proxyRestartArgs),
-  'move.targets': compile(moveTargetsArgsStrict), 'move.open': compile(moveOpenArgsStrict), 'move.offer': compile(moveOfferArgsStrict), 'move.answer': compile(moveAnswerArgsStrict), 'move.start': compile(moveStartArgsStrict), 'move.go': compile(moveGoArgsStrict), 'move.release': compile(moveReleaseArgsStrict), 'move.finish': compile(moveFinishArgsStrict), 'move.cancel': compile(moveCancelArgsStrict),
+  'move.begin': compile(moveBeginArgsStrict), 'move.targets': compile(moveTargetsArgsStrict), 'move.open': compile(moveOpenArgsStrict), 'move.offer': compile(moveOfferArgsStrict), 'move.answer': compile(moveAnswerArgsStrict), 'move.start': compile(moveStartArgsStrict), 'move.go': compile(moveGoArgsStrict), 'move.release': compile(moveReleaseArgsStrict), 'move.finish': compile(moveFinishArgsStrict), 'move.cancel': compile(moveCancelArgsStrict),
 };
 // A proxy's result payload, leniently (unknown fields ignored).
 const vResult: Record<string, ValidateFunction> = {
@@ -114,7 +116,7 @@ const vResult: Record<string, ValidateFunction> = {
   'config.get': compile(configGetResult), 'config.set': compile(configSetResult), 'config.unset': compile(configUnsetResult),
   'config.rollback': compile(configRollbackResult), 'camera.action': compile(cameraActionResult), 'camera.name.set': compile(cameraNameSetResult),
   'proxy.restart': compile(proxyRestartResult),
-  'move.targets': compile(moveTargetsResult), 'move.open': compile(moveOpenResult), 'move.offer': compile(moveOfferResult), 'move.answer': compile(moveAnswerResult), 'move.start': compile(moveStartResult), 'move.go': compile(moveGoResult), 'move.release': compile(moveReleaseResult), 'move.finish': compile(moveFinishResult), 'move.cancel': compile(moveCancelResult),
+  'move.begin': compile(moveBeginResult), 'move.targets': compile(moveTargetsResult), 'move.open': compile(moveOpenResult), 'move.offer': compile(moveOfferResult), 'move.answer': compile(moveAnswerResult), 'move.start': compile(moveStartResult), 'move.go': compile(moveGoResult), 'move.release': compile(moveReleaseResult), 'move.finish': compile(moveFinishResult), 'move.cancel': compile(moveCancelResult),
 };
 export function validateCommandArgs(command: string, args: unknown): { ok: true } | { ok: false; detail: string } {
   const v = Object.hasOwn(vArgs, command) ? vArgs[command] : undefined;

@@ -63,6 +63,25 @@ describe('move events', () => {
     badTarget.body.target = 'proxy-b';
     expect(strictValid('event', badTarget)).toBe(false);
   });
+  it('move.request with bounds, with bounds null and without bounds are valid (strict)', () => {
+    const base = fixtureNamed('valid-event-move-request').message;
+    expect(base.body.bounds).toBeUndefined();
+    expect(strictValid('event', base)).toBe(true);
+    const withB = fixtureNamed('valid-event-move-request-bounds').message;
+    expect(withB.body.bounds).toEqual({ transfer: true, kinds: ['clips', 'events'], space: 'fit', maxBudgetS: 3600 });
+    expect(strictValid('event', withB)).toBe(true);
+    const nul = structuredClone(withB);
+    nul.body.bounds = null;
+    expect(strictValid('event', nul)).toBe(true);
+  });
+  it('move.request with bounds outside the closed object is invalid', () => {
+    const m = fixtureNamed('valid-event-move-request-bounds').message;
+    for (const bad of [{ ...m.body.bounds, maxBudgetS: 0 }, { ...m.body.bounds, maxBudgetS: 604801 }, { ...m.body.bounds, extra: 1 }, { ...m.body.bounds, space: 'some' }, { transfer: true }]) {
+      const b = structuredClone(m);
+      b.body.bounds = bad;
+      expect(strictValid('event', b)).toBe(false);
+    }
+  });
   it('move.request and move.approve: settings leaves are all optional, no nulls, no extra fields', () => {
     const m = fixtureNamed('valid-event-move-request').message;
     for (const settings of [{}, { name: 'Front door' }, { ftp: { stream: 'sub' } }, { events: { poll: { enabled: true } } }]) {

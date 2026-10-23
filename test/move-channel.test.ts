@@ -145,6 +145,7 @@ describe('move commands', () => {
   });
 
   it('maps the allow entries per role', () => {
+    expect(requiredEntries('move.begin', {})).toEqual(['move.send']);
     expect(requiredEntries('move.open', {})).toEqual(['move.send']);
     expect(requiredEntries('move.offer', {})).toEqual(['move.receive']);
     expect(requiredEntries('move.start', {})).toEqual(['move.receive']);

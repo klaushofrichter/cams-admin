@@ -163,7 +163,12 @@ export function fixtures(): Record<string, unknown> {
   const moveRefused = (code: string, name: string, args: object, allow: string[], note: string) => refused(code, command(3, name, args), ctx({ allow }), note);
   const moveEvent = (seq: number, body: object, note: string) =>
     valid('event', signed(env('event', seq, { proxyId: PRX, connId: CON, ...body }), PROXY), note);
+  const bounds = { transfer: true, kinds: ['clips', 'events'], space: 'fit', maxBudgetS: 3600 };
+  const beginArgs = { v: 1, camera: 'cam1', target: PRX_T, bounds };
   const moves = {
+    'valid-command-move-begin': moveValid('move.begin', ['move.send'], beginArgs, 'cams-admin starts a move on the source, with pre-approval bounds (the source may approve its own offer within them)'),
+    'valid-command-move-begin-no-bounds': moveValid('move.begin', ['move.send'], { ...beginArgs, bounds: null }, 'bounds null: the move waits for a person to approve it on the source'),
+    'refused-move-begin-not-allowed': moveRefused('not_allowed', 'move.begin', beginArgs, ['move.receive'], 'move.begin needs move.send; move.receive does not cover it'),
     'valid-command-move-targets': moveValid('move.targets', ['move.send'], { v: 1, requestId: RQ, targets: [{ proxyId: PRX_T, name: 'Pi', site: 'garage' }, { proxyId: 'prx_2123456789ABCDEFGHJK', name: 'Mini PC', site: null }] },
       'the proxies the source may move to (source side)'),
     'valid-command-move-open': moveValid('move.open', ['move.send'], { v: 1, moveId: MV, requestId: RQ, camera: 'cam1', tokenHash: HASH(9), targetIp: '192.0.2.20' }, 'the source accepts one bearer token (its hash), bound to the target address'),
@@ -180,6 +185,9 @@ export function fixtures(): Record<string, unknown> {
     'valid-event-move-request': moveEvent(3, {
       kind: 'move.request', requestId: RQ, camera: { proxyCameraId: 'cam1', ...camConn }, target: PRX_T, actor: { origin: 'local', label: 'admin' }, summary, settings,
     }, 'the source asks to move a camera: connection fields from its config, never a password'),
+    'valid-event-move-request-bounds': moveEvent(3, {
+      kind: 'move.request', requestId: RQ, camera: { proxyCameraId: 'cam1', ...camConn }, target: PRX_T, actor: { origin: 'managed', label: 'cams-admin move' }, summary, settings, bounds,
+    }, 'a request started by move.begin: the bounds the source kept (null when none)'),
     'valid-event-move-approve': moveEvent(3, { kind: 'move.approve', moveId: MV, plan }, 'the user approved the plan on the source'),
     'valid-event-move-cancel': moveEvent(3, { kind: 'move.cancel', moveId: MV, copied: 'delete' }, 'cancelled from the source page'),
     'valid-event-move-phase': moveEvent(3, { kind: 'move.phase', moveId: MV, role: 'target', phase: 'failed', ok: false, code: 'token_address', detail: 'the source refused the bound peer' }, 'a phase change; failed carries a code'),
