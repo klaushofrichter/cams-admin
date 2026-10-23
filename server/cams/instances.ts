@@ -13,8 +13,10 @@ import type { RevocationEntry } from './revocations';
 // The registry of cams instances (migration spec §5, §9.1, §9.6; plan P4
 // Task 3): which accounts an instance serves, its per-proxy routes (a URL
 // or hidden, ruling R4-3), its one-time CAC1 enrollment codes and its keys.
-// What an instance does (last request, pulls, reports) lives in memory only
-// (touch/live): the database is written on meaningful changes.
+// What an instance does (last request, pulls) lives in memory only
+// (touch/live): the database is written on meaningful changes. Its last
+// report is kept in memory and also stored, written only when its content
+// changes (issue #58), so a restart does not lose it.
 
 type Row = Record<string, unknown>;
 
@@ -480,13 +482,16 @@ export class CamsInstances {
     return true;
   }
 
-  // POST /cams/v1/report: kept in memory only (no write); answers whether the
-  // instance's applied revision is the current one.
+  // POST /cams/v1/report: kept in memory, and stored when its content changed
+  // (the timestamps lastPullAt / cacheVerifiedAt change with every pull and
+  // would make each report new); answers whether the instance's applied
+  // revision is the current one.
   report(instanceId: string, report: unknown, now: number): { changed: boolean; revision: string } {
     const v = validateCams('report-request', report);
     if (!v.ok) throw new ApiError(400, 'invalid', fieldOf(v.detail));
     const r = report as CamsReport;
     const prev = this.live(instanceId);
+    this.storeReport(instanceId, r, now);
     const zero = r.mode === 'shadow' && !!r.shadow && r.shadow.differences === 0;
     this.touch(instanceId, { report: r, reportAt: now, shadowZeroSince: zero ? prev.shadowZeroSince ?? now : null });
     const revision = snapshotRevision(this.d.db, instanceId, this.d.serverKeyFingerprints[0] ?? '');
@@ -495,8 +500,32 @@ export class CamsInstances {
 
   // --- in memory ------------------------------------------------------------------------------
 
+  // The report as compared for "changed": without the per-pull timestamps.
+  private static reportKey(r: CamsReport): string {
+    const { lastPullAt: _p, cacheVerifiedAt: _c, ...rest } = r;
+    return JSON.stringify(rest);
+  }
+
+  private storeReport(id: string, r: CamsReport, now: number): void {
+    const row = this.q('SELECT last_report FROM cams_instances WHERE id = ?').get(id) as Row | undefined;
+    if (!row) return;
+    let same = false;
+    try { same = typeof row.last_report === 'string' && CamsInstances.reportKey(JSON.parse(row.last_report)) === CamsInstances.reportKey(r); } catch { /* corrupt: rewrite */ }
+    if (same) return;
+    tx(this.d.db, () => void this.q('UPDATE cams_instances SET last_report = ?, last_report_at = ? WHERE id = ?').run(JSON.stringify(r), now, id));
+  }
+
+  // The report falls back to the stored one (its time is when it last changed)
+  // while memory has none, e.g. after a restart.
   live(id: string): CamsLive {
-    return { ...(this.liveState.get(id) ?? EMPTY_LIVE) };
+    const l = { ...(this.liveState.get(id) ?? EMPTY_LIVE) };
+    if (!l.report) {
+      const row = this.q('SELECT last_report, last_report_at FROM cams_instances WHERE id = ?').get(id) as Row | undefined;
+      if (row && typeof row.last_report === 'string') {
+        try { l.report = JSON.parse(row.last_report) as CamsReport; l.reportAt = row.last_report_at as number | null; } catch { /* corrupt: none */ }
+      }
+    }
+    return l;
   }
 
   touch(id: string, patch: Partial<CamsLive>): void {
