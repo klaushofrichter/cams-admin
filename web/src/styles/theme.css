@@ -37,6 +37,8 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .btn:disabled { opacity: 0.5; cursor: default; }
 input, select, textarea { background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; min-width: 0; }
 label { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
+/* A checkbox or radio sits on the line of its words, just ahead of them. */
+label:has(> input[type="checkbox"], > input[type="radio"]) { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
 th { color: var(--muted); font-weight: 500; font-size: 13px; }
