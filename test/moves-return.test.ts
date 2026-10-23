@@ -387,6 +387,53 @@ describe('the return runs', () => {
     expect(apiErr(() => s.built.moves.giveUp(ACTOR, a.r.id))).toEqual({ status: 409, code: 'wrong_phase' });
   });
 
+  it('give up: a side offline for more than 24 h still gets its abandoned finish when it comes back', async () => {
+    const a = await returning();
+    const mm = s.built.moves as any;
+    const realOnline = mm.online.bind(mm);
+    mm.online = (id: string) => (id === a.tgt.proxyId ? false : realOnline(id));
+    s.built.moves.giveUp(ACTOR, a.r.id);
+    await until(() => got(a.src.client, 'move.finish', a.r.id).length === 1, 5000, 'original finish');
+    clock.advance(25 * 3600_000);
+    s.built.moves.tick();
+    await settle();
+    expect(got(a.tgt.client, 'move.finish', a.r.id)).toHaveLength(0);
+    mm.online = realOnline;
+    s.built.moves.onLive(a.tgt.proxyId);
+    await until(() => got(a.tgt.client, 'move.finish', a.r.id).length === 1, 5000, 'finish after the return');
+    expect(got(a.tgt.client, 'move.finish', a.r.id)[0].body.args).toEqual({ v: 1, moveId: a.r.id, role: 'source', abandoned: true, return: true });
+    await until(() => cmdRows(a.r.id, 'move.finish').every((c) => c.state === 'done'), 5000, 'answered');
+    s.built.moves.tick();
+    await settle();
+    expect(got(a.tgt.client, 'move.finish', a.r.id)).toHaveLength(1);
+    expect(got(a.src.client, 'move.finish', a.r.id)).toHaveLength(1);
+  });
+
+  it('give up: never pruned while a finish is unanswered; pruned on a later run once both are', async () => {
+    const a = await returning();
+    const mm = s.built.moves as any;
+    const realOnline = mm.online.bind(mm);
+    mm.online = (id: string) => (id === a.tgt.proxyId ? false : realOnline(id));
+    s.built.moves.giveUp(ACTOR, a.r.id);
+    await until(() => got(a.src.client, 'move.finish', a.r.id).length === 1, 5000, 'original finish');
+    const far = clock.now() + 4000 * 86_400_000;
+    expect(s.built.moves.store.prunable(far, 30)).not.toContain(a.r.id);
+    mm.online = realOnline;
+    s.built.moves.onLive(a.tgt.proxyId);
+    await until(() => cmdRows(a.r.id, 'move.finish').length === 2 && cmdRows(a.r.id, 'move.finish').every((c) => c.state === 'done'), 5000, 'both answered');
+    expect(s.built.moves.store.prunable(far, 30)).toContain(a.r.id);
+    expect(s.built.moves.store.prune(far, 30)).toContain(a.r.id);
+  });
+
+  it('give up: a normal return finish already queued is followed by the abandoned one', async () => {
+    const a = await returning();
+    s.built.commands.create('system', a.r.accountId, a.tgt.proxyId, 'move.finish', { v: 1, moveId: a.r.id, role: 'source', abandoned: false, return: true }, { actorType: 'system' });
+    await until(() => got(a.tgt.client, 'move.finish', a.r.id).length === 1, 5000, 'normal finish');
+    s.built.moves.giveUp(ACTOR, a.r.id);
+    await until(() => got(a.tgt.client, 'move.finish', a.r.id).length === 2, 5000, 'abandoned finish');
+    expect(got(a.tgt.client, 'move.finish', a.r.id)[1].body.args).toMatchObject({ role: 'source', abandoned: true, return: true });
+  });
+
   it('no token in any command row, audit row or view', async () => {
     const a = await returning();
     await until(() => cmdRows(a.r.id, 'move.return.start')[0]?.state === 'done', 5000, 'started');

@@ -1033,16 +1033,29 @@ export class Moves {
     return mv;
   }
 
-  // move.finish {return, abandoned} to both sides of a given-up return, each until queued, again when it went unanswered.
+  // move.finish {return, abandoned} to both sides of a given-up return, until each is answered (no time bound, like
+  // target_cleanup_pending). Only to an online side, and a new one only when the last went unanswered (expired,
+  // unknown: the command's own expiry paces it) or is not an abandoned finish (a normal return finish queued by
+  // the return before Give up: the abandoned one goes out after it, M1).
   private giveUpFinishes(m: Move): void {
-    const unsent = (p: string) => (r: CommandRow) => (r.state === 'expired' || r.state === 'unknown') && this.online(p);
-    this.ensure(m, m.sourceProxyId, 'move.finish', { v: 1, moveId: m.id, role: 'source', abandoned: true, return: true }, unsent(m.sourceProxyId));
-    this.ensure(m, m.targetProxyId, 'move.finish', { v: 1, moveId: m.id, role: 'target', abandoned: true, return: true }, unsent(m.targetProxyId));
+    for (const [proxyId, role] of [[m.sourceProxyId, 'source'], [m.targetProxyId, 'target']] as const) {
+      const last = this.lastCommand(m, proxyId, 'move.finish');
+      const abandoned = last?.args.abandoned === true;
+      if (last && abandoned && !(last.state === 'expired' || last.state === 'unknown')) continue;
+      if (!this.online(proxyId)) continue;
+      const key = `${m.id}:${proxyId}:move.finish:give-up`;
+      if (this.gaveUp.has(key)) continue;
+      const r = this.send(m.accountId, proxyId, 'move.finish', { v: 1, moveId: m.id, role, abandoned: true, return: true });
+      if (!r.ok && PERMANENT.has(r.code)) this.gaveUp.add(key);
+    }
   }
 
+  // Given-up returns where a side has no answered abandoned finish yet (done, failed or refused), however long ago.
   private givenUp(proxyId?: string): Move[] {
-    const rows = this.d.db.prepare(`SELECT id FROM moves WHERE phase = 'returned' AND reason = ? AND ended_at >= ?${proxyId ? ' AND (source_proxy_id = ? OR target_proxy_id = ?)' : ''}`)
-      .all(...(proxyId ? [GIVEN_UP, this.d.clock.now() - ENDED_RETRY_MS, proxyId, proxyId] : [GIVEN_UP, this.d.clock.now() - ENDED_RETRY_MS])) as { id: string }[];
+    const rows = this.d.db.prepare(`SELECT id FROM moves WHERE phase = 'returned' AND reason = ?${proxyId ? ' AND (source_proxy_id = ? OR target_proxy_id = ?)' : ''}
+      AND (SELECT COUNT(DISTINCT c.proxy_id) FROM commands c WHERE c.command = 'move.finish' AND json_extract(c.args, '$.moveId') = moves.id
+        AND json_extract(c.args, '$.abandoned') = 1 AND c.state IN ('done', 'failed', 'refused')) < 2`)
+      .all(...(proxyId ? [GIVEN_UP, proxyId, proxyId] : [GIVEN_UP])) as { id: string }[];
     return rows.map((r) => this.store.get(r.id)).filter((x): x is Move => x !== null);
   }
 

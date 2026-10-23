@@ -141,14 +141,17 @@ export class MoveStore {
   }
 
   // Ended moves past their keepDays (defaultDays when the proxy reported none);
-  // never one whose source or target cleanup is pending or that a return names.
+  // never one whose source or target cleanup is pending or that a return names, nor a given-up return
+  // whose abandoned finishes are not yet answered on both sides (Give up, however long a proxy was away).
   // A cancelled move that was switched over and has no return is kept for a day
   // more: Task 15 creates the return in the cancel's own transaction, so that
   // state means the return was pruned first (it goes on the next run) or is
   // missing; the grace keeps a not-yet-created return from losing its original.
   private static readonly PRUNABLE = `FROM moves WHERE ended_at IS NOT NULL AND cleanup_pending = 0 AND target_cleanup_pending = 0
          AND ended_at + COALESCE(keep_days, ?) * 86400000 + (CASE WHEN phase = 'cancelled' AND switched_at IS NOT NULL AND return_of IS NULL THEN ${RETURN_GRACE_MS} ELSE 0 END) < ?
-         AND NOT EXISTS (SELECT 1 FROM moves r WHERE r.return_of = moves.id)`;
+         AND NOT EXISTS (SELECT 1 FROM moves r WHERE r.return_of = moves.id)
+         AND NOT (COALESCE(reason, '') = 'given_up' AND (SELECT COUNT(DISTINCT c.proxy_id) FROM commands c WHERE c.command = 'move.finish' AND json_extract(c.args, '$.moveId') = moves.id
+           AND json_extract(c.args, '$.abandoned') = 1 AND c.state IN ('done', 'failed', 'refused')) < 2)`;
 
   // A read: the ids prune(now, defaultDays) would delete.
   prunable(now: number, defaultDays: number): string[] {
