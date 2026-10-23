@@ -397,4 +397,17 @@ CREATE TABLE diag_tokens (
   revoked_at INTEGER, revoked_by TEXT
 ) STRICT;
 `),
+  // 10: operations tokens: write-scoped bearer tokens for scripts. Same shape
+  // as diag_tokens, plus the scopes (a JSON array).
+  (db) => db.exec(`
+CREATE TABLE ops_tokens (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 64),
+  hash TEXT NOT NULL UNIQUE CHECK (hash GLOB 'sha256:*' AND length(hash) = 71),
+  created_at INTEGER NOT NULL, created_by TEXT NOT NULL,
+  expires_at INTEGER NOT NULL,
+  revoked_at INTEGER, revoked_by TEXT,
+  scopes TEXT NOT NULL
+) STRICT;
+`),
 ];

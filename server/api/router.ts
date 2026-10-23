@@ -32,6 +32,7 @@ import { writeHeapSnapshot } from 'v8';
 import { readEpoch } from '../db/open';
 import { bodyErrors } from '../bodyErrors';
 import type { DiagTokens } from '../diag/tokens';
+import type { OpsTokens } from '../ops/tokens';
 
 export interface ManualBackup { at: number; ok: boolean; litestream: { ok: boolean; status?: string; error?: string }; snapshot: { ok: boolean; key?: string; bytes?: number; error?: string } }
 export interface BackupState {
@@ -48,7 +49,7 @@ export interface BackupService { state(): BackupState; backupNow(actor: string):
 
 export interface ApiDeps {
   db: Db; clock: Clock; cfg: Config; audit: Audit; registry: Registry; enrollment: Enrollment; hub: Hub; status: StatusStore; live: LiveHub; sessions: Sessions; backup: BackupService;
-  commands: Commands; tokens: Tokens; camsInstances: CamsInstances; serverKeyFingerprints: string[]; importer: Importer; config: ProxyConfig; actions: RemoteActions; moves: Moves; diag: DiagTokens;
+  commands: Commands; tokens: Tokens; camsInstances: CamsInstances; serverKeyFingerprints: string[]; importer: Importer; config: ProxyConfig; actions: RemoteActions; moves: Moves; diag: DiagTokens; ops: OpsTokens;
 }
 
 type H = (req: Request, res: Response) => unknown;

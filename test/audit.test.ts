@@ -26,9 +26,9 @@ describe('audit log', () => {
     for (const a of OVERRIDES) expect(AUDIT_ACTIONS).toContain(a);
     expect(AUDIT_ACTIONS).toContain('move-event-refused');
     // Camera move: move-event-refused; Task 4: request, offer, phase; Task 5: approve, switch; Task 6: budget-exceeded, cancel, end-transfer, done.
-    // Diagnostics tokens (issue #45): issue, revoke, a refused bearer token.
-    for (const a of ['diag-token-issue', 'diag-token-revoke', 'diag-auth-refused']) expect(AUDIT_ACTIONS).toContain(a);
-    expect(AUDIT_ACTIONS).toHaveLength(37 + P4.length + OVERRIDES.length + 1 + 3 + 2 + 4 + 3);
+    // Diagnostics and operations tokens: issue, revoke, a refused bearer token.
+    for (const a of ['diag-token-issue', 'diag-token-revoke', 'diag-auth-refused', 'ops-token-issue', 'ops-token-revoke', 'ops-auth-refused']) expect(AUDIT_ACTIONS).toContain(a);
+    expect(AUDIT_ACTIONS).toHaveLength(37 + P4.length + OVERRIDES.length + 1 + 3 + 2 + 4 + 3 + 3);
     expect(new Set(AUDIT_ACTIONS).size).toBe(AUDIT_ACTIONS.length);
   });
 
