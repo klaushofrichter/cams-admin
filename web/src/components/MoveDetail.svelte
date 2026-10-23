@@ -41,7 +41,7 @@
       <button class="link" data-testid="move-return-link" onclick={() => onopen?.(move.returnId ?? move.returnOf)}>{move.returnId ? 'show the copy back' : 'show the cancelled move'}</button>
     </p>
   {/if}
-  {#if move.endRequested}<p class="muted small" data-testid="move-end-waiting">The transfer ends as soon as Archive is copied. Ending it again changes nothing.</p>{/if}
+  {#if move.endRequested && move.phase === 'copying'}<p class="muted small" data-testid="move-end-waiting">The transfer ends as soon as Archive is copied. Ending it again changes nothing.</p>{/if}
   {#if move.cleanupPending}<p class="muted small" data-testid="move-cleanup-pending">Cleanup on {move.source.name} pending</p>{/if}
   {#if move.targetCleanupPending}<p class="muted small" data-testid="move-target-cleanup-pending">Cleanup on {move.target.name} pending</p>{/if}
   {#if error}<p class="error" data-testid="move-error">{error}</p>{/if}

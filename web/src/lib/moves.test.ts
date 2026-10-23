@@ -133,10 +133,10 @@ describe('active moves (menu and Dashboard)', () => {
 
 describe('copy back, check, End after Archive', () => {
   it('phases and reasons of a copy back', () => {
-    expect(phaseText('returning')).toBe('Copying back');
-    expect(phaseText('returned')).toBe('Copied back');
-    expect(reasonText('given_up')).toBe('Copy back given up');
-    expect(reasonText('paused:no_space')).toBe('Paused: no room on the original proxy');
+    expect(phaseText('returning')).toBe('copying back');
+    expect(phaseText('returned')).toBe('copied back');
+    expect(reasonText('given_up')).toBe('copy back given up');
+    expect(reasonText('paused:no_space')).toBe('paused: no room on the original proxy');
     expect(phaseClass('returning')).toBe('warn');
     expect(phaseClass('returned')).toBe('');
   });

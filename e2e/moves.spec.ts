@@ -93,7 +93,7 @@ test('a copy back shows Copying back, cannot be cancelled and is given up behind
   const ret = insertMove(acc.id, b.id, a.id, 'returning', 4);
   patchMove(ret, 'return_of = ?', orig);
   await page.goto('/#/moves');
-  await expect(page.getByTestId(`move-phase-${ret}`)).toHaveText('Copying back');
+  await expect(page.getByTestId(`move-phase-${ret}`)).toHaveText('copying back');
   const detail = page.getByTestId(`move-detail-${ret}`);
   await expect(detail.getByTestId('move-cancel')).toHaveCount(0);
   await expect(detail.getByTestId('move-end-transfer')).toHaveCount(0);
@@ -112,8 +112,8 @@ test('a copy back shows Copying back, cannot be cancelled and is given up behind
   await expect(page.getByTestId('confirm-ok')).toBeDisabled();
   await page.getByTestId('confirm-input').fill('give up');
   await page.getByTestId('confirm-ok').click();
-  await expect(page.getByTestId(`move-phase-${ret}`)).toHaveText('Copied back');
-  await expect(page.getByTestId(`move-reason-${ret}`)).toContainText('Copy back given up');
+  await expect(page.getByTestId(`move-phase-${ret}`)).toHaveText('copied back');
+  await expect(page.getByTestId(`move-reason-${ret}`)).toContainText('copy back given up');
   await expect(detail.getByTestId('move-give-up')).toHaveCount(0);
 });
 
@@ -145,7 +145,7 @@ test('cancelling a copying move offers no copied choice and says what is copied 
   await expect(page.getByTestId('confirm')).not.toContainText('age out');
   await page.getByTestId('confirm-input').fill('cancel');
   await page.getByTestId('confirm-ok').click();
-  await expect(page.getByTestId(`move-phase-${id}`)).toHaveText(/cancelling|cancelled|Copying back/);
+  await expect(page.getByTestId(`move-phase-${id}`)).toHaveText(/^(cancelling|cancelled)$/);
 });
 
 // The Start move form. The answers of POST /moves are stubbed (a real 202 needs online proxies that pass the whole precheck); the lists come from the real API.
