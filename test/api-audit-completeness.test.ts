@@ -70,6 +70,8 @@ describe('audit completeness', () => {
     // Camera moves (Task 8): one record each; the moves are made by hand in the matching phase.
     ['post', '/moves/:moveId/cancel', () => `/moves/${ids.mvCancel}/cancel`, () => ({ copied: 'delete', confirm: 'cancel' }), 'move-cancel'],
     ['post', '/moves/:moveId/end-transfer', () => `/moves/${ids.mvEnd}/end-transfer`, () => ({ confirm: 'end transfer' }), 'move-end-transfer'],
+    // move.begin: a clean precheck (no fix), so the move-begin record and the command's.
+    ['post', '/moves', () => '/moves', () => ({ sourceProxyId: ids.bgs, targetProxyId: ids.bgt, cameraId: 'beginporch', bounds: null }), ['move-begin', 'command-create']],
     // Diagnostics tokens (issue #45).
     ['post', '/diag-tokens', () => '/diag-tokens', () => ({ name: 'mac', days: 1 }), 'diag-token-issue'],
     ['post', '/diag-tokens/:tokenId/revoke', () => `/diag-tokens/${ids.dgt}/revoke`, () => ({}), 'diag-token-revoke'],
@@ -141,6 +143,18 @@ describe('audit completeness', () => {
       };
       ids.mvCancel = mk('c');
       ids.mvEnd = mk('e');
+      // Two online proxies that take moves, and a camera on the first, for the POST /moves row.
+      const live = (tag: string) => {
+        const id = `prx_${tag.padEnd(20, '0')}`;
+        a.db.prepare(`INSERT INTO proxies (id, account_id, name, display_name, runs_on, state, url, tls_site, tls_servername, created_at, updated_at) VALUES (?, ?, ?, ?, 'cluster', 'enrolled', 'http://192.0.2.9:8480', 'site-bg', ?, 1, 1)`).run(id, ids.acc, tag, tag, `${tag}.internal`);
+        a.db.prepare(`INSERT INTO proxy_keys (id, proxy_id, public_key, fingerprint, created_at, confirmed_at) VALUES (?, ?, ?, ?, 1, 1)`).run(`key_${tag.padEnd(20, '0')}`, id, `pk${tag}`, `fp${tag}`);
+        a.status.hello(id, 'v2', Date.now(), ['status', 'commands']);
+        a.status.heartbeat(id, { summary: makeSummary({ cameras: 1, now: Date.now() }), proxy: { ...makeProxyInfo({ now: Date.now(), site: 'site-bg' }), commands: { enabled: true, paused: false, pauseReason: null, allow: ['move.send', 'move.receive'], seenWindow: 1000 } }, truncated: false }, Date.now());
+        return id;
+      };
+      ids.bgs = live('BGSRC');
+      ids.bgt = live('BGTGT');
+      a.db.prepare(`INSERT INTO cameras (id, account_id, proxy_id, cams_id, proxy_camera_id, name, kind, created_at, updated_at) VALUES ('cam_bgbegin', ?, ?, 'beginporch', 'pc', 'B', 'camera', 1, 1)`).run(ids.acc, ids.bgs);
     }
     // The account goes next: its moves must end first (an active one refuses the delete); ended ones go with it.
     if (action === 'backup-now') a.db.exec('UPDATE moves SET ended_at = 1 WHERE ended_at IS NULL');

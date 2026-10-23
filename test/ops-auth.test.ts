@@ -133,6 +133,40 @@ describe('scoped writes', () => {
     expect(r.body).toMatchObject({ id: mv, phase: 'cancelling' });
   });
 
+  it('a moves token may POST /moves; a routes token gets 403 scope and nothing is fixed', async () => {
+    const acct = a.registry.createAccount('admin@example.com', { name: 'beginacc', displayName: 'B' }).id;
+    const mk = (name: string, allow: string[]) => {
+      const p = a.registry.createProxy('admin@example.com', acct, { name, displayName: name, runsOn: 'local-host' }).id;
+      a.db.prepare(`UPDATE proxies SET state = 'enrolled' WHERE id = ?`).run(p);
+      a.db.prepare(`INSERT INTO proxy_keys (id, proxy_id, public_key, fingerprint, created_at, confirmed_at) VALUES (?, ?, ?, ?, 1, 1)`).run(`key_${String(n++).padStart(20, '0')}`, p, `pk${p}`, `fp${p}`);
+      const cur = a.registry.getProxy(acct, p);
+      a.registry.updateProxy('admin@example.com', acct, p, { url: 'http://192.0.2.9:8480', tlsSite: 'site-ops', tlsServername: `${name}.internal`, version: cur.version });
+      a.status.hello(p, 'v2', Date.now(), ['status', 'commands']);
+      a.status.heartbeat(p, { summary: makeSummary({ cameras: 1, now: Date.now() }), proxy: { ...makeProxyInfo({ now: Date.now(), site: 'site-ops' }), commands: { enabled: true, paused: false, pauseReason: null, allow, seenWindow: 1000 } }, truncated: false }, Date.now());
+      return p;
+    };
+    const s = mk('bs', ['move.send', 'move.receive']);
+    const t = mk('bt', ['move.send', 'move.receive']);
+    a.registry.createCamera('admin@example.com', acct, { camsId: 'beginporch', name: 'P', kind: 'camera', proxyId: s, proxyCameraId: 'cam1', host: '192.0.2.10', protocol: 'https' });
+    const ci = a.camsInstances.create('admin@example.com', { name: 'beginci', displayName: 'C', accounts: [acct] }).id;
+    a.camsInstances.setRoute('admin@example.com', ci, s, { url: null, hidden: false });
+    const body = { sourceProxyId: s, targetProxyId: t, cameraId: 'beginporch', bounds: null };
+    const cmds = () => (a.db.prepare(`SELECT count(*) n FROM commands WHERE command = 'move.begin'`).get() as { n: number }).n;
+    expect(opsScopeFor('POST', '/moves')).toBe('moves');
+    const rt = issue(['routes']);
+    const bad = await bearer('post', '/moves', rt.token, body);
+    expect(bad.status).toBe(403);
+    expect(bad.body).toMatchObject({ error: 'scope' });
+    expect(a.camsInstances.routes(ci)).toHaveLength(1);
+    expect(cmds()).toBe(0);
+    const mt = issue(['moves']);
+    const ok = await bearer('post', '/moves', mt.token, body);
+    expect(ok.status, JSON.stringify(ok.body)).toBe(202);
+    expect(ok.body).toMatchObject({ commandId: expect.any(String), fixed: [{ rule: 'routed', instanceId: ci, proxyId: t }] });
+    expect(cmds()).toBe(1);
+    expect(auditOf('move-begin').at(-1)!.actor).toBe(`ops-token:${mt.prefix}`);
+  });
+
   it('every other table route reaches its handler with a token in scope', async () => {
     // A proxy that takes tokens.apply (for retire and apply).
     const p2 = a.registry.createProxy('admin@example.com', acc, { name: 'p2', displayName: 'P2', runsOn: 'local-host' }).id;

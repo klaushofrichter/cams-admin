@@ -1,8 +1,10 @@
 // The moves API (plan Task 8): list, detail with chunk counts, cancel and
 // end transfer behind typed confirms. No view field carries a token, a hash or a key.
+import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { tmpDir } from './helpers/tmp';
 import { testApp } from './helpers/app';
+import { makeProxyInfo, makeSummary } from '../test-client/summaries';
 
 const dir = tmpDir();
 const a = testApp(dir);
@@ -131,5 +133,59 @@ describe('moves API', () => {
     expect(r.body.source.name).toMatch(/^Source /);
     a.db.prepare(`UPDATE proxies SET display_name = '' WHERE id = ?`).run(m.t);
     expect((await a.api('get', `/moves/${m.mv}`)).body.target.name).toMatch(/^tgt/);
+  });
+  // POST /moves (move.begin plan Task 4). Two online proxies of a fresh account that allow moves, a camera on the source, one cams instance seeing both.
+  const SITE_FP = 'SHA256:' + 'CD'.repeat(32);
+  const BOUNDS = { transfer: true, kinds: ['clips', 'stills'], space: 'fit', maxBudgetS: 3600 };
+  function beginFixture(tag: string, online = true) {
+    const acct = (a.registry.createAccount('admin@example.com', { name: `bg${tag}`, displayName: 'B' }) as { id: string }).id;
+    const px = (name: string, allow: string[], live = true) => {
+      const p = a.registry.createProxy('admin@example.com', acct, { name, displayName: name, runsOn: 'local-host' }).id;
+      a.db.prepare(`UPDATE proxies SET state = 'enrolled' WHERE id = ?`).run(p);
+      const cur = a.registry.getProxy(acct, p);
+      a.registry.updateProxy('admin@example.com', acct, p, { url: 'http://192.0.2.9:8480', tlsSite: `site-${tag}`, tlsServername: `${name}.internal`, caFingerprints: [SITE_FP], version: cur.version });
+      a.db.prepare(`INSERT INTO proxy_keys (id, proxy_id, public_key, fingerprint, created_at, confirmed_at) VALUES (?, ?, ?, ?, 1, 1)`).run(`key_${String(n++).padStart(20, '0')}`, p, `pk${p}`, `fp${p}`);
+      if (live) {
+        a.status.hello(p, 'v2', Date.now(), ['status', 'commands']);
+        a.status.heartbeat(p, { summary: makeSummary({ cameras: 1, now: Date.now() }), proxy: { ...makeProxyInfo({ now: Date.now(), site: `site-${tag}`, caFingerprint: [SITE_FP] }), commands: { enabled: true, paused: false, pauseReason: null, allow, seenWindow: 1000 } }, truncated: false }, Date.now());
+      }
+      return p;
+    };
+    const s = px(`s${tag}`, ['move.send', 'move.receive']);
+    const t = px(`t${tag}`, ['move.send', 'move.receive'], online);
+    a.registry.createCamera('admin@example.com', acct, { camsId: `porch${tag}`, name: 'Porch', kind: 'camera', proxyId: s, proxyCameraId: 'cam1', host: '192.0.2.10', protocol: 'https' });
+    const inst = a.camsInstances.create('admin@example.com', { name: `ci${tag}`, displayName: 'C', accounts: [acct] }).id;
+    for (const p of [s, t]) a.camsInstances.setRoute('admin@example.com', inst, p, { url: null, hidden: false });
+    return { acct, s, t, body: { sourceProxyId: s, targetProxyId: t, cameraId: `porch${tag}`, bounds: BOUNDS } };
+  }
+  const commandCount = () => (a.db.prepare(`SELECT count(*) n FROM commands WHERE command = 'move.begin'`).get() as { n: number }).n;
+
+  it('POST /moves with a session answers 202 with commandId, fixed and report', async () => {
+    const f = beginFixture('a');
+    const r = await a.api('post', '/moves', f.body);
+    expect(r.status, JSON.stringify(r.body)).toBe(202);
+    expect(r.body).toMatchObject({ commandId: expect.any(String), fixed: [], report: { ok: true } });
+    expect(commandCount()).toBe(1);
+  });
+
+  it('POST /moves answers 409 precheck with the report', async () => {
+    const f = beginFixture('b', false);
+    const r = await a.api('post', '/moves', f.body);
+    expect(r.status).toBe(409);
+    expect(r.body).toMatchObject({ error: 'precheck', reason: 'target_offline' });
+    expect(r.body.report.rules.find((x: { rule: string }) => x.rule === 'target_online')).toMatchObject({ ok: false });
+  });
+
+  it('POST /moves with a bad body is 400 with the field', async () => {
+    const f = beginFixture('c');
+    const { targetProxyId: _t, ...rest } = f.body;
+    expect(await a.api('post', '/moves', rest)).toMatchObject({ status: 400, body: { error: 'invalid', field: 'targetProxyId' } });
+  });
+
+  it('a session POST /moves without X-Cams-Admin is 403 csrf', async () => {
+    const f = beginFixture('d');
+    const r = await request(a.app).post('/api/v1/moves').set('Cookie', a.cookie).set('Content-Type', 'application/json').send(JSON.stringify(f.body));
+    expect(r.status).toBe(403);
+    expect(r.body).toMatchObject({ error: 'csrf' });
   });
 });

@@ -76,6 +76,7 @@ actor `ops-token:<8 hex>`. The list is also at `/diag/ops-tokens`.
 | `routes` | `PUT /cams-instances/:instanceId/routes/:proxyId` |
 | `routes` | `DELETE /cams-instances/:instanceId/routes/:proxyId` |
 | `routes` | `DELETE /cams-instances/:instanceId/camera-overrides/:cameraId` |
+| `moves` | `POST /moves` |
 | `moves` | `POST /moves/:moveId/cancel` |
 | `moves` | `POST /moves/:moveId/end-transfer` |
 
@@ -94,3 +95,73 @@ curl -fsS -X POST -H "Authorization: Bearer $(cat ~/.config/cams-admin/ops-token
 
 (`acc_…`, `prx_…` and `tok_…` are placeholders; take the real ids from
 `/diag/proxies` and `/diag/tokens`.)
+
+## Start a move
+
+`POST /api/v1/moves` starts a camera move from cams-admin. A session works too
+(with `X-Cams-Admin`); a script uses an operations token with scope `moves`.
+
+```sh
+curl -fsS -X POST -H "Authorization: Bearer $(cat ~/.config/cams-admin/ops-token)" -H 'Content-Type: application/json' \
+  -d '{"sourceProxyId":"prx_…","targetProxyId":"prx_…","cameraId":"porch","bounds":{"transfer":true,"kinds":["clips","stills","events","checks","archive"],"space":"fit","maxBudgetS":3600}}' \
+  https://cams-admin.example.net/api/v1/moves
+```
+
+(`prx_…` and `porch` are placeholders: take the proxy ids from `/diag/proxies`.
+`cameraId` is the registry id or the cams id within the source's account.)
+
+`bounds` is required, but may be `null` (no pre-approval): `transfer` (copy
+content), `kinds` (what may be copied), `space` (the space choice the move
+plan may have), `maxBudgetS` (60 to 604800 seconds).
+
+What it does, in this order:
+
+1. Checks the request and the source: the camera is on the source, the source
+   is online, allows `move.send` and has its URL and TLS name in the registry;
+   the target has its URL. Then it runs the precheck (as
+   `/diag/moves/precheck`).
+2. If a rule other than the three below fails, it answers 409 and has changed
+   nothing.
+3. It fixes the three fixable rules:
+   - `routed`: adds a visible cams route (url empty) to the target on every
+     cams instance that sees the source. A route that is hidden on purpose is
+     not unhidden; that instance keeps failing and the answer is 409.
+   - `site_ca`: writes the registry's site for a proxy from the site the
+     proxy itself reports, only where the registry has none. A registry site
+     that differs from the reported one is not overwritten.
+   - `no_host_override`: clears the camera's per-instance host (a set camera
+     user stays).
+4. It re-checks and queues the command `move.begin` on the source, which then
+   makes the usual move request.
+
+What it does not do: it never writes CA fingerprints or the TLS name (set
+those by hand), never fixes any other rule (offline, busy, other account, no
+`move.receive`), and never sends a camera password. Each fix is audited as
+`move-fix`, the command as `move-begin`. A fix stays when the request is
+refused later, for example a host-override fix when the source then refuses
+the command (busy, no site CA): the fixes are audited, there is no move, and a
+second request starts from the fixed state.
+
+Answers:
+
+- 202 `{commandId, fixed, report}`: the command is queued. `fixed` lists what
+  was changed (`{rule, instanceId, proxyId}` for `routed`, `{rule, proxyId,
+  site}` for `site_ca`, `{rule, instanceId, cameraId}` for `no_host_override`);
+  `report` is the precheck report after the fixes.
+- 400 `{error: "invalid", field}`: the body is wrong (`sourceProxyId`,
+  `targetProxyId`, `cameraId` or `bounds`).
+- 404 `{error: "not_found", field}`: unknown source or camera.
+- 409 `{error, reason?, report?, fixed?}`: `precheck` (with the report and its
+  `reason`, such as `target_offline`), or one of `camera_not_on_source`,
+  `source_offline`, `moves_not_allowed`, `source_registry_incomplete`,
+  `target_registry_incomplete`.
+
+`autoApprove` on a move only means that the request carried bounds. The source
+proxy decides: it approves its own offer when the target's answer fits the
+bounds, and otherwise it waits for a person to approve, as for any move.
+
+Follow the move: the command's result is at
+`GET /api/v1/accounts/:accountId/proxies/:proxyId/commands/:cmdId` (it holds the
+`requestId`, or the source's refusal code), and the move itself, with
+`autoApprove` and `bounds`, at `GET /api/v1/diag/moves?accountId=…`, matched by
+that `requestId`.

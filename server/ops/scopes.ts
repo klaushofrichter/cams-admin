@@ -15,6 +15,7 @@ export const OPS_ROUTES: readonly OpsRoute[] = [
   { method: 'PUT', path: '/cams-instances/:instanceId/routes/:proxyId', scope: 'routes' },
   { method: 'DELETE', path: '/cams-instances/:instanceId/routes/:proxyId', scope: 'routes' },
   { method: 'DELETE', path: '/cams-instances/:instanceId/camera-overrides/:cameraId', scope: 'routes' },
+  { method: 'POST', path: '/moves', scope: 'moves' },
   { method: 'POST', path: '/moves/:moveId/cancel', scope: 'moves' },
   { method: 'POST', path: '/moves/:moveId/end-transfer', scope: 'moves' },
 ];
