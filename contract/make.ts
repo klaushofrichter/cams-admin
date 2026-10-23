@@ -142,6 +142,7 @@ export function fixtures(): Record<string, unknown> {
   // (move.finish and move.cancel by args.role). No password anywhere: the camera's passwords travel sealed, out of band.
   const MV = 'mv_0123456789ABCDEFGHJK';
   const RQ = 'rq_0123456789ABCDEFGHJK';
+  const MV2 = 'mv_1123456789ABCDEFGHJK';
   const PRX_T = 'prx_1123456789ABCDEFGHJK';
   const LEAF = `SHA256:${'AB'.repeat(32)}`;
   // A fixed X25519 SPKI public key (the 12-byte prefix and 32 bytes: RFC 8410), base64.
@@ -179,6 +180,10 @@ export function fixtures(): Record<string, unknown> {
     'valid-command-move-release': moveValid('move.release', ['move.send'], { v: 1, moveId: MV }, 'the source drops the camera'),
     'valid-command-move-finish': moveValid('move.finish', ['move.send'], { v: 1, moveId: MV, role: 'source', abandoned: false }, 'the source side ends; a target side is role target (move.receive)'),
     'valid-command-move-cancel': moveValid('move.cancel', ['move.receive'], { v: 1, moveId: MV, role: 'target', copied: 'age-out' }, 'cancel on the target, with what to do with copied content (a source cancel has no copied)'),
+    'valid-command-move-return-open': moveValid('move.return.open', ['move.receive'], { v: 1, moveId: MV2, returnOf: MV, tokenHash: HASH(9), targetIp: '192.0.2.10' }, 'the copy back after a cancel: the receiving side (move.receive) accepts one bearer token (its hash) for the return move'),
+    'valid-command-move-return-start': moveValid('move.return.start', ['move.send'], { v: 1, moveId: MV2, returnOf: MV, token: 'example-move-token-not-a-secret', source: offerArgs.source, done: ['clips:2026-10-20'] }, 'the sending side (move.send) starts copying back; done lists the newest chunk ids already back'),
+    'valid-command-move-finish-return': moveValid('move.finish', ['move.receive'], { v: 1, moveId: MV2, role: 'source', abandoned: false, return: true }, 'a return ends: the entry flips, so role source needs move.receive (role target needs move.send)'),
+    'refused-move-finish-return-wrong-entry': moveRefused('not_allowed', 'move.finish', { v: 1, moveId: MV2, role: 'source', abandoned: false, return: true }, ['move.send'], 'move.finish with return and role source needs move.receive; move.send does not cover it'),
     'refused-move-offer-not-allowed': moveRefused('not_allowed', 'move.offer', offerArgs, ['move.send'], 'move.offer needs move.receive; move.send does not cover it'),
     'refused-move-cancel-target-no-copied': moveRefused('invalid_args', 'move.cancel', { v: 1, moveId: MV, role: 'target' }, ['move.receive'], 'a target cancel names what to do with copied content (strict args refuse)'),
     'valid-event-move-targets': moveEvent(3, { kind: 'move.targets', requestId: RQ, camera: 'cam1' }, 'the source asks for the targets of one camera'),
@@ -191,6 +196,11 @@ export function fixtures(): Record<string, unknown> {
     'valid-event-move-approve': moveEvent(3, { kind: 'move.approve', moveId: MV, plan }, 'the user approved the plan on the source'),
     'valid-event-move-cancel': moveEvent(3, { kind: 'move.cancel', moveId: MV, copied: 'delete' }, 'cancelled from the source page'),
     'valid-event-move-phase': moveEvent(3, { kind: 'move.phase', moveId: MV, role: 'target', phase: 'failed', ok: false, code: 'token_address', detail: 'the source refused the bound peer' }, 'a phase change; failed carries a code'),
+    'valid-event-move-phase-check': moveEvent(3, { kind: 'move.phase', moveId: MV, role: 'target', phase: 'copied', ok: false, check: { complete: false, missing: { stills: 2 }, recovered: { clips: 1 }, failed: { archive: 1 }, expired: {} }, keepDays: 30 }, 'the completeness check: counts of files per kind (a row that could not be imported counts as failed)'),
+    'valid-event-move-phase-return-pending': moveEvent(3, { kind: 'move.phase', moveId: MV, role: 'source', phase: 'cancelled', ok: true, returnPending: true }, 'cancelled after the switch-over: the content is still to be copied back'),
+    'invalid-event-move-phase-keepdays-low': invalid('event', 'bad_message', signed(env('event', 3, {
+      proxyId: PRX, connId: CON, kind: 'move.phase', moveId: MV, role: 'target', phase: 'finished', ok: true, keepDays: 3,
+    }), PROXY), 'keepDays is 7 to 3650'),
     'valid-event-move-progress': moveEvent(3, {
       kind: 'move.progress', moveId: MV, chunks: [{ id: 'clips:2026-10-20', state: 'verified' }, { id: 'clips:2026-10-21', state: 'pending' }, { id: 'events:2026-10-20', state: 'failed' }],
       bytesDone: 10_485_760, bytesTotal: 52_428_800, rateBps: 1_048_576, etaS: 40,
