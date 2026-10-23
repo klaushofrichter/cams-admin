@@ -353,7 +353,8 @@ describe('cancel', () => {
     expect(move(a.m.id).phase).toBe('cancelling');
     expect(s.built.moves.store.chunks(a.m.id)).toEqual([{ id: 'clips:2026-10-01', state: 'verified' }]);
     await until(() => got(a.tgt.client, 'move.cancel', a.m.id).length === 1, 5000, 'target cancel');
-    expect(got(a.tgt.client, 'move.cancel', a.m.id)[0].body.args).toEqual({ v: 1, moveId: a.m.id, role: 'target', copied: 'delete' });
+    // After the switch-over the choice is ignored (copied back instead): the target is told the safe 'age-out'.
+    expect(got(a.tgt.client, 'move.cancel', a.m.id)[0].body.args).toEqual({ v: 1, moveId: a.m.id, role: 'target', copied: 'age-out' });
     // The registry stays on the target until the source reports the camera back.
     expect(s.built.registry.getCamera(a.src.accountId, a.cam.id).proxyId).toBe(a.tgt.proxyId);
     // The release answers late (re-sent after a reconnect): nothing changes.

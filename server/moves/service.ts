@@ -840,10 +840,12 @@ export class Moves {
   }
 
   // The target's cancel, with the choice for copied content (no outer transaction: reads only unless one is due).
+  // No choice stored (a cancel after the switch-over: the content is copied back) → 'age-out', the safe one should
+  // a proxy not yet know the return.
   private ensureTargetCancel(m: Move): void {
     if (m.phase === 'cancelling' && !this.online(m.sourceProxyId)) return;
     const { unsent, failedAgain } = this.cancelRetry(m);
-    this.ensure(m, m.targetProxyId, 'move.cancel', { v: 1, moveId: m.id, role: 'target', copied: m.copiedChoice === 'age-out' ? 'age-out' : 'delete' }, (r) => unsent(m.targetProxyId)(r) || failedAgain(m.targetProxyId)(r));
+    this.ensure(m, m.targetProxyId, 'move.cancel', { v: 1, moveId: m.id, role: 'target', copied: m.copiedChoice === 'delete' ? 'delete' : 'age-out' }, (r) => unsent(m.targetProxyId)(r) || failedAgain(m.targetProxyId)(r));
   }
 
   private commandCount(m: Move, proxyId: string, command: WireCommand): number {
@@ -887,8 +889,8 @@ export class Moves {
   // at once (`cancelled`), the cancels go out. In copying the camera comes back
   // first (`cancelling`); the registry follows the source's `cancelled`, and a
   // return copies back what the target captured: the copied choice is ignored
-  // there (stored as null, ruling 18; the target's cancel says 'delete', which
-  // cam-proxy ignores after the switch-over).
+  // there (stored as null, ruling 18; the target's cancel says 'age-out', and
+  // cam-proxy keeps everything after the switch-over anyway).
   private cancelIn(m: Move, copied: 'delete' | 'age-out', who: Who): Move {
     const back = m.phase === 'copying';
     const mv = this.store.setPhase(m.id, back ? 'cancelling' : 'cancelled', { ...this.flushIn(m.id), copiedChoice: back ? null : copied });

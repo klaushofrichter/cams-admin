@@ -224,13 +224,21 @@ describe('the return runs', () => {
     clock.advance(CANCEL_RETRY_MS);
     s.built.moves.tick();
     await until(() => cmdRows(a.r.id, 'move.return.open').length === 2, 5000, 'asked again');
-    // Every CANCEL_RETRY_MS while wrong_phase (no doubling).
+    // wrong_phase backs off like any failure: twice the base after the second try.
     await until(() => cmdRows(a.r.id, 'move.return.open')[1].state === 'failed', 5000, 'failed again');
+    clock.advance(CANCEL_RETRY_MS);
+    s.built.moves.tick();
+    await settle();
+    expect(cmdRows(a.r.id, 'move.return.open')).toHaveLength(2);
     clock.advance(CANCEL_RETRY_MS);
     s.built.moves.tick();
     await until(() => cmdRows(a.r.id, 'move.return.open').length === 3, 5000, 'asked a third time');
     await until(() => cmdRows(a.r.id, 'move.return.open')[2].state === 'failed', 5000, 'third answered');
     delete a.tgt.client.moveResults['move.return.open'];
+    clock.advance(CANCEL_RETRY_MS * 3);
+    s.built.moves.tick();
+    await settle();
+    expect(cmdRows(a.r.id, 'move.return.open')).toHaveLength(3); // 4x the base after the third
     clock.advance(CANCEL_RETRY_MS);
     s.built.moves.tick();
     await until(() => got(a.src.client, 'move.return.start', a.r.id).length === 1, 5000, 'start after open');
@@ -291,9 +299,16 @@ describe('the return runs', () => {
   });
 
   it('tick writes nothing while a started return copies', async () => {
-    const a = await returning();
+    const a = await returning({ open: { status: 'ok', result: { chunks: 2, bytes: 5000 } } });
     await until(() => cmdRows(a.r.id, 'move.return.start')[0]?.state === 'done', 5000, 'started');
     await settle();
+    expect(move(a.r.id).bytesTotal).toBe(5000);
+    // The copier's own total differs from the open's (real bytes, a refreshed manifest): saved with progress, not overwritten.
+    progress(a.src, a.r.id, [{ id: 'clips:2026-10-20', state: 'verified' }], 1000, 6200);
+    clock.advance(60_000);
+    s.built.moves.tick();
+    await settle();
+    expect(move(a.r.id).bytesTotal).toBe(6200);
     const epoch = readEpoch(s.built.db);
     for (let k = 0; k < 5; k++) {
       clock.advance(60_000);
@@ -301,6 +316,56 @@ describe('the return runs', () => {
     }
     await settle();
     expect(readEpoch(s.built.db)).toBe(epoch);
+    expect(move(a.r.id).bytesTotal).toBe(6200);
+  });
+
+  it('a failure on the original re-sends the start (same token, done from the chunk states) with a backoff', async () => {
+    const a = await returning();
+    await until(() => cmdRows(a.r.id, 'move.return.start')[0]?.state === 'done', 5000, 'started');
+    progress(a.src, a.r.id, [{ id: 'clips:2026-10-20', state: 'verified' }, { id: 'clips:2026-10-21', state: 'pending' }], 1000);
+    a.src.client.emitEvent({ kind: 'move.phase', moveId: a.r.id, role: 'target', phase: 'failed', ok: false, code: 'internal' });
+    await until(() => auditFor('move-return').some((x) => x.d.step === 'failed'), 5000, 'failure audited');
+    expect(move(a.r.id).phase).toBe('returning');
+    s.built.moves.tick();
+    await settle();
+    expect(got(a.src.client, 'move.return.start', a.r.id)).toHaveLength(1);
+    clock.advance(CANCEL_RETRY_MS);
+    s.built.moves.tick();
+    await until(() => got(a.src.client, 'move.return.start', a.r.id).length === 2, 5000, 'start again');
+    const [first, second] = got(a.src.client, 'move.return.start', a.r.id).map((c) => c.body.args);
+    expect(second.token === first.token).toBe(true);
+    expect(second.done).toEqual(['clips:2026-10-20']);
+    expect(got(a.tgt.client, 'move.return.open', a.r.id)).toHaveLength(1);
+    // A second failure waits twice as long.
+    await until(() => cmdRows(a.r.id, 'move.return.start')[1]?.state === 'done', 5000, 'restarted');
+    a.src.client.emitEvent({ kind: 'move.phase', moveId: a.r.id, role: 'target', phase: 'failed', ok: false, code: 'internal' });
+    await settle();
+    clock.advance(CANCEL_RETRY_MS);
+    s.built.moves.tick();
+    await settle();
+    expect(got(a.src.client, 'move.return.start', a.r.id)).toHaveLength(2);
+    clock.advance(CANCEL_RETRY_MS);
+    s.built.moves.tick();
+    await until(() => got(a.src.client, 'move.return.start', a.r.id).length === 3, 5000, 'start a third time');
+    phase(a.src, a.r.id, 'target', 'copied', { check: CHECK });
+    await until(() => move(a.r.id).phase === 'returned', 5000, 'returned');
+  });
+
+  it('a failure on the new proxy re-sends the open, then the start', async () => {
+    const a = await returning();
+    await until(() => cmdRows(a.r.id, 'move.return.start')[0]?.state === 'done', 5000, 'started');
+    a.tgt.client.emitEvent({ kind: 'move.phase', moveId: a.r.id, role: 'source', phase: 'failed', ok: false, code: 'internal' });
+    await until(() => auditFor('move-return').some((x) => x.d.step === 'failed' && x.d.role === 'source'), 5000, 'failure audited');
+    s.built.moves.tick();
+    await settle();
+    expect(got(a.tgt.client, 'move.return.open', a.r.id)).toHaveLength(1);
+    clock.advance(CANCEL_RETRY_MS);
+    s.built.moves.tick();
+    await until(() => got(a.tgt.client, 'move.return.open', a.r.id).length === 2 && got(a.src.client, 'move.return.start', a.r.id).length === 2, 5000, 'open, then start again');
+    const opens = got(a.tgt.client, 'move.return.open', a.r.id).map((c) => c.body.args.tokenHash);
+    expect(opens[0] === opens[1]).toBe(true);
+    phase(a.src, a.r.id, 'target', 'copied', { check: CHECK });
+    await until(() => move(a.r.id).phase === 'returned', 5000, 'returned');
   });
 
   it('no token in any command row, audit row or view', async () => {

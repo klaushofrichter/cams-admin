@@ -33,6 +33,7 @@ export const NO_SPACE_REASON = 'paused:no_space';
 // A step whose command could not be queued (the proxy paused, the entry off) is tried again this often.
 export const RETURN_QUEUE_RETRY_MS = 60_000;
 
+const RETRY_CAP_MS = 3600_000;
 const FINAL_STATES = new Set(['done', 'refused', 'failed', 'expired', 'unknown']);
 const DONE_MAX = 512;
 const isCount = (x: unknown): x is number => Number.isSafeInteger(x) && (x as number) >= 0;
@@ -63,12 +64,15 @@ export interface ReturnHost {
 }
 
 // The plaintext token of a return and the commands sent with it (memory only).
-export interface ReturnKey { token: string; openId: string | null; startId: string | null }
+// bytesFor: the open whose `bytes` went into bytesTotal (taken once per open; the copier's progress total wins after that).
+export interface ReturnKey { token: string; openId: string | null; startId: string | null; bytesFor?: string }
 
 export class Returns {
   // Commands that could not be queued, by moveId:command: when they were last tried.
   private blocked = new Map<string, number>();
   private resolving = new Set<string>();
+  // A side's reported failure (memory: a restart re-keys, which sends open and start again anyway), by return id.
+  private failures = new Map<string, { source?: number; target?: number }>();
 
   constructor(private h: ReturnHost, private keys: Map<string, ReturnKey>, private retryMs: number) {}
 
@@ -105,10 +109,26 @@ export class Returns {
     if (!open) return sendOpen();
     if (!FINAL_STATES.has(open.state)) return;
     if (open.state !== 'done') return void (this.again(m, m.sourceProxyId, 'move.return.open', open) && sendOpen());
+    const failed = this.failures.get(m.id);
+    // The new proxy failed after this open: open again (same key) after the backoff; the start follows that open.
+    if (failed?.source !== undefined) {
+      if (this.failureDue(m, m.sourceProxyId, 'move.return.open', failed.source)) {
+        delete failed.source;
+        sendOpen();
+      }
+      return;
+    }
     const bytes = open.result?.bytes;
-    if (isCount(bytes) && m.bytesTotal !== bytes) tx(this.h.db, () => this.h.store.setPhase(m.id, 'returning', { bytesTotal: bytes }));
+    if (key.bytesFor !== open.id) {
+      key.bytesFor = open.id;
+      if (isCount(bytes) && m.bytesTotal !== bytes) tx(this.h.db, () => this.h.store.setPhase(m.id, 'returning', { bytesTotal: bytes }));
+    }
     const start = key.startId ? this.cmd(m, m.targetProxyId, key.startId) : null;
-    if (start && (!FINAL_STATES.has(start.state) || start.state === 'done' || !this.again(m, m.targetProxyId, 'move.return.start', start))) return;
+    if (start && start.state === 'done' && failed?.target !== undefined) {
+      // The original failed after this start: start again (same token, `done` from the chunk states) after the backoff.
+      if (!this.failureDue(m, m.targetProxyId, 'move.return.start', failed.target)) return;
+      delete failed.target;
+    } else if (start && (!FINAL_STATES.has(start.state) || start.state === 'done' || !this.again(m, m.targetProxyId, 'move.return.start', start))) return;
     const src = this.h.registry.proxyById(m.sourceProxyId);
     if (!src?.url || !src.tlsServername) {
       if (this.due(`${m.id}:registry`)) this.h.log.warn({ moveId: m.id }, 'move_return_source_registry_incomplete');
@@ -132,8 +152,15 @@ export class Returns {
   // A phase event for a returning move (each side for its own role; the caller checked).
   onPhase(m: Move, ev: MovePhaseEvent): void {
     if (!ev.ok || ev.phase === 'failed') {
-      // The return retries until done: a side's failure is logged only (Give up is the exit).
-      this.h.log.warn({ moveId: m.id, role: ev.role, phase: ev.phase, code: ev.code }, 'move_return_failure_ignored');
+      // The return retries until done: the failed side's step is sent again after a backoff (step), audited per failure.
+      if (this.finishing(m)) return;
+      const f = this.failures.get(m.id) ?? {};
+      if (f[ev.role] !== undefined) return;
+      f[ev.role] = this.h.clock.now();
+      this.failures.set(m.id, f);
+      this.h.log.warn({ moveId: m.id, role: ev.role, phase: ev.phase, code: ev.code }, 'move_return_side_failed');
+      tx(this.h.db, () => this.h.audit(m, 'move-return', 'failed', { step: 'failed', phase: 'returning', role: ev.role, code: ev.code ?? null },
+        { actorType: 'proxy', actor: ev.role === 'source' ? m.sourceProxyId : m.targetProxyId }));
       return;
     }
     if (ev.role === 'target' && ev.phase === 'copying') {
@@ -183,6 +210,7 @@ export class Returns {
       });
     });
     this.keys.delete(m.id);
+    this.failures.delete(m.id);
     this.h.publish(m.id);
   }
 
@@ -205,12 +233,17 @@ export class Returns {
     return key;
   }
 
-  // A failed command is due again: unanswered while its proxy is online; wrong_phase (the new proxy's cancel not
-  // landed yet) every retryMs; any other failure with the doubling backoff.
+  // A failed command is due again: unanswered while its proxy is online; answered failed or refused (wrong_phase: the
+  // new proxy's cancel not landed yet) with the doubling backoff, capped at an hour.
   private again(m: Move, proxyId: string, command: WireCommand, last: CommandRow): boolean {
     if (unanswered(last)) return this.h.online(proxyId);
-    if (last.outcomeCode === 'wrong_phase') return this.h.clock.now() - (last.finishedAt ?? last.createdAt) >= this.retryMs;
     return this.h.retryDue(m, proxyId, command, this.retryMs, last);
+  }
+
+  // A side's reported failure is due for another try: retryMs doubling with the tries of that command so far, capped.
+  private failureDue(m: Move, proxyId: string, command: WireCommand, at: number): boolean {
+    const n = this.count(m, proxyId, command);
+    return this.h.clock.now() - at >= Math.min(this.retryMs * 2 ** Math.max(0, n - 1), RETRY_CAP_MS);
   }
 
   private queue(m: Move, proxyId: string, command: WireCommand, args: Record<string, unknown>, sent?: (id: string) => void): void {
