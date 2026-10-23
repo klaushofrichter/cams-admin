@@ -1,6 +1,6 @@
 // The browser side of /api/v1: JSON, and the CSRF header on every write (spec §7).
 export class ApiFailure extends Error {
-  constructor(public status: number, public code: string, public field?: string) {
+  constructor(public status: number, public code: string, public field?: string, public body?: unknown) {
     super(field ? `${code} (${field})` : code);
   }
 }
@@ -22,7 +22,7 @@ export async function api<T = any>(method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'D
   if (r.status === 204) return undefined as T;
   const j = await r.json().catch(() => ({}));
   if (r.status === 401) onUnauthorized();
-  if (!r.ok) throw new ApiFailure(r.status, j.error ?? `http_${r.status}`, j.field);
+  if (!r.ok) throw new ApiFailure(r.status, j.error ?? `http_${r.status}`, j.field, j);
   return j as T;
 }
 

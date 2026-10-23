@@ -201,7 +201,7 @@ describe('start and go', () => {
 });
 
 describe('switch-over', () => {
-  it('switched moves the camera in the registry with the new TLS name and sets move_id', async () => {
+  it('switched moves the camera in the registry with the new TLS name and sets move_id (and Registry.moveCamera sets switched_at)', async () => {
     const { src, tgt, cam, m } = await switched();
     const c = s.built.registry.getCamera(src.accountId, cam.id);
     expect(c).toMatchObject({ proxyId: tgt.proxyId, proxyCameraId: 'cam1', tlsServername: `cam1.${tgt.site}.internal`, camsId: 'cam1', host: '192.0.2.10' });
@@ -209,11 +209,23 @@ describe('switch-over', () => {
     expect((s.built.db.prepare('SELECT move_id FROM cameras WHERE id = ?').get(cam.id) as { move_id: string }).move_id).toBe(m.id);
     // The target copies right after switched: phase copying at once.
     expect(move(m.id).phase).toBe('copying');
+    // Registry.moveCamera stamps the switch-over time for the cams attestation (migration 13).
+    expect((s.built.db.prepare('SELECT switched_at FROM moves WHERE id = ?').get(m.id) as { switched_at: number }).switched_at).toBe(clock.now());
     expect(got(src.client, 'move.release', m.id)[0].body.args).toEqual({ v: 1, moveId: m.id });
     const sw = auditFor('move-switch');
     expect(sw).toHaveLength(1);
     expect(sw[0]).toMatchObject({ outcome: 'ok', actor_type: 'system' });
     expect(sw[0].d).toMatchObject({ moveId: m.id, camsId: 'cam1', from: { proxyId: src.proxyId, tlsServername: null }, to: { proxyId: tgt.proxyId, tlsServername: `cam1.${tgt.site}.internal` } });
+  });
+
+  it('a cancel moving the camera back to the source leaves switched_at unchanged', async () => {
+    const { src, cam, m } = await switched();
+    const at = () => (s.built.db.prepare('SELECT switched_at FROM moves WHERE id = ?').get(m.id) as { switched_at: number }).switched_at;
+    const stamped = at();
+    expect(stamped).toBe(clock.now());
+    clock.advance(60_000);
+    s.built.registry.moveCamera('system', src.accountId, cam.id, { proxyId: src.proxyId, proxyCameraId: 'cam1', tlsServername: null, moveId: m.id });
+    expect(at()).toBe(stamped);
   });
 
   it('snapshot revision changes at switch-over', async () => {

@@ -8,7 +8,7 @@ import type { MoveBounds } from './types';
 
 // The move job's rows (plan Task 2). Every write is one transaction. Never
 // holds a token, password, sealed blob or private key: tokenHash is
-// 'sha256:<hex>' only. cameras.move_id is set by markCamera at the switch-over and never cleared.
+// 'sha256:<hex>' only. cameras.move_id and moves.switched_at are set by Registry.moveCamera at the switch-over; move_id is never cleared.
 
 export type MovePhase = 'requested' | 'offered' | 'awaiting-approval' | 'approved' | 'switching' | 'copying' | 'cleaning' | 'done' | 'rejected' | 'cancelling' | 'cancelled' | 'failed';
 export type ChunkStateName = 'pending' | 'copied' | 'verified' | 'skipped' | 'failed' | 'abandoned';
@@ -87,8 +87,9 @@ export class MoveStore {
     });
   }
 
-  // Called at the switch-over (with the registry change): the camera now
-  // names this move. Never cleared; the next move overwrites it.
+  // Names the move on the camera (cameras.move_id; never cleared, the next move
+  // overwrites it). Production does this in Registry.moveCamera, which also sets
+  // switched_at; this one is used by tests only and does not stamp switched_at.
   markCamera(moveId: string): void {
     tx(this.db, () => {
       const m = this.get(moveId);
