@@ -5,12 +5,25 @@
   import type { Snippet } from 'svelte';
   let { token, proxyName = '', title, onclose, children }: { token: string; proxyName?: string; title?: string; onclose: () => void; children?: Snippet } = $props();
   let stored = $state(false);
-  const copy = () => navigator.clipboard?.writeText(token);
+  // "Copied" (or why not) for two seconds, then "Copy" again.
+  let copied = $state<'' | 'Copied' | 'Copy failed: select the text'>('');
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(token);
+      copied = 'Copied';
+    } catch {
+      copied = 'Copy failed: select the text';
+    }
+    clearTimeout(timer);
+    timer = setTimeout(() => (copied = ''), 2000);
+  };
+  $effect(() => () => clearTimeout(timer));
 </script>
 <div class="scrim" role="presentation"></div>
 <div class="dialog card" role="dialog" aria-modal="true" aria-label="New token" data-testid="shown-once">
   <h3>{title ?? `New token for ${proxyName}`}</h3>
-  <div class="row"><input class="mono" readonly value={token} data-testid="shown-token" autocomplete="off" spellcheck="false" /><button class="btn" onclick={copy}>Copy</button></div>
+  <div class="row"><input class="mono" readonly value={token} data-testid="shown-token" autocomplete="off" spellcheck="false" /><button class="btn" onclick={copy} data-testid="shown-copy" aria-live="polite">{copied || 'Copy'}</button></div>
   {#if children}{@render children()}{:else}
   <p>
     This is the only time cams-admin shows this token. Put it in cams's <code>cameras-config.json</code> as this proxy's <code>token</code>

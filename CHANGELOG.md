@@ -5,3 +5,6 @@ then empties it on `main`.
 
 ## [Unreleased]
 
+- The Copy button of a token shown once says "Copied" for two seconds (or that
+  copying failed). Checkboxes sit on the line of their words.
+
