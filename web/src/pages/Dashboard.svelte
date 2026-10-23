@@ -8,6 +8,8 @@
   import Ago from '../components/Ago.svelte';
   import { clock } from '../lib/clock.svelte';
   import { instanceState, stateClass as camsClass, stateText as camsText } from '../lib/cams';
+  import { moving } from '../lib/activeMoves.svelte';
+  import { activeLine } from '../lib/moves';
 
   let d = $state<any>(null);
   let onlyProblems = $state(false);
@@ -53,6 +55,9 @@
     <div><b data-testid="sum-proxies">{counts.online}/{counts.proxies}</b> proxies online</div>
     <div><b data-testid="sum-cameras">{counts.camsOnline}/{counts.cameras}</b> cameras online</div>
     <div><b data-testid="sum-problems">{counts.problems}</b> with problems</div>
+    {#each moving.items as m (m.id)}
+      <a href="#/moves" class="backup" data-testid="dash-move-{m.id}"><span class="chip">moving</span><span class="muted">{activeLine(m)}</span></a>
+    {/each}
     <a href="#/backup" class="backup" data-testid="backup-card">
       <span class="chip {d.backup.alerts.length ? 'bad' : 'ok'}">backup</span>
       <span class="muted">snapshot {ago(d.backup.lastSnapshotAt, clock.now)}{d.backup.litestream ? `, replicated ${ago(d.backup.lastReplicationAt, clock.now)}` : ''}</span>

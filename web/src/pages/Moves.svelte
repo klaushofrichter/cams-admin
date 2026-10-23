@@ -3,7 +3,7 @@
   import { onMount } from 'svelte';
   import { api, errorText, ApiFailure } from '../lib/api';
   import { coalesced, live } from '../lib/live';
-  import { cancelable, etaText, phaseClass, phaseText, progressText, reasonText, refusalText, startBody } from '../lib/moves';
+  import { cancelable, etaText, phaseClass, phaseText, progressText, reasonText, refusalText, startBody, cameraLabel } from '../lib/moves';
   import MoveDetail from '../components/MoveDetail.svelte';
 
   let items = $state<any[]>([]);
@@ -87,7 +87,7 @@
     <label>Camera
       <select data-testid="start-move-camera" bind:value={cameraId}>
         <option value="">Choose…</option>
-        {#each camerasOnSource as c (c.id)}<option value={c.id}>{c.name || c.camsId}</option>{/each}
+        {#each camerasOnSource as c (c.id)}<option value={c.id}>{cameraLabel(c)}</option>{/each}
       </select>
     </label>
     <label>To proxy

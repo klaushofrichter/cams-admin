@@ -113,3 +113,23 @@ export function refusalText(answer: unknown): string {
   const code = typeof a.error === 'string' ? a.error : '';
   return code ? (REFUSALS[code] ?? reasonText(code)) : 'the move was refused';
 }
+
+// A camera in the Start move list: its name, then its alias (camsId), the
+// proxy's own id when that differs, and its address unless it is reached
+// through the proxy ("from-proxy").
+export function cameraLabel(c: { name?: string | null; camsId: string; proxyCameraId?: string | null; host?: string | null }): string {
+  const extra = [c.camsId, c.proxyCameraId && c.proxyCameraId !== c.camsId ? c.proxyCameraId : null, c.host && c.host !== 'from-proxy' ? c.host : null].filter(Boolean);
+  if (!c.name) return [c.camsId, ...extra.slice(1)].join(', ');
+  return `${c.name} (${extra.join(', ')})`;
+}
+
+// The moves still under way (not ended): the menu's marker and the Dashboard line.
+export function activeMoves<T extends { endedAt: number | null }>(items: T[] | undefined): T[] {
+  return (items ?? []).filter((m) => m.endedAt === null);
+}
+
+// One move in a line: "Backyard: Mini PC → een, copying 25%".
+export function activeLine(m: { cameraName?: string | null; camsId: string; source: { name: string }; target: { name: string }; phase: string; bytesDone: number | null; bytesTotal: number | null }): string {
+  const pct = m.phase === 'copying' && m.bytesTotal ? ` ${Math.min(100, Math.round(((m.bytesDone ?? 0) / m.bytesTotal) * 100))}%` : '';
+  return `${m.cameraName || m.camsId}: ${m.source.name} → ${m.target.name}, ${phaseText(m.phase)}${pct}`;
+}
