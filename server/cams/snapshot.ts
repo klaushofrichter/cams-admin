@@ -38,6 +38,7 @@ export const SNAPSHOT_FORMAT = 3;
 // How long a move attestation holds, from the switch-over.
 export const MOVE_ATTEST_MS = 24 * 3600_000;
 // Phases in which the camera is on the target for good (a cancel puts it back).
+// `cancelling` is left out on purpose: the camera is still on the target there; the attestation drops when the camera is moved back, which bumps the revision.
 const ATTEST_PHASES = new Set(['switching', 'copying', 'cleaning', 'done']);
 
 export function snapshotRevision(db: Db, instanceId: string, keyFp: string, format = SNAPSHOT_FORMAT): string {
