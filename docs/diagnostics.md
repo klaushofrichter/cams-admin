@@ -45,3 +45,52 @@ A signed-in sysadmin's browser session works on the same routes.
 | `/diag/moves?accountId=` | the newest 100 moves with chunk counts |
 | `/diag/moves/precheck?source=&target=&camera=` | every precheck rule in order with ok, reason and a detail; `camera` is the registry id or the cams id |
 | `/diag/audit?account=&actorType=&action=&from=&to=&limit=&cursor=` | the audit log, as on the Audit page, with every e-mail address replaced by `email:` + 8 hex of its SHA-256 |
+
+## Operations tokens
+
+A diagnostics token only reads. An operations token (`cao_…`) lets a script
+make a few writes without a Google sign-in: revoke a proxy token, set a cams
+route, cancel a move. Each token carries the scopes ticked when it was issued.
+
+Diagnostics page → Operations tokens → name, days, scopes → Issue token. As
+with the diagnostics token it is shown once, and it is stored only as a hash
+(the page and the audit show 8 hex of it). On the Mac press Copy, then:
+
+```sh
+mkdir -p ~/.config/cams-admin && (umask 077; pbpaste > ~/.config/cams-admin/ops-token)
+```
+
+Limits: 1–90 days (default 30), at most 5 live at a time, 60 writes a minute
+per token (else 429 `rate_limited`). Revoke on the same page; a revoke is
+journalled like the diagnostics token's, so a restore can't bring it back.
+Issue and revoke are audited (`ops-token-issue`, `ops-token-revoke`); a
+refused token is audited as `ops-auth-refused` and a token outside its scopes
+as `ops-scope-refused` (both throttled). A write by a token is audited with the
+actor `ops-token:<8 hex>`. The list is also at `/diag/ops-tokens`.
+
+| Scope | Method and path (relative to `/api/v1`) |
+|---|---|
+| `tokens` | `POST /accounts/:accountId/proxies/:proxyId/tokens/:tokenId/revoke` |
+| `tokens` | `POST /accounts/:accountId/proxies/:proxyId/tokens/:tokenId/retire` |
+| `tokens` | `POST /accounts/:accountId/proxies/:proxyId/tokens/apply` |
+| `routes` | `PUT /cams-instances/:instanceId/routes/:proxyId` |
+| `routes` | `DELETE /cams-instances/:instanceId/routes/:proxyId` |
+| `routes` | `DELETE /cams-instances/:instanceId/camera-overrides/:cameraId` |
+| `moves` | `POST /moves/:moveId/cancel` |
+| `moves` | `POST /moves/:moveId/end-transfer` |
+
+Paths must be exactly as listed: lowercase, no trailing slash. Anything else,
+and every route not in the table, gets 403 `scope`. No token can issue proxy
+tokens, cams enrollment codes, diagnostics tokens or operations tokens, read
+or set camera passwords, or reach a GET route under `/api/v1`: reads go
+through the diagnostics token. A bearer request needs no `X-Cams-Admin`
+header, and a session cookie sent with it is ignored. A bad, expired or
+revoked token gets 401.
+
+```sh
+curl -fsS -X POST -H "Authorization: Bearer $(cat ~/.config/cams-admin/ops-token)" -H 'Content-Type: application/json' \
+  "https://cams-admin.example.net/api/v1/accounts/acc_…/proxies/prx_…/tokens/tok_…/revoke"
+```
+
+(`acc_…`, `prx_…` and `tok_…` are placeholders; take the real ids from
+`/diag/proxies` and `/diag/tokens`.)
