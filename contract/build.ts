@@ -283,7 +283,16 @@ export function buildSchemas(mode: Mode): Record<string, S> {
     'move.go': all({ ...mv, plan: movePlan, targetPublicKey: x25519, expectedLeaf: fp }),
     'move.release': all(mv),
     // role: which side ends (a move ends on both; the target stops its copier and closes its journal).
-    'move.finish': all({ ...mv, role: en(['source', 'target']), abandoned: bool }),
+    // return (optional): this finish ends a copy back; the entry flips (source -> move.receive, target -> move.send).
+    'move.finish': obj({ ...mv, role: en(['source', 'target']), abandoned: bool, return: bool }, ['v', 'moveId', 'role', 'abandoned'], ['return']),
+    // The copy back after a cancel past the switch-over: it is its own move (moveId) returning the content of returnOf.
+    // Both run on the proxy that now holds the camera's content (open: the receiving side, move.receive; start: the sending side, move.send).
+    'move.return.open': all({ ...mv, returnOf: mvId, tokenHash: hash, targetIp: str(45, { pattern: '^[0-9A-Fa-f:.]{2,45}$' }) }),
+    'move.return.start': all({
+      ...mv, returnOf: mvId, token: str(256, { minLength: 8, pattern: '^[\\x21-\\x7e]+$' }),
+      source: all({ proxyId: prxId, name: nameS, url: str(300, { pattern: '^https?://' }), caFingerprints: arr(fp, 2), tlsServername: str(253, { minLength: 1 }) }),
+      done: arr(chunkId, 512),
+    }),
     // copied (what to do with content already copied) is required only for the target.
     'move.cancel': {
       ...obj({ ...mv, role: en(['source', 'target']), copied: copiedChoice, expectedLeaf: fp }, ['v', 'moveId', 'role'], ['copied', 'expectedLeaf']),
@@ -292,7 +301,8 @@ export function buildSchemas(mode: Mode): Record<string, S> {
   };
   const moveResults: Record<(typeof MOVE_COMMANDS)[number], S> = {
     'move.begin': all({ requestId }),
-    'move.targets': empty, 'move.open': empty, 'move.answer': empty, 'move.go': empty, 'move.release': empty, 'move.cancel': empty,
+    'move.targets': empty, 'move.open': empty, 'move.answer': empty, 'move.go': empty, 'move.release': empty, 'move.cancel': empty, 'move.return.start': empty,
+    'move.return.open': all({ chunks: int(), bytes: int() }),
     'move.offer': { anyOf: [all({ accept: { const: true }, space: moveSpace, probeBps: int() }), all({ accept: { const: false }, reason: offerReason })] },
     'move.start': all({ publicKey: x25519, leafFingerprint: fp }),
     // Only the five kinds: the recordings cache is not content.
@@ -307,6 +317,9 @@ export function buildSchemas(mode: Mode): Record<string, S> {
   // --- events (proxy -> cams-admin): command.done and the move kinds ---------------
   const doneEvent = obj({ ...resultCore, kind: en(['command.done']), phase: { const: 'done' } },
     ['proxyId', 'connId', 'kind', 'cmdId', 'phase', 'status'], ['code', 'retryAfterS', 'duplicate', 'result']);
+  // The completeness check: counts of files per kind (a row that could not be imported counts as failed).
+  const counts = optionalOnly(kindMap(int()));
+  const moveCheck = all({ complete: bool, missing: counts, recovered: counts, failed: counts, expired: counts });
   const moveEvent = (kind: (typeof MOVE_EVENT_KINDS)[number], props: Record<string, S>, optional: string[] = []): S =>
     obj({ proxyId: prxId, connId: id('con'), kind: { const: kind }, ...props }, ['proxyId', 'connId', 'kind', ...Object.keys(props).filter((k) => !optional.includes(k))], optional);
   const eventBody: S = {
@@ -319,7 +332,7 @@ export function buildSchemas(mode: Mode): Record<string, S> {
       moveEvent('move.approve', { moveId: mvId, plan: movePlan }),
       moveEvent('move.cancel', { moveId: mvId, copied: copiedChoice }),
       {
-        ...moveEvent('move.phase', { moveId: mvId, role: en(['source', 'target']), phase: en([...MOVE_PHASES]), ok: bool, code: str(64), detail: str() }, ['code', 'detail']),
+        ...moveEvent('move.phase', { moveId: mvId, role: en(['source', 'target']), phase: en([...MOVE_PHASES]), ok: bool, code: str(64), detail: str(), check: moveCheck, keepDays: int(7, { maximum: 3650 }), returnPending: bool }, ['code', 'detail', 'check', 'keepDays', 'returnPending']),
         // a failed phase says why
         if: { properties: { phase: { const: 'failed' } }, required: ['phase'] }, then: { properties: { code: str(64) }, required: ['code'] },
       },
@@ -387,7 +400,7 @@ export const RESERVED_TYPES = ['key.rotate'] as const;
 // --- camera moves -------------------------------------------------------------
 // The ten commands (role -> allow entry: targets, open, answer, go, release and finish need `move.send`; offer and start `move.receive`;
 // finish and cancel by `args.role`: source `move.send`, target `move.receive`).
-export const MOVE_COMMANDS = ['move.begin', 'move.targets', 'move.open', 'move.offer', 'move.answer', 'move.start', 'move.go', 'move.release', 'move.finish', 'move.cancel'] as const;
+export const MOVE_COMMANDS = ['move.begin', 'move.targets', 'move.open', 'move.offer', 'move.answer', 'move.start', 'move.go', 'move.release', 'move.finish', 'move.cancel', 'move.return.open', 'move.return.start'] as const;
 export const MOVE_EVENT_KINDS = ['move.targets', 'move.request', 'move.approve', 'move.cancel', 'move.phase', 'move.progress'] as const;
 export const MOVE_KINDS = ['stills', 'clips', 'events', 'checks', 'archive'] as const;
 export const MOVE_OFFER_REASONS = ['moves_not_allowed', 'camera_unreachable', 'camera_limit', 'id_taken', 'busy', 'incompatible', 'no_site_ca', 'ca_does_not_cover_camera', 'external_cert'] as const;
