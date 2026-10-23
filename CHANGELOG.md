@@ -5,5 +5,6 @@ then empties it on `main`.
 
 ## [Unreleased]
 
-- Start move on the Moves page.
-- The cams snapshot carries a signed move record so cams can accept a moved camera without Confirm.
+- Start move: the camera list shows each camera's alias and address next to its name.
+- A move under way shows as a count on the Moves menu item and as a line on the Dashboard.
+

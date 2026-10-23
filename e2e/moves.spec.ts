@@ -47,6 +47,11 @@ test('moves page lists a move and cancels it', async ({ page }, info) => {
   await expect(row).toContainText('1.0 KiB of 2.0 KiB (50%)');
   await expect(page.getByTestId(`move-phase-${id}`)).toHaveText('waiting for approval');
   await expect(page.getByTestId(`move-budget-${id}`)).toHaveText('Over time budget');
+  // A move under way: a count on the Moves menu item and a line on the Dashboard.
+  await expect(page.getByTestId('nav-moves-active')).toBeVisible();
+  await page.goto('/#/');
+  await expect(page.getByTestId(`dash-move-${id}`)).toContainText('Porch 1: Old proxy → New proxy');
+  await page.goto('/#/moves');
   await expect(page.getByTestId(`move-detail-${id}`).getByTestId('move-end-transfer')).toHaveCount(0);
   // The proxy page links to the active move.
   await page.goto(`/#/accounts/${acc.id}/proxies/${a.id}`);
@@ -93,6 +98,8 @@ test('start a move from the Moves page', async ({ page }, info) => {
     await route.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ commandId: 'cmd_x', fixed: [{ rule: 'site_ca', proxyId: 'prx_x', site: 'home' }], report: { ok: true, reason: null, rules: [] } }) });
   });
   const { a, b } = await startForm(page, info, 'ms');
+  // The camera list shows the alias and the proxy's own id next to the name.
+  await expect(page.getByTestId('start-move-camera').locator('option', { hasText: 'Porch (porch, pc1' })).toHaveCount(1);
   // The target list has the account's other proxy only: not the source, not another account's.
   await expect(page.getByTestId('start-move-target').locator('option', { hasText: 'Old proxy' })).toHaveCount(0);
   await expect(page.getByTestId('start-move-target').locator('option', { hasText: 'Far proxy' })).toHaveCount(0);

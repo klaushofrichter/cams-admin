@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cancelable, etaText, phaseClass, phaseText, progressText, reasonText, boundsText, startBody, refusalText } from './moves';
+import { cancelable, etaText, phaseClass, phaseText, progressText, reasonText, boundsText, startBody, refusalText, cameraLabel, activeMoves, activeLine } from './moves';
 
 const PHASES = ['requested', 'offered', 'awaiting-approval', 'approved', 'switching', 'copying', 'cleaning', 'done', 'rejected', 'cancelling', 'cancelled', 'failed'];
 
@@ -92,5 +92,37 @@ describe('startBody and refusalText', () => {
     expect(refusalText({ error: 'source_offline' })).toBeTruthy();
     expect(refusalText({ error: 'zzz_unknown' })).toBe('zzz_unknown');
     expect(refusalText(null)).toBeTruthy();
+  });
+});
+
+describe('cameraLabel (Start move camera list)', () => {
+  it('name, then the alias and the address', () => {
+    expect(cameraLabel({ name: 'Backyard', camsId: 'cam4', proxyCameraId: 'cam4', host: '192.0.2.85' })).toBe('Backyard (cam4, 192.0.2.85)');
+  });
+  it('the proxy\'s own id when it differs from the alias', () => {
+    expect(cameraLabel({ name: 'Gate', camsId: 'gate', proxyCameraId: 'cam1', host: null })).toBe('Gate (gate, cam1)');
+  });
+  it('no address for a camera reached through its proxy', () => {
+    expect(cameraLabel({ name: 'Gate', camsId: 'cam1', proxyCameraId: 'cam1', host: 'from-proxy' })).toBe('Gate (cam1)');
+  });
+  it('the alias alone when there is no name', () => {
+    expect(cameraLabel({ name: '', camsId: 'cam2', proxyCameraId: null, host: null })).toBe('cam2');
+  });
+});
+
+describe('active moves (menu and Dashboard)', () => {
+  const m = (o: Record<string, unknown> = {}) => ({ id: 'mv_1', camsId: 'cam4', cameraName: 'Backyard', source: { name: 'Mini PC' }, target: { name: 'een' }, phase: 'copying', bytesDone: 25, bytesTotal: 100, endedAt: null, ...o });
+  it('activeMoves keeps the moves that have not ended', () => {
+    expect(activeMoves([m(), m({ id: 'mv_2', phase: 'done', endedAt: 5 }), m({ id: 'mv_3', phase: 'switching' })]).map((x) => x.id)).toEqual(['mv_1', 'mv_3']);
+    expect(activeMoves(undefined)).toEqual([]);
+  });
+  it('activeLine: camera, route, phase and progress', () => {
+    expect(activeLine(m())).toBe('Backyard: Mini PC → een, copying 25%');
+  });
+  it('activeLine: no percent outside the copy', () => {
+    expect(activeLine(m({ phase: 'switching', bytesTotal: null }))).toBe(`Backyard: Mini PC → een, ${phaseText('switching')}`);
+  });
+  it('activeLine: the alias when there is no name', () => {
+    expect(activeLine(m({ cameraName: '' }))).toMatch(/^cam4: /);
   });
 });
