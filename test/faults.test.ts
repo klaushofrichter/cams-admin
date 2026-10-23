@@ -71,11 +71,12 @@ describe('fault injection', () => {
     tp.slow(2000, 32 * 1024);
     const c = client(makeClient({ ...p.key, connectUrl: `ws://127.0.0.1:${tp.port}/proxy/v1/connect` }, { summary: () => makeSummary({ cameras: 4, now: Date.now(), site: true }), heartbeatS: 3, connectTimeoutMs: 20_000 }));
     c.start();
-    await until(() => c.stats.acked >= 3, 20_000, '3 acks');
+    // About 19 s on an idle machine (the handshake alone crosses the 2 s link several times): room for a busy one.
+    await until(() => c.stats.acked >= 3, 40_000, '3 acks');
     expect(c.stats.reconnects).toBe(0);
     expect(c.stats.sent - c.stats.acked).toBeLessThanOrEqual(1);
     expect(view(s, p.proxyId).state).toBe('online');
-  }, 30_000);
+  }, 50_000);
 
   it('hostile summaries: long text clamped, 1000 cameras unreadable, deep nesting cut, HTML kept as text', async () => {
     const s = await server();
