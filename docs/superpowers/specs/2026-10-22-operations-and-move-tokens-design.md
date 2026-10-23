@@ -1,6 +1,6 @@
 # Operations tokens and hands-off moves — design
 
-Status: draft for Klaus's review (2026-10-22). Spans cams-admin, cams and cam-proxy.
+Status: approved by Klaus 2026-10-22 ("ok"), including the move attestation in §3. Spans cams-admin, cams and cam-proxy.
 
 ## Why
 
