@@ -107,6 +107,18 @@ export function diagTokens(d: ApiDeps) {
   };
 }
 
+// The operations tokens: name, scopes, state and age. Only the 8-hex hash
+// prefix, never the token; e-mail addresses are masked like the audit's.
+export function diagOpsTokens(d: ApiDeps) {
+  return {
+    items: d.ops.list().items.map((t) => ({
+      id: t.id, name: t.name, scopes: t.scopes, hashPrefix: t.hashPrefix, state: t.state,
+      createdAt: t.createdAt, createdBy: mask(t.createdBy), expiresAt: t.expiresAt,
+      revokedAt: t.revokedAt, revokedBy: t.revokedBy === null ? null : mask(t.revokedBy), lastUsedAt: t.lastUsedAt,
+    })),
+  };
+}
+
 export function diagMoves(d: ApiDeps, accountId: string | undefined) {
   return {
     items: d.moves.store.list(accountId).map((m) => {

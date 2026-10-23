@@ -25,6 +25,8 @@ export const AUDIT_ACTIONS = [
   'move-budget-exceeded', 'move-cancel', 'move-end-transfer', 'move-done',
   // Read-only diagnostics tokens (issue #45): issued, revoked, and a bearer token refused (throttled).
   'diag-token-issue', 'diag-token-revoke', 'diag-auth-refused',
+  // Operations tokens: issued, revoked, a bearer token refused, and a valid one used outside its scopes (both throttled).
+  'ops-token-issue', 'ops-token-revoke', 'ops-auth-refused', 'ops-scope-refused',
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 const KNOWN = new Set<string>(AUDIT_ACTIONS);
