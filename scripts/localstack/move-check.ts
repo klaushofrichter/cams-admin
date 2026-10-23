@@ -18,6 +18,10 @@
 //      (SIGTERM to its cam-proxy; the supervisor starts it again): still done.
 //   3. beta-1 → beta-2, cancelled in cams-admin after the switch-over: the
 //      camera comes back, the registry names beta-1 again, beta-1 serves it.
+//   4. beta-1 → beta-2 started from cams-admin (POST /api/v1/moves with an
+//      ops token), after breaking two fixable rules (beta-2's registry site,
+//      a cams route to it): fixed, approved by beta-1 itself within the
+//      bounds, done; audit move-fix, move-begin, move-request … move-done.
 // Prints one line per step, exits 1 at the first failure, 2 when the stack is
 // not a moves stack. Reads secrets from the run's files (mode 600), never prints them.
 import { createRequire } from 'module';
@@ -318,6 +322,19 @@ async function auditOf(moveId: string): Promise<string[]> {
   return out.reverse().map((a) => `${a.action}${a.detail?.phase ? `:${a.detail.phase}` : ''}${a.outcome !== 'ok' ? `(${a.outcome})` : ''}`);
 }
 
+// cams-admin's audit of the account, newest first (all pages up to 2000 rows), optionally one action.
+async function auditRows(action?: string): Promise<any[]> {
+  const out: any[] = [];
+  let cursor: string | undefined;
+  for (let i = 0; i < 10; i++) {
+    const r = (await api('GET', `/audit?account=${accountId}&limit=200${action ? `&action=${action}` : ''}${cursor ? `&cursor=${cursor}` : ''}`)).body;
+    out.push(...(r.items as any[]));
+    if (!r.nextCursor) break;
+    cursor = r.nextCursor;
+  }
+  return out;
+}
+
 async function assertOn(px: Px, other: Px, label: string, otherSeededOnly = false): Promise<void> {
   const c = await camera();
   expect(c.proxyId === px.id && c.proxyCameraId === CAM && c.tlsServername === `${CAM}.${px.name}.internal`, `registry: ${CAMS_ID} on ${px.name} as ${CAM}.${px.name}.internal (is ${c.proxyId}, ${c.tlsServername})`);
@@ -402,6 +419,85 @@ const scenarios: [string, () => Promise<void>][] = [
     const a = await auditOf(run.moveId);
     say(`  cams-admin audit: ${a.join(' → ')}`);
     expect(a.includes('move-cancel:cancelling') && a.at(-1) === 'move-phase:cancelled', `audit ends with the cancel (${a.join(', ')})`);
+  }],
+  ['beta-1 → beta-2 started from cams-admin (POST /moves with an ops token), fixes made, approved automatically', async () => {
+    const [src, tgt] = [pxs['beta-1'], pxs['beta-2']];
+    const c0 = await camera();
+    expect(c0.proxyId === src.id, `registry: ${CAMS_ID} on ${src.name} before the move (scenario 3 left it there)`);
+    const before = new Set(((await api('GET', `/diag/moves?accountId=${accountId}`)).body.items as any[]).map((m) => m.id));
+    // An operations token with scope moves, as a script would use; it is revoked at the end.
+    const issued = await api('POST', '/ops-tokens', { name: 'move-check', days: 1, scopes: ['moves'] });
+    expect(issued.status === 201 && typeof issued.body.token === 'string', `POST /ops-tokens ${issued.status}`);
+    const token = issued.body.token as string;
+    const tokenId = issued.body.item.id as string;
+    try {
+      // Break two fixable rules: the target's registry site, and (if any) a cams route to the target.
+      // caFingerprints and tlsServername stay as they are (the fixers never write them).
+      const proxy = (await api('GET', `/accounts/${accountId}/proxies/${tgt.id}`)).body;
+      const un = await api('PATCH', `/accounts/${accountId}/proxies/${tgt.id}`, { version: proxy.version, tlsSite: null });
+      expect(un.status === 200 && un.body.tlsSite === null, `${tgt.name}: PATCH tlsSite null ${un.status} ${JSON.stringify(un.body).slice(0, 200)}`);
+      let routedFrom: string | null = null;
+      for (const i of (await api('GET', '/cams-instances')).body.items as { id: string; name: string }[]) {
+        const routes = (await api('GET', `/cams-instances/${i.id}/routes`)).body.items as { proxyId: string; hidden: boolean }[];
+        if (!routes.some((r) => r.proxyId === src.id) || !routes.some((r) => r.proxyId === tgt.id && !r.hidden)) continue;
+        const del = await api('DELETE', `/cams-instances/${i.id}/routes/${tgt.id}`);
+        expect(del.status === 204 || del.status === 200, `DELETE route ${i.name} → ${tgt.name} ${del.status}`);
+        routedFrom = i.id;
+        say(`  broken: ${tgt.name}'s registry site removed, no route from ${i.name} to ${tgt.name}`);
+        break;
+      }
+      if (routedFrom === null) say(`  broken: ${tgt.name}'s registry site removed (no cams route to ${tgt.name} to delete)`);
+
+      const bounds = { transfer: true, kinds: ['stills', 'clips', 'events', 'checks', 'archive'], space: 'fit', maxBudgetS: 3600 };
+      const r = await fetch(`${ADMIN}/api/v1/moves`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ sourceProxyId: src.id, targetProxyId: tgt.id, cameraId: CAMS_ID, bounds }), signal: AbortSignal.timeout(15_000) });
+      const body = (await r.json().catch(() => ({}))) as any;
+      expect(r.status === 202, `POST /moves ${r.status} ${JSON.stringify(body).slice(0, 400)}`);
+      const fixed = body.fixed as { rule: string; proxyId?: string; instanceId?: string; site?: string }[];
+      expect(fixed.some((f) => f.rule === 'site_ca' && f.proxyId === tgt.id && f.site === tgt.name), `fixed has site_ca for ${tgt.name}: ${JSON.stringify(fixed)}`);
+      if (routedFrom !== null) expect(fixed.some((f) => f.rule === 'routed' && f.instanceId === routedFrom && f.proxyId === tgt.id), `fixed has routed: ${JSON.stringify(fixed)}`);
+      say(`  POST /moves: 202, command ${body.commandId}, fixed ${fixed.map((f) => f.rule).join(', ')}, precheck ok ${body.report.ok}`);
+      // The registry and the route are back.
+      const after = (await api('GET', `/accounts/${accountId}/proxies/${tgt.id}`)).body;
+      expect(after.tlsSite === tgt.name, `registry: ${tgt.name} tlsSite ${after.tlsSite}`);
+      if (routedFrom !== null) {
+        const route = ((await api('GET', `/cams-instances/${routedFrom}/routes`)).body.items as any[]).find((x) => x.proxyId === tgt.id);
+        expect(route && route.url === null && route.hidden === false, `route to ${tgt.name} is visible with url null: ${JSON.stringify(route)}`);
+      }
+      // The move of that command: the source's request id is in the move-begin audit row.
+      const begin = await waitFor(async () => (await auditRows('move-begin')).find((a) => a.detail?.cmdId === body.commandId && a.outcome === 'ok' && a.detail?.requestId), 'the move-begin audit row with the request id', 60_000);
+      const requestId = begin.detail.requestId as string;
+      const m0 = await waitFor(async () => ((await api('GET', `/diag/moves?requestId=${requestId}`)).body.items as any[])[0], `the move of request ${requestId} in /diag/moves`, 60_000);
+      expect(!before.has(m0.id), 'a new move');
+      expect(m0.autoApprove === true && JSON.stringify(m0.bounds) === JSON.stringify(bounds), `/diag/moves: autoApprove ${m0.autoApprove}, bounds ${JSON.stringify(m0.bounds)}`);
+      say(`  ${m0.id}: autoApprove ${m0.autoApprove}, bounds ${JSON.stringify(m0.bounds)} (never approved here: no call to ${src.name}'s /control/moves/:id/approve)`);
+      const run: Run = { moveId: m0.id, budgetS: 60, estimateS: 0 };
+      const m = await waitPhase(run, ['done'], 'done');
+      expect(!m.cleanupPending && m.reason === null, `done cleanly (cleanupPending ${m.cleanupPending}, reason ${m.reason})`);
+      const d = await move(run.moveId);
+      say(`  done: ${m.bytesDone}/${m.bytesTotal} B, chunks ${JSON.stringify(d.chunks)}`);
+      expect(d.chunks.failed === 0 && d.chunks.abandoned === 0 && d.chunks.pending === 0, `no chunk failed, abandoned or pending: ${JSON.stringify(d.chunks)}`);
+      await assertOn(tgt, src, 'after the move');
+      // cams-admin's audit: the fixes, the command, then the move.
+      const rows = [...(await auditRows())].reverse().filter((a) =>
+        (a.action === 'move-fix' && a.detail?.source === src.id && a.detail?.target === tgt.id) || (a.action === 'move-begin' && a.detail?.cmdId === body.commandId && a.outcome === 'ok') || a.detail?.moveId === run.moveId);
+      const names = rows.map((a) => `${a.action}${a.detail?.rule ? `:${a.detail.rule}` : ''}${a.detail?.phase ? `:${a.detail.phase}` : ''}${a.outcome !== 'ok' ? `(${a.outcome})` : ''}`);
+      say(`  cams-admin audit: ${names.join(' → ')}`);
+      const at = (n: string) => names.indexOf(n);
+      expect(at('move-fix:site_ca') >= 0 && (routedFrom === null || at('move-fix:routed') >= 0), `audit has the fixes (${names.join(', ')})`);
+      expect(at('move-begin') > Math.max(at('move-fix:site_ca'), at('move-fix:routed')), `move-begin after the fixes (${names.join(', ')})`);
+      expect(at('move-request:requested') > at('move-begin') && names.at(-1) === 'move-done:done', `move-request … move-done after move-begin (${names.join(', ')})`);
+      // The source approved its own offer (cam-proxy's audit, NDJSON).
+      const ar = await fetch(`http://127.0.0.1:${src.port}/control/audit?action=move-approve&limit=50`, { headers: { Authorization: `Bearer ${src.admin}` }, signal: AbortSignal.timeout(15_000) });
+      expect(ar.status === 200, `${src.name}: GET /control/audit ${ar.status}`);
+      const recs = (await ar.text()).split('\n').filter(Boolean).map((l) => JSON.parse(l));
+      // cam-proxy's ECS records keep their fields under cam_proxy.
+      const appr = recs.find((x) => x.cam_proxy?.moveId === run.moveId);
+      expect(appr && appr.cam_proxy.label === 'cams-admin auto-approval', `${src.name}: move-approve record with label "cams-admin auto-approval": ${JSON.stringify(appr?.cam_proxy ?? recs.map((x) => x.cam_proxy?.moveId)).slice(0, 400)}`);
+      say(`  ${src.name} audit: move-approve by "${appr.cam_proxy.label}" (origin ${appr.cam_proxy.origin})`);
+    } finally {
+      const rv = await api('POST', `/ops-tokens/${tokenId}/revoke`);
+      say(`  ops token revoked: ${rv.status}`);
+    }
   }],
 ];
 
