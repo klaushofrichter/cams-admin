@@ -12,6 +12,8 @@ import { MOVE_ANSWER_REASONS, MOVE_KINDS } from '../../contract/build';
 import { newId } from '../ids';
 import { MoveBusy, MoveStore, type ChunkState, type ChunkStateName, type Move } from './store';
 import { eligibleTargets, precheck, type Candidate, type EligibleTarget, type PrecheckDeps } from './precheck';
+import { begin, type BeginResult } from './begin';
+import type { CamsInstances } from '../cams/instances';
 import { moveToken, targetAddress, type Resolve } from './token';
 import type { MoveApproveEvent, MoveCameraConn, MoveCancelEvent, MoveEvent, MovePhaseEvent, MoveProgressEvent, MoveRequestEvent, MoveTargetsEvent } from './types';
 
@@ -141,7 +143,8 @@ function answerSpace(x: unknown): Record<string, unknown> | null {
   return { needed: s.needed, available: s.available, fits: s.fits, perKind, retentionProposal: s.retentionProposal ?? null };
 }
 
-export interface MovesDeps { db: Db; clock: Clock; audit: Audit; registry: Registry; status: StatusStore; commands: Commands; log: Logger; resolve?: Resolve; live?: LiveHub }
+// camsInstances: a getter (built after the moves; only begin() uses it, for the route and override fixes).
+export interface MovesDeps { db: Db; clock: Clock; audit: Audit; registry: Registry; status: StatusStore; commands: Commands; log: Logger; camsInstances: () => CamsInstances; resolve?: Resolve; live?: LiveHub }
 
 // The target's latest progress (R8): memory, saved by `flushIn`.
 interface Progress { chunks: Map<string, ChunkStateName>; dirty: Set<string>; bytesDone: number; bytesTotal: number; rateBps: number; etaS: number; savedAt: number; changed: boolean }
@@ -180,6 +183,11 @@ export class Moves {
 
   precheck(m: Candidate) {
     return precheck(this.pd, m);
+  }
+
+  // A move started from cams-admin (move.begin plan Task 3): the fixable precheck failures fixed, move.begin queued to the source.
+  begin(actor: string, body: unknown): BeginResult {
+    return begin({ ...this.pd, audit: this.d.audit, commands: this.d.commands, camsInstances: this.d.camsInstances() }, actor, body);
   }
 
   onEvent(proxyId: string, accountId: string, ev: MoveEvent): void {
@@ -431,6 +439,16 @@ export class Moves {
   // --- command results ----------------------------------------------------------------------
 
   private onFinal(r: CommandRow): void {
+    // move.begin has no move yet (the source's move.request makes it): a refusal or failure is audited only (A10), the fixes stay.
+    if (r.command === 'move.begin') {
+      if (r.state !== 'done') {
+        this.d.audit.write({
+          actorType: 'system', actor: 'system', action: 'move-begin', accountId: r.accountId, targetType: 'proxy', targetId: r.proxyId, outcome: 'failed',
+          detail: { cmdId: r.id, source: r.proxyId, code: r.outcomeCode ?? r.state },
+        });
+      }
+      return;
+    }
     if (!['move.open', 'move.offer', 'move.start', 'move.go', 'move.release', 'move.finish', 'move.cancel'].includes(r.command)) return;
     const moveId = r.args.moveId;
     const m = typeof moveId === 'string' ? this.store.get(moveId) : null;
