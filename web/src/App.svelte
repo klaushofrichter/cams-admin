@@ -13,12 +13,15 @@
   import Audit from './pages/Audit.svelte';
   import Backup from './pages/Backup.svelte';
   import Diagnostics from './pages/Diagnostics.svelte';
+  import { moving, watchMoves } from './lib/activeMoves.svelte';
 
   let me = $state<{ email: string; expiresAt: number } | null>(null);
   let checked = $state(false);
   let route = $state<Route>(parse(location.hash));
 
   setUnauthorized(() => (me = null));
+  // The moves under way (the menu's marker), once signed in.
+  $effect(() => { if (me) return watchMoves(); });
   onMount(() => {
     api('GET', '/me').then((m) => (me = m)).catch(() => (me = null)).finally(() => (checked = true));
     const on = () => (route = parse(location.hash));
@@ -43,7 +46,7 @@
       <a href="#/" data-testid="nav-dashboard" class:on={route.page === 'dashboard'}>Dashboard</a>
       <a href="#/accounts" data-testid="nav-accounts" class:on={route.page === 'accounts' || route.page === 'account' || route.page === 'proxy'}>Accounts</a>
       <a href="#/cams-instances" data-testid="nav-cams" class:on={route.page === 'cams-instances' || route.page === 'cams-instance'}>cams</a>
-      <a href="#/moves" data-testid="nav-moves" class:on={route.page === 'moves'}>Moves</a>
+      <a href="#/moves" data-testid="nav-moves" class:on={route.page === 'moves'}>Moves{#if moving.items.length}<span class="nav-badge" data-testid="nav-moves-active" title="{moving.items.length} move{moving.items.length === 1 ? '' : 's'} under way">{moving.items.length}</span>{/if}</a>
       <a href="#/audit" data-testid="nav-audit" class:on={route.page === 'audit'}>Audit</a>
       <a href="#/backup" data-testid="nav-backup" class:on={route.page === 'backup'}>Backup</a>
       <a href="#/diagnostics" data-testid="nav-diagnostics" class:on={route.page === 'diagnostics'}>Diagnostics</a>
@@ -72,6 +75,7 @@
   .brand { font-weight: 700; text-decoration: none; background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
   nav a { text-decoration: none; color: var(--muted); padding: 2px 6px; border-radius: 6px; }
   nav a.on { color: var(--text); background: var(--surface-2); }
+  .nav-badge { margin-left: 4px; padding: 0 6px; border-radius: 9px; font-size: 11px; background: var(--accent); color: var(--accent-ink); }
   .who { margin-left: auto; font-size: 13px; }
   .page { max-width: 1200px; margin: 0 auto; padding: 16px; display: grid; gap: 16px; }
   @media (max-width: 640px) { .top { gap: 8px; } .page { padding: 12px 8px; } }

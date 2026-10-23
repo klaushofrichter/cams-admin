@@ -47,6 +47,11 @@ test('moves page lists a move and cancels it', async ({ page }, info) => {
   await expect(row).toContainText('1.0 KiB of 2.0 KiB (50%)');
   await expect(page.getByTestId(`move-phase-${id}`)).toHaveText('waiting for approval');
   await expect(page.getByTestId(`move-budget-${id}`)).toHaveText('Over time budget');
+  // A move under way: a count on the Moves menu item and a line on the Dashboard.
+  await expect(page.getByTestId('nav-moves-active')).toBeVisible();
+  await page.goto('/#/');
+  await expect(page.getByTestId(`dash-move-${id}`)).toContainText('Porch 1: Old proxy → New proxy');
+  await page.goto('/#/moves');
   await expect(page.getByTestId(`move-detail-${id}`).getByTestId('move-end-transfer')).toHaveCount(0);
   // The proxy page links to the active move.
   await page.goto(`/#/accounts/${acc.id}/proxies/${a.id}`);
