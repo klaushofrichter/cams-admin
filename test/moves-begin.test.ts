@@ -58,7 +58,7 @@ function instance(accountId: string, routedTo: string[]) {
   return i;
 }
 const got = (c: ProxyClient, command: string) => c.receivedCommands.filter((m) => m.body.command === command);
-const auditFor = (action: string) => (s.built.db.prepare('SELECT * FROM audit_log WHERE action = ? ORDER BY id').all(action) as { outcome: string; detail: string; target_type: string; target_id: string }[])
+const auditFor = (action: string) => (s.built.db.prepare('SELECT * FROM audit_log WHERE action = ? ORDER BY id').all(action) as { outcome: string; detail: string; target_type: string; target_id: string; target_label: string; actor: string; actor_type: string }[])
   .map((r) => ({ ...r, detail: JSON.parse(r.detail) as Record<string, any> }));
 const commandsOf = (command: string) => s.built.db.prepare('SELECT * FROM commands WHERE command = ?').all(command) as { args: string; proxy_id: string }[];
 // Everything a fixer may touch: routes, registry proxies and camera overrides.
@@ -132,6 +132,7 @@ describe('move.begin from cams-admin', () => {
     expect(s.built.registry.proxyById(tgt.proxyId)!.tlsSite).toBe('old');
     expect(fixable()).toBe(was);
     expect(auditFor('move-fix')).toHaveLength(0);
+    expect(auditFor('move-begin')).toMatchObject([{ outcome: 'refused', actor_type: 'sysadmin', actor: ACTOR, target_type: 'camera', target_label: 'porch-cam1', detail: { failing: ['site_ca'] } }]);
     expect(commandsOf('move.begin')).toHaveLength(0);
   });
 
@@ -147,6 +148,7 @@ describe('move.begin from cams-admin', () => {
     expect(s.built.camsInstances.routes(i.id).find((x) => x.proxyId === tgt.proxyId)).toMatchObject({ hidden: true });
     expect(fixable()).toBe(was);
     expect(auditFor('move-fix')).toHaveLength(0);
+    expect(auditFor('move-begin')).toMatchObject([{ outcome: 'refused', actor: ACTOR, detail: { failing: ['routed'] } }]);
     expect(commandsOf('move.begin')).toHaveLength(0);
   });
 
@@ -187,7 +189,12 @@ describe('move.begin from cams-admin', () => {
     expect(r.ok === false && r.report!.rules.find((x) => x.rule === 'target_online')).toMatchObject({ ok: false });
     expect(fixable()).toBe(was);
     expect(auditFor('move-fix')).toHaveLength(0);
-    expect((s.built.db.prepare('SELECT count(*) n FROM audit_log').get() as { n: number }).n).toBe(auditN);
+    // The one row a refusal writes: move-begin refused, the failing rules by name (nothing else of the request persists).
+    expect((s.built.db.prepare('SELECT count(*) n FROM audit_log').get() as { n: number }).n).toBe(auditN + 1);
+    const refused = auditFor('move-begin');
+    expect(refused).toHaveLength(1);
+    expect(refused[0]).toMatchObject({ outcome: 'refused', actor_type: 'sysadmin', actor: ACTOR, target_type: 'camera', target_id: cam.id, target_label: cam.camsId });
+    expect(refused[0].detail).toEqual({ failing: ['target_online', 'site_ca', 'routed', 'no_host_override'] });
     expect(commandsOf('move.begin')).toHaveLength(0);
   });
 
@@ -222,6 +229,18 @@ describe('move.begin from cams-admin', () => {
     expect(commandsOf('move.begin')).toHaveLength(0);
   });
 
+  it('a target without a registry url is refused before any fix', async () => {
+    const src = await proxy();
+    const tgt = await proxy({ url: false, site: 'beta-2', registrySite: null });
+    camera(src);
+    instance(src.accountId, [src.proxyId]);
+    const was = fixable();
+    expect(begin(src, tgt)).toMatchObject({ ok: false, status: 409, error: 'target_registry_incomplete' });
+    expect(fixable()).toBe(was);
+    expect(auditFor('move-fix')).toHaveLength(0);
+    expect(commandsOf('move.begin')).toHaveLength(0);
+  });
+
   it('cameraId may be the cams id', async () => {
     const src = await proxy();
     const tgt = await proxy();
@@ -234,13 +253,15 @@ describe('move.begin from cams-admin', () => {
   it('a refused move.begin is audited and leaves no move', async () => {
     const src = await proxy();
     const tgt = await proxy({ site: 'beta-2', registrySite: null });
-    camera(src);
+    const cam = camera(src);
     src.client.moveResults['move.begin'] = { status: 'failed', code: 'busy' };
     const r = begin(src, tgt);
     expect(r).toMatchObject({ ok: true });
     await until(() => auditFor('move-begin').some((a) => a.outcome === 'failed'), 5000, 'failed move-begin audit');
     const failed = auditFor('move-begin').find((a) => a.outcome === 'failed')!;
     expect(failed.detail).toEqual({ cmdId: r.ok && r.commandId, source: src.proxyId, code: 'busy' });
+    // Attributed like the ok row: the requester, the camera.
+    expect(failed).toMatchObject({ actor_type: 'sysadmin', actor: ACTOR, target_type: 'camera', target_id: cam.id, target_label: cam.camsId });
     expect(s.built.moves.store.list()).toHaveLength(0);
     expect(auditFor('move-fix')).toMatchObject([{ detail: { rule: 'site_ca', proxyId: tgt.proxyId } }]);
     expect(s.built.registry.proxyById(tgt.proxyId)!.tlsSite).toBe('beta-2');

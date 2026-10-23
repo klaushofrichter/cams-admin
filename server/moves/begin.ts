@@ -1,5 +1,5 @@
 import { tx } from '../db/open';
-import type { Audit } from '../audit';
+import type { Audit, AuditEntry } from '../audit';
 import { ApiError, type Proxy } from '../registry';
 import type { Commands } from '../commands/service';
 import type { CamsInstances } from '../cams/instances';
@@ -16,7 +16,8 @@ import type { MoveBounds } from './types';
 // fingerprints or the TLS name) and `no_host_override` (the instance's host
 // for the camera cleared, its camera user kept). Every check, including
 // whether each fix may be made, runs before the first fix, in one transaction:
-// a refused request writes nothing. A re-check that still fails after the
+// a refused request writes nothing but its one `move-begin` refused audit row
+// (after the rollback) when the precheck refused it. A re-check that still fails after the
 // fixes answers 409 and keeps them (each one is audited). Then move.begin to
 // the source, which runs its own checks and emits the usual move.request.
 
@@ -47,8 +48,9 @@ export function beginInput(body: unknown): BeginInput {
 }
 
 // A refusal before any write: thrown out of the transaction (which rolls back, not even the write epoch moves).
+// A precheck refusal carries its one audit row, written after the rollback.
 class Refused {
-  constructor(readonly r: BeginResult) {}
+  constructor(readonly r: BeginResult, readonly audit?: AuditEntry) {}
 }
 
 export function begin(d: BeginDeps, actor: string, body: unknown): BeginResult {
@@ -56,14 +58,15 @@ export function begin(d: BeginDeps, actor: string, body: unknown): BeginResult {
   try {
     return tx(d.db, () => run(d, actor, input));
   } catch (e) {
-    if (e instanceof Refused) return e.r;
-    throw e;
+    if (!(e instanceof Refused)) throw e;
+    if (e.audit) d.audit.write(e.audit);
+    return e.r;
   }
 }
 
 function run(d: BeginDeps, actor: string, input: BeginInput): BeginResult {
-  const refuse = (r: Omit<Extract<BeginResult, { ok: false }>, 'ok'>): never => {
-    throw new Refused({ ok: false, ...r });
+  const refuse = (r: Omit<Extract<BeginResult, { ok: false }>, 'ok'>, audit?: AuditEntry): never => {
+    throw new Refused({ ok: false, ...r }, audit);
   };
   // A4, A7: the source, the camera on it (the registry id or the cams id in the source's account), the source able to take move.begin.
   const src = d.registry.proxyById(input.sourceProxyId);
@@ -79,10 +82,16 @@ function run(d: BeginDeps, actor: string, input: BeginInput): BeginResult {
   const cand = { accountId: src.accountId, sourceProxyId: src.id, targetProxyId: input.targetProxyId, cameraId: cam.id };
   const r1 = precheckReport(d, cand);
   const failing = new Set(r1.rules.filter((r) => !r.ok).map((r) => r.rule));
-  const notFixed = () => refuse({ status: 409, error: 'precheck', reason: r1.reason, report: r1, fixed: [] });
+  // A 409 with the report: one move-begin row, refused, naming the failing rules only.
+  const refusedRow = (report: PrecheckReport): AuditEntry => ({
+    actorType: 'sysadmin', actor, action: 'move-begin', accountId: src.accountId, targetType: 'camera', targetId: cam.id, targetLabel: cam.camsId, outcome: 'refused',
+    detail: { failing: report.rules.filter((r) => !r.ok).map((r) => r.rule) },
+  });
+  const notFixed = () => refuse({ status: 409, error: 'precheck', reason: r1.reason, report: r1, fixed: [] }, refusedRow(r1));
   if ([...failing].some((r) => !FIXABLE.has(r))) return notFixed();
-  // Past same_account: the target is registered in the source's account.
+  // Past same_account: the target is registered in the source's account. Its url is what the move token is bound to (onRequest).
   const tgt = d.registry.proxyById(input.targetProxyId)!;
+  if (!tgt.url) return refuse({ status: 409, error: 'target_registry_incomplete' });
 
   // Every fix decided before the first is made.
   const fixes: Fix[] = [];
@@ -135,7 +144,10 @@ function run(d: BeginDeps, actor: string, input: BeginInput): BeginResult {
   }
 
   const r2 = precheckReport(d, cand);
-  if (!r2.ok) return { ok: false, status: 409, error: 'precheck', reason: r2.reason, report: r2, fixed: fixes };
+  if (!r2.ok) {
+    d.audit.write(refusedRow(r2));
+    return { ok: false, status: 409, error: 'precheck', reason: r2.reason, report: r2, fixed: fixes };
+  }
   // An ApiError here (paused, rate limited) rolls the fixes back with it.
   const cmd = d.commands.create(actor, src.accountId, src.id, 'move.begin', { v: 1, camera: cam.proxyCameraId, target: tgt.id, bounds: input.bounds });
   d.audit.write({

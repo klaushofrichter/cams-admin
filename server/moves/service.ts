@@ -440,10 +440,13 @@ export class Moves {
 
   private onFinal(r: CommandRow): void {
     // move.begin has no move yet (the source's move.request makes it): a refusal or failure is audited only (A10), the fixes stay.
+    // Attributed like its ok row: the requester (the command's actor) and the camera.
     if (r.command === 'move.begin') {
       if (r.state !== 'done') {
+        const cam = this.d.db.prepare('SELECT id, cams_id FROM cameras WHERE account_id = ? AND proxy_id = ? AND proxy_camera_id = ?')
+          .get(r.accountId, r.proxyId, String(r.args.camera)) as { id: string; cams_id: string } | undefined;
         this.d.audit.write({
-          actorType: 'system', actor: 'system', action: 'move-begin', accountId: r.accountId, targetType: 'proxy', targetId: r.proxyId, outcome: 'failed',
+          actorType: 'sysadmin', actor: r.actor, action: 'move-begin', accountId: r.accountId, targetType: 'camera', targetId: cam?.id ?? null, targetLabel: cam?.cams_id ?? null, outcome: 'failed',
           detail: { cmdId: r.id, source: r.proxyId, code: r.outcomeCode ?? r.state },
         });
       }
