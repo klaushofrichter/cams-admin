@@ -24,7 +24,7 @@ const issue = async (name: string, days?: number) => {
   return r.body as { token: string; item: { id: string; hashPrefix: string; state: string; expiresAt: number; createdAt: number } };
 };
 const auditOf = (action: string) => a.db.prepare('SELECT * FROM audit_log WHERE action = ? ORDER BY id').all(action) as { detail: string; outcome: string; target_id: string }[];
-const ROUTES = ['/diag', '/diag/proxies', '/diag/cams-instances', '/diag/cameras', '/diag/tokens', '/diag/moves', '/diag/audit'];
+const ROUTES = ['/diag', '/diag/proxies', '/diag/cams-instances', '/diag/cameras', '/diag/tokens', '/diag/ops-tokens', '/diag/moves', '/diag/audit'];
 
 let acc: string, px: string, px2: string;
 beforeAll(() => {
@@ -139,6 +139,21 @@ describe('diagnostics answers', () => {
     const p = (await bearer('/diag/tokens', token)).body.items.find((x: { proxyId: string }) => x.proxyId === px);
     expect(p.tokens).toEqual([expect.objectContaining({ id: 'tok_DIAG0000000000000001', kind: 'client', holder: i.id, holderName: 'cluster', label: 'cams cluster', state: 'active', createdBy: expect.stringMatching(/^email:[0-9a-f]{8}$/) })]);
     expect(JSON.stringify(p)).not.toContain('cdcdcdcd');
+  });
+
+  it('ops-tokens: the operations tokens with scopes and state; never the token or a full hash', async () => {
+    const { token } = await issue('reader');
+    const o = await a.api('post', '/ops-tokens', { name: 'ops-view', days: 1, scopes: ['tokens', 'moves'] });
+    expect(o.status).toBe(201);
+    const res = await bearer('/diag/ops-tokens', token);
+    expect(res.status).toBe(200);
+    expect(res.body.items.find((t: { id: string }) => t.id === o.body.item.id)).toMatchObject({ name: 'ops-view', scopes: ['tokens', 'moves'], state: 'active', hashPrefix: o.body.item.hashPrefix });
+    const text = JSON.stringify(res.body);
+    expect(text).not.toContain(o.body.token);
+    expect(text).not.toMatch(/sha256:|[0-9a-f]{64}/);
+    expect((await bearer('/diag', token)).body.routes).toContain('/diag/ops-tokens');
+    expect((await bearer('/diag/ops-tokens', o.body.token)).status).toBe(401);
+    await a.api('post', `/ops-tokens/${o.body.item.id}/revoke`);
   });
 
   it('the move precheck names every rule: an offline target, and the instance that sees only the source', async () => {

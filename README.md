@@ -154,6 +154,9 @@ A read-only diagnostics API (`/api/v1/diag/…`) answers tools with a
 revocable diagnostics token instead of a sign-in: proxies, cams instances and
 their problems, cameras, moves, the move precheck rule by rule, and the audit
 log ([docs/diagnostics.md](docs/diagnostics.md)).
+Operations tokens do the same for a few scoped writes (revoke a proxy token,
+set a cams route, cancel a move) without a sign-in, and are issued on the same
+page.
 
 There is no video: cams-admin is a control plane, not in any data path.
 Camera passwords never pass through it; a managed proxy token passes through

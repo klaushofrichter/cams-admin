@@ -34,3 +34,31 @@ test('a diagnostics token is shown once with the save command, reads /diag witho
     await anon.dispose();
   }
 });
+
+test('an operations token is shown once with its scopes, listed as active, and revoked', async ({ page }, info) => {
+  // Room under the live-token cap whatever earlier runs left.
+  for (const t of (await api(page, 'GET', '/ops-tokens')).items) if (t.state === 'active') await api(page, 'POST', `/ops-tokens/${t.id}/revoke`);
+  const name = uniq(info, 'ops').slice(0, 64);
+  await page.goto('/#/diagnostics');
+  await page.getByTestId('ops-name').fill(name);
+  await page.getByTestId('ops-days').fill('1');
+  await page.getByTestId('ops-scope-tokens').check();
+  await page.getByTestId('ops-issue').click();
+  const field = page.getByTestId('shown-token');
+  await expect(field).toHaveValue(/^cao_[A-Za-z0-9_-]{43}$/);
+  const token = await field.inputValue();
+  await expect(page.getByTestId('ops-save')).toContainText('pbpaste > ~/.config/cams-admin/ops-token');
+  await page.getByTestId('shown-stored').check();
+  await page.getByTestId('shown-close').click();
+  expect(await page.content()).not.toContain(token);
+  await expect(page.getByTestId(`ops-state-${name}`)).toHaveText('active');
+  await expect(page.getByTestId(`ops-row-${name}`)).toContainText('tokens');
+
+  // Gone after a reload.
+  await page.reload();
+  expect(await page.content()).not.toContain(token);
+  await expect(page.getByTestId(`ops-state-${name}`)).toHaveText('active');
+
+  await page.getByTestId(`ops-revoke-${name}`).click();
+  await expect(page.getByTestId(`ops-state-${name}`)).toHaveText('revoked');
+});

@@ -73,6 +73,9 @@ describe('audit completeness', () => {
     // Diagnostics tokens (issue #45).
     ['post', '/diag-tokens', () => '/diag-tokens', () => ({ name: 'mac', days: 1 }), 'diag-token-issue'],
     ['post', '/diag-tokens/:tokenId/revoke', () => `/diag-tokens/${ids.dgt}/revoke`, () => ({}), 'diag-token-revoke'],
+    // Operations tokens.
+    ['post', '/ops-tokens', () => '/ops-tokens', () => ({ name: 'script', scopes: ['moves'], days: 1 }), 'ops-token-issue'],
+    ['post', '/ops-tokens/:tokenId/revoke', () => `/ops-tokens/${ids.opt}/revoke`, () => ({}), 'ops-token-revoke'],
     ['post', '/backup/now', () => '/backup/now', () => ({}), 'backup-now'],
     ['delete', '/accounts/:accountId', () => `/accounts/${ids.acc}`, () => ({ confirmName: 'home' }), 'account-delete'],
     // Last: it ends every session, this test's too.
@@ -124,6 +127,7 @@ describe('audit completeness', () => {
       a.db.prepare(`UPDATE proxy_tokens SET state = 'active' WHERE id = ?`).run(ids.tok); // as if the proxy confirmed it
     }
     if (action === 'diag-token-issue') ids.dgt = r.body.item.id;
+    if (action === 'ops-token-issue') ids.opt = r.body.item.id;
     if (action === 'camera-create') ids.cam = r.body.id;
     if (action === 'camera-create') {
       // Two moves for the move rows: proxies and cameras of their own, in copying.

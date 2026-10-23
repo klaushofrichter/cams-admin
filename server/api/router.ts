@@ -19,12 +19,13 @@ import type { ProxyConfig } from '../config/service';
 import type { RemoteActions } from '../actions/service';
 import type { Moves } from '../moves/service';
 import { chunkCounts, moveView } from '../moves/view';
-import { SESSION_COOKIE, type Sessions } from '../auth/session';
-import { requireCsrf, requireSysadmin, writeLimiter } from '../auth/middleware';
+import { SESSION_COOKIE, type Session, type Sessions } from '../auth/session';
+import { bearerOf, requireAuth, sessionBeforeBody } from '../auth/middleware';
 import { reconcile } from '../status/derive';
 import { FieldError } from '../validate';
 import { Buckets } from '../channel/limits';
 import { limiter, sessionKey } from '../rateLimit';
+import { sha256Hex } from '../ids';
 import { monitorEventLoopDelay } from 'perf_hooks';
 import { existsSync, statSync } from 'fs';
 import { join } from 'path';
@@ -32,6 +33,7 @@ import { writeHeapSnapshot } from 'v8';
 import { readEpoch } from '../db/open';
 import { bodyErrors } from '../bodyErrors';
 import type { DiagTokens } from '../diag/tokens';
+import type { OpsTokens } from '../ops/tokens';
 
 export interface ManualBackup { at: number; ok: boolean; litestream: { ok: boolean; status?: string; error?: string }; snapshot: { ok: boolean; key?: string; bytes?: number; error?: string } }
 export interface BackupState {
@@ -48,7 +50,7 @@ export interface BackupService { state(): BackupState; backupNow(actor: string):
 
 export interface ApiDeps {
   db: Db; clock: Clock; cfg: Config; audit: Audit; registry: Registry; enrollment: Enrollment; hub: Hub; status: StatusStore; live: LiveHub; sessions: Sessions; backup: BackupService;
-  commands: Commands; tokens: Tokens; camsInstances: CamsInstances; serverKeyFingerprints: string[]; importer: Importer; config: ProxyConfig; actions: RemoteActions; moves: Moves; diag: DiagTokens;
+  commands: Commands; tokens: Tokens; camsInstances: CamsInstances; serverKeyFingerprints: string[]; importer: Importer; config: ProxyConfig; actions: RemoteActions; moves: Moves; diag: DiagTokens; ops: OpsTokens;
 }
 
 type H = (req: Request, res: Response) => unknown;
@@ -58,13 +60,27 @@ const keyView = ({ publicKey: _pk, ...k }: ProxyKey) => k;
 
 export function apiRouter(d: ApiDeps): express.Router {
   const r = express.Router();
-  // Every API request, per session (CodeQL-visible; the write limit below is tighter).
-  r.use(limiter({ windowMs: 60_000, limit: 1200, key: (req) => sessionKey(req.cookies?.[SESSION_COOKIE]) }));
-  // P4: an import carries a whole cams export (≤ 1 MiB); only a signed-in sysadmin's body is read that far.
-  r.use('/accounts/:accountId/import', requireSysadmin(d.sessions), express.json({ limit: 1024 * 1024 }));
+  // Every API request, per session or per bearer token (CodeQL-visible; the write limits are tighter).
+  // A token request is keyed by its hash, whatever cookie comes with it (the bearer decides).
+  r.use(limiter({ windowMs: 60_000, limit: 1200, key: (req) => {
+    const t = bearerOf(req);
+    return t === null ? sessionKey(req.cookies?.[SESSION_COOKIE]) : 'bearer:' + sha256Hex(t).slice(0, 32);
+  } }));
+  // P4: an import carries a whole cams export (≤ 1 MiB); only a signed-in sysadmin's body is read
+  // that far. A token request is refused unread.
+  r.use('/accounts/:accountId/import', sessionBeforeBody(d), express.json({ limit: 1024 * 1024 }));
   r.use(express.json({ limit: 64 * 1024 }));
-  r.use(requireSysadmin(d.sessions), requireCsrf(d.cfg), writeLimiter(d.cfg, d.clock));
-  const actor = (res: Response): string => res.locals.session.email;
+  r.use(...requireAuth(d));
+  // The e-mail of the session, or ops-token:<8hex> (set by requireAuth).
+  const actor = (res: Response): string => {
+    if (typeof res.locals.actor !== 'string') throw new Error('no actor');
+    return res.locals.actor;
+  };
+  // Session-only handlers: a token request never gets here (GET is refused), but fail closed.
+  const session = (res: Response): Session => {
+    if (!res.locals.session) throw new ApiError(403, 'scope');
+    return res.locals.session;
+  };
   // Async-safe handler with the API's error mapping.
   const h = (fn: H) => async (req: Request, res: Response) => {
     try {
@@ -86,9 +102,10 @@ export function apiRouter(d: ApiDeps): express.Router {
   const limit = (req: Request) => (req.query.limit === undefined ? undefined : Number(req.query.limit));
 
   // --- session and live ---------------------------------------------------------------
-  r.get('/me', h((_q, res) => ({ email: actor(res), expiresAt: res.locals.session.expiresAt })));
+  r.get('/me', h((_q, res) => { const s = session(res); return { email: s.email, expiresAt: s.expiresAt }; }));
   r.get('/live', (req, res) => {
     const cookie = req.cookies?.[SESSION_COOKIE];
+    if (!res.locals.session) return void res.status(403).json({ error: 'scope' });
     if (!d.live.subscribe(res.locals.session.idHash, res, () => d.sessions.get(cookie) !== null)) res.status(429).json({ error: 'too_many_streams' });
   });
   r.post('/sessions/end', h((_q, res) => {
@@ -347,6 +364,17 @@ export function apiRouter(d: ApiDeps): express.Router {
   r.get('/diag-tokens', h(() => d.diag.list()));
   r.post('/diag-tokens', h((req, res) => { created(res); return d.diag.issue(actor(res), req.body); }));
   r.post('/diag-tokens/:tokenId/revoke', h((req, res) => d.diag.revoke(actor(res), p(req, 'tokenId'))));
+
+  // --- operations tokens: session-only (not in OPS_ROUTES), so no token issues or revokes one ---
+  r.get('/ops-tokens', h(() => d.ops.list()));
+  r.post('/ops-tokens', h((req, res) => {
+    // The token's only appearance.
+    res.set('Cache-Control', 'no-store');
+    const out = d.ops.issue(actor(res), req.body);
+    created(res);
+    return { ...out, shownOnce: true };
+  }));
+  r.post('/ops-tokens/:tokenId/revoke', h((req, res) => d.ops.revoke(actor(res), p(req, 'tokenId'))));
 
   // --- audit -------------------------------------------------------------------------------
   r.get('/audit', h((req) => {

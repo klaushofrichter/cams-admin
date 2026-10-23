@@ -5,5 +5,9 @@ then empties it on `main`.
 
 ## [Unreleased]
 
-- Fix: the cams configuration revision now includes a snapshot format number, so a server-side change to the configuration (like the previous release's TLS-name fix) reaches every cams at once instead of the old one being kept as unchanged.
+- Operations tokens: write-scoped bearer tokens (`cao_…`, scopes `tokens`,
+  `routes`, `moves`; 1–90 days, at most 5 live) so a script can revoke proxy
+  tokens, set cams routes and cancel moves without a Google sign-in. Issued on
+  the Diagnostics page, listed at `/diag/ops-tokens`, documented in
+  `docs/diagnostics.md`.
 
