@@ -13,9 +13,12 @@ import { ApiError } from '../registry';
 export interface SnapUser { email: string; role: 'admin' | 'viewer'; disabled: boolean }
 export interface SnapToken { id: string; kind: 'client' | 'admin'; state: 'pending' | 'active' | 'retiring' | 'revoked'; retireAt: number | null }
 export interface SnapProxy { id: string; name: string; displayName: string; url: string | null; adminUiUrl: string | null; tlsServername: string | null; caFingerprints: string[]; tokens: SnapToken[]; site: string | null }
+export interface SnapMove { id: string; sourceProxyId: string; targetProxyId: string; expiresAt: number }
 export interface SnapCamera {
   id: string; camsId: string; name: string; proxyId: string | null; proxyCameraId: string | null; host: string | null; protocol: 'https' | 'http' | null;
   tlsServername: string | null; cameraUser: string | null; webUiUrl: string | null; webUiNote: string | null; moveId: string | null;
+  // The attestation that this camera's move was made by cams-admin (format 3); null when none applies.
+  move: SnapMove | null;
 }
 export interface SnapAccount { id: string; name: string; displayName: string; revision: number; users: SnapUser[]; proxies: SnapProxy[]; cameras: SnapCamera[] }
 export interface Snapshot { v: 1; type: 'cams-config'; instance: { id: string; name: string; rotateBefore: number | null }; revision: string; generatedAt: number; accounts: SnapAccount[]; sig: string }
@@ -30,8 +33,12 @@ type Row = Record<string, unknown>;
 // "r:" + 16 hex over the instance, its version, its served accounts' revisions and the signing key (R4-1).
 // The snapshot's format: bump it whenever the server changes what a snapshot
 // says for the same database rows, so the revision moves and every cams
-// fetches the new one instead of getting 304 on the old (2: #48).
-export const SNAPSHOT_FORMAT = 2;
+// fetches the new one instead of getting 304 on the old (2: #48; 3: cameras[].move).
+export const SNAPSHOT_FORMAT = 3;
+// How long a move attestation holds, from the switch-over.
+export const MOVE_ATTEST_MS = 24 * 3600_000;
+// Phases in which the camera is on the target for good (a cancel puts it back).
+const ATTEST_PHASES = new Set(['switching', 'copying', 'cleaning', 'done']);
 
 export function snapshotRevision(db: Db, instanceId: string, keyFp: string, format = SNAPSHOT_FORMAT): string {
   const inst = db.prepare('SELECT version FROM cams_instances WHERE id = ?').get(instanceId) as { version: number } | undefined;
@@ -71,8 +78,9 @@ export function buildSnapshot(d: SnapshotDeps, instanceId: string): Snapshot {
         site: typeof p.tls_site === 'string' && SITE_RE.test(p.tls_site) ? p.tls_site : null,
       }));
     const listed = new Set(proxies.map((p) => p.id));
-    const cameras = (q(`SELECT id, cams_id, name, proxy_id, proxy_camera_id, host, protocol, tls_servername, camera_user, web_ui_url, web_ui_note, move_id FROM cameras
-      WHERE account_id = ? ORDER BY cams_id`).all(accountId) as Row[])
+    const cameras = (q(`SELECT c.id, c.cams_id, c.name, c.proxy_id, c.proxy_camera_id, c.host, c.protocol, c.tls_servername, c.camera_user, c.web_ui_url, c.web_ui_note, c.move_id,
+      m.phase move_phase, m.source_proxy_id move_source, m.target_proxy_id move_target, m.switched_at move_switched_at FROM cameras c
+      LEFT JOIN moves m ON m.id = c.move_id WHERE c.account_id = ? ORDER BY c.cams_id`).all(accountId) as Row[])
       .filter((c) => c.proxy_id === null || listed.has(c.proxy_id as string))
       .map((c): SnapCamera => {
         // This instance's own host and camera user, where it has one (the contract's fields, unchanged).
@@ -82,6 +90,10 @@ export function buildSnapshot(d: SnapshotDeps, instanceId: string): Snapshot {
         host: o?.host ?? (c.host as string | null), protocol: c.protocol as SnapCamera['protocol'], tlsServername: c.tls_servername as string | null, cameraUser: o?.cameraUser ?? (c.camera_user as string | null),
         webUiUrl: c.web_ui_url as string | null, webUiNote: c.web_ui_note as string | null,
         moveId: c.move_id as string | null, // set at a move's switch-over, never cleared (A16)
+        // Only while the camera sits on the move's target, in a phase after the switch-over (a cancel puts it back on the source).
+        move: c.move_id !== null && ATTEST_PHASES.has(c.move_phase as string) && c.proxy_id === c.move_target && typeof c.move_switched_at === 'number'
+          ? { id: c.move_id as string, sourceProxyId: c.move_source as string, targetProxyId: c.move_target as string, expiresAt: (c.move_switched_at as number) + MOVE_ATTEST_MS }
+          : null,
         };
       });
     return { id: accountId, name: a.name as string, displayName: a.display_name as string, revision: a.revision as number, users, proxies, cameras };

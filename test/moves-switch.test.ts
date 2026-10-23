@@ -201,7 +201,7 @@ describe('start and go', () => {
 });
 
 describe('switch-over', () => {
-  it('switched moves the camera in the registry with the new TLS name and sets move_id', async () => {
+  it('switched moves the camera in the registry with the new TLS name and sets move_id (and markCamera sets switched_at)', async () => {
     const { src, tgt, cam, m } = await switched();
     const c = s.built.registry.getCamera(src.accountId, cam.id);
     expect(c).toMatchObject({ proxyId: tgt.proxyId, proxyCameraId: 'cam1', tlsServername: `cam1.${tgt.site}.internal`, camsId: 'cam1', host: '192.0.2.10' });
@@ -209,6 +209,8 @@ describe('switch-over', () => {
     expect((s.built.db.prepare('SELECT move_id FROM cameras WHERE id = ?').get(cam.id) as { move_id: string }).move_id).toBe(m.id);
     // The target copies right after switched: phase copying at once.
     expect(move(m.id).phase).toBe('copying');
+    // markCamera stamps the switch-over time for the cams attestation (migration 13).
+    expect((s.built.db.prepare('SELECT switched_at FROM moves WHERE id = ?').get(m.id) as { switched_at: number }).switched_at).toBe(clock.now());
     expect(got(src.client, 'move.release', m.id)[0].body.args).toEqual({ v: 1, moveId: m.id });
     const sw = auditFor('move-switch');
     expect(sw).toHaveLength(1);

@@ -94,6 +94,7 @@ export class MoveStore {
       const m = this.get(moveId);
       if (!m) throw new ApiError(404, 'not_found');
       this.db.prepare('UPDATE cameras SET move_id = ? WHERE id = ?').run(moveId, m.cameraId);
+      this.db.prepare('UPDATE moves SET switched_at = ? WHERE id = ?').run(this.clock.now(), moveId);
     });
   }
 

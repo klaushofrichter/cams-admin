@@ -414,6 +414,8 @@ export class Registry {
       this.getProxy(accountId, to.proxyId); // 404 for another account's proxy
       this.db.prepare('UPDATE cameras SET proxy_id = ?, proxy_camera_id = ?, tls_servername = ?, move_id = ?, updated_at = ?, version = version + 1 WHERE id = ? AND account_id = ?')
         .run(f.proxyId!, f.proxyCameraId!, f.tlsServername ?? null, to.moveId, this.clock.now(), cameraId, accountId);
+      // The forward switch (onto the move's target) stamps the move for the cams attestation; the way back at a cancel does not.
+      this.db.prepare('UPDATE moves SET switched_at = ? WHERE id = ? AND target_proxy_id = ?').run(this.clock.now(), to.moveId, f.proxyId!);
       this.audit.write({
         actorType: 'system', actor, action: 'move-switch', accountId, targetType: 'camera', targetId: cameraId, targetLabel: old.camsId, outcome: 'ok',
         detail: {

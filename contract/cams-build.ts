@@ -62,8 +62,10 @@ export function buildCamsSchemas(mode: Mode): Record<string, S> {
     id: id('cam'), camsId, name: str(), proxyId: nullable(id('prx')), proxyCameraId: nullable(str(32)), host: nullable(str(255)),
     protocol: nullable(en(['https', 'http'])), tlsServername: nullable(str(253)), cameraUser: nullable(str(64)), webUiUrl: nullable(str(512)), webUiNote: nullable(str(120)),
     moveId: nullable(id('mv')),
+    // The attestation that cams-admin made this camera's move (cams rules A/B): signed with the snapshot, expires with expiresAt (ms).
+    move: nullable(all({ id: id('mv'), sourceProxyId: id('prx'), targetProxyId: id('prx'), expiresAt: int() })),
   };
-  const camera = obj(cameraProps, Object.keys(cameraProps).filter((k) => k !== 'moveId'));
+  const camera = obj(cameraProps, Object.keys(cameraProps).filter((k) => k !== 'moveId' && k !== 'move'));
   const account = all({ id: id('acc'), name: str(32), displayName: str(), revision: int(0), users: arr(user, 500), proxies: arr(proxy, 64), cameras: arr(camera, 256) });
   const snapshot = all({
     v: { const: 1 }, type: { const: 'cams-config' }, instance: all({ id: id('cms'), name: str(32), rotateBefore: nullable(int()) }),
@@ -141,7 +143,7 @@ function unsignedSnapshot(kind: 'two-accounts' | 'empty'): Record<string, unknow
       id: IDS.beta, name: 'beta', displayName: 'Beta', revision: 3,
       users: [{ email: 'klaus@example.org', role: 'viewer', disabled: false }],
       proxies: [{ id: IDS.b1, name: 'b1', displayName: 'Beta proxy', url: 'https://beta.example.net:8480', adminUiUrl: null, tlsServername: null, caFingerprints: [], tokens: [], site: null }],
-      cameras: [{ id: IDS.bcam1, camsId: 'cam1', name: 'Gate', proxyId: IDS.b1, proxyCameraId: 'cam1', host: 'from-proxy', protocol: 'https', tlsServername: null, cameraUser: 'cams', webUiUrl: null, webUiNote: null, moveId: null }],
+      cameras: [{ id: IDS.bcam1, camsId: 'cam1', name: 'Gate', proxyId: IDS.b1, proxyCameraId: 'cam1', host: 'from-proxy', protocol: 'https', tlsServername: null, cameraUser: 'cams', webUiUrl: null, webUiNote: null, moveId: null, move: null }],
     },
     {
       id: IDS.home, name: 'home', displayName: 'Home', revision: 17,
@@ -153,8 +155,9 @@ function unsignedSnapshot(kind: 'two-accounts' | 'empty'): Record<string, unknow
           tokens: [{ id: IDS.tok1, kind: 'client', state: 'active', retireAt: null }], site: null },
       ],
       cameras: [
-        { id: IDS.cam1, camsId: 'cam1', name: 'Backyard', proxyId: IDS.pi, proxyCameraId: 'cam1', host: 'from-proxy', protocol: 'https', tlsServername: 'cam1.example.net', cameraUser: 'cams', webUiUrl: null, webUiNote: null, moveId: null },
-        { id: IDS.cam2, camsId: 'cam2', name: 'Driveway', proxyId: IDS.cluster, proxyCameraId: 'cam2', host: '192.0.2.31', protocol: 'https', tlsServername: null, cameraUser: 'cams', webUiUrl: 'https://192.0.2.31', webUiNote: 'LAN only', moveId: 'mv_0123456789ABCDEFGHJK' },
+        { id: IDS.cam1, camsId: 'cam1', name: 'Backyard', proxyId: IDS.pi, proxyCameraId: 'cam1', host: 'from-proxy', protocol: 'https', tlsServername: 'cam1.example.net', cameraUser: 'cams', webUiUrl: null, webUiNote: null, moveId: null, move: null },
+        { id: IDS.cam2, camsId: 'cam2', name: 'Driveway', proxyId: IDS.cluster, proxyCameraId: 'cam2', host: '192.0.2.31', protocol: 'https', tlsServername: null, cameraUser: 'cams', webUiUrl: 'https://192.0.2.31', webUiNote: 'LAN only', moveId: 'mv_0123456789ABCDEFGHJK',
+          move: { id: 'mv_0123456789ABCDEFGHJK', sourceProxyId: IDS.pi, targetProxyId: IDS.cluster, expiresAt: NOW + 86_400_000 } },
       ],
     },
   ];

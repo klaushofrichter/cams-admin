@@ -329,6 +329,40 @@
                       "type": "null"
                     }
                   ]
+                },
+                "move": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "pattern": "^mv_[0-9A-HJKMNP-TV-Z]{20}$"
+                        },
+                        "sourceProxyId": {
+                          "type": "string",
+                          "pattern": "^prx_[0-9A-HJKMNP-TV-Z]{20}$"
+                        },
+                        "targetProxyId": {
+                          "type": "string",
+                          "pattern": "^prx_[0-9A-HJKMNP-TV-Z]{20}$"
+                        },
+                        "expiresAt": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "sourceProxyId",
+                        "targetProxyId",
+                        "expiresAt"
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 }
               },
               "required": [
