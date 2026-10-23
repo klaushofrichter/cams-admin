@@ -14,11 +14,13 @@ const PHASES: Record<string, string> = {
   cancelling: 'cancelling',
   cancelled: 'cancelled',
   failed: 'failed',
+  returning: 'Copying back',
+  returned: 'Copied back',
 };
 export const phaseText = (p: string): string => PHASES[p] ?? p;
 
 export function phaseClass(p: string): string {
-  return p === 'done' ? 'ok' : p === 'failed' || p === 'rejected' ? 'bad' : p === 'cancelled' || p === 'cancelling' ? 'warn' : '';
+  return p === 'done' ? 'ok' : p === 'failed' || p === 'rejected' ? 'bad' : p === 'cancelled' || p === 'cancelling' || p === 'returning' ? 'warn' : '';
 }
 
 export function progressText(v: { bytesDone: number | null; bytesTotal: number | null }): string {
@@ -59,6 +61,8 @@ const REASONS: Record<string, string> = {
   bad_result: 'a proxy answered something unexpected',
   unknown: 'no answer',
   expired: 'not delivered in time',
+  given_up: 'Copy back given up',
+  'paused:no_space': 'Paused: no room on the original proxy',
 };
 // A failure code is `<step>:<code>` (the step that failed, the proxy's code or the command's end state).
 const STEPS: Record<string, string> = {
@@ -82,6 +86,25 @@ export function reasonText(r: string | null | undefined): string {
 }
 
 export const cancelable = (phase: string): boolean => ['awaiting-approval', 'approved', 'switching', 'copying'].includes(phase);
+
+export const canGiveUp = (phase: string): boolean => phase === 'returning';
+
+// The receiving side's completeness check in a line: "Complete", or the counts per kind ("2 stills missing, 1 Archive failed").
+interface Check { complete: boolean; missing?: Record<string, number>; recovered?: Record<string, number>; failed?: Record<string, number>; expired?: Record<string, number> }
+export function checkText(c: Check | null | undefined): string {
+  if (!c) return '';
+  if (c.complete) return 'Complete';
+  const kind = (k: string) => (k === 'archive' ? 'Archive' : k);
+  const part = (counts: Record<string, number> | undefined, what: string) => Object.entries(counts ?? {}).filter(([, n]) => n > 0).map(([k, n]) => `${n} ${kind(k)} ${what}`);
+  const parts = [...part(c.missing, 'missing'), ...part(c.failed, 'failed'), ...part(c.expired, 'expired')];
+  return parts.length ? parts.join(', ') : 'Incomplete';
+}
+
+// The End transfer button while Archive may still be copying: it waits for Archive, and once asked it is only waiting.
+export function endLabel(m: { archivePending: boolean; endRequested: boolean }): string {
+  if (m.endRequested) return 'Ending after Archive';
+  return m.archivePending ? 'End after Archive…' : 'End transfer…';
+}
 
 // What the request was pre-approved within (the bounds it carried), for the move detail.
 export function boundsText(b: { transfer: boolean; kinds: string[]; space: string; maxBudgetS: number } | null): string {
@@ -130,6 +153,6 @@ export function activeMoves<T extends { endedAt: number | null }>(items: T[] | u
 
 // One move in a line: "Backyard: Mini PC → een, copying 25%".
 export function activeLine(m: { cameraName?: string | null; camsId: string; source: { name: string }; target: { name: string }; phase: string; bytesDone: number | null; bytesTotal: number | null }): string {
-  const pct = m.phase === 'copying' && m.bytesTotal ? ` ${Math.min(100, Math.round(((m.bytesDone ?? 0) / m.bytesTotal) * 100))}%` : '';
-  return `${m.cameraName || m.camsId}: ${m.source.name} → ${m.target.name}, ${phaseText(m.phase)}${pct}`;
+  const pct = (m.phase === 'copying' || m.phase === 'returning') && m.bytesTotal ? ` ${Math.min(100, Math.round(((m.bytesDone ?? 0) / m.bytesTotal) * 100))}%` : '';
+  return `${m.cameraName || m.camsId}: ${m.source.name} → ${m.target.name}, ${m.phase === 'returning' ? 'copying back' : phaseText(m.phase)}${pct}`;
 }

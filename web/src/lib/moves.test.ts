@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { cancelable, etaText, phaseClass, phaseText, progressText, reasonText, boundsText, startBody, refusalText, cameraLabel, activeMoves, activeLine } from './moves';
+import { cancelable, etaText, phaseClass, phaseText, progressText, reasonText, boundsText, startBody, refusalText, cameraLabel, activeMoves, activeLine, checkText, endLabel, canGiveUp } from './moves';
 
-const PHASES = ['requested', 'offered', 'awaiting-approval', 'approved', 'switching', 'copying', 'cleaning', 'done', 'rejected', 'cancelling', 'cancelled', 'failed'];
+const PHASES = ['requested', 'offered', 'awaiting-approval', 'approved', 'switching', 'copying', 'cleaning', 'done', 'rejected', 'cancelling', 'cancelled', 'failed', 'returning', 'returned'];
 
 describe('moves (UI text)', () => {
   it('phaseText covers every phase', () => {
@@ -124,5 +124,38 @@ describe('active moves (menu and Dashboard)', () => {
   });
   it('activeLine: the alias when there is no name', () => {
     expect(activeLine(m({ cameraName: '' }))).toMatch(/^cam4: /);
+  });
+  it('a copy back is active and phrased as copying back', () => {
+    expect(activeMoves([m({ phase: 'returning' }), m({ id: 'mv_2', phase: 'returned', endedAt: 5 })]).map((x) => x.id)).toEqual(['mv_1']);
+    expect(activeLine(m({ phase: 'returning' }))).toBe('Backyard: Mini PC → een, copying back 25%');
+  });
+});
+
+describe('copy back, check, End after Archive', () => {
+  it('phases and reasons of a copy back', () => {
+    expect(phaseText('returning')).toBe('Copying back');
+    expect(phaseText('returned')).toBe('Copied back');
+    expect(reasonText('given_up')).toBe('Copy back given up');
+    expect(reasonText('paused:no_space')).toBe('Paused: no room on the original proxy');
+    expect(phaseClass('returning')).toBe('warn');
+    expect(phaseClass('returned')).toBe('');
+  });
+  it('checkText: complete, or the counts per kind', () => {
+    expect(checkText(null)).toBe('');
+    expect(checkText({ complete: true, missing: {}, recovered: { stills: 1 }, failed: {}, expired: {} })).toBe('Complete');
+    expect(checkText({ complete: false, missing: { stills: 2 }, recovered: {}, failed: { archive: 1 }, expired: { clips: 3 } })).toBe('2 stills missing, 1 Archive failed, 3 clips expired');
+    expect(checkText({ complete: false, missing: {}, recovered: {}, failed: {}, expired: {} })).toBe('Incomplete');
+    expect(checkText({ complete: false, missing: { clips: 0, events: 4 }, recovered: {}, failed: {}, expired: {} })).toBe('4 events missing');
+  });
+  it('endLabel: plain, waiting for Archive, ending after Archive', () => {
+    expect(endLabel({ archivePending: false, endRequested: false })).toBe('End transfer…');
+    expect(endLabel({ archivePending: true, endRequested: false })).toBe('End after Archive…');
+    expect(endLabel({ archivePending: true, endRequested: true })).toBe('Ending after Archive');
+    expect(endLabel({ archivePending: false, endRequested: true })).toBe('Ending after Archive');
+  });
+  it('only a copy back can be given up; it is not cancelable', () => {
+    expect(canGiveUp('returning')).toBe(true);
+    for (const p of ['returned', 'copying', 'cancelled', 'done']) expect(canGiveUp(p), p).toBe(false);
+    expect(cancelable('returning')).toBe(false);
   });
 });

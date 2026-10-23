@@ -78,6 +78,76 @@ test('moves page ends a transfer in copying', async ({ page }, info) => {
   await expect(page.getByTestId(`move-phase-${id}`)).not.toHaveText('copying');
 });
 
+// Straight-into-the-database changes to a move made by insertMove.
+function patchMove(id: string, sql: string, ...args: (string | number | null)[]) {
+  const db = new DatabaseSync(ENV.DB_FILE);
+  db.exec('PRAGMA busy_timeout = 5000');
+  db.prepare(`UPDATE moves SET ${sql} WHERE id = ?`).run(...args, id);
+  db.close();
+}
+
+test('a copy back shows Copying back, cannot be cancelled and is given up behind a typed confirm', async ({ page }, info) => {
+  const { acc, a, b } = await twoProxies(page, info, 'mr');
+  const orig = insertMove(acc.id, a.id, b.id, 'cancelled', 3);
+  patchMove(orig, 'ended_at = 5, check_result = ?', JSON.stringify({ complete: false, missing: { stills: 2 }, recovered: {}, failed: { archive: 1 }, expired: { clips: 3 } }));
+  const ret = insertMove(acc.id, b.id, a.id, 'returning', 4);
+  patchMove(ret, 'return_of = ?', orig);
+  await page.goto('/#/moves');
+  await expect(page.getByTestId(`move-phase-${ret}`)).toHaveText('Copying back');
+  const detail = page.getByTestId(`move-detail-${ret}`);
+  await expect(detail.getByTestId('move-cancel')).toHaveCount(0);
+  await expect(detail.getByTestId('move-end-transfer')).toHaveCount(0);
+  await expect(page.getByTestId('nav-moves-active')).toBeVisible();
+  await page.goto('/#/');
+  await expect(page.getByTestId(`dash-move-${ret}`)).toContainText('copying back');
+  await page.goto('/#/moves');
+  // The cancelled move shows its check and links to the copy back.
+  await page.getByTestId(`move-toggle-${orig}`).click();
+  const od = page.getByTestId(`move-detail-${orig}`);
+  await expect(od.getByTestId('move-check')).toHaveText('Check: 2 stills missing, 1 Archive failed, 3 clips expired');
+  await expect(od.getByTestId('move-return-link')).toBeVisible();
+  await expect(od.getByTestId('move-give-up')).toHaveCount(0);
+  // Give up: the typed word, then the copy back is over.
+  await detail.getByTestId('move-give-up').click();
+  await expect(page.getByTestId('confirm-ok')).toBeDisabled();
+  await page.getByTestId('confirm-input').fill('give up');
+  await page.getByTestId('confirm-ok').click();
+  await expect(page.getByTestId(`move-phase-${ret}`)).toHaveText('Copied back');
+  await expect(page.getByTestId(`move-reason-${ret}`)).toContainText('Copy back given up');
+  await expect(detail.getByTestId('move-give-up')).toHaveCount(0);
+});
+
+test('End after Archive: the waiting state shows and a repeated End changes nothing', async ({ page }, info) => {
+  const { acc, a, b } = await twoProxies(page, info, 'ma');
+  const id = insertMove(acc.id, a.id, b.id, 'copying', 5);
+  patchMove(id, 'plan = ?, summary = ?', JSON.stringify({ transfer: true, kinds: ['clips', 'archive'], space: 'all', budgetS: 60 }), JSON.stringify({ archive: { files: 2 } }));
+  await page.goto('/#/moves');
+  const btn = page.getByTestId(`move-detail-${id}`).getByTestId('move-end-transfer');
+  await expect(btn).toHaveText('End after Archive…');
+  await btn.click();
+  await expect(page.getByTestId('confirm')).toContainText('Archive is still being copied');
+  await page.getByTestId('confirm-input').fill('end transfer');
+  await page.getByTestId('confirm-ok').click();
+  await expect(btn).toHaveText('Ending after Archive');
+  await expect(btn).toBeDisabled();
+  await expect(page.getByTestId(`move-detail-${id}`).getByTestId('move-end-waiting')).toContainText('Ending it again changes nothing');
+  await expect(page.getByTestId(`move-phase-${id}`)).toHaveText('copying');
+});
+
+test('cancelling a copying move offers no copied choice and says what is copied back', async ({ page }, info) => {
+  const { acc, a, b } = await twoProxies(page, info, 'mc');
+  const id = insertMove(acc.id, a.id, b.id, 'copying', 6);
+  await page.goto('/#/moves');
+  await page.getByTestId(`move-detail-${id}`).getByTestId('move-cancel').click();
+  await expect(page.getByTestId('confirm')).toContainText('is copied back to Old proxy');
+  await expect(page.getByTestId('move-copied-delete')).toHaveCount(0);
+  await expect(page.getByTestId('move-copied-age-out')).toHaveCount(0);
+  await expect(page.getByTestId('confirm')).not.toContainText('age out');
+  await page.getByTestId('confirm-input').fill('cancel');
+  await page.getByTestId('confirm-ok').click();
+  await expect(page.getByTestId(`move-phase-${id}`)).toHaveText(/cancelling|cancelled|Copying back/);
+});
+
 // The Start move form. The answers of POST /moves are stubbed (a real 202 needs online proxies that pass the whole precheck); the lists come from the real API.
 async function startForm(page: import('@playwright/test').Page, info: import('@playwright/test').TestInfo, base: string) {
   const { acc, a, b } = await twoProxies(page, info, base);

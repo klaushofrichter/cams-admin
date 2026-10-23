@@ -44,6 +44,7 @@ describe('moves API', () => {
       id: m1.mv, requestId: expect.stringMatching(/^rq_/), accountId: acc, camsId: expect.stringMatching(/^porch/), cameraName: expect.stringMatching(/^Porch/), source: { id: m1.s, name: expect.stringMatching(/^Source /) }, target: { id: m1.t, name: expect.stringMatching(/^Target /) },
       phase: 'copying', reason: null, plan: { transfer: true, kinds: ['clips'], space: 'all', budgetS: 60 }, bytesTotal: 1000, bytesDone: 400, rateBps: 50, etaS: 12, budgetExceeded: false,
       cleanupPending: false, targetCleanupPending: false, autoApprove: false, bounds: null, createdAt: expect.any(Number), updatedAt: expect.any(Number), endedAt: null,
+      returnOf: null, returnId: null, check: null, archivePending: false, endRequested: false, keepDays: null,
     });
     expect((await a.api('get', '/moves')).body.items.length).toBeGreaterThanOrEqual(2);
     expect((await a.api('get', '/moves?accountId=acc_nope')).status).toBe(404);
@@ -102,6 +103,18 @@ describe('moves API', () => {
     const au = a.db.prepare(`SELECT actor_type, actor, outcome FROM audit_log WHERE action = 'move-give-up'`).all();
     expect(au).toEqual([{ actor_type: 'sysadmin', actor: 'admin@example.com', outcome: 'ok' }]);
     expect((await a.api('post', `/moves/${m.mv}/give-up`, { confirm: 'give up' })).status).toBe(409);
+  });
+
+  it('the view links a cancelled move and its copy back, and shows the check and the waiting End', async () => {
+    const m = fixture(acc, 'cancelled');
+    const r = fixture(acc, 'returning');
+    const check = { complete: false, missing: { stills: 2 }, recovered: {}, failed: { archive: 1 }, expired: { clips: 3 } };
+    a.db.prepare('UPDATE moves SET return_of = ? WHERE id = ?').run(m.mv, r.mv);
+    a.db.prepare('UPDATE moves SET check_result = ?, keep_days = 14, end_requested = ? WHERE id = ?').run(JSON.stringify(check), JSON.stringify({ at: 5, actorType: 'sysadmin', actor: 'admin@example.com' }), m.mv);
+    const orig = (await a.api('get', `/moves/${m.mv}`)).body;
+    expect(orig).toMatchObject({ returnId: r.mv, returnOf: null, check, keepDays: 14, endRequested: true, archivePending: false });
+    expect((await a.api('get', `/moves/${r.mv}`)).body).toMatchObject({ returnOf: m.mv, returnId: null, check: null, endRequested: false, keepDays: null });
+    expect(JSON.stringify(orig)).not.toContain('admin@example.com');
   });
 
   it('no move view field contains token, hash or publicKey', async () => {

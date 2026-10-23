@@ -65,6 +65,11 @@
     } catch (err) { startError = err instanceof ApiFailure && err.body ? refusalText(err.body) : errorText(err); }
     sending = false;
   }
+  // The link between a cancelled move and its copy back: open the other one's detail and scroll to it.
+  function show(id: string) {
+    open[id] = true;
+    setTimeout(() => document.querySelector(`[data-testid="move-row-${id}"]`)?.scrollIntoView({ block: 'center' }), 0);
+  }
   const shown = (m: any) => open[m.id] ?? (cancelable(m.phase) || m.endedAt === null);
 </script>
 
@@ -104,7 +109,7 @@
 
 <section class="card grid">
   <h2>Moves</h2>
-  <p class="muted">A camera moving from one proxy to another of the same account: its phase and progress, and cancel or end the transfer early.</p>
+  <p class="muted">A camera moving from one proxy to another of the same account: its phase and progress, cancel, end the transfer early, and the copy back after a cancel.</p>
   {#if error}<p class="error" data-testid="moves-error">{error}</p>{/if}
   <div class="scroll-x">
     <table data-testid="moves-list">
@@ -117,13 +122,13 @@
             <td>{m.target.name}</td>
             <td>
               <span class="chip {phaseClass(m.phase)}" data-testid="move-phase-{m.id}">{phaseText(m.phase)}</span>
-              {#if m.reason && (m.phase === 'rejected' || m.phase === 'failed')}<span class="muted small" data-testid="move-reason-{m.id}"> {reasonText(m.reason)}</span>{/if}
+              {#if m.reason && (m.phase === 'rejected' || m.phase === 'failed' || m.phase === 'returning' || m.phase === 'returned')}<span class="muted small" data-testid="move-reason-{m.id}"> {reasonText(m.reason)}</span>{/if}
               {#if m.budgetExceeded}<span class="badge warn" data-testid="move-budget-{m.id}">Over time budget</span>{/if}
             </td>
-            <td>{progressText(m)}{#if m.phase === 'copying' && etaText(m.etaS)}<div class="muted small">{etaText(m.etaS)}</div>{/if}</td>
+            <td>{progressText(m)}{#if (m.phase === 'copying' || m.phase === 'returning') && etaText(m.etaS)}<div class="muted small">{etaText(m.etaS)}</div>{/if}</td>
           </tr>
           {#if shown(m)}
-            <tr class="detail"><td colspan="5"><MoveDetail move={m} onchange={load} /></td></tr>
+            <tr class="detail"><td colspan="5"><MoveDetail move={m} onchange={load} onopen={show} /></td></tr>
           {/if}
         {/each}
         {#if loaded && !items.length}<tr><td colspan="5" class="muted" data-testid="moves-empty">No camera move yet. Start one with the Start move form above, or ask for a move in cams.</td></tr>{/if}
