@@ -242,6 +242,51 @@ describe('finish', () => {
     expect(cmdRows(a.m.id, 'move.finish')).toHaveLength(2);
   });
 
+  it('stores the completeness check and audits move-check', async () => {
+    const a = await copying();
+    const check = { complete: false, missing: { clips: 2 }, recovered: {}, failed: { events: 1 }, expired: {} };
+    a.tgt.client.emitEvent({ kind: 'move.phase', moveId: a.m.id, role: 'target', phase: 'copied', ok: true, check });
+    await until(() => move(a.m.id).phase === 'cleaning' || move(a.m.id).phase === 'done', 5000, 'cleaning');
+    expect(s.built.moves.store.get(a.m.id)!.check).toEqual(check);
+    const rows = auditFor('move-check');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].outcome).toBe('failed');
+    expect(rows[0].d.check).toEqual(check);
+  });
+
+  it('a complete check audits ok; no check stores null and audits nothing', async () => {
+    const a = await copying();
+    const check = { complete: true, missing: {}, recovered: { clips: 1 }, failed: {}, expired: {} };
+    a.tgt.client.emitEvent({ kind: 'move.phase', moveId: a.m.id, role: 'target', phase: 'copied', ok: true, check });
+    await until(() => auditFor('move-check').length === 1, 5000, 'check');
+    expect(auditFor('move-check')[0].outcome).toBe('ok');
+    const b = await copying('cam2');
+    phase(b.tgt, b.m.id, 'target', 'copied');
+    await until(() => move(b.m.id).phase === 'cleaning' || move(b.m.id).phase === 'done', 5000, 'cleaning');
+    expect(s.built.moves.store.get(b.m.id)!.check).toBeNull();
+    expect(auditFor('move-check')).toHaveLength(1);
+  });
+
+  it('keepDays comes from the target finish, after the move is done; the source finish is ignored', async () => {
+    const a = await copying();
+    a.src.client.moveResults['move.finish'] = { status: 'ok', result: { deleted: DELETED } };
+    a.tgt.client.moveResults['move.finish'] = { status: 'ok', result: { deleted: DELETED } };
+    phase(a.tgt, a.m.id, 'target', 'copied');
+    await until(() => move(a.m.id).phase === 'done', 5000, 'done');
+    a.src.client.emitEvent({ kind: 'move.phase', moveId: a.m.id, role: 'source', phase: 'finished', ok: true, keepDays: 9 });
+    await settle();
+    expect(s.built.moves.store.get(a.m.id)!.keepDays).toBeNull();
+    a.tgt.client.emitEvent({ kind: 'move.phase', moveId: a.m.id, role: 'target', phase: 'finished', ok: true, keepDays: 30 });
+    await until(() => s.built.moves.store.get(a.m.id)!.keepDays === 30, 5000, 'keepDays');
+  });
+
+  it('keepDays 3 is refused by the strict schema and never stored', async () => {
+    const a = await copying();
+    a.tgt.client.emitEvent({ kind: 'move.phase', moveId: a.m.id, role: 'target', phase: 'finished', ok: true, keepDays: 3 } as any);
+    await settle();
+    expect(s.built.moves.store.get(a.m.id)!.keepDays).toBeNull();
+  });
+
   it('a lost finish is derived again by resume', async () => {
     const a = await copying();
     a.src.client.dropCommands = 1;

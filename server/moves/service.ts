@@ -15,7 +15,7 @@ import { eligibleTargets, precheck, type Candidate, type EligibleTarget, type Pr
 import { begin, type BeginResult } from './begin';
 import type { CamsInstances } from '../cams/instances';
 import { moveToken, targetAddress, type Resolve } from './token';
-import type { MoveApproveEvent, MoveCameraConn, MoveCancelEvent, MoveEvent, MovePhaseEvent, MoveProgressEvent, MoveRequestEvent, MoveTargetsEvent } from './types';
+import type { MoveCheck, MoveApproveEvent, MoveCameraConn, MoveCancelEvent, MoveEvent, MovePhaseEvent, MoveProgressEvent, MoveRequestEvent, MoveTargetsEvent } from './types';
 
 // The move job, its start (plan Task 4; S §4, §6, §7, §8.1): a source's
 // move.targets and move.request events, cams-admin's precheck, move.open to the
@@ -617,11 +617,21 @@ export class Moves {
     if ((r.state === 'expired' || r.state === 'unknown') && this.online(m.sourceProxyId)) this.queueStep(m, 'release', () => this.sendRelease(m));
   }
 
+  // The camera holder's keepDays (how long the records of an ended move stay): `finished` from the target, `cancelled` from the source.
+  // Runs before the ended guard: the event may come after the move is done.
+  private noteKeepDays(m: Move, ev: MovePhaseEvent): void {
+    if (ev.keepDays === undefined || !ev.ok) return;
+    const holder = (ev.role === 'target' && ev.phase === 'finished') || (ev.role === 'source' && ev.phase === 'cancelled');
+    if (!holder || m.keepDays === ev.keepDays) return;
+    this.store.setPhase(m.id, m.phase, { keepDays: ev.keepDays });
+  }
+
   private onPhase(proxyId: string, accountId: string, ev: MovePhaseEvent): void {
     const m = this.store.get(ev.moveId);
     if (!m || m.accountId !== accountId) return;
     // Each side speaks for its own role only.
     if (proxyId !== (ev.role === 'source' ? m.sourceProxyId : m.targetProxyId)) return;
+    this.noteKeepDays(m, ev);
     // X15: an ended move stays ended; a re-emitted phase or failure changes nothing.
     if (m.endedAt !== null) return;
     // A cancel after the switch-over ends when the source has the camera back (cam-proxy reports it only then).
@@ -633,11 +643,11 @@ export class Moves {
       this.switchOver(m);
       const mv = this.store.get(m.id);
       // `copied` while cams-admin missed `switched`: both steps.
-      if (ev.phase === 'copied' && mv?.phase === 'copying') this.copied(mv);
+      if (ev.phase === 'copied' && mv?.phase === 'copying') this.copied(mv, ev.check ?? null);
       return;
     }
     if (ev.role === 'source' && ev.phase === 'released' && m.phase === 'copying') return this.released(m);
-    if (ev.role === 'target' && ev.phase === 'copied' && m.phase === 'copying') return this.copied(m);
+    if (ev.role === 'target' && ev.phase === 'copied' && m.phase === 'copying') return this.copied(m, ev.check ?? null);
     // Other phases: nothing new.
   }
 
@@ -889,9 +899,10 @@ export class Moves {
   // --- finish, end transfer, done (S §10.4, §11, A5, A9) ----------------------------------------
 
   // The target copied everything: cleaning, move.finish to both roles (the source purges, the target closes).
-  private copied(m: Move): void {
+  private copied(m: Move, check: MoveCheck | null): void {
     tx(this.d.db, () => {
-      const mv = this.store.setPhase(m.id, 'cleaning', this.flushIn(m.id));
+      const mv = this.store.setPhase(m.id, 'cleaning', { ...this.flushIn(m.id), check });
+      if (check) this.audit(mv, 'move-check', check.complete ? 'ok' : 'failed', { check }, { actorType: 'proxy', actor: m.targetProxyId });
       this.audit(mv, 'move-phase', 'ok', { phase: 'cleaning' }, { actorType: 'proxy', actor: m.targetProxyId });
       this.ensureFinishes(mv);
     });
@@ -1072,7 +1083,7 @@ export class Moves {
   }
 
   // Detail: moveId, camsId, source, target, reason (never a token or its hash).
-  private audit(m: Move, action: 'move-request' | 'move-offer' | 'move-phase' | 'move-approve' | 'move-budget-exceeded' | 'move-cancel' | 'move-end-transfer' | 'move-done', outcome: 'ok' | 'refused' | 'failed', extra: Record<string, unknown>, who?: Who): void {
+  private audit(m: Move, action: 'move-request' | 'move-offer' | 'move-phase' | 'move-approve' | 'move-budget-exceeded' | 'move-cancel' | 'move-end-transfer' | 'move-done' | 'move-check' | 'move-return' | 'move-give-up' | 'move-end-after-archive' | 'moves-pruned', outcome: 'ok' | 'refused' | 'failed', extra: Record<string, unknown>, who?: Who): void {
     const camsId = this.camsId(m);
     this.d.audit.write({
       actorType: who?.actorType ?? 'system', actor: who?.actor ?? 'system', action, accountId: m.accountId, targetType: 'camera', targetId: m.cameraId, targetLabel: camsId, outcome,
