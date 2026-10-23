@@ -77,6 +77,9 @@ export const CANCEL_RECHECK_MS = 15 * 60_000;
 // Backoff for a release (before the source's finish) or a cancel the proxy answered failed: base, doubling per attempt, capped.
 export const RELEASE_RETRY_MS = 60_000;
 export const CANCEL_RETRY_MS = 60_000;
+// Ended moves age out at most hourly, after the proxy's keepDays (30 days when it reported none).
+export const PRUNE_EVERY_MS = 3_600_000;
+export const DEFAULT_KEEP_DAYS = 30;
 const RETRY_CAP_MS = 3600_000;
 // Chunk states that end a chunk (cam-proxy's `failed` is "copied with failures"); the others are abandoned at an end transfer.
 const FINAL_CHUNK = new Set<ChunkStateName>(['verified', 'skipped', 'failed', 'abandoned']);
@@ -171,6 +174,8 @@ export class Moves {
   private prog = new Map<string, Progress>();
   // Automatic commands that can never be queued (moveId:proxyId:command): not tried again.
   private gaveUp = new Set<string>();
+  // When pruneEnded last ran from tick() (memory).
+  private prunedAt = 0;
   // A return's token (plaintext, memory only; a restart re-keys) and the commands sent with it, by return id.
   readonly returnTokens = new Map<string, ReturnKey>();
   private returns: Returns;
@@ -289,6 +294,14 @@ export class Moves {
         this.d.log.error({ err: e, moveId: m.id }, 'move_tick_failed');
       }
     }
+    if (now - this.prunedAt >= PRUNE_EVERY_MS) {
+      this.prunedAt = now;
+      try {
+        this.pruneEnded();
+      } catch (e) {
+        this.d.log.error({ err: e }, 'move_prune_failed');
+      }
+    }
     for (const id of ended) {
       if (now - (this.resumedAt.get(id) ?? 0) < RESUME_GAP_MS) continue;
       this.resumedAt.set(id, now);
@@ -300,6 +313,20 @@ export class Moves {
         this.d.log.error({ err: e, moveId: id }, 'move_tick_failed');
       }
     }
+  }
+
+  // Deletes the ended moves past their keep time, with one audit row {count, ids}; writes nothing when none is due.
+  pruneEnded(): number {
+    const now = this.d.clock.now();
+    if (!this.store.prunable(now, DEFAULT_KEEP_DAYS).length) return 0;
+    return tx(this.d.db, () => {
+      const accounts = new Set(this.store.prunable(now, DEFAULT_KEEP_DAYS).map((id) => this.store.get(id)!.accountId));
+      const ids = this.store.prune(now, DEFAULT_KEEP_DAYS);
+      if (ids.length) {
+        this.d.audit.write({ actorType: 'system', actor: 'system', action: 'moves-pruned', accountId: accounts.size === 1 ? [...accounts][0] : null, outcome: 'ok', detail: { count: ids.length, ids } });
+      }
+      return ids.length;
+    });
   }
 
   // The hub's "proxy live" hook: the move this proxy takes part in re-derives its next step.

@@ -78,6 +78,9 @@ const toMove = (r: Row): Move => ({
   returnOf: r.return_of as string | null, check: dec(r.check_result), keepDays: r.keep_days as number | null, endRequested: dec(r.end_requested),
 });
 
+// How long a cancelled switched-over move without a return waits past its keep time.
+export const RETURN_GRACE_MS = 86_400_000;
+
 export class MoveStore {
   constructor(private db: Db, private clock: Clock) {}
 
@@ -137,16 +140,27 @@ export class MoveStore {
     return r ? toMove(r) : null;
   }
 
-  // Deletes ended moves older than their keepDays (defaultDays when the proxy
-  // reported none); never one whose source or target cleanup is pending or that
-  // a return names. Chunk states go with the row (ON DELETE CASCADE). Returns the
-  // deleted ids. cameras.move_id may keep naming a pruned move (it has no FK).
+  // Ended moves past their keepDays (defaultDays when the proxy reported none);
+  // never one whose source or target cleanup is pending or that a return names.
+  // A cancelled move that was switched over and has no return is kept for a day
+  // more: Task 15 creates the return in the cancel's own transaction, so that
+  // state means the return was pruned first (it goes on the next run) or is
+  // missing; the grace keeps a not-yet-created return from losing its original.
+  private static readonly PRUNABLE = `FROM moves WHERE ended_at IS NOT NULL AND cleanup_pending = 0 AND target_cleanup_pending = 0
+         AND ended_at + COALESCE(keep_days, ?) * 86400000 + (CASE WHEN phase = 'cancelled' AND switched_at IS NOT NULL AND return_of IS NULL THEN ${RETURN_GRACE_MS} ELSE 0 END) < ?
+         AND NOT EXISTS (SELECT 1 FROM moves r WHERE r.return_of = moves.id)`;
+
+  // A read: the ids prune(now, defaultDays) would delete.
+  prunable(now: number, defaultDays: number): string[] {
+    return (this.db.prepare(`SELECT id ${MoveStore.PRUNABLE}`).all(defaultDays, now) as Row[]).map((r) => r.id as string);
+  }
+
+  // Deletes the prunable ended moves. Chunk states go with the row (ON DELETE
+  // CASCADE). Returns the deleted ids; writes nothing (no epoch bump) when
+  // there are none. cameras.move_id may keep naming a pruned move (it has no FK).
   prune(now: number, defaultDays: number): string[] {
-    return tx(this.db, () => (this.db.prepare(
-      `DELETE FROM moves WHERE ended_at IS NOT NULL AND cleanup_pending = 0 AND target_cleanup_pending = 0
-         AND ended_at + COALESCE(keep_days, ?) * 86400000 < ?
-         AND NOT EXISTS (SELECT 1 FROM moves r WHERE r.return_of = moves.id) RETURNING id`,
-    ).all(defaultDays, now) as Row[]).map((r) => r.id as string));
+    if (!this.prunable(now, defaultDays).length) return [];
+    return tx(this.db, () => (this.db.prepare(`DELETE ${MoveStore.PRUNABLE} RETURNING id`).all(defaultDays, now) as Row[]).map((r) => r.id as string));
   }
 
   setPhase(id: string, phase: MovePhase, patch: Partial<Move> = {}): Move {
