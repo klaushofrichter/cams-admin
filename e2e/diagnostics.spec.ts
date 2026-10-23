@@ -42,11 +42,23 @@ test('an operations token is shown once with its scopes, listed as active, and r
   await page.goto('/#/diagnostics');
   await page.getByTestId('ops-name').fill(name);
   await page.getByTestId('ops-days').fill('1');
+  // Each scope's tick sits on the line of its name, just ahead of it.
+  const tick = await page.getByTestId('ops-scope-tokens').boundingBox();
+  const word = await page.getByTestId('ops-scope-tokens').locator('xpath=following-sibling::code[1]').boundingBox();
+  expect(tick && word).toBeTruthy();
+  expect(Math.abs((tick!.y + tick!.height / 2) - (word!.y + word!.height / 2))).toBeLessThan(6);
+  expect(word!.x).toBeGreaterThan(tick!.x);
   await page.getByTestId('ops-scope-tokens').check();
   await page.getByTestId('ops-issue').click();
   const field = page.getByTestId('shown-token');
   await expect(field).toHaveValue(/^cao_[A-Za-z0-9_-]{43}$/);
   const token = await field.inputValue();
+  // Copy says so for a moment, and the clipboard holds the token.
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  await page.getByTestId('shown-copy').click();
+  await expect(page.getByTestId('shown-copy')).toHaveText('Copied');
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(token);
+  await expect(page.getByTestId('shown-copy')).toHaveText('Copy', { timeout: 5000 });
   await expect(page.getByTestId('ops-save')).toContainText('pbpaste > ~/.config/cams-admin/ops-token');
   await page.getByTestId('shown-stored').check();
   await page.getByTestId('shown-close').click();
