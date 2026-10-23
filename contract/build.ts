@@ -398,8 +398,9 @@ export const MESSAGE_TYPES = ['challenge', 'hello', 'welcome', 'heartbeat', 'ack
 export const RESERVED_TYPES = ['key.rotate'] as const;
 
 // --- camera moves -------------------------------------------------------------
-// The ten commands (role -> allow entry: targets, open, answer, go, release and finish need `move.send`; offer and start `move.receive`;
-// finish and cancel by `args.role`: source `move.send`, target `move.receive`).
+// The twelve commands (role -> allow entry: targets, open, answer, go, release and finish need `move.send`; offer and start `move.receive`;
+// finish and cancel by `args.role`: source `move.send`, target `move.receive`; a return swaps them: move.return.open `move.receive`,
+// move.return.start `move.send`, and move.finish with `return: true` source `move.receive`, target `move.send`).
 export const MOVE_COMMANDS = ['move.begin', 'move.targets', 'move.open', 'move.offer', 'move.answer', 'move.start', 'move.go', 'move.release', 'move.finish', 'move.cancel', 'move.return.open', 'move.return.start'] as const;
 export const MOVE_EVENT_KINDS = ['move.targets', 'move.request', 'move.approve', 'move.cancel', 'move.phase', 'move.progress'] as const;
 export const MOVE_KINDS = ['stills', 'clips', 'events', 'checks', 'archive'] as const;
