@@ -4,7 +4,7 @@ import type { Clock } from '../clock';
 import { SESSION_COOKIE, type Sessions } from './session';
 import { Buckets } from '../channel/limits';
 import type { Audit } from '../audit';
-import type { OpsTokens } from '../ops/tokens';
+import type { OpsScope, OpsTokens } from '../ops/tokens';
 import { opsScopeFor } from '../ops/scopes';
 
 const SAFE = new Set(['GET', 'HEAD', 'OPTIONS']);
@@ -57,12 +57,11 @@ export function writeLimiter(cfg: Config, clock: Clock): RequestHandler {
   };
 }
 
-// A Bearer header's token: '' when the header names Bearer without one, null
-// without a Bearer header (an ingress's Basic header is not a token attempt).
+// The token of a `Bearer <token>` header, else null. Only that is a token
+// attempt (here and on the diag API): a bare or malformed Bearer header, or an
+// ingress's Basic header, carries no credential, so the session decides.
 export function bearerOf(req: Request): string | null {
-  const h = req.headers.authorization ?? '';
-  if (!/^Bearer(\s|$)/i.test(h)) return null;
-  return /^Bearer\s+(\S+)\s*$/i.exec(h)?.[1] ?? '';
+  return /^Bearer\s+(\S+)$/i.exec(req.headers.authorization ?? '')?.[1] ?? null;
 }
 
 type AuthDeps = { sessions: Sessions; ops: OpsTokens; audit: Audit; cfg: Config; clock: Clock };
@@ -71,6 +70,13 @@ type AuthDeps = { sessions: Sessions; ops: OpsTokens; audit: Audit; cfg: Config;
 function refuseToken(audit: Audit, res: Response): void {
   audit.throttled('ops-auth-refused', { actorType: 'system', actor: 'system', action: 'ops-auth-refused', outcome: 'refused' });
   res.status(401).json({ error: 'unauthorized' });
+}
+
+// A valid token outside its scopes: 403, one throttled record per token. The
+// method and the scope needed only, never the path's ids or the body.
+function refuseScope(audit: Audit, res: Response, t: { id: string; hashPrefix: string }, method: string, scope: OpsScope | null): void {
+  audit.throttled(`ops-scope-refused:${t.id}`, { actorType: 'system', actor: `ops-token:${t.hashPrefix}`, action: 'ops-scope-refused', outcome: 'refused', detail: { method, scope } });
+  res.status(403).json({ error: 'scope' });
 }
 
 // The API's auth: a sysadmin session (with the CSRF check and its write
@@ -89,11 +95,11 @@ export function requireAuth(d: AuthDeps): RequestHandler[] {
       res.locals.actor = s.email;
       return next();
     }
-    const t = token === '' ? null : d.ops.verifyScoped(token);
+    const t = d.ops.verifyScoped(token);
     if (!t) return refuseToken(d.audit, res);
     // Writes only; reads use the diag token.
     const scope = SAFE.has(req.method) ? null : opsScopeFor(req.method, req.path);
-    if (!scope || !t.scopes.includes(scope)) return void res.status(403).json({ error: 'scope' });
+    if (!scope || !t.scopes.includes(scope)) return refuseScope(d.audit, res, t, req.method, scope);
     const b = tokenWrites.take(`ops:${t.id}`, d.clock.now());
     if (!b.ok) return void res.status(429).set('Retry-After', String(b.retryAfterS)).json({ error: 'rate_limited', retryAfterS: b.retryAfterS });
     res.locals.actor = `ops-token:${t.hashPrefix}`;
@@ -112,7 +118,8 @@ export function sessionBeforeBody(d: AuthDeps): RequestHandler {
   return (req, res, next) => {
     const token = bearerOf(req);
     if (token === null) return session(req, res, next);
-    if (token === '' || !d.ops.verifyScoped(token)) return refuseToken(d.audit, res);
-    res.status(403).json({ error: 'scope' });
+    const t = d.ops.verifyScoped(token);
+    if (!t) return refuseToken(d.audit, res);
+    refuseScope(d.audit, res, t, req.method, null);
   };
 }

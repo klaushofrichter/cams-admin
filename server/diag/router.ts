@@ -3,6 +3,7 @@ import type { Request, RequestHandler, Response } from 'express';
 import type { ApiDeps } from '../api/router';
 import { ApiError } from '../registry';
 import { SESSION_COOKIE } from '../auth/session';
+import { bearerOf } from '../auth/middleware';
 import { limiter } from '../rateLimit';
 import { precheckReport } from '../moves/precheck';
 import { version } from '../version';
@@ -18,9 +19,9 @@ const ROUTES = ['/diag', '/diag/proxies', '/diag/cams-instances', '/diag/cameras
 export function diagAuth(d: Pick<ApiDeps, 'sessions' | 'audit'> & { diag: DiagTokens }): RequestHandler {
   return (req, res, next) => {
     // Only a Bearer header is a token attempt (an ingress's Basic header is not).
-    const m = /^Bearer\s+(\S+)$/i.exec(req.headers.authorization ?? '');
-    if (m) {
-      const id = d.diag.verify(m[1]);
+    const token = bearerOf(req);
+    if (token !== null) {
+      const id = d.diag.verify(token);
       if (!id) {
         // Never keyed on the client address: one throttled record for all refusals.
         d.audit.throttled('diag-auth-refused', { actorType: 'system', actor: 'system', action: 'diag-auth-refused', outcome: 'refused' });

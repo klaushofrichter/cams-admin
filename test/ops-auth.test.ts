@@ -12,6 +12,7 @@ import { testApp } from './helpers/app';
 import { apiRouter } from '../server/api/router';
 import { OPS_ROUTES, opsScopeFor } from '../server/ops/scopes';
 import { OPS_SCOPES, type OpsScope } from '../server/ops/tokens';
+import { makeProxyInfo, makeSummary } from '../test-client/summaries';
 
 const dir = tmpDir();
 const a = testApp(dir);
@@ -27,13 +28,15 @@ const issue = (scopes: OpsScope[], name = 'script') => {
   return { token, prefix: item.hashPrefix, id: item.id };
 };
 const auditOf = (action: string) => a.db.prepare('SELECT * FROM audit_log WHERE action = ? ORDER BY id').all(action) as { actor: string; detail: string; outcome: string; target_id: string }[];
-const auditCount = () => (a.db.prepare(`SELECT count(*) n FROM audit_log WHERE action <> 'ops-auth-refused'`).get() as { n: number }).n;
+// Audit rows other than the (throttled) refusals.
+const auditCount = () => (a.db.prepare(`SELECT count(*) n FROM audit_log WHERE action NOT IN ('ops-auth-refused', 'ops-scope-refused', 'audit-throttled')`).get() as { n: number }).n;
+const scopeRefusals = (actor: string) => auditOf('ops-scope-refused').filter((x) => x.actor === actor);
 
 let acc: string, px: string, inst: string;
 let n = 0;
 // An active proxy token, as if the proxy had confirmed it.
 const seedToken = () => {
-  const id = `tok_OPS${String(n++).padStart(17, '0')}`;
+  const id = `tok_9${String(n++).padStart(19, '0')}`;
   a.db.prepare(`INSERT INTO proxy_tokens (id,account_id,proxy_id,kind,holder,label,hash,state,issued_revision,created_at,created_by) VALUES (?,?,?,'client','manual','seeded',?,'active',1,1,'admin@example.com')`).run(id, acc, px, 'sha256:' + String(n).padStart(64, 'e'));
   return id;
 };
@@ -81,7 +84,7 @@ describe('the scope table', () => {
     const have = new Set(routes.map((r) => `${r.method} ${r.path}`));
     for (const o of OPS_ROUTES) expect(have.has(`${o.method} ${o.path}`), `${o.method} ${o.path}`).toBe(true);
     const inTable = new Set(OPS_ROUTES.map((o) => `${o.method} ${o.path}`));
-    const { token } = issue([...OPS_SCOPES], 'all');
+    const { token, prefix } = issue([...OPS_SCOPES], 'all');
     const before = auditCount();
     for (const r of routes) {
       if (inTable.has(`${r.method} ${r.path}`)) continue;
@@ -89,7 +92,9 @@ describe('the scope table', () => {
       expect(res.status, `${r.method} ${r.path}`).toBe(403);
       expect(res.body, `${r.method} ${r.path}`).toEqual({ error: 'scope' });
     }
+    // Nothing but one throttled refusal for the token.
     expect(auditCount()).toBe(before);
+    expect(scopeRefusals(`ops-token:${prefix}`)).toHaveLength(1);
   });
 });
 
@@ -128,6 +133,33 @@ describe('scoped writes', () => {
     expect(r.body).toMatchObject({ id: mv, phase: 'cancelling' });
   });
 
+  it('every other table route reaches its handler with a token in scope', async () => {
+    // A proxy that takes tokens.apply (for retire and apply).
+    const p2 = a.registry.createProxy('admin@example.com', acc, { name: 'p2', displayName: 'P2', runsOn: 'local-host' }).id;
+    a.db.prepare(`UPDATE proxies SET state = 'enrolled' WHERE id = ?`).run(p2);
+    a.status.hello(p2, 'v2', Date.now(), ['status', 'commands']);
+    a.status.heartbeat(p2, { summary: makeSummary({ cameras: 1, now: Date.now() }), proxy: { ...makeProxyInfo({ now: Date.now() }), commands: { enabled: true, paused: false, pauseReason: null, allow: ['tokens.apply'], seenWindow: 1000 } }, truncated: false }, Date.now());
+    const tok = `tok_9${String(n++).padStart(19, '0')}`;
+    a.db.prepare(`INSERT INTO proxy_tokens (id,account_id,proxy_id,kind,holder,label,hash,state,issued_revision,created_at,created_by) VALUES (?,?,?,'client','manual','seeded',?,'active',1,1,'admin@example.com')`).run(tok, acc, p2, 'sha256:' + String(n).padStart(64, 'd'));
+    const cam = a.registry.createCamera('admin@example.com', acc, { camsId: 'yard', name: 'Yard', kind: 'camera', proxyId: px, proxyCameraId: 'cam1', host: '192.0.2.20', protocol: 'https' }).id;
+    a.camsInstances.setOverride('admin@example.com', inst, cam, { host: 'from-proxy', cameraUser: 'proxy' });
+    const mv = seedMove();
+    const t = issue([...OPS_SCOPES]);
+    const actor = `ops-token:${t.prefix}`;
+    const cases: [M, string, unknown, number, string][] = [
+      ['post', `/accounts/${acc}/proxies/${p2}/tokens/${tok}/retire`, { hours: 24 }, 200, 'token-retire'],
+      ['post', `/accounts/${acc}/proxies/${p2}/tokens/apply`, {}, 202, 'command-create'],
+      ['post', `/moves/${mv}/end-transfer`, { confirm: 'end transfer' }, 202, 'move-end-transfer'],
+      ['delete', `/cams-instances/${inst}/camera-overrides/${cam}`, undefined, 204, 'camera-override-clear'],
+    ];
+    for (const [m, path, body, status, action] of cases) {
+      const r = await bearer(m, path, t.token, body);
+      expect(r.status, `${path} ${JSON.stringify(r.body)}`).toBe(status);
+      expect(auditOf(action).at(-1)!.actor, path).toBe(actor);
+    }
+    expect(scopeRefusals(actor)).toHaveLength(0);
+  });
+
   it('a bearer write needs no X-Cams-Admin header; a session write without it is still 403 csrf', async () => {
     const t = issue(['moves']);
     const r = await request(a.app).post(`/api/v1/moves/${seedMove()}/cancel`).set('Authorization', `Bearer ${t.token}`).set('Content-Type', 'application/json').send('{"copied":"delete","confirm":"cancel"}');
@@ -161,6 +193,12 @@ describe('review focus', () => {
     }
     expect(auditCount()).toBe(before);
     expect(live()).toBe(tokensBefore);
+    // One throttled refusal for the three: the method and the scope needed, never the path's ids or the body.
+    const rec = scopeRefusals(`ops-token:${t.prefix}`);
+    expect(rec).toHaveLength(1);
+    expect(rec[0].outcome).toBe('refused');
+    expect(JSON.parse(rec[0].detail)).toEqual({ method: 'POST', scope: null });
+    for (const leak of [acc, px, t.token, '"x"']) expect(JSON.stringify(rec)).not.toContain(leak);
     expect((a.db.prepare(`SELECT count(*) n FROM proxy_tokens WHERE label = 'x'`).get() as { n: number }).n).toBe(0);
   });
 
@@ -171,6 +209,14 @@ describe('review focus', () => {
     expect(r.status).toBe(403);
     expect(r.body).toEqual({ error: 'scope' });
     expect((a.db.prepare('SELECT state FROM proxy_tokens WHERE id = ?').get(tok) as { state: string }).state).toBe('active');
+    const rec = scopeRefusals(`ops-token:${t.prefix}`);
+    expect(rec).toHaveLength(1);
+    expect(JSON.parse(rec[0].detail)).toEqual({ method: 'POST', scope: 'tokens' });
+    expect(JSON.stringify(rec)).not.toContain(tok);
+    // Each token has its own throttle window: another one is recorded too.
+    const u = issue(['routes'], 'other');
+    await bearer('post', `/accounts/${acc}/proxies/${px}/tokens/${tok}/revoke`, u.token);
+    expect(scopeRefusals(`ops-token:${u.prefix}`)).toHaveLength(1);
   });
 
   it('3: an expired, revoked or diag token on a write is 401; an ops token on the diag API is 401', async () => {
@@ -187,8 +233,6 @@ describe('review focus', () => {
       expect(r.status).toBe(401);
       expect(r.body).toEqual({ error: 'unauthorized' });
     }
-    // A Bearer header without a token is a token attempt too.
-    expect((await request(a.app).post(`/api/v1${path}`).set('Authorization', 'Bearer').set('Content-Type', 'application/json').send(JSON.stringify(body))).status).toBe(401);
     // Throttled: one record for the burst, never keyed on the client address.
     const refused = auditOf('ops-auth-refused');
     expect(refused.length).toBe(before + 1);
@@ -247,6 +291,18 @@ describe('review focus', () => {
       srv.close();
     }
     expect(auditOf('import-run')).toHaveLength(0);
+  });
+});
+
+describe('the Authorization header', () => {
+  it('a bare or malformed Bearer header is no token: the session decides, as on the diag API', async () => {
+    for (const h of ['Bearer', 'Bearer ', 'Bearer a b', 'Basic dXNlcjpwYXNz']) {
+      expect((await request(a.app).get('/api/v1/me').set('Cookie', a.cookie).set('Authorization', h)).status, h).toBe(200);
+      expect((await request(a.app).get('/api/v1/diag/proxies').set('Cookie', a.cookie).set('Authorization', h)).status, h).toBe(200);
+      // Without a session: 401, and the session's CSRF check still applies to a write.
+      expect((await request(a.app).get('/api/v1/me').set('Authorization', h)).status, h).toBe(401);
+      expect((await request(a.app).post('/api/v1/moves/mv_NOPE/cancel').set('Cookie', a.cookie).set('Authorization', h).set('Content-Type', 'application/json').send('{}')).body, h).toEqual({ error: 'csrf' });
+    }
   });
 });
 
