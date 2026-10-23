@@ -28,7 +28,9 @@ describe('audit log', () => {
     // Camera move: move-event-refused; Task 4: request, offer, phase; Task 5: approve, switch; Task 6: budget-exceeded, cancel, end-transfer, done.
     // Diagnostics and operations tokens: issue, revoke, a refused bearer token; an ops token outside its scopes.
     for (const a of ['diag-token-issue', 'diag-token-revoke', 'diag-auth-refused', 'ops-token-issue', 'ops-token-revoke', 'ops-auth-refused', 'ops-scope-refused']) expect(AUDIT_ACTIONS).toContain(a);
-    expect(AUDIT_ACTIONS).toHaveLength(37 + P4.length + OVERRIDES.length + 1 + 3 + 2 + 4 + 3 + 4);
+    // A move started from cams-admin (move.begin): each fix, and the move.begin itself.
+    for (const a of ['move-fix', 'move-begin']) expect(AUDIT_ACTIONS).toContain(a);
+    expect(AUDIT_ACTIONS).toHaveLength(37 + P4.length + OVERRIDES.length + 1 + 3 + 2 + 4 + 3 + 4 + 2);
     expect(new Set(AUDIT_ACTIONS).size).toBe(AUDIT_ACTIONS.length);
   });
 

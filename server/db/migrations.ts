@@ -410,4 +410,10 @@ CREATE TABLE ops_tokens (
   scopes TEXT NOT NULL
 ) STRICT;
 `),
+  // 11: the pre-approval bounds a move.request carried (JSON, or NULL when the
+  // source sent none): the move view shows them; the source does the approving.
+  (db) => db.exec(`ALTER TABLE moves ADD COLUMN bounds TEXT;`),
+  // 12: a cams instance's last status report (JSON) and when it last changed,
+  // so a restart does not lose it (issue #58). Written only on a changed report.
+  (db) => db.exec(`ALTER TABLE cams_instances ADD COLUMN last_report TEXT; ALTER TABLE cams_instances ADD COLUMN last_report_at INTEGER;`),
 ];

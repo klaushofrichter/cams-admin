@@ -14,7 +14,7 @@ import { diagAudit, diagCameras, diagCamsInstances, diagMoves, diagOpsTokens, di
 // diagnostics token (Authorization: Bearer cad_…) or a sysadmin session.
 // GET only; the token opens nothing outside this router.
 
-const ROUTES = ['/diag', '/diag/proxies', '/diag/cams-instances', '/diag/cameras', '/diag/tokens', '/diag/ops-tokens', '/diag/moves?accountId=', '/diag/moves/precheck?source=&target=&camera=', '/diag/audit?account=&actorType=&action=&from=&to=&limit=&cursor='];
+const ROUTES = ['/diag', '/diag/proxies', '/diag/cams-instances', '/diag/cameras', '/diag/tokens', '/diag/ops-tokens', '/diag/moves?accountId=&requestId=', '/diag/moves/precheck?source=&target=&camera=', '/diag/audit?account=&actorType=&action=&from=&to=&limit=&cursor='];
 
 export function diagAuth(d: Pick<ApiDeps, 'sessions' | 'audit'> & { diag: DiagTokens }): RequestHandler {
   return (req, res, next) => {
@@ -66,7 +66,7 @@ export function diagRouter(d: ApiDeps & { diag: DiagTokens }): express.Router {
   r.get('/moves', h((req) => {
     const acc = q(req, 'accountId');
     if (acc !== undefined) d.registry.getAccount(acc);
-    return diagMoves(d, acc);
+    return diagMoves(d, acc, q(req, 'requestId'));
   }));
   // Every precheck rule for a candidate move, with pass/fail and a detail.
   r.get('/moves/precheck', h((req) => {

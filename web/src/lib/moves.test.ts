@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cancelable, etaText, phaseClass, phaseText, progressText, reasonText } from './moves';
+import { cancelable, etaText, phaseClass, phaseText, progressText, reasonText, boundsText } from './moves';
 
 const PHASES = ['requested', 'offered', 'awaiting-approval', 'approved', 'switching', 'copying', 'cleaning', 'done', 'rejected', 'cancelling', 'cancelled', 'failed'];
 
@@ -61,5 +61,13 @@ describe('moves (UI text)', () => {
   it('which phases offer cancel and end transfer', () => {
     for (const p of ['awaiting-approval', 'approved', 'switching', 'copying']) expect(cancelable(p), p).toBe(true);
     for (const p of ['requested', 'offered', 'cleaning', 'done', 'rejected', 'cancelling', 'cancelled', 'failed']) expect(cancelable(p), p).toBe(false);
+  });
+});
+
+describe('boundsText', () => {
+  it('says what the request was approved within', () => {
+    expect(boundsText(null)).toBe('Approval on the source proxy');
+    expect(boundsText({ transfer: true, kinds: ['clips', 'stills'], space: 'fit', maxBudgetS: 3600 })).toBe('Auto-approved within: clips, stills; space fit; at most 60 min');
+    expect(boundsText({ transfer: false, kinds: [], space: 'all', maxBudgetS: 90 })).toBe('Auto-approved within: no content; at most 2 min');
   });
 });

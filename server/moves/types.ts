@@ -16,8 +16,11 @@ export interface MoveCameraConn {
 export type MoveKindSummary = Record<MoveKind, { files: number; bytes: number; rows: number; oldest: number | null; newest: number | null }>;
 
 export interface MoveTargetsEvent extends Head { kind: 'move.targets'; requestId: string; camera: string }
+export interface MoveBounds { transfer: boolean; kinds: MoveKind[]; space: MovePlanSpace; maxBudgetS: number }
 export interface MoveRequestEvent extends Head {
   kind: 'move.request'; requestId: string; camera: MoveCameraConn; target: string; actor: { origin: string; label: string }; summary: MoveKindSummary; settings: Record<string, unknown>;
+  // Absent from proxies that predate move.begin: read as null.
+  bounds?: MoveBounds | null;
 }
 export interface MoveApproveEvent extends Head { kind: 'move.approve'; moveId: string; plan: MovePlan }
 export interface MoveCancelEvent extends Head { kind: 'move.cancel'; moveId: string; copied: 'delete' | 'age-out' }

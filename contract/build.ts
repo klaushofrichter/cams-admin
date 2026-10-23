@@ -251,6 +251,10 @@ export function buildSchemas(mode: Mode): Record<string, S> {
     transfer: bool, kinds: arr(kindEn, MOVE_KINDS.length, { uniqueItems: true }), space: en(MOVE_SPACE_CHOICES as unknown as string[]),
     targetSettings: nullable(pathMap), budgetS: int(), estimateS: int(),
   });
+  // Pre-approval bounds a move.begin carries; the source keeps them and reports them back in move.request. maxBudgetS: one minute to seven days.
+  const moveBounds = all({
+    transfer: bool, kinds: arr(kindEn, MOVE_KINDS.length, { uniqueItems: true }), space: en(MOVE_SPACE_CHOICES as unknown as string[]), maxBudgetS: int(60, { maximum: 604800 }),
+  });
   const moveSpace = all({ needed: int(), available: int(), fits: bool, perKind: optionalOnly(kindMap(int())), retentionProposal: nullable(pathMap) });
   // What the camera is, as the target needs it to add it (never a password: those travel sealed, never in cams-admin's messages).
   const connectionFields: Record<string, S> = { name: cameraName, host: str(255, { minLength: 1 }), protocol: en(['https', 'http']), user: str(64), onvifPort: port, rtspPort: port, baichuanPort: port };
@@ -262,6 +266,8 @@ export function buildSchemas(mode: Mode): Record<string, S> {
   const mv = { v: { const: 1 }, moveId: mvId };
   const copiedChoice = en(['delete', 'age-out']);
   const moveArgs: Record<(typeof MOVE_COMMANDS)[number], S> = {
+    // cams-admin starts a move on the source; no password, token or key travels (the camera's password stays on the source).
+    'move.begin': all({ v: { const: 1 }, camera: camId, target: prxId, bounds: nullable(moveBounds) }),
     'move.targets': all({ v: { const: 1 }, requestId, targets: arr(all({ proxyId: prxId, name: nameS, site: nullable(site) }), 64) }),
     'move.open': all({ ...mv, requestId, camera: camId, tokenHash: hash, targetIp: str(45, { pattern: '^[0-9A-Fa-f:.]{2,45}$' }) }),
     // The plaintext token goes to the target in the first offer only (it is not stored once the command is final).
@@ -285,6 +291,7 @@ export function buildSchemas(mode: Mode): Record<string, S> {
     },
   };
   const moveResults: Record<(typeof MOVE_COMMANDS)[number], S> = {
+    'move.begin': all({ requestId }),
     'move.targets': empty, 'move.open': empty, 'move.answer': empty, 'move.go': empty, 'move.release': empty, 'move.cancel': empty,
     'move.offer': { anyOf: [all({ accept: { const: true }, space: moveSpace, probeBps: int() }), all({ accept: { const: false }, reason: offerReason })] },
     'move.start': all({ publicKey: x25519, leafFingerprint: fp }),
@@ -307,8 +314,8 @@ export function buildSchemas(mode: Mode): Record<string, S> {
       doneEvent,
       moveEvent('move.targets', { requestId, camera: camId }),
       moveEvent('move.request', {
-        requestId, camera: moveCameraEvent, target: prxId, actor: all({ origin: en(['local', 'managed']), label }), summary: moveSummary, settings: moveSettings,
-      }),
+        requestId, camera: moveCameraEvent, target: prxId, actor: all({ origin: en(['local', 'managed']), label }), summary: moveSummary, settings: moveSettings, bounds: nullable(moveBounds),
+      }, ['bounds']),
       moveEvent('move.approve', { moveId: mvId, plan: movePlan }),
       moveEvent('move.cancel', { moveId: mvId, copied: copiedChoice }),
       {
@@ -378,9 +385,9 @@ export const MESSAGE_TYPES = ['challenge', 'hello', 'welcome', 'heartbeat', 'ack
 export const RESERVED_TYPES = ['key.rotate'] as const;
 
 // --- camera moves -------------------------------------------------------------
-// The nine commands (role -> allow entry: targets, open, answer, go, release and finish need `move.send`; offer and start `move.receive`;
+// The ten commands (role -> allow entry: targets, open, answer, go, release and finish need `move.send`; offer and start `move.receive`;
 // finish and cancel by `args.role`: source `move.send`, target `move.receive`).
-export const MOVE_COMMANDS = ['move.targets', 'move.open', 'move.offer', 'move.answer', 'move.start', 'move.go', 'move.release', 'move.finish', 'move.cancel'] as const;
+export const MOVE_COMMANDS = ['move.begin', 'move.targets', 'move.open', 'move.offer', 'move.answer', 'move.start', 'move.go', 'move.release', 'move.finish', 'move.cancel'] as const;
 export const MOVE_EVENT_KINDS = ['move.targets', 'move.request', 'move.approve', 'move.cancel', 'move.phase', 'move.progress'] as const;
 export const MOVE_KINDS = ['stills', 'clips', 'events', 'checks', 'archive'] as const;
 export const MOVE_OFFER_REASONS = ['moves_not_allowed', 'camera_unreachable', 'camera_limit', 'id_taken', 'busy', 'incompatible', 'no_site_ca', 'ca_does_not_cover_camera', 'external_cert'] as const;
@@ -389,6 +396,8 @@ export const MOVE_PHASES = ['opened', 'switching', 'switched', 'released', 'copy
 // `failed` = copied with failures.
 export const CHUNK_STATES = ['pending', 'copied', 'verified', 'skipped', 'failed'] as const;
 export const MOVE_SPACE_CHOICES = ['all', 'omit', 'fit', 'retention'] as const;
+// Why the source refuses move.begin (the command's `failed` status carries one as its code).
+export const MOVE_BEGIN_REFUSALS = ['no_site_ca', 'external_cert', 'moves_not_allowed', 'busy', 'unknown_camera'] as const;
 // A TLS site name, as cam-proxy's tls.site (also the cams-v1 snapshot's proxies[].site).
 export const SITE_PATTERN = '^[a-z0-9][a-z0-9-]{0,30}$';
 

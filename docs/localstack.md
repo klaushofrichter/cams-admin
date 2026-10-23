@@ -105,7 +105,7 @@ and CA fingerprint (from `GET /tls/ca.pem`) per proxy. It waits until cam4
 runs on beta-1 with a site-CA certificate (the first push comes about 30 s
 after the start), then seeds two past days of cam4's content on beta-1 as
 cam-proxy writes it (150 stills packs a day, 8 clips with snapshots and
-events a day; once per stack). Then three scenarios, in order:
+events a day; once per stack). Then four scenarios, in order:
 
 1. **beta-1 → beta-2:** the source page's flow (`POST /control/moves/targets`,
    `POST /control/moves`, the target's answer, approve with a budget of twice
@@ -122,9 +122,24 @@ events a day; once per stack). Then three scenarios, in order:
    registry names beta-1 again, beta-1 serves cam4 and the seeded days, and
    beta-2 keeps nothing of the seeded days (what it captured itself ages out
    there).
+4. **beta-1 → beta-2, started from cams-admin and approved automatically:**
+   it starts where scenario 3 left the camera, on beta-1. The check issues an
+   operations token with scope `moves`, then breaks two fixable rules: beta-2's
+   registry `tlsSite` (set to null) and the cams route to beta-2 (deleted, on
+   the instance that sees beta-1); `caFingerprints` and `tlsServername` stay.
+   `POST /api/v1/moves` with that token and bounds (transfer, all five kinds,
+   space `fit`, budget 3600 s) answers 202, and `fixed` has `site_ca` (beta-2)
+   and `routed`; the registry site is `beta-2` again and the route is visible
+   with `url: null`. The move never gets a call to beta-1's
+   `/control/moves/:id/approve`: beta-1 approves its own offer within the bounds
+   and the move ends `done`. `/diag/moves` shows `autoApprove: true` and the
+   bounds; cams-admin's audit runs `move-fix`, `move-begin`, then
+   `move-request` … `move-done`; beta-1's audit has a `move-approve` record
+   labelled `cams-admin auto-approval`; scenario 1's end checks pass. The
+   token is revoked at the end.
 
-It prints one line per step and `move-check: 3/3 scenarios ok`, and exits 1
-at the first failure. It takes about 3 minutes. Run it on a fresh stack
+It prints one line per step and `move-check: 4/4 scenarios ok`, and exits 1
+at the first failure. It takes about 8 minutes. Run it on a fresh stack
 (`stop.sh`, `LOCALSTACK_MOVES=1 start.sh`): each scenario starts where the
 one before left the camera.
 
