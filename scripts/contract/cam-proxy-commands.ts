@@ -50,10 +50,7 @@ const P3 = ['config.get', 'config.set', 'config.unset', 'config.rollback', 'came
 const P3_STARTED = P3.some(implemented);
 // The camera-move group (same rule, per group): pending until cam-proxy implements any move command.
 const MOVE = ['move.begin', 'move.targets', 'move.open', 'move.offer', 'move.answer', 'move.start', 'move.go', 'move.release', 'move.finish', 'move.cancel', 'move.return.open', 'move.return.start'];
-// move.begin (added later) is pending on its own until cam-proxy implements it; the rest of the group is already implemented and stays strict.
-const MOVE_STARTED = MOVE.filter((c) => c !== 'move.begin' && !c.startsWith('move.return.')).some(implemented);
-// The copy back (move.return.open/start, move.finish with return) is pending on its own until cam-proxy implements move.return.open.
-const isReturn = (m: { command: string; args?: { return?: boolean } }) => m.command.startsWith('move.return.') || (m.command === 'move.finish' && m.args?.return === true);
+const MOVE_STARTED = MOVE.some(implemented);
 const DIR = join(__dirname, '../../contract/v1/fixtures');
 const ctxOf = (c: Ctx, journal: (id: string) => unknown = () => undefined) => {
   const seen = new SeenIds();
@@ -77,9 +74,8 @@ for (const f of cmds) {
   // all (P3, or camera moves): once it has one, every fixture of the group must
   // match (a forgotten IMPLEMENTED entry is drift).
   const cmd = f.message.body.command;
-  const group = cmd === 'move.begin' ? false : MOVE.includes(cmd) ? MOVE_STARTED : P3_STARTED;
-  const ret = isReturn(f.message.body);
-  if (got !== want && (ret ? !implemented('move.return.open') : !implemented(f.message.body.command) && !group)) {
+  const group = MOVE.includes(cmd) ? MOVE_STARTED : P3_STARTED;
+  if (got !== want && !implemented(cmd) && !group) {
     pending++;
     console.log(`pending ${f.name} (cam-proxy does not implement ${f.message.body.command} yet)`);
     continue;

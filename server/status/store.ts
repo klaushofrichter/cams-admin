@@ -66,6 +66,7 @@ export class StatusStore {
   // P2: a heartbeat's token revision (Tokens confirms a set whose done was lost).
   onTokens?: (proxyId: string, tokens: TokensInfo | null) => void;
   onConfig?: (proxyId: string) => void; // P3: the heartbeat's configRevision (ProxyConfig.onHeartbeat)
+  onCameras?: (proxyId: string, cameras: Reported['cameras']) => void; // the reported cameras (Registry.fillCameraModels)
   private dirty = new Set<string>();
   private lastFlush: number;
   private snapshotMs: number;
@@ -201,6 +202,8 @@ export class StatusStore {
     const t = this.mem.get(proxyId)?.reported?.tokens;
     if (t && this.onTokens) this.onTokens(proxyId, t);
     if (this.onConfig && this.mem.get(proxyId)?.reported?.commands) this.onConfig(proxyId);
+    const cams = this.mem.get(proxyId)?.reported?.cameras;
+    if (cams?.length && this.onCameras) this.onCameras(proxyId, cams);
   }
 
   disconnected(proxyId: string, reason: string): void {

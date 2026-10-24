@@ -401,6 +401,26 @@ export class Registry {
     }));
   }
 
+  // A camera registered without a model takes the one its proxy reports in a
+  // heartbeat (cam1 was registered before proxies reported models). A set model
+  // is never overwritten; with nothing to fill this only reads.
+  fillCameraModels(proxyId: string, reported: { ref: string; model?: string | null }[]): Camera[] {
+    const models = new Map(reported.filter((c) => typeof c.model === 'string' && c.model.trim()).map((c) => [c.ref, c.model!.trim().slice(0, 80)]));
+    if (!models.size) return [];
+    const todo = (this.db.prepare('SELECT id, account_id, cams_id, proxy_camera_id FROM cameras WHERE proxy_id = ? AND model IS NULL').all(proxyId) as Row[])
+      .filter((r) => models.has(r.proxy_camera_id as string));
+    if (!todo.length) return [];
+    return tx(this.db, () => todo.map((r) => {
+      const model = models.get(r.proxy_camera_id as string)!;
+      this.db.prepare('UPDATE cameras SET model = ?, updated_at = ?, version = version + 1 WHERE id = ? AND model IS NULL').run(model, this.clock.now(), r.id as string);
+      this.audit.write({
+        actorType: 'proxy', actor: proxyId, action: 'camera-update', accountId: r.account_id as string, targetType: 'camera', targetId: r.id as string, targetLabel: r.cams_id as string, outcome: 'ok',
+        detail: { fields: ['model'], model, from: 'proxy-report' },
+      });
+      return this.getCamera(r.account_id as string, r.id as string);
+    }));
+  }
+
   // The camera-move switch-over (plan Task 5, S §9.1 step 7): the camera now
   // runs on the target proxy under its new TLS name, and names the move
   // (cameras.move_id, never cleared: A16). The cams id, host and protocol stay.
