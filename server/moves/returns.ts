@@ -33,6 +33,12 @@ export const NO_SPACE_REASON = 'paused:no_space';
 // A step whose command could not be queued (the proxy paused, the entry off) is tried again this often.
 export const RETURN_QUEUE_RETRY_MS = 60_000;
 
+// A proxy on a cam-proxy release before the return refuses its commands (an unknown command: not_allowed; an unknown
+// field: invalid_args; or unsupported_version): permanent for that command until the proxy reconnects (an update).
+export const OLD_PROXY_CODES = ['not_allowed', 'invalid_args', 'unsupported_version'];
+// The reason the return shows while one side needs the update (the return's role: source = new proxy, target = original).
+export const updateReason = (role: 'source' | 'target') => `paused:proxy_update:${role}`;
+export const isOldProxyRefusal = (r: CommandRow) => (r.state === 'refused' || r.state === 'failed') && OLD_PROXY_CODES.includes(r.outcomeCode ?? '');
 const RETRY_CAP_MS = 3600_000;
 const FINAL_STATES = new Set(['done', 'refused', 'failed', 'expired', 'unknown']);
 const DONE_MAX = 512;
@@ -73,6 +79,8 @@ export class Returns {
   private resolving = new Set<string>();
   // A side's reported failure (memory: a restart re-keys, which sends open and start again anyway), by return id.
   private failures = new Map<string, { source?: number; target?: number }>();
+  // moveId:proxyId of a proxy that reconnected while its return command was refused as by an old release: one more try.
+  private liveRetry = new Set<string>();
 
   constructor(private h: ReturnHost, private keys: Map<string, ReturnKey>, private retryMs: number) {}
 
@@ -108,7 +116,11 @@ export class Returns {
     const open = key.openId ? this.cmd(m, m.sourceProxyId, key.openId) : null;
     if (!open) return sendOpen();
     if (!FINAL_STATES.has(open.state)) return;
-    if (open.state !== 'done') return void (this.again(m, m.sourceProxyId, 'move.return.open', open) && sendOpen());
+    if (open.state !== 'done') {
+      if (isOldProxyRefusal(open)) return this.liveRetry.delete(`${m.id}:${m.sourceProxyId}`) ? sendOpen() : this.setReason(m, updateReason('source'));
+      return void (this.again(m, m.sourceProxyId, 'move.return.open', open) && sendOpen());
+    }
+    if (m.reason === updateReason('source')) this.setReason(m, null);
     const failed = this.failures.get(m.id);
     // The new proxy failed after this open: open again (same key) after the backoff; the start follows that open.
     if (failed?.source !== undefined) {
@@ -124,7 +136,12 @@ export class Returns {
       if (isCount(bytes) && m.bytesTotal !== bytes) tx(this.h.db, () => this.h.store.setPhase(m.id, 'returning', { bytesTotal: bytes }));
     }
     const start = key.startId ? this.cmd(m, m.targetProxyId, key.startId) : null;
-    if (start && start.state === 'done' && failed?.target !== undefined) {
+    if (start?.state === 'done' && m.reason === updateReason('target')) this.setReason(m, null);
+    const startRetry = start !== null && isOldProxyRefusal(start) && this.liveRetry.delete(`${m.id}:${m.targetProxyId}`);
+    if (start && isOldProxyRefusal(start) && !startRetry) return this.setReason(m, updateReason('target'));
+    if (startRetry) {
+      // The original reconnected (perhaps updated): one more start.
+    } else if (start && start.state === 'done' && failed?.target !== undefined) {
       // The original failed after this start: start again (same token, `done` from the chunk states) after the backoff.
       if (!this.failureDue(m, m.targetProxyId, 'move.return.start', failed.target)) return;
       delete failed.target;
@@ -139,6 +156,22 @@ export class Returns {
       v: 1, moveId: m.id, returnOf: m.returnOf, token: key.token,
       source: { proxyId: src.id, name: src.name, url: src.url, caFingerprints: src.caFingerprints.slice(0, 2), tlsServername: src.tlsServername }, done,
     }, (id) => { key.startId = id; });
+  }
+
+  // A proxy (re)connected: a return command it refused as an old release would is tried once more.
+  reconnected(m: Move, proxyId: string): void {
+    if (m.phase === 'returning') this.liveRetry.add(`${m.id}:${proxyId}`);
+  }
+
+  // The reason shown on the return, written only when it changes.
+  private setReason(m: Move, reason: string | null): void {
+    if (m.reason === reason) return;
+    tx(this.h.db, () => {
+      const mv = this.h.store.setPhase(m.id, 'returning', { reason });
+      if (reason?.startsWith('paused:proxy_update')) this.h.audit(mv, 'move-return', 'refused', { step: 'needs-update', phase: 'returning', role: reason.slice(reason.lastIndexOf(':') + 1) });
+    });
+    m.reason = reason;
+    this.h.publish(m.id);
   }
 
   // A return command's result: the start's acceptance is audited, then the next step.
@@ -260,15 +293,19 @@ export class Returns {
   }
 
   // The original's address when its url names a host (looked up once, outside a transaction).
-  private resolveAddress(m: Move): void {
+  // Also for a given-up return (Give up opens on the new proxy, which needs the address too): `then` follows the write.
+  resolveAddress(m: Move, then: () => void = () => this.step(m)): void {
     if (this.resolving.has(m.id) || !this.due(`${m.id}:resolve`)) return;
     this.resolving.add(m.id);
     const original = this.h.registry.proxyById(m.targetProxyId);
     targetAddress(original?.url ?? null, this.h.resolve).then((ip) => {
       this.resolving.delete(m.id);
       if (!ip) return void this.h.log.warn({ moveId: m.id }, 'move_return_target_address');
-      tx(this.h.db, () => this.h.store.setPhase(m.id, 'returning', { targetIp: ip }));
-      this.step(m);
+      tx(this.h.db, () => {
+        const cur = this.h.store.get(m.id);
+        if (cur) this.h.store.setPhase(m.id, cur.phase, { targetIp: ip });
+      });
+      then();
     }).catch((e) => {
       this.resolving.delete(m.id);
       this.h.log.error({ err: e, moveId: m.id }, 'move_return_resolve_failed');

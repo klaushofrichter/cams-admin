@@ -10,7 +10,7 @@ import type { CommandRow, Commands, WireCommand } from '../commands/service';
 import { validateResultPayload } from '../contract';
 import { MOVE_ANSWER_REASONS, MOVE_KINDS } from '../../contract/build';
 import { newId } from '../ids';
-import { MoveBusy, MoveStore, type ChunkState, type ChunkStateName, type Move } from './store';
+import { GIVE_UP_CLOSED, GIVE_UP_CLOSED_OPEN_CODES, MoveBusy, MoveStore, type ChunkState, type ChunkStateName, type Move } from './store';
 import { eligibleTargets, precheck, type Candidate, type EligibleTarget, type PrecheckDeps } from './precheck';
 import { begin, type BeginResult } from './begin';
 import type { CamsInstances } from '../cams/instances';
@@ -332,6 +332,7 @@ export class Moves {
   // The hub's "proxy live" hook: the move this proxy takes part in re-derives its next step.
   onLive(proxyId: string): void {
     const m = this.store.byProxy(proxyId);
+    if (m?.phase === 'returning') this.returns.reconnected(m, proxyId);
     if (m) this.resume(m.id);
     for (const g of this.givenUp(proxyId)) this.giveUpFinishes(g);
     // A source back with a done move's cleanup still pending (ruling b).
@@ -1046,7 +1047,7 @@ export class Moves {
     for (const [proxyId, role] of [[m.sourceProxyId, 'source'], [m.targetProxyId, 'target']] as const) {
       // The new proxy (the return's source) finds its record only by a return id it has seen in move.return.open:
       // an open that never got `done` there is sent first (a fresh token, only its hash kept), the finish follows it.
-      if (proxyId === m.sourceProxyId && !this.giveUpOpened(m)) continue;
+      if (proxyId === m.sourceProxyId && this.giveUpOpened(m) !== 'opened') continue;
       const last = this.lastCommand(m, proxyId, 'move.finish');
       const abandoned = last?.args.abandoned === true;
       if (last && abandoned && !(last.state === 'expired' || last.state === 'unknown')) continue;
@@ -1058,31 +1059,41 @@ export class Moves {
     }
   }
 
-  // The new proxy answered the return's move.return.open `done`; otherwise one is sent (when due) and false returned.
-  private giveUpOpened(m: Move): boolean {
+  // 'opened': the new proxy answered the return's move.return.open `done`. 'closed': it refused the latest one as a
+  // proxy without the return (an old release) or has no record of it (unknown_move): nothing to close there, the side
+  // counts as closed (GIVE_UP_CLOSED). Otherwise one is sent (when due; the original's address resolved first when it
+  // never was) and 'waiting' returned.
+  private giveUpOpened(m: Move): 'opened' | 'closed' | 'waiting' {
     const proxyId = m.sourceProxyId;
     const last = this.lastCommand(m, proxyId, 'move.return.open');
-    if (last?.state === 'done') return true;
-    if (!this.online(proxyId) || !m.targetIp) return false;
+    if (last?.state === 'done') return 'opened';
+    if (last && (last.state === 'refused' || last.state === 'failed') && GIVE_UP_CLOSED_OPEN_CODES.includes(last.outcomeCode ?? '')) return 'closed';
+    if (!this.online(proxyId)) return 'waiting';
+    if (!m.targetIp) {
+      this.returns.resolveAddress(m, () => {
+        const mv = this.store.get(m.id);
+        if (mv) this.giveUpFinishes(mv);
+      });
+      return 'waiting';
+    }
     if (last) {
-      if (!FINAL_STATES.has(last.state)) return false;
+      if (!FINAL_STATES.has(last.state)) return 'waiting';
       const unanswered = last.state === 'expired' || last.state === 'unknown';
-      if (!unanswered && !this.retryDue(m, proxyId, 'move.return.open', CANCEL_RETRY_MS, last)) return false;
+      if (!unanswered && !this.retryDue(m, proxyId, 'move.return.open', CANCEL_RETRY_MS, last)) return 'waiting';
     }
     const key = `${m.id}:${proxyId}:move.return.open:give-up`;
-    if (this.gaveUp.has(key)) return false;
+    if (this.gaveUp.has(key)) return 'waiting';
     const { tokenHash } = moveToken();
     const mv = tx(this.d.db, () => this.store.setPhase(m.id, 'returned', { tokenHash }));
     const r = this.send(m.accountId, proxyId, 'move.return.open', { v: 1, moveId: m.id, returnOf: m.returnOf, tokenHash: mv.tokenHash, targetIp: m.targetIp });
     if (!r.ok && PERMANENT.has(r.code)) this.gaveUp.add(key);
-    return false;
+    return 'waiting';
   }
 
-  // Given-up returns where a side has no answered abandoned finish yet (done, failed or refused), however long ago.
+  // Given-up returns where a side is not closed yet (no answered abandoned finish, nor a refused open that closes it), however long ago.
   private givenUp(proxyId?: string): Move[] {
     const rows = this.d.db.prepare(`SELECT id FROM moves WHERE phase = 'returned' AND reason = ?${proxyId ? ' AND (source_proxy_id = ? OR target_proxy_id = ?)' : ''}
-      AND (SELECT COUNT(DISTINCT c.proxy_id) FROM commands c WHERE c.command = 'move.finish' AND json_extract(c.args, '$.moveId') = moves.id
-        AND json_extract(c.args, '$.abandoned') = 1 AND c.state IN ('done', 'failed', 'refused')) < 2`)
+      AND NOT (${GIVE_UP_CLOSED})`)
       .all(...(proxyId ? [GIVEN_UP, proxyId, proxyId] : [GIVEN_UP])) as { id: string }[];
     return rows.map((r) => this.store.get(r.id)).filter((x): x is Move => x !== null);
   }

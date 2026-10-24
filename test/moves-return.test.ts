@@ -20,7 +20,7 @@ import { MoveBusy } from '../server/moves/store';
 import { moveView } from '../server/moves/view';
 import { requiredEntries } from '../server/commands/service';
 import { CANCEL_RETRY_MS } from '../server/moves/service';
-import { RETURN_PLAN } from '../server/moves/returns';
+import { RETURN_PLAN, RETURN_QUEUE_RETRY_MS } from '../server/moves/returns';
 
 const ACTOR = 'admin@example.com';
 const fx = (name: string) => JSON.parse(readFileSync(join(__dirname, '../contract/v1/fixtures', name), 'utf8')).message.body as Record<string, any>;
@@ -99,9 +99,11 @@ async function copying() {
   return a;
 }
 // A cancel in copying, the source back with the camera: the return exists.
-async function returning(o: { open?: Record<string, any> } = {}) {
+async function returning(o: { open?: Record<string, any>; start?: Record<string, any>; before?: (a: Awaited<ReturnType<typeof copying>>) => void } = {}) {
   const a = await copying();
   if (o.open) a.tgt.client.moveResults['move.return.open'] = o.open as any;
+  if (o.start) a.src.client.moveResults['move.return.start'] = o.start as any;
+  o.before?.(a);
   s.built.moves.cancel(ACTOR, a.m.id, 'age-out');
   await until(() => cmdRows(a.m.id, 'move.cancel').length === 2, 5000, 'cancels');
   phase(a.src, a.m.id, 'source', 'cancelled');
@@ -459,6 +461,117 @@ describe('the return runs', () => {
     s.built.moves.giveUp(ACTOR, a.r.id);
     await until(() => got(a.tgt.client, 'move.finish', a.r.id).length === 2, 5000, 'abandoned finish');
     expect(got(a.tgt.client, 'move.finish', a.r.id)[1].body.args).toMatchObject({ role: 'source', abandoned: true, return: true });
+  });
+
+  it('a new proxy on the previous release refuses the open: waiting for its update, no retries; tried again when it reconnects', async () => {
+    const a = await returning({ open: { status: 'refused', code: 'not_allowed' } });
+    await until(() => move(a.r.id).reason === 'paused:proxy_update:source', 5000, 'needs the update');
+    expect(move(a.r.id).phase).toBe('returning');
+    await settle();
+    const epoch = readEpoch(s.built.db);
+    for (let k = 0; k < 24; k++) {
+      clock.advance(3600_000);
+      s.built.moves.tick();
+    }
+    await settle();
+    expect(readEpoch(s.built.db)).toBe(epoch);
+    expect(cmdRows(a.r.id, 'move.return.open')).toHaveLength(1);
+    // Updated and back: one more try, which now goes through.
+    delete (a.tgt.client.moveResults as any)['move.return.open'];
+    s.built.moves.onLive(a.tgt.proxyId);
+    await until(() => got(a.src.client, 'move.return.start', a.r.id).length === 1, 5000, 'start after the update');
+    expect(cmdRows(a.r.id, 'move.return.open')).toHaveLength(2);
+    expect(move(a.r.id).reason).toBeNull();
+  });
+
+  it('an original on the previous release refuses the start: waiting for its update', async () => {
+    const a = await returning({ start: { status: 'failed', code: 'invalid_args' } });
+    await until(() => move(a.r.id).reason === 'paused:proxy_update:target', 5000, 'needs the update');
+    for (let k = 0; k < 5; k++) {
+      clock.advance(3600_000);
+      s.built.moves.tick();
+    }
+    await settle();
+    expect(cmdRows(a.r.id, 'move.return.start')).toHaveLength(1);
+    // A reconnect of the other proxy does not retry it.
+    s.built.moves.onLive(a.tgt.proxyId);
+    await settle();
+    expect(cmdRows(a.r.id, 'move.return.start')).toHaveLength(1);
+    delete (a.src.client.moveResults as any)['move.return.start'];
+    s.built.moves.onLive(a.src.proxyId);
+    await until(() => cmdRows(a.r.id, 'move.return.start')[1]?.state === 'done', 5000, 'started after the update');
+    await until(() => move(a.r.id).reason === null, 5000, 'reason cleared');
+  });
+
+  it('give up with a new proxy on the previous release: its side counts as closed; the return and its move are pruned', async () => {
+    const a = await returning({ open: { status: 'refused', code: 'not_allowed' } });
+    await until(() => move(a.r.id).reason === 'paused:proxy_update:source', 5000, 'needs the update');
+    s.built.moves.giveUp(ACTOR, a.r.id);
+    await until(() => cmdRows(a.r.id, 'move.finish').length === 1 && cmdRows(a.r.id, 'move.finish')[0].state === 'done', 5000, 'original finish');
+    for (let k = 0; k < 5; k++) {
+      clock.advance(3600_000);
+      s.built.moves.tick();
+    }
+    await settle();
+    expect(cmdRows(a.r.id, 'move.return.open')).toHaveLength(1); // no fresh open to a proxy that refuses it
+    expect(got(a.tgt.client, 'move.finish', a.r.id)).toHaveLength(0);
+    const far = clock.now() + 40 * 86_400_000;
+    expect(s.built.moves.store.prune(far, 30)).toEqual([a.r.id]);
+    expect(s.built.moves.store.prune(far, 30)).toContain(a.m.id);
+  });
+
+  it('give up: a fresh open answered unknown_move closes the new proxy\'s side', async () => {
+    const a = await returning({ open: { status: 'failed', code: 'wrong_phase' } });
+    await until(() => cmdRows(a.r.id, 'move.return.open')[0]?.state === 'failed', 5000, 'open failed');
+    a.tgt.client.moveResults['move.return.open'] = { status: 'failed', code: 'unknown_move' } as any;
+    s.built.moves.giveUp(ACTOR, a.r.id);
+    clock.advance(CANCEL_RETRY_MS);
+    s.built.moves.tick();
+    await until(() => cmdRows(a.r.id, 'move.return.open')[1]?.state === 'failed', 5000, 'fresh open answered');
+    await until(() => cmdRows(a.r.id, 'move.finish')[0]?.state === 'done', 5000, 'original finish');
+    for (let k = 0; k < 5; k++) {
+      clock.advance(3600_000);
+      s.built.moves.tick();
+    }
+    await settle();
+    expect(cmdRows(a.r.id, 'move.return.open')).toHaveLength(2);
+    expect(s.built.moves.store.prunable(clock.now() + 40 * 86_400_000, 30)).toContain(a.r.id);
+  });
+
+  it('give up while the original\'s address never resolved: resolved for the open, then the finish', async () => {
+    const rs = (s.built.moves as any).returns.h;
+    rs.resolve = async () => {
+      throw new Error('no such host');
+    };
+    const a = await returning({
+      before: (x) => {
+        const cur = s.built.registry.getProxy(x.src.accountId, x.src.proxyId);
+        s.built.registry.updateProxy(ACTOR, x.src.accountId, x.src.proxyId, { url: 'http://original.example.test:8480', version: cur.version });
+      },
+    });
+    await settle();
+    expect(move(a.r.id).targetIp).toBeNull();
+    expect(cmdRows(a.r.id, 'move.return.open')).toHaveLength(0);
+    rs.resolve = async () => '198.51.100.7';
+    s.built.moves.giveUp(ACTOR, a.r.id);
+    clock.advance(RETURN_QUEUE_RETRY_MS);
+    s.built.moves.tick();
+    await until(() => got(a.tgt.client, 'move.return.open', a.r.id).length === 1, 5000, 'open with the resolved address');
+    expect(got(a.tgt.client, 'move.return.open', a.r.id)[0].body.args.targetIp).toBe('198.51.100.7');
+    await until(() => got(a.tgt.client, 'move.finish', a.r.id).length === 1, 5000, 'finish after the open');
+    expect(move(a.r.id)).toMatchObject({ phase: 'returned', reason: 'given_up' });
+  });
+
+  it('a failed move whose target cancel never landed is not pruned until it does', async () => {
+    const a = await awaiting();
+    s.built.moves.cancel(ACTOR, a.m.id, 'delete');
+    await until(() => cmdRows(a.m.id, 'move.cancel').length === 2 && cmdRows(a.m.id, 'move.cancel').every((c) => c.state === 'done'), 5000, 'cancels');
+    const tgtCancel = cmdRows(a.m.id, 'move.cancel').find((c) => c.proxy_id === a.tgt.proxyId)!;
+    s.built.db.prepare(`UPDATE commands SET state = 'expired' WHERE id = ?`).run(tgtCancel.id);
+    const far = clock.now() + 40 * 86_400_000;
+    expect(s.built.moves.store.prunable(far, 30)).not.toContain(a.m.id);
+    s.built.db.prepare(`UPDATE commands SET state = 'done' WHERE id = ?`).run(tgtCancel.id);
+    expect(s.built.moves.store.prunable(far, 30)).toContain(a.m.id);
   });
 
   it('no token in any command row, audit row or view', async () => {

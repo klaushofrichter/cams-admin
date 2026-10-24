@@ -1,7 +1,7 @@
 <script lang="ts">
   // One move: chunk counts, the check, the cleanup note, the copy back; Cancel move…, End transfer… (after Archive when it is still copying) and Give up behind typed confirms.
   import { api, errorText } from '../lib/api';
-  import { boundsText, canGiveUp, cancelable, checkText, endLabel, reasonText, phaseText } from '../lib/moves';
+  import { boundsText, canGiveUp, cancelable, checkText, endLabel, phaseReason, phaseText } from '../lib/moves';
   import Confirm from './Confirm.svelte';
 
   let { move, onchange, onopen }: { move: any; onchange: () => void; onopen?: (id: string) => void } = $props();
@@ -28,7 +28,7 @@
 <div class="grid detail" data-testid="move-detail-{move.id}">
   <div class="row muted">
     <span>{move.camsId}: {move.source.name} → {move.target.name}</span>
-    <span>· {phaseText(move.phase)}{move.reason ? ` (${reasonText(move.reason)})` : ''}</span>
+    <span>· {phaseText(move.phase, move.reason)}{phaseReason(move.phase, move.reason) ? ` (${phaseReason(move.phase, move.reason)})` : ''}</span>
   </div>
   <p class="muted small" data-testid="move-bounds">{boundsText(move.bounds ?? null)}</p>
   {#if chunks && CHUNK_ORDER.some((k) => chunks![k])}
@@ -59,7 +59,7 @@
 </div>
 
 {#if dialog === 'cancel' && copyBack}
-  <Confirm title="Cancel move" body="The move stops and the camera goes back to {move.source.name}. What was copied and what {move.target.name} recorded since the switch-over is copied back to {move.source.name}." typed="cancel" ok="Cancel move"
+  <Confirm title="Cancel move" body="The move stops and the camera goes back to {move.source.name}. What {move.target.name} recorded since the switch-over is copied back to {move.source.name}; the old content never left {move.source.name}." typed="cancel" ok="Cancel move"
     onconfirm={() => run('cancel', { confirm: 'cancel' })} oncancel={() => (dialog = null)} />
 {:else if dialog === 'cancel'}
   <Confirm title="Cancel move" body="The move stops. What do you want to do with what was already copied?" typed="cancel" ok="Cancel move"

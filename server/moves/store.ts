@@ -81,6 +81,18 @@ const toMove = (r: Row): Move => ({
 // How long a cancelled switched-over move without a return waits past its keep time.
 export const RETURN_GRACE_MS = 86_400_000;
 
+// Both sides of a given-up return (a `moves` row in the outer query) are closed: each answered its abandoned finish
+// (done, failed or refused), or the new proxy (the return's source) refused its latest move.return.open as a proxy
+// without the return does (an old release: not_allowed, invalid_args, unsupported_version; or unknown_move: no
+// record to close). Such a side never gets the finish: nothing is left there to close.
+export const GIVE_UP_CLOSED_OPEN_CODES = ['not_allowed', 'invalid_args', 'unsupported_version', 'unknown_move'];
+const abandonedAnswered = (proxyCol: string) => `EXISTS (SELECT 1 FROM commands c WHERE c.proxy_id = ${proxyCol} AND c.command = 'move.finish'
+    AND json_extract(c.args, '$.moveId') = moves.id AND json_extract(c.args, '$.abandoned') = 1 AND c.state IN ('done', 'failed', 'refused'))`;
+const openClosed = `COALESCE((SELECT c.state IN ('refused', 'failed') AND c.outcome_code IN (${GIVE_UP_CLOSED_OPEN_CODES.map((x) => `'${x}'`).join(', ')})
+    FROM commands c WHERE c.proxy_id = moves.source_proxy_id AND c.command = 'move.return.open' AND json_extract(c.args, '$.moveId') = moves.id
+    ORDER BY c.rowid DESC LIMIT 1), 0) = 1`;
+export const GIVE_UP_CLOSED = `(${abandonedAnswered('moves.source_proxy_id')} OR ${openClosed}) AND ${abandonedAnswered('moves.target_proxy_id')}`;
+
 export class MoveStore {
   constructor(private db: Db, private clock: Clock) {}
 
@@ -147,11 +159,14 @@ export class MoveStore {
   // more: Task 15 creates the return in the cancel's own transaction, so that
   // state means the return was pruned first (it goes on the next run) or is
   // missing; the grace keeps a not-yet-created return from losing its original.
+  // Nor a failed or cancelled move whose target has not taken its cancel on (onLive asks it again on its return: the
+  // target must let go of the camera, and it needs the row for that).
   private static readonly PRUNABLE = `FROM moves WHERE ended_at IS NOT NULL AND cleanup_pending = 0 AND target_cleanup_pending = 0
          AND ended_at + COALESCE(keep_days, ?) * 86400000 + (CASE WHEN phase = 'cancelled' AND switched_at IS NOT NULL AND return_of IS NULL THEN ${RETURN_GRACE_MS} ELSE 0 END) < ?
          AND NOT EXISTS (SELECT 1 FROM moves r WHERE r.return_of = moves.id)
-         AND NOT (COALESCE(reason, '') = 'given_up' AND (SELECT COUNT(DISTINCT c.proxy_id) FROM commands c WHERE c.command = 'move.finish' AND json_extract(c.args, '$.moveId') = moves.id
-           AND json_extract(c.args, '$.abandoned') = 1 AND c.state IN ('done', 'failed', 'refused')) < 2)`;
+         AND NOT (COALESCE(reason, '') = 'given_up' AND NOT (${GIVE_UP_CLOSED}))
+         AND NOT (phase IN ('failed', 'cancelled') AND (copied_choice IS NOT NULL OR switched_at IS NOT NULL)
+           AND NOT EXISTS (SELECT 1 FROM commands c WHERE c.proxy_id = moves.target_proxy_id AND c.command = 'move.cancel' AND c.state = 'done' AND json_extract(c.args, '$.moveId') = moves.id))`;
 
   // A read: the ids prune(now, defaultDays) would delete.
   prunable(now: number, defaultDays: number): string[] {

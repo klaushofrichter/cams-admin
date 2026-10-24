@@ -3,7 +3,7 @@
   import { onMount } from 'svelte';
   import { api, errorText, ApiFailure } from '../lib/api';
   import { coalesced, live } from '../lib/live';
-  import { cancelable, etaText, phaseClass, phaseText, progressText, reasonText, refusalText, startBody, cameraLabel } from '../lib/moves';
+  import { cancelable, etaText, phaseClass, phaseReason, phaseText, progressText, refusalText, startBody, cameraLabel } from '../lib/moves';
   import MoveDetail from '../components/MoveDetail.svelte';
 
   let items = $state<any[]>([]);
@@ -121,8 +121,8 @@
             <td>{m.source.name}</td>
             <td>{m.target.name}</td>
             <td>
-              <span class="chip {phaseClass(m.phase)}" data-testid="move-phase-{m.id}">{phaseText(m.phase)}</span>
-              {#if m.reason && (m.phase === 'rejected' || m.phase === 'failed' || m.phase === 'returning' || m.phase === 'returned')}<span class="muted small" data-testid="move-reason-{m.id}"> {reasonText(m.reason)}</span>{/if}
+              <span class="chip {phaseClass(m.phase)}" data-testid="move-phase-{m.id}">{phaseText(m.phase, m.reason)}</span>
+              {#if phaseReason(m.phase, m.reason) && (m.phase === 'rejected' || m.phase === 'failed' || m.phase === 'returning' || m.phase === 'returned')}<span class="muted small" data-testid="move-reason-{m.id}"> {phaseReason(m.phase, m.reason)}</span>{/if}
               {#if m.budgetExceeded}<span class="badge warn" data-testid="move-budget-{m.id}">Over time budget</span>{/if}
             </td>
             <td>{progressText(m)}{#if (m.phase === 'copying' || m.phase === 'returning') && etaText(m.etaS)}<div class="muted small">{etaText(m.etaS)}</div>{/if}</td>

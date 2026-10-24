@@ -102,6 +102,9 @@ describe('ended moves age out', () => {
     const d = f.mk('e');
     s.built.db.prepare('UPDATE moves SET switched_at = ? WHERE id = ?').run(clock.now(), d.id);
     store().setPhase(d.id, 'cancelled', { keepDays: 7 });
+    // The target took its cancel on (a move whose target cancel never landed is kept: moves-return.test.ts).
+    s.built.db.prepare(`INSERT INTO commands (id, account_id, proxy_id, actor, command, args, dry_run, revocation_only, state, created_at) VALUES (?,?,?,?,?,?,0,0,'done',?)`)
+      .run('cmd_00000000000000000001', f.src.accountId, f.tgt.proxyId, 'system', 'move.cancel', JSON.stringify({ v: 1, moveId: d.id, role: 'target' }), clock.now());
     clock.advance(7 * DAY + 1);
     expect(store().prunable(clock.now(), 30)).toEqual([]);
     expect(s.built.moves.pruneEnded()).toBe(0);

@@ -5,7 +5,12 @@
 // at most one write per LITESTREAM_SYNC_INTERVAL_S (1 h), and only when
 // nothing else was written in that interval (so Litestream uploads once an
 // interval even when idle: replication freshness is read from S3).
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { readFileSync } from 'fs';
+import { join } from 'path';
+import { fakeClock, type FakeClock } from './helpers/clock';
+import { enrolled, makeClient, resetAccounts, startServer, until, type Running } from './helpers/server';
+import type { ProxyClient } from '../test-client/client';
 import { makeRegistry, ACTOR } from './helpers/registry';
 import { tmpDir } from './helpers/tmp';
 import { StatusStore } from '../server/status/store';
@@ -146,5 +151,82 @@ describe('database write budget', () => {
       r.clock.advance(60_000);
     }
     expect(readEpoch(r.db)).toBe(start + 1);
+  });
+});
+
+// Camera moves (step 4): a return that copies, one waiting for a proxy's cam-proxy update and a given-up one write
+// nothing per tick over a simulated day (the commands' own expiry is not part of moves.tick).
+describe('database write budget: returns', () => {
+  const dir = tmpDir();
+  const clients: ProxyClient[] = [];
+  let s: Running;
+  let clock: FakeClock;
+  let n = 0;
+  let ip = 200;
+  const FP = 'SHA256:' + 'CD'.repeat(32);
+  const fx = JSON.parse(readFileSync(join(__dirname, '../contract/v1/fixtures/valid-event-move-request.json'), 'utf8')).message.body as Record<string, any>;
+  beforeEach(async () => {
+    resetAccounts();
+    clock = fakeClock(Date.now());
+    s = await startServer(dir, { HEARTBEAT_MIN_GAP_MS: '0', LIMIT_MSG_PER_MIN: '10000', LIMIT_HELLO_PER_PROXY: '1000', TICK_MS: '60000' }, 0, clock);
+  });
+  afterEach(async () => {
+    for (const c of clients.splice(0)) await c.stop('shutdown');
+    await s.stop();
+  });
+  const cmds = (moveId: string, command: string) => s.built.db.prepare(`SELECT state FROM commands WHERE command = ? AND json_extract(args, '$.moveId') = ?`).all(command, moveId) as { state: string }[];
+  async function proxy() {
+    const name = `wb${n++}`;
+    const p = await enrolled(s, name, 'home');
+    const site = `site-${name}`;
+    const client = makeClient(p.key, { commands: { allow: ['move.send', 'move.receive'] }, proxyInfo: () => makeProxyInfo({ now: Date.now(), site, caFingerprint: [FP] }) });
+    clients.push(client);
+    client.start();
+    await until(() => client.state === 'connected' && !!s.built.status.row(p.proxyId)?.reported?.commands, 5000, 'connected');
+    const cur = s.built.registry.getProxy(p.accountId, p.proxyId);
+    s.built.registry.updateProxy(ACTOR, p.accountId, p.proxyId, { url: `http://192.0.2.${ip++}:8480`, tlsSite: site, tlsServername: `${name}.${site}.internal`, caFingerprints: [FP], version: cur.version });
+    return { ...p, client };
+  }
+  // A move cancelled after the switch-over: its return id.
+  async function returnMove(camsId: string, open?: Record<string, unknown>) {
+    const src = await proxy();
+    const tgt = await proxy();
+    if (open) tgt.client.moveResults['move.return.open'] = open as any;
+    const cam = s.built.registry.createCamera(ACTOR, src.accountId, { camsId, name: camsId, kind: 'camera', proxyId: src.proxyId, proxyCameraId: 'cam1', host: '192.0.2.10', protocol: 'https' });
+    const { proxyId: _p, connId: _c, ...rest } = fx;
+    const requestId = 'rq_' + camsId.toUpperCase().padEnd(20, '0');
+    src.client.emitEvent({ ...rest, requestId, target: tgt.proxyId, camera: { ...rest.camera, proxyCameraId: 'cam1' } });
+    await until(() => s.built.moves.store.byRequest(src.proxyId, requestId)?.phase === 'awaiting-approval', 5000, 'awaiting');
+    const m = s.built.moves.store.byRequest(src.proxyId, requestId)!;
+    src.client.emitEvent({ kind: 'move.approve', moveId: m.id, plan: { transfer: true, kinds: ['clips'], space: 'all', targetSettings: null, budgetS: 600, estimateS: 60 } });
+    await until(() => s.built.moves.store.get(m.id)!.phase === 'switching', 5000, 'switching');
+    tgt.client.emitEvent({ kind: 'move.phase', moveId: m.id, role: 'target', phase: 'switched', ok: true });
+    await until(() => s.built.moves.store.get(m.id)!.phase === 'copying', 5000, 'copying');
+    s.built.moves.cancel(ACTOR, m.id, 'age-out');
+    await until(() => cmds(m.id, 'move.cancel').filter((c) => c.state === 'done').length === 2, 5000, 'cancels');
+    src.client.emitEvent({ kind: 'move.phase', moveId: m.id, role: 'source', phase: 'cancelled', ok: true });
+    await until(() => !!s.built.moves.store.returnFor(m.id), 5000, 'return');
+    void cam;
+    return s.built.moves.store.returnFor(m.id)!.id;
+  }
+
+  it('a copying, a waiting and a given-up return: a simulated day of ticks writes nothing', async () => {
+    const copyingId = await returnMove('wba');
+    const waitingId = await returnMove('wbb', { status: 'refused', code: 'not_allowed' });
+    const givenUpId = await returnMove('wbc');
+    await until(() => cmds(copyingId, 'move.return.start')[0]?.state === 'done' && cmds(givenUpId, 'move.return.start')[0]?.state === 'done', 5000, 'started');
+    await until(() => s.built.moves.store.get(waitingId)!.reason === 'paused:proxy_update:source', 5000, 'waiting');
+    s.built.moves.giveUp(ACTOR, givenUpId);
+    await until(() => cmds(givenUpId, 'move.finish').length === 2 && cmds(givenUpId, 'move.finish').every((c) => c.state === 'done'), 5000, 'given up');
+    await new Promise((r) => setTimeout(r, 250));
+    const start = readEpoch(s.built.db);
+    for (let t = 0; t < 86_400; t += 10) {
+      clock.advance(10_000);
+      s.built.moves.tick();
+    }
+    await new Promise((r) => setTimeout(r, 250));
+    expect(readEpoch(s.built.db) - start).toBe(0);
+    expect(s.built.moves.store.get(copyingId)!.phase).toBe('returning');
+    expect(cmds(waitingId, 'move.return.open')).toHaveLength(1);
   });
 });

@@ -112,8 +112,9 @@ test('a copy back shows Copying back, cannot be cancelled and is given up behind
   await expect(page.getByTestId('confirm-ok')).toBeDisabled();
   await page.getByTestId('confirm-input').fill('give up');
   await page.getByTestId('confirm-ok').click();
-  await expect(page.getByTestId(`move-phase-${ret}`)).toHaveText('copied back');
-  await expect(page.getByTestId(`move-reason-${ret}`)).toContainText('copy back given up');
+  // Only "copy back given up": it did not copy back.
+  await expect(page.getByTestId(`move-phase-${ret}`)).toHaveText('copy back given up');
+  await expect(page.getByTestId(`move-reason-${ret}`)).toHaveCount(0);
   await expect(detail.getByTestId('move-give-up')).toHaveCount(0);
 });
 

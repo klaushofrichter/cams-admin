@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cancelable, etaText, phaseClass, phaseText, progressText, reasonText, boundsText, startBody, refusalText, cameraLabel, activeMoves, activeLine, checkText, endLabel, canGiveUp } from './moves';
+import { cancelable, etaText, phaseClass, phaseText, progressText, reasonText, boundsText, startBody, refusalText, cameraLabel, activeMoves, activeLine, checkText, endLabel, canGiveUp, phaseReason } from './moves';
 
 const PHASES = ['requested', 'offered', 'awaiting-approval', 'approved', 'switching', 'copying', 'cleaning', 'done', 'rejected', 'cancelling', 'cancelled', 'failed', 'returning', 'returned'];
 
@@ -139,6 +139,15 @@ describe('copy back, check, End after Archive', () => {
     expect(reasonText('paused:no_space')).toBe('paused: no room on the original proxy');
     expect(phaseClass('returning')).toBe('warn');
     expect(phaseClass('returned')).toBe('');
+    expect(reasonText('paused:proxy_update:source')).toBe('waiting: the new proxy needs the cam-proxy update');
+    expect(reasonText('paused:proxy_update:target')).toBe('waiting: the original proxy needs the cam-proxy update');
+  });
+  it('a given-up copy back reads "copy back given up" only', () => {
+    expect(phaseText('returned', 'given_up')).toBe('copy back given up');
+    expect(phaseReason('returned', 'given_up')).toBe('');
+    expect(phaseText('returned', null)).toBe('copied back');
+    expect(phaseReason('returning', 'paused:no_space')).toBe('paused: no room on the original proxy');
+    expect(phaseReason('failed', null)).toBe('');
   });
   it('checkText: complete, or the counts per kind', () => {
     expect(checkText(null)).toBe('');

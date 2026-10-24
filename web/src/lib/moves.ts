@@ -17,7 +17,8 @@ const PHASES: Record<string, string> = {
   returning: 'copying back',
   returned: 'copied back',
 };
-export const phaseText = (p: string): string => PHASES[p] ?? p;
+// A given-up copy back did not copy back: its phase reads as the reason.
+export const phaseText = (p: string, reason?: string | null): string => (p === 'returned' && reason === 'given_up' ? 'copy back given up' : PHASES[p] ?? p);
 
 export function phaseClass(p: string): string {
   return p === 'done' ? 'ok' : p === 'failed' || p === 'rejected' ? 'bad' : p === 'cancelled' || p === 'cancelling' || p === 'returning' ? 'warn' : '';
@@ -63,6 +64,8 @@ const REASONS: Record<string, string> = {
   expired: 'not delivered in time',
   given_up: 'copy back given up',
   'paused:no_space': 'paused: no room on the original proxy',
+  'paused:proxy_update:source': 'waiting: the new proxy needs the cam-proxy update',
+  'paused:proxy_update:target': 'waiting: the original proxy needs the cam-proxy update',
 };
 // A failure code is `<step>:<code>` (the step that failed, the proxy's code or the command's end state).
 const STEPS: Record<string, string> = {
@@ -84,6 +87,9 @@ export function reasonText(r: string | null | undefined): string {
   const code = r.slice(i + 1);
   return `${step}: ${REASONS[code] ?? code}`;
 }
+
+// The reason beside the phase text; none when the phase text already says it (a given-up copy back).
+export const phaseReason = (p: string, reason: string | null | undefined): string => (!reason || (p === 'returned' && reason === 'given_up') ? '' : reasonText(reason));
 
 export const cancelable = (phase: string): boolean => ['awaiting-approval', 'approved', 'switching', 'copying'].includes(phase);
 
