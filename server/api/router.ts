@@ -8,6 +8,7 @@ import { ApiError, type ProxyKey, type Registry } from '../registry';
 import type { Enrollment } from '../enroll/codes';
 import type { Hub } from '../channel/hub';
 import type { StatusStore } from '../status/store';
+import type { Move } from '../moves/store';
 import type { LiveHub } from '../live';
 import type { Commands } from '../commands/service';
 import type { Tokens } from '../tokens/service';
@@ -243,6 +244,7 @@ export function apiRouter(d: ApiDeps): express.Router {
   r.post(`${proxyBase}/restart`, h((req, res) => accepted(res, d.actions.restart(actor(res), p(req, 'accountId'), p(req, 'proxyId'), req.body))));
 
   // --- camera moves (plan 2026-10-21 Task 8) ---------------------------------------------------
+  const mview = (m: Move) => moveView(d.db, m, m.phase === 'copying' && d.moves.archivePending(m));
   const moveOf = (id: string) => {
     const m = d.moves.current(id);
     if (!m) throw new ApiError(404, 'not_found');
@@ -264,23 +266,32 @@ export function apiRouter(d: ApiDeps): express.Router {
   r.get('/moves', h((req) => {
     const acc = req.query.accountId === undefined ? undefined : String(req.query.accountId);
     if (acc !== undefined) d.registry.getAccount(acc);
-    return { items: d.moves.store.list(acc).map((m) => moveView(d.db, d.moves.current(m.id) ?? m)) };
+    return { items: d.moves.store.list(acc).map((m) => mview(d.moves.current(m.id) ?? m)) };
   }));
   r.get('/moves/:moveId', h((req) => {
     const m = moveOf(p(req, 'moveId'));
-    return { ...moveView(d.db, m), chunks: chunkCounts(d.moves.chunkStates(m.id)) };
+    return { ...mview(m), chunks: chunkCounts(d.moves.chunkStates(m.id)) };
   }));
   r.post('/moves/:moveId/cancel', h((req, res) => {
     typed(req, 'cancel');
     moveOf(p(req, 'moveId'));
     res.locals.status = 202;
-    return moveView(d.db, d.moves.cancel(actor(res), p(req, 'moveId'), req.body?.copied));
+    return mview(d.moves.cancel(actor(res), p(req, 'moveId'), req.body?.copied));
   }));
   r.post('/moves/:moveId/end-transfer', h((req, res) => {
     typed(req, 'end transfer');
     moveOf(p(req, 'moveId'));
     res.locals.status = 202;
-    return moveView(d.db, d.moves.endTransfer(actor(res), p(req, 'moveId')));
+    return mview(d.moves.endTransfer(actor(res), p(req, 'moveId')));
+  }));
+
+  // Sysadmin only (ruling 11): not in OPS_ROUTES, and an operations token is refused here too, fail closed.
+  r.post('/moves/:moveId/give-up', h((req, res) => {
+    if (actor(res).startsWith('ops-token:')) throw new ApiError(403, 'sysadmin_only');
+    typed(req, 'give up');
+    moveOf(p(req, 'moveId'));
+    res.locals.status = 202;
+    return mview(d.moves.giveUp(actor(res), p(req, 'moveId')));
   }));
 
   r.get(`${proxyBase}/status-events`, h((req) => {

@@ -194,9 +194,10 @@ differs, is reported `pending` (not a failure) by
 match (nothing pending).
 ## Camera moves
 
-Additive: the envelope stays v1, signatures and JCS unchanged. Ten commands
+Additive: the envelope stays v1, signatures and JCS unchanged. Twelve commands
 (`move.begin`, `move.targets`, `move.open`, `move.offer`, `move.answer`, `move.start`,
-`move.go`, `move.release`, `move.finish`, `move.cancel`; all `v:1`, in the strict
+`move.go`, `move.release`, `move.finish`, `move.cancel`, `move.return.open`,
+`move.return.start`; all `v:1`, in the strict
 `command` enum, each with `commands/<name>.args` and `.result` schemas) and six
 `event` kinds without a `cmdId` (`move.targets`, `move.request`,
 `move.approve`, `move.cancel`, `move.phase`, `move.progress`; they keep the
@@ -206,8 +207,8 @@ Additive: the envelope stays v1, signatures and JCS unchanged. Ten commands
 
 **Allow entries** (new in the strict heartbeat enum, both local, off by default):
 `move.send` (the source side: `move.begin`, `move.targets`, `move.open`, `move.answer`,
-`move.go`, `move.release`, and `move.finish` / `move.cancel` with `args.role` =
-`source`) and `move.receive` (the target side: `move.offer`, `move.start`, and
+`move.go`, `move.release`, `move.return.start`, and `move.finish` / `move.cancel` with
+`args.role` = `source`) and `move.receive` (the target side: `move.offer`, `move.start`, `move.return.open`, and
 `move.finish` / `move.cancel` with `args.role` = `target`).
 
 Changed steps of the check order:
@@ -218,7 +219,8 @@ Changed steps of the check order:
   60 per minute per proxy (the same as `config.get`); no journal budget.
 - **Step 11 (entries):** `move.finish` and `move.cancel` need the entry of
   `args.role` (`source` -> `move.send`, `target` -> `move.receive`) -> else
-  `not_allowed` (after the args check, as `tokens.apply.admin`).
+  `not_allowed` (after the args check, as `tokens.apply.admin`). A `move.finish` with
+  `return: true` flips the mapping (see below).
 
 Rulings of the camera-move plan that the schemas carry:
 
@@ -263,6 +265,27 @@ Rulings of the camera-move plan that the schemas carry:
   under the 16 KiB cap); the target's journal is authoritative for the rest.
 - A chunk `state` of `failed` means copied with failures; chunk ids are
   `<kind>:<YYYY-MM-DD>`.
+- **Copy back (step 4).** After a cancel past the switch-over the content is copied back
+  as its own move (`moveId`) that returns the content of `returnOf` (an `mv_` id), with
+  the roles swapped: the proxy that now holds the camera's content sends, the other receives.
+  - `move.return.open` (entry `move.receive`; args `{v, moveId, returnOf, tokenHash,
+    targetIp}`, all required, closed) -> result `{chunks, bytes}` (integers: what is to
+    come back). The receiving side accepts one bearer token (its hash). A repeated
+    open with a new `tokenHash` re-keys (cams-admin restarted and holds a fresh token).
+  - `move.return.start` (entry `move.send`; args `{v, moveId, returnOf, token, source:
+    {proxyId, name, url, caFingerprints, tlsServername}, done: chunkId[<= 512]}`) ->
+    result `{}`. Here `source` names the proxy to pull from, as in `move.offer`.
+  - `move.finish` gains an optional `return` boolean. With `return: true` the entry
+    flips: role `source` needs `move.receive`, role `target` needs `move.send`
+    (step 11 of the check order).
+  - `move.phase` gains three optional fields: `check` (the completeness check:
+    `{complete, missing, recovered, failed, expired}`; `complete` is a boolean, the
+    other four are objects with optional keys among the five kinds, each a file count),
+    `keepDays` (integer 7 to 3650: how long cams-admin keeps the ended move) and
+    `returnPending` (boolean: a cancel past the switch-over left content to copy back).
+  - The check counts files; rows that could not be imported count as `failed`.
+  - Archive first (Archive items move before the other kinds) is internal to the
+    proxies: no wire change.
 - `site` (`move.targets`, and cams-v1 `proxies[].site`) is null or
   `^[a-z0-9][a-z0-9-]{0,30}$`, cam-proxy's `tls.site`.
 

@@ -95,7 +95,7 @@ describe('the v1 contract', () => {
   it('every proxy-receiver fixture has a $context and a runtime code from the nack list', () => {
     const NACKS = ['bad_signature', 'wrong_target', 'expired', 'replayed', 'not_allowed', 'paused', 'rate_limited', 'invalid_args', 'unsupported_version', 'busy'];
     const proxyFixtures = allFixtures().filter((x) => x.$expect?.receiver === 'proxy');
-    expect(proxyFixtures.length).toBe(34);
+    expect(proxyFixtures.length).toBe(35);
     for (const f of proxyFixtures) {
       expect(f.$context, f.name).toMatchObject({ now: expect.any(Number), proxyId: expect.stringMatching(/^prx_/), connId: expect.stringMatching(/^con_/), serverKeys: [vectors.keys.server.publicKey] });
       expect(NACKS, f.name).toContain(f.$expect.runtime);

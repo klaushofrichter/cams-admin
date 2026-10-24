@@ -11,7 +11,24 @@ const base = () => fixtureNamed('valid-event-command-done').message;
 const wrap = (body: Record<string, unknown>) => ({ ...base(), body: { proxyId: base().body.proxyId, connId: base().body.connId, ...body } });
 const progress = (chunks: unknown) => wrap({ kind: 'move.progress', moveId: MV, chunks, bytesDone: 0, bytesTotal: 1, rateBps: 0, etaS: 0 });
 
+const phase = (o: Record<string, unknown>) => wrap({ kind: 'move.phase', moveId: MV, role: 'target', ok: true, ...o });
 describe('move events', () => {
+  it('move.phase carries check, keepDays and returnPending', () => {
+    const none = { complete: false, missing: { stills: 2 }, recovered: {}, failed: { archive: 1 }, expired: {} };
+    expect(strictValid('event', phase({ phase: 'copied', check: none }))).toBe(true);
+    expect(strictValid('event', phase({ phase: 'finished', keepDays: 30 }))).toBe(true);
+    expect(strictValid('event', phase({ phase: 'finished', keepDays: 3650 }))).toBe(true);
+    expect(strictValid('event', phase({ phase: 'finished', keepDays: 3 }))).toBe(false);
+    expect(strictValid('event', phase({ phase: 'finished', keepDays: 3651 }))).toBe(false);
+    expect(strictValid('event', phase({ phase: 'cancelled', returnPending: true }))).toBe(true);
+    expect(strictValid('event', phase({ phase: 'copied', check: { complete: true } }))).toBe(false); // all five keys required
+    expect(strictValid('event', phase({ phase: 'copied', check: { ...none, missing: { photos: 1 } } }))).toBe(false);
+  });
+  it('has the new move.phase and return fixtures', () => {
+    const names = fixtureList().map((f) => f.name);
+    for (const n of ['valid-event-move-phase-check', 'valid-event-move-phase-return-pending', 'invalid-event-move-phase-keepdays-low']) expect(names, n).toContain(n);
+    expect(strictValid('event', fixtureNamed('invalid-event-move-phase-keepdays-low').message)).toBe(false);
+  });
   it('has a valid fixture for every move event kind', () => {
     const names = fixtureList().map((f) => f.name);
     for (const k of KINDS) expect(names, k).toContain(`valid-event-move-${k}`);
