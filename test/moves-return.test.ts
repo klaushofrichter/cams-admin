@@ -425,6 +425,33 @@ describe('the return runs', () => {
     expect(s.built.moves.store.prune(far, 30)).toContain(a.r.id);
   });
 
+  it('give up before the open reached the new proxy: open first (new token), then the finish; after an open done: the finish only', async () => {
+    const a = await returning({ open: { status: 'failed', code: 'wrong_phase' } });
+    await until(() => cmdRows(a.r.id, 'move.return.open')[0]?.state === 'failed', 5000, 'open failed');
+    s.built.moves.giveUp(ACTOR, a.r.id);
+    await until(() => got(a.src.client, 'move.finish', a.r.id).length === 1, 5000, 'original finish');
+    await settle();
+    expect(got(a.tgt.client, 'move.finish', a.r.id)).toHaveLength(0);
+    delete (a.tgt.client.moveResults as any)['move.return.open'];
+    clock.advance(CANCEL_RETRY_MS);
+    s.built.moves.tick();
+    await until(() => cmdRows(a.r.id, 'move.return.open').length === 2, 5000, 'open again');
+    await until(() => got(a.tgt.client, 'move.finish', a.r.id).length === 1, 5000, 'finish after the open');
+    const opens = got(a.tgt.client, 'move.return.open', a.r.id).map((c) => c.body.args);
+    expect(opens[1].tokenHash).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(opens[1].tokenHash === opens[0].tokenHash).toBe(false);
+    expect(JSON.stringify(cmdRows(a.r.id, 'move.return.open'))).not.toMatch(/"token":/);
+    expect(got(a.tgt.client, 'move.finish', a.r.id)[0].body.args).toMatchObject({ role: 'source', abandoned: true, return: true });
+  });
+
+  it('give up after the open was done: the finish only, no second open', async () => {
+    const b = await returning();
+    await until(() => cmdRows(b.r.id, 'move.return.open')[0]?.state === 'done', 5000, 'open done');
+    s.built.moves.giveUp(ACTOR, b.r.id);
+    await until(() => got(b.tgt.client, 'move.finish', b.r.id).length === 1, 5000, 'finish');
+    expect(cmdRows(b.r.id, 'move.return.open')).toHaveLength(1);
+  });
+
   it('give up: a normal return finish already queued is followed by the abandoned one', async () => {
     const a = await returning();
     s.built.commands.create('system', a.r.accountId, a.tgt.proxyId, 'move.finish', { v: 1, moveId: a.r.id, role: 'source', abandoned: false, return: true }, { actorType: 'system' });

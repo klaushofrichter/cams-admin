@@ -529,7 +529,12 @@ export class Moves {
     const moveId = r.args.moveId;
     const m = typeof moveId === 'string' ? this.store.get(moveId) : null;
     if (!m) return;
-    if (m.returnOf !== null) return m.phase === 'returning' ? this.returns.onFinal(m, r) : undefined;
+    if (m.returnOf !== null) {
+      if (m.phase === 'returning') return this.returns.onFinal(m, r);
+      // A given-up return: its open reached the new proxy (or not), the finishes follow.
+      if (m.reason === GIVEN_UP) this.giveUpFinishes(m);
+      return;
+    }
     switch (r.command) {
       case 'move.open': return this.onOpenFinal(m, r);
       case 'move.offer': return this.onOfferFinal(m, r);
@@ -1039,6 +1044,9 @@ export class Moves {
   // the return before Give up: the abandoned one goes out after it, M1).
   private giveUpFinishes(m: Move): void {
     for (const [proxyId, role] of [[m.sourceProxyId, 'source'], [m.targetProxyId, 'target']] as const) {
+      // The new proxy (the return's source) finds its record only by a return id it has seen in move.return.open:
+      // an open that never got `done` there is sent first (a fresh token, only its hash kept), the finish follows it.
+      if (proxyId === m.sourceProxyId && !this.giveUpOpened(m)) continue;
       const last = this.lastCommand(m, proxyId, 'move.finish');
       const abandoned = last?.args.abandoned === true;
       if (last && abandoned && !(last.state === 'expired' || last.state === 'unknown')) continue;
@@ -1048,6 +1056,26 @@ export class Moves {
       const r = this.send(m.accountId, proxyId, 'move.finish', { v: 1, moveId: m.id, role, abandoned: true, return: true });
       if (!r.ok && PERMANENT.has(r.code)) this.gaveUp.add(key);
     }
+  }
+
+  // The new proxy answered the return's move.return.open `done`; otherwise one is sent (when due) and false returned.
+  private giveUpOpened(m: Move): boolean {
+    const proxyId = m.sourceProxyId;
+    const last = this.lastCommand(m, proxyId, 'move.return.open');
+    if (last?.state === 'done') return true;
+    if (!this.online(proxyId) || !m.targetIp) return false;
+    if (last) {
+      if (!FINAL_STATES.has(last.state)) return false;
+      const unanswered = last.state === 'expired' || last.state === 'unknown';
+      if (!unanswered && !this.retryDue(m, proxyId, 'move.return.open', CANCEL_RETRY_MS, last)) return false;
+    }
+    const key = `${m.id}:${proxyId}:move.return.open:give-up`;
+    if (this.gaveUp.has(key)) return false;
+    const { tokenHash } = moveToken();
+    const mv = tx(this.d.db, () => this.store.setPhase(m.id, 'returned', { tokenHash }));
+    const r = this.send(m.accountId, proxyId, 'move.return.open', { v: 1, moveId: m.id, returnOf: m.returnOf, tokenHash: mv.tokenHash, targetIp: m.targetIp });
+    if (!r.ok && PERMANENT.has(r.code)) this.gaveUp.add(key);
+    return false;
   }
 
   // Given-up returns where a side has no answered abandoned finish yet (done, failed or refused), however long ago.
