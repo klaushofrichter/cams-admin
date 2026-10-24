@@ -38,6 +38,10 @@ import moveGoArgsStrict from '../contract/v1/strict/commands/move.go.args.schema
 import moveGoResult from '../contract/v1/commands/move.go.result.schema.json';
 import moveReleaseArgsStrict from '../contract/v1/strict/commands/move.release.args.schema.json';
 import moveReleaseResult from '../contract/v1/commands/move.release.result.schema.json';
+import moveReturnOpenArgsStrict from '../contract/v1/strict/commands/move.return.open.args.schema.json';
+import moveReturnOpenResult from '../contract/v1/commands/move.return.open.result.schema.json';
+import moveReturnStartArgsStrict from '../contract/v1/strict/commands/move.return.start.args.schema.json';
+import moveReturnStartResult from '../contract/v1/commands/move.return.start.result.schema.json';
 import moveFinishArgsStrict from '../contract/v1/strict/commands/move.finish.args.schema.json';
 import moveFinishResult from '../contract/v1/commands/move.finish.result.schema.json';
 import moveCancelArgsStrict from '../contract/v1/strict/commands/move.cancel.args.schema.json';
@@ -109,6 +113,7 @@ const vArgs: Record<string, ValidateFunction> = {
   'config.rollback': compile(configRollbackArgs), 'camera.action': compile(cameraActionArgs), 'camera.name.set': compile(cameraNameSetArgs),
   'proxy.restart': compile(proxyRestartArgs),
   'move.begin': compile(moveBeginArgsStrict), 'move.targets': compile(moveTargetsArgsStrict), 'move.open': compile(moveOpenArgsStrict), 'move.offer': compile(moveOfferArgsStrict), 'move.answer': compile(moveAnswerArgsStrict), 'move.start': compile(moveStartArgsStrict), 'move.go': compile(moveGoArgsStrict), 'move.release': compile(moveReleaseArgsStrict), 'move.finish': compile(moveFinishArgsStrict), 'move.cancel': compile(moveCancelArgsStrict),
+  'move.return.open': compile(moveReturnOpenArgsStrict), 'move.return.start': compile(moveReturnStartArgsStrict),
 };
 // A proxy's result payload, leniently (unknown fields ignored).
 const vResult: Record<string, ValidateFunction> = {
@@ -117,6 +122,7 @@ const vResult: Record<string, ValidateFunction> = {
   'config.rollback': compile(configRollbackResult), 'camera.action': compile(cameraActionResult), 'camera.name.set': compile(cameraNameSetResult),
   'proxy.restart': compile(proxyRestartResult),
   'move.begin': compile(moveBeginResult), 'move.targets': compile(moveTargetsResult), 'move.open': compile(moveOpenResult), 'move.offer': compile(moveOfferResult), 'move.answer': compile(moveAnswerResult), 'move.start': compile(moveStartResult), 'move.go': compile(moveGoResult), 'move.release': compile(moveReleaseResult), 'move.finish': compile(moveFinishResult), 'move.cancel': compile(moveCancelResult),
+  'move.return.open': compile(moveReturnOpenResult), 'move.return.start': compile(moveReturnStartResult),
 };
 export function validateCommandArgs(command: string, args: unknown): { ok: true } | { ok: false; detail: string } {
   const v = Object.hasOwn(vArgs, command) ? vArgs[command] : undefined;

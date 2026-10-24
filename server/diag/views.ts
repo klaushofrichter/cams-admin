@@ -123,7 +123,7 @@ export function diagMoves(d: ApiDeps, accountId: string | undefined, requestId?:
   return {
     items: d.moves.store.list(accountId).filter((m) => requestId === undefined || m.requestId === requestId).map((m) => {
       const cur = d.moves.current(m.id) ?? m;
-      return { ...moveView(d.db, cur), chunks: chunkCounts(d.moves.chunkStates(cur.id)) };
+      return { ...moveView(d.db, cur, cur.phase === 'copying' && d.moves.archivePending(cur)), chunks: chunkCounts(d.moves.chunkStates(cur.id)) };
     }),
   };
 }

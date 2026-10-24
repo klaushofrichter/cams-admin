@@ -326,4 +326,21 @@ describe('database', () => {
     expect((db.prepare(`SELECT name FROM pragma_index_list('audit_log') WHERE origin = 'c' ORDER BY name`).all() as { name: string }[]).map((x) => x.name)).toEqual(['audit_account_at', 'audit_action_at', 'audit_at']);
     expect(db.prepare('SELECT account_id, revision FROM config_revision ORDER BY account_id').all()).toEqual([{ account_id: 'acc_a', revision: 1 }, { account_id: 'acc_b', revision: 1 }]);
   });
+  it('migration 14 rebuilds moves with every index, trigger and foreign key of before, plus moves_return_of', () => {
+    const f = join(dir, 'm14s.db');
+    const raw = new DatabaseSync(f);
+    for (let i = 0; i < 13; i++) MIGRATIONS[i](raw);
+    raw.exec('PRAGMA user_version = 13');
+    const objects = (d: DatabaseSync) => d.prepare(`SELECT type, name, tbl_name, sql FROM sqlite_master WHERE tbl_name IN ('moves','move_chunks') AND type IN ('index','trigger') AND sql IS NOT NULL ORDER BY name`).all();
+    const fks = (d: DatabaseSync) => d.prepare(`SELECT 'moves' t, "table", "from", "to", on_delete FROM pragma_foreign_key_list('moves') UNION ALL SELECT 'move_chunks', "table", "from", "to", on_delete FROM pragma_foreign_key_list('move_chunks') ORDER BY 1, 2, 3`).all();
+    const before = objects(raw);
+    const fksBefore = fks(raw);
+    raw.close();
+    const db = openDb(f);
+    const after = objects(db) as { name: string }[];
+    expect(after.filter((o) => o.name !== 'moves_return_of')).toEqual(before);
+    expect(after.find((o) => o.name === 'moves_return_of')).toMatchObject({ type: 'index', tbl_name: 'moves' });
+    expect(fks(db)).toEqual(fksBefore);
+    expect(db.prepare(`SELECT strict FROM pragma_table_list WHERE name IN ('moves','move_chunks') ORDER BY name`).all()).toEqual([{ strict: 1 }, { strict: 1 }]);
+  });
 });

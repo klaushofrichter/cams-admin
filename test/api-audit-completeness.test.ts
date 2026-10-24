@@ -70,6 +70,7 @@ describe('audit completeness', () => {
     // Camera moves (Task 8): one record each; the moves are made by hand in the matching phase.
     ['post', '/moves/:moveId/cancel', () => `/moves/${ids.mvCancel}/cancel`, () => ({ copied: 'delete', confirm: 'cancel' }), 'move-cancel'],
     ['post', '/moves/:moveId/end-transfer', () => `/moves/${ids.mvEnd}/end-transfer`, () => ({ confirm: 'end transfer' }), 'move-end-transfer'],
+    ['post', '/moves/:moveId/give-up', () => `/moves/${ids.mvGive}/give-up`, () => ({ confirm: 'give up' }), 'move-give-up'],
     // move.begin: a clean precheck (no fix), so the move-begin record and the command's.
     ['post', '/moves', () => '/moves', () => ({ sourceProxyId: ids.bgs, targetProxyId: ids.bgt, cameraId: 'beginporch', bounds: null }), ['move-begin', 'command-create']],
     // Diagnostics tokens (issue #45).
@@ -133,16 +134,17 @@ describe('audit completeness', () => {
     if (action === 'camera-create') ids.cam = r.body.id;
     if (action === 'camera-create') {
       // Two moves for the move rows: proxies and cameras of their own, in copying.
-      const mk = (tag: string) => {
+      const mk = (tag: string, phase = 'copying') => {
         const px = [`prx_${tag}s`, `prx_${tag}t`];
         for (const [i, id] of px.entries()) a.db.prepare(`INSERT INTO proxies (id, account_id, name, display_name, runs_on, state, created_at, updated_at) VALUES (?, ?, ?, ?, 'cluster', 'enrolled', 1, 1)`).run(id, ids.acc, `${tag}${i}`, `${tag}${i}`);
         a.db.prepare(`INSERT INTO cameras (id, account_id, proxy_id, cams_id, proxy_camera_id, name, kind, created_at, updated_at) VALUES (?, ?, ?, ?, 'pc', 'M', 'camera', 1, 1)`).run(`cam_${tag}`, ids.acc, px[0], `m${tag}`);
         const id = `mv_${tag.padEnd(20, '0')}`;
-        a.db.prepare(`INSERT INTO moves (id, account_id, camera_id, source_proxy_id, target_proxy_id, request_id, phase, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'copying', 1, 1)`).run(id, ids.acc, `cam_${tag}`, px[0], px[1], `rq_${tag}`);
+        a.db.prepare(`INSERT INTO moves (id, account_id, camera_id, source_proxy_id, target_proxy_id, request_id, phase, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 1, 1)`).run(id, ids.acc, `cam_${tag}`, px[0], px[1], `rq_${tag}`, phase);
         return id;
       };
       ids.mvCancel = mk('c');
       ids.mvEnd = mk('e');
+      ids.mvGive = mk('g', 'returning');
       // Two online proxies that take moves, and a camera on the first, for the POST /moves row.
       const live = (tag: string) => {
         const id = `prx_${tag.padEnd(20, '0')}`;

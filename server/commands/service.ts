@@ -33,7 +33,8 @@ const FINAL = ['done', 'refused', 'failed', 'expired'];
 
 export type CommandState = 'queued' | 'sent' | 'received' | 'done' | 'refused' | 'failed' | 'expired' | 'unknown';
 export type WireCommand = 'tokens.apply' | 'config.get' | 'config.set' | 'config.unset' | 'config.rollback' | 'camera.action' | 'camera.name.set' | 'proxy.restart'
-  | 'move.begin' | 'move.targets' | 'move.open' | 'move.offer' | 'move.answer' | 'move.start' | 'move.go' | 'move.release' | 'move.finish' | 'move.cancel';
+  | 'move.begin' | 'move.targets' | 'move.open' | 'move.offer' | 'move.answer' | 'move.start' | 'move.go' | 'move.release' | 'move.finish' | 'move.cancel'
+  | 'move.return.open' | 'move.return.start';
 export interface CommandRow {
   id: string; accountId: string; proxyId: string | null; actor: string; command: string; args: Record<string, unknown>; state: CommandState;
   outcomeCode: string | null; result: Record<string, unknown> | null; createdAt: number; sentAt: number | null; finishedAt: number | null; attempts: number;
@@ -90,8 +91,10 @@ export function requiredEntries(command: string, args: Record<string, unknown>):
   }
   if (command === 'camera.action') return [`camera.action:${String(args.action)}`];
   // Camera move (R3): the source's commands need move.send, the target's move.receive; finish and cancel go by args.role.
-  if (command === 'move.finish' || command === 'move.cancel') return [args.role === 'target' ? 'move.receive' : 'move.send'];
-  if (command === 'move.offer' || command === 'move.start') return ['move.receive'];
+  // A return (step 4 ruling 2) needs the entry each proxy had in the cancelled move: the return's source (the new proxy)
+  // move.receive, its target (the original) move.send; move.finish with `return: true` swaps role -> entry.
+  if (command === 'move.finish' || command === 'move.cancel') return [(args.role === 'target') !== (command === 'move.finish' && args.return === true) ? 'move.receive' : 'move.send'];
+  if (command === 'move.offer' || command === 'move.start' || command === 'move.return.open') return ['move.receive'];
   if (command.startsWith('move.')) return ['move.send'];
   return [command];
 }
@@ -276,9 +279,10 @@ export class Commands {
     tx(this.d.db, () => this.q(`UPDATE commands SET state = ?, sent_at = ?, attempts = attempts + 1 WHERE id = ?`).run(head.state === 'received' ? 'received' : 'sent', now, head.id));
   }
 
-  // The move token's plaintext lives in the move.offer args only while the command is open (it is re-sent with them); once final the stored args are the summary.
+  // The move token's plaintext lives in the move.offer and move.return.start args only while the command is open (it is
+  // re-sent with them); once final the stored args are the summary (move.return.open's token hash goes the same way).
   private scrubMoveArgs(r: Raw): void {
-    if (r.command === 'move.offer') this.q(`UPDATE commands SET args = ? WHERE id = ?`).run(JSON.stringify(summariseArgs(r.command, r.rawArgs)), r.id);
+    if (r.command === 'move.offer' || r.command === 'move.return.start' || r.command === 'move.return.open') this.q(`UPDATE commands SET args = ? WHERE id = ?`).run(JSON.stringify(summariseArgs(r.command, r.rawArgs)), r.id);
   }
 
   private giveUp(r: Raw, now: number): void {

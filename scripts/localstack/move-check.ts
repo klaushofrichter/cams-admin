@@ -12,16 +12,23 @@
 // beta-1 (stills packs, clips with snapshots, events). Scenarios:
 //   1. beta-1 → beta-2: targets, request on the source page, approve with a 2×
 //      budget, done; the registry names beta-2 and cam4.beta-2.internal,
-//      beta-2 serves the copied days, beta-1 has nothing of cam4 left,
+//      beta-2 serves the copied days, beta-1 has nothing of cam4 left (but
+//      what its cleanup kept by the target's keep list, never a seeded day),
 //      cams-admin's audit has move-request … move-done.
 //   2. beta-2 → beta-1 with beta-2 (the source) restarted during the copy
 //      (SIGTERM to its cam-proxy; the supervisor starts it again): still done.
 //   3. beta-1 → beta-2, cancelled in cams-admin after the switch-over: the
-//      camera comes back, the registry names beta-1 again, beta-1 serves it.
+//      camera comes back, the registry names beta-1 again, beta-1 serves it;
+//      the copy back (the return move) ends returned before scenario 4.
 //   4. beta-1 → beta-2 started from cams-admin (POST /api/v1/moves with an
 //      ops token), after breaking two fixable rules (beta-2's registry site,
 //      a cams route to it): fixed, approved by beta-1 itself within the
 //      bounds, done; audit move-fix, move-begin, move-request … move-done.
+//   5. beta-2 → beta-1, cancelled after the switch-over once beta-1 captured
+//      stills of cam4 itself (a whole minute after the switch-over's): the
+//      return copies them back (returned, its check complete), beta-2 serves
+//      them, beta-1 has nothing of cam4 left (but its kept overlap); audit
+//      move-cancel … move-return … move-check … move-return.
 // Prints one line per step, exits 1 at the first failure, 2 when the stack is
 // not a moves stack. Reads secrets from the run's files (mode 600), never prints them.
 import { createRequire } from 'module';
@@ -239,15 +246,36 @@ async function serves(px: Px): Promise<{ clips: number; stills: number; clipByte
 const SEEDED = { clips: SEED_DAYS.length * CLIPS, stills: SEED_DAYS.length * STILL_MINUTES * 12 };
 
 // Nothing of cam4 on a proxy: not listed, its routes 404, no content files
-// left (`seededOnly`: none of the seeded days; after a cancel the target keeps
-// what it captured itself since the switch-over, to age out there).
-async function hasNothing(px: Px, seededOnly = false): Promise<string | null> {
+// left (`seededOnly`: none of the seeded days). `kept`: the files the proxy's
+// own cleanup says it kept (the receiver's keep list: the overlap minute of
+// the switch-over stays where it was, to age out there); none of the seeded days.
+async function hasNothing(px: Px, seededOnly = false, kept = 0): Promise<string | null> {
   const list = await proxyApi(px, 'GET', '/api/cameras', undefined, px.client);
   if ((list.body as { id: string }[]).some((c) => c.id === CAM)) return 'listed in /api/cameras';
   const one = await proxyApi(px, 'GET', `/api/cameras/${CAM}`, undefined, px.client);
   if (one.status !== 404) return `GET /api/cameras/${CAM} answered ${one.status}`;
+  if (kept > 0) {
+    const seeded = countFiles(px, true);
+    if (seeded) return `${seeded} content files of ${CAM} of the seeded days left in its data dir`;
+  }
   const files = countFiles(px, seededOnly);
-  return files ? `${files} content files of ${CAM}${seededOnly ? ' of the seeded days' : ''} left in its data dir` : null;
+  return files > kept ? `${files} content files of ${CAM}${seededOnly ? ' of the seeded days' : ''} left in its data dir${kept ? ` (its cleanup kept ${kept})` : ''}` : null;
+}
+
+// The files a proxy's cleanup kept for some moves (cam-proxy's audit: move-cleanup of
+// a move's source, move-return step finish of a copy back's source; per kind, files).
+async function keptOn(px: Px, moveIds: string[]): Promise<number> {
+  let n = 0;
+  for (const action of ['move-cleanup', 'move-return']) {
+    const r = await fetch(`http://127.0.0.1:${px.port}/control/audit?action=${action}&limit=200`, { headers: { Authorization: `Bearer ${px.admin}` }, signal: AbortSignal.timeout(15_000) });
+    expect(r.status === 200, `${px.name}: GET /control/audit?action=${action} ${r.status}`);
+    for (const l of (await r.text()).split('\n').filter(Boolean)) {
+      const c = JSON.parse(l).cam_proxy ?? {};
+      if (!moveIds.includes(c.moveId) || c.role !== 'source' || (action === 'move-return' && c.step !== 'finish')) continue;
+      n += Object.values((c.kept ?? {}) as Record<string, { files: number }>).reduce((x, k) => x + (k.files ?? 0), 0);
+    }
+  }
+  return n;
 }
 function countFiles(px: Px, seededOnly: boolean): number {
   let n = 0;
@@ -272,8 +300,9 @@ function countFiles(px: Px, seededOnly: boolean): number {
 
 interface Run { moveId: string; budgetS: number; estimateS: number }
 
-// The source page's flow: target list, request, the target's answer, approve with a 2× budget.
-async function startMove(src: Px, tgt: Px): Promise<Run> {
+// The source page's flow: target list, request, the target's answer, approve with a 2× budget
+// (`factor`: a larger one slows the paced copy).
+async function startMove(src: Px, tgt: Px, factor = 2): Promise<Run> {
   const c = await camera();
   expect(c.proxyId === src.id, `registry: ${CAMS_ID} on ${src.name} before the move (a fresh stack: stop.sh, LOCALSTACK_MOVES=1 start.sh)`);
   const tr = await proxyApi(src, 'POST', '/control/moves/targets', { camera: CAM });
@@ -292,7 +321,7 @@ async function startMove(src: Px, tgt: Px): Promise<Run> {
   const answer = item.answer as { estimateS: number; space: { fits: boolean; needed: number } };
   expect(answer.space?.fits, `the content fits on ${tgt.name} (${JSON.stringify(answer.space)})`);
   const kinds = (['stills', 'clips', 'events', 'checks', 'archive'] as const).filter((k) => item.summary[k].files + item.summary[k].rows > 0);
-  const budgetS = Math.max(1, 2 * answer.estimateS);
+  const budgetS = Math.max(1, factor * answer.estimateS);
   const p = { transfer: true, kinds, space: 'all', targetSettings: null, budgetS, estimateS: answer.estimateS };
   const ap = await proxyApi(src, 'POST', `/control/moves/${item.id}/approve`, { plan: p });
   expect(ap.status === 202, `${src.name}: approve ${ap.status} ${JSON.stringify(ap.body)}`);
@@ -335,7 +364,8 @@ async function auditRows(action?: string): Promise<any[]> {
   return out;
 }
 
-async function assertOn(px: Px, other: Px, label: string, otherSeededOnly = false): Promise<void> {
+// `moveIds`: the moves whose cleanup on `other` may have kept files (its keep list).
+async function assertOn(px: Px, other: Px, label: string, moveIds: string[], otherSeededOnly = false): Promise<void> {
   const c = await camera();
   expect(c.proxyId === px.id && c.proxyCameraId === CAM && c.tlsServername === `${CAM}.${px.name}.internal`, `registry: ${CAMS_ID} on ${px.name} as ${CAM}.${px.name}.internal (is ${c.proxyId}, ${c.tlsServername})`);
   await waitFor(async () => {
@@ -346,9 +376,26 @@ async function assertOn(px: Px, other: Px, label: string, otherSeededOnly = fals
   expect(s.clips === SEEDED.clips && s.stills >= SEEDED.stills && s.clipBytes === 256 * 1024 && s.stillBytes > 1000,
     `${px.name} serves the seeded days: ${JSON.stringify(s)} (want ${SEEDED.clips} clips, ${SEEDED.stills} stills)`);
   say(`  ${label}: registry ${CAMS_ID} → ${px.name} (${CAM}.${px.name}.internal); ${px.name} serves ${s.clips} clips and ${s.stills} stills of the seeded days (one clip ${s.clipBytes} B, one still ${s.stillBytes} B)`);
-  const left = await waitFor(async () => ((await hasNothing(other, otherSeededOnly)) === null ? 'nothing' : null), `${other.name} has nothing of ${CAM}`, 60_000, 1000)
-    .catch(async (e) => { throw new Fail(`${(e as Error).message}: ${await hasNothing(other, otherSeededOnly)}`); });
-  say(`  ${other.name}: ${left} of ${CAM} (not listed, 404, no content files${otherSeededOnly ? ' of the seeded days' : ''})`);
+  const kept = await keptOn(other, moveIds);
+  const left = await waitFor(async () => ((await hasNothing(other, otherSeededOnly, kept)) === null ? 'nothing' : null), `${other.name} has nothing of ${CAM}`, 60_000, 1000)
+    .catch(async (e) => { throw new Fail(`${(e as Error).message}: ${await hasNothing(other, otherSeededOnly, kept)}`); });
+  say(`  ${other.name}: ${left} of ${CAM} (not listed, 404, no content files${otherSeededOnly ? ' of the seeded days' : ''}${kept ? `; its cleanup kept ${kept} files of the overlap, none of the seeded days` : ''})`);
+}
+
+// The copy back of a move cancelled after the switch-over: its return move, until it ends returned.
+async function waitReturn(cancelledId: string): Promise<any> {
+  const returnId = await waitFor(async () => (await move(cancelledId)).returnId as string | null, `${cancelledId}: its return move`, 60_000, 1000);
+  const r = await move(returnId);
+  expect(r.returnOf === cancelledId && r.source.id === (await move(cancelledId)).target.id, `${returnId}: the return of ${cancelledId}, roles swapped (${JSON.stringify({ returnOf: r.returnOf, source: r.source, target: r.target })})`);
+  const m = await waitPhase({ moveId: returnId, budgetS: 60, estimateS: 0 }, ['returned'], 'returned');
+  say(`  ${returnId} (copy back of ${cancelledId}): ${m.phase}, ${m.bytesDone}/${m.bytesTotal} B, check ${JSON.stringify(m.check)}`);
+  return m;
+}
+
+// cams-admin's audit rows of some moves, oldest first, as action[:phase|:step](outcome).
+async function auditOfMoves(ids: string[]): Promise<{ name: string; at: number }[]> {
+  const rows = (await auditRows()).filter((a) => ids.includes(a.detail?.moveId)).reverse();
+  return rows.map((a) => ({ name: `${a.action}${a.detail?.phase ? `:${a.detail.phase}` : ''}${a.detail?.step ? `/${a.detail.step}` : ''}${a.outcome !== 'ok' ? `(${a.outcome})` : ''}`, at: a.at as number }));
 }
 
 // The cam-proxy process under beta-2's supervisor (its child): its PID, checked by its command line.
@@ -374,7 +421,7 @@ const scenarios: [string, () => Promise<void>][] = [
     const d = await move(run.moveId);
     say(`  done: ${m.bytesDone}/${m.bytesTotal} B, chunks ${JSON.stringify(d.chunks)}`);
     expect(d.chunks.failed === 0 && d.chunks.abandoned === 0 && d.chunks.pending === 0, `no chunk failed, abandoned or pending: ${JSON.stringify(d.chunks)}`);
-    await assertOn(tgt, src, 'after the move');
+    await assertOn(tgt, src, 'after the move', [run.moveId]);
     const a = await auditOf(run.moveId);
     say(`  cams-admin audit: ${a.join(' → ')}`);
     expect(a[0] === 'move-request:requested' && a.at(-1) === 'move-done:done', `audit from move-request to move-done (${a.join(', ')})`);
@@ -399,7 +446,7 @@ const scenarios: [string, () => Promise<void>][] = [
     const d = await move(run.moveId);
     say(`  done: ${m.bytesDone}/${m.bytesTotal} B, chunks ${JSON.stringify(d.chunks)}`);
     expect(d.chunks.failed === 0 && d.chunks.abandoned === 0, `no chunk failed or abandoned: ${JSON.stringify(d.chunks)}`);
-    await assertOn(tgt, src, 'after the move');
+    await assertOn(tgt, src, 'after the move', [run.moveId]);
     const a = await auditOf(run.moveId);
     expect(a[0] === 'move-request:requested' && a.at(-1) === 'move-done:done', `audit from move-request to move-done (${a.join(', ')})`);
   }],
@@ -415,10 +462,14 @@ const scenarios: [string, () => Promise<void>][] = [
     say(`  cancelled in cams-admin while copying (copied: delete): ${r.body.phase}`);
     const m = await waitPhase(run, ['cancelled'], 'cancelled');
     say(`  ${m.phase}`);
-    await assertOn(src, tgt, 'after the cancel', true);
+    // The copy back of what beta-2 captured since the switch-over: it ends before scenario 4 starts.
+    const ret = await waitReturn(run.moveId);
+    expect(ret.check?.complete === true, `${ret.id}: check complete (${JSON.stringify(ret.check)})`);
+    // beta-2 keeps nothing of the seeded days; what it captured itself is copied back (scenario 5 checks that strictly).
+    await assertOn(src, tgt, 'after the cancel and its copy back', [run.moveId, ret.id], true);
     const a = await auditOf(run.moveId);
     say(`  cams-admin audit: ${a.join(' → ')}`);
-    expect(a.includes('move-cancel:cancelling') && a.at(-1) === 'move-phase:cancelled', `audit ends with the cancel (${a.join(', ')})`);
+    expect(a.includes('move-cancel:cancelling') && a.includes('move-phase:cancelled'), `audit has the cancel (${a.join(', ')})`);
   }],
   ['beta-1 → beta-2 started from cams-admin (POST /moves with an ops token), fixes made, approved automatically', async () => {
     const [src, tgt] = [pxs['beta-1'], pxs['beta-2']];
@@ -476,7 +527,7 @@ const scenarios: [string, () => Promise<void>][] = [
       const d = await move(run.moveId);
       say(`  done: ${m.bytesDone}/${m.bytesTotal} B, chunks ${JSON.stringify(d.chunks)}`);
       expect(d.chunks.failed === 0 && d.chunks.abandoned === 0 && d.chunks.pending === 0, `no chunk failed, abandoned or pending: ${JSON.stringify(d.chunks)}`);
-      await assertOn(tgt, src, 'after the move');
+      await assertOn(tgt, src, 'after the move', [run.moveId]);
       // cams-admin's audit: the fixes, the command, then the move.
       const rows = [...(await auditRows())].reverse().filter((a) =>
         (a.action === 'move-fix' && a.detail?.source === src.id && a.detail?.target === tgt.id) || (a.action === 'move-begin' && a.detail?.cmdId === body.commandId && a.outcome === 'ok') || a.detail?.moveId === run.moveId);
@@ -498,6 +549,53 @@ const scenarios: [string, () => Promise<void>][] = [
       const rv = await api('POST', `/ops-tokens/${tokenId}/revoke`);
       say(`  ops token revoked: ${rv.status}`);
     }
+  }],
+  ['beta-2 → beta-1, cancelled after the switch-over with stills captured on beta-1: copied back', async () => {
+    // It starts where scenario 4 left the camera, on beta-2. A 4× budget: the paced copy runs long enough for the stills.
+    const [from, to] = [pxs['beta-2'], pxs['beta-1']];
+    const run = await startMove(from, to, 4);
+    await waitPhase(run, ['copying', 'cleaning', 'done'], 'copying');
+    expect((await phaseOf(run.moveId)) === 'copying', 'still copying when the stills come');
+    const c = await camera();
+    expect(c.proxyId === to.id, `registry: switched over to ${to.name}`);
+    const switchAt = (await auditOfMoves([run.moveId])).find((a) => a.name === 'move-phase:copying')?.at;
+    expect(switchAt, 'the move-phase:copying audit row (the switch-over)');
+    // Stills of cam4 that the new proxy captured itself (named by their time, after the switch-over),
+    // in the first whole minute after the switch-over's, and that minute over before the cancel: the
+    // minutes of the switch-over and of the cancel are captured by both proxies (a pack per minute),
+    // and such a minute stays where it is (the new proxy's cleanup keeps it, to age out there).
+    const minute = Math.floor(switchAt! / MIN) * MIN + MIN;
+    const captured = await waitFor(async () => {
+      if (Date.now() < minute + MIN + 2000) return null;
+      const st = await proxyApi(to, 'GET', `/api/cameras/${CAM}/stills?from=${minute}&to=${minute + MIN - 1}`, undefined, to.client);
+      const mine = st.status === 200 ? (st.body as number[]).filter((t) => t > switchAt! && t >= minute && t < minute + MIN) : [];
+      return mine.length >= 3 ? mine : null;
+    }, `${to.name}: 3 stills of ${CAM} newer than the switch-over, in the minute from ${new Date(minute).toISOString()}`, 180_000, 1000);
+    expect((await phaseOf(run.moveId)) === 'copying', 'still copying when the cancel comes (raise the seeded content if the copy is too quick)');
+    say(`  ${to.name} captured ${captured.length} stills of ${CAM} since the switch-over (${new Date(captured[0]).toISOString()} …)`);
+    const r = await api('POST', `/moves/${run.moveId}/cancel`, { confirm: 'cancel' });
+    expect(r.status === 202 && r.body.phase === 'cancelling', `cancel: ${r.status} ${JSON.stringify(r.body)}`);
+    say(`  cancelled in cams-admin while copying: ${r.body.phase}`);
+    const m = await waitPhase(run, ['cancelled'], 'cancelled');
+    say(`  ${m.phase}`);
+    const ret = await waitReturn(run.moveId);
+    expect(ret.check?.complete === true, `${ret.id}: check complete (${JSON.stringify(ret.check)})`);
+    // The original serves what the new proxy captured; the new proxy has nothing of cam4 left.
+    const back = await proxyApi(from, 'GET', `/api/cameras/${CAM}/stills?from=${captured[0]}&to=${captured.at(-1)}`, undefined, from.client);
+    expect(back.status === 200 && captured.every((t) => (back.body as number[]).includes(t)), `${from.name} serves the ${captured.length} stills captured on ${to.name} (${back.status}, ${captured.filter((t) => !(back.body as number[]).includes?.(t)).length} missing)`);
+    const one = await proxyApi(from, 'GET', `/api/cameras/${CAM}/stills/${captured[0]}.jpg`, undefined, from.client);
+    expect(one.status === 200 && one.bytes > 1000, `${from.name}: GET still ${captured[0]} ${one.status} ${one.bytes} B`);
+    say(`  ${from.name} serves the ${captured.length} stills captured on ${to.name} (one ${one.bytes} B)`);
+    await assertOn(from, to, 'after the copy back', [run.moveId, ret.id]);
+    const a = (await auditOfMoves([run.moveId, ret.id])).map((x) => x.name);
+    say(`  cams-admin audit: ${a.join(' → ')}`);
+    const at = (p: string, after = -1) => a.findIndex((n, i) => i > after && n.startsWith(p));
+    const iCancel = at('move-cancel');
+    const iReturn = at('move-return', iCancel);
+    const iCheck = at('move-check', iReturn);
+    const iReturned = at('move-return', iCheck);
+    expect(iCancel >= 0 && iReturn > iCancel && iCheck > iReturn && iReturned > iCheck, `audit move-cancel … move-return … move-check … move-return (${a.join(', ')})`);
+    expect(a[iReturned] === 'move-return:returned/returned', `the last move-return is returned (${a[iReturned]})`);
   }],
 ];
 

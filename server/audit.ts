@@ -23,6 +23,8 @@ export const AUDIT_ACTIONS = [
   'move-approve', 'move-switch',
   // Plan Task 6: the end of the move: the time budget ran out (once), a cancel, the transfer ended early, the move done.
   'move-budget-exceeded', 'move-cancel', 'move-end-transfer', 'move-done',
+  // Step 4: the completeness check, the copy back, giving up a return, ending after Archive, ended moves pruned.
+  'move-check', 'move-return', 'move-give-up', 'move-end-after-archive', 'moves-pruned',
   // A move started from cams-admin (move.begin plan Task 3): each precheck fix it made, and its move.begin (queued, or failed at the source).
   'move-fix', 'move-begin',
   // Read-only diagnostics tokens (issue #45): issued, revoked, and a bearer token refused (throttled).

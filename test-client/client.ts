@@ -340,7 +340,8 @@ export class ProxyClient extends EventEmitter {
   private runMove(b: Record<string, any>): DoneBody {
     if (b.command === 'move.finish' && b.args?.role === 'source' && !this.releasedMoves.has(b.args.moveId)) return { status: 'failed', code: 'wrong_phase' };
     const o = this.moveResults[b.command];
-    if (b.command === 'move.release' && (!o || o.status === 'ok')) this.releasedMoves.add(b.args.moveId);
+    // A return's source (move.return.open, the new proxy) is released from the start, as cam-proxy's return source record.
+    if ((b.command === 'move.release' || b.command === 'move.return.open') && (!o || o.status === 'ok')) this.releasedMoves.add(b.args.moveId);
     if (o) return o;
     switch (b.command) {
       case 'move.begin': {
@@ -352,6 +353,7 @@ export class ProxyClient extends EventEmitter {
       case 'move.offer': return { status: 'ok', result: { accept: true, space: { needed: 1000, available: 5000, fits: true, perKind: {}, retentionProposal: null }, probeBps: 50_000_000 } };
       case 'move.start': return { status: 'ok', result: { publicKey: 'MCowBQYDK2VuAyEA' + 'A'.repeat(43) + '=', leafFingerprint: 'SHA256:' + 'AB'.repeat(32) } };
       case 'move.finish': return { status: 'ok', result: {} };
+      case 'move.return.open': return { status: 'ok', result: { chunks: 0, bytes: 0 } };
       default: return { status: 'ok', result: {} };
     }
   }
