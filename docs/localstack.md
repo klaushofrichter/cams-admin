@@ -84,7 +84,8 @@ proxies; run it on a fresh stack (`stop.sh`, `start.sh`).
 
 A real camera move between two real cam-proxies, run by this cams-admin,
 with a cam-sim as the camera. It needs a cam-proxy with moves (`main` from
-cam-proxy #234 on) and a stack started for it:
+cam-proxy #234 on; scenarios 3 and 5 need its copy back, until its release
+`LOCALSTACK_CAM_PROXY_REF=feat/move-step4`) and a stack started for it:
 
 ```
 LOCALSTACK_MOVES=1 scripts/localstack/start.sh
@@ -105,23 +106,27 @@ and CA fingerprint (from `GET /tls/ca.pem`) per proxy. It waits until cam4
 runs on beta-1 with a site-CA certificate (the first push comes about 30 s
 after the start), then seeds two past days of cam4's content on beta-1 as
 cam-proxy writes it (150 stills packs a day, 8 clips with snapshots and
-events a day; once per stack). Then four scenarios, in order:
+events a day; once per stack). Then five scenarios, in order:
 
 1. **beta-1 → beta-2:** the source page's flow (`POST /control/moves/targets`,
    `POST /control/moves`, the target's answer, approve with a budget of twice
    the estimate), then `done`. The registry names beta-2 and
    `cam4.beta-2.internal`, beta-2 serves cam4 (online, site-CA certificate)
    and every clip and still of the seeded days, beta-1 has nothing of cam4
-   (not listed, 404, no files), cams-admin's audit runs from `move-request`
-   to `move-done`.
+   (not listed, 404, no files; only what its cleanup kept by the target's
+   keep list, the minute of the switch-over that both proxies captured, as
+   its `move-cleanup` audit record counts it, and nothing of the seeded
+   days), cams-admin's audit runs from `move-request` to `move-done`.
 2. **beta-2 → beta-1, the source restarted while copying:** a SIGTERM to
    beta-2's cam-proxy (the supervisor starts it again); the copy resumes and
    the move still ends `done`, with the same checks.
 3. **beta-1 → beta-2, cancelled after the switch-over:** cams-admin's
-   cancel (`copied: delete`) while copying; the move ends `cancelled`, the
-   registry names beta-1 again, beta-1 serves cam4 and the seeded days, and
-   beta-2 keeps nothing of the seeded days (what it captured itself ages out
-   there).
+   cancel while copying (the `copied` choice is ignored after the
+   switch-over); the move ends `cancelled`, and its copy back (the return
+   move, roles swapped) ends `returned` with its check complete before
+   scenario 4 starts. The registry names beta-1 again, beta-1 serves cam4 and
+   the seeded days, and beta-2 keeps nothing of the seeded days (scenario 5
+   checks the copy back of what the new proxy captured).
 4. **beta-1 → beta-2, started from cams-admin and approved automatically:**
    it starts where scenario 3 left the camera, on beta-1. The check issues an
    operations token with scope `moves`, then breaks two fixable rules: beta-2's
@@ -137,8 +142,25 @@ events a day; once per stack). Then four scenarios, in order:
    `move-request` … `move-done`; beta-1's audit has a `move-approve` record
    labelled `cams-admin auto-approval`; scenario 1's end checks pass. The
    token is revoked at the end.
+5. **beta-2 → beta-1, cancelled after the switch-over with content captured
+   on beta-1: copied back:** it starts where scenario 4 left the camera, on
+   beta-2, approved with a budget of four times the estimate (the paced copy
+   runs longer). Once the move is copying, the check waits until beta-1
+   serves at least 3 stills of cam4 newer than the switch-over (the
+   `move-phase:copying` audit row; stills are named by their time) in the
+   first whole minute after the switch-over's, and until that minute is over,
+   then cancels in cams-admin (`confirm: 'cancel'`). The minutes of the
+   switch-over and of the cancel are captured by both proxies (stills are
+   kept as a pack per minute): such a minute stays where it is, the new
+   proxy's cleanup keeps it (counted as `kept` in its audit) and it ages out
+   there. The move ends `cancelled`, its return ends `returned` with
+   `check.complete`, beta-2 serves those stills, beta-1 has nothing of cam4
+   left (not listed, 404, no files but what its cleanup kept, none of the
+   seeded days), the registry names beta-2, and cams-admin's audit of the
+   two moves runs `move-cancel` … `move-return` … `move-check` …
+   `move-return` (`returned`).
 
-It prints one line per step and `move-check: 4/4 scenarios ok`, and exits 1
+It prints one line per step and `move-check: 5/5 scenarios ok`, and exits 1
 at the first failure. It takes about 8 minutes. Run it on a fresh stack
 (`stop.sh`, `LOCALSTACK_MOVES=1 start.sh`): each scenario starts where the
 one before left the camera.
