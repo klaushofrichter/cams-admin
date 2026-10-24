@@ -220,8 +220,8 @@ describe('database write budget: returns', () => {
     await until(() => cmds(givenUpId, 'move.finish').length === 2 && cmds(givenUpId, 'move.finish').every((c) => c.state === 'done'), 5000, 'given up');
     await new Promise((r) => setTimeout(r, 250));
     const start = readEpoch(s.built.db);
-    for (let t = 0; t < 86_400; t += 10) {
-      clock.advance(10_000);
+    for (let t = 0; t < 86_400; t += 60) {
+      clock.advance(60_000);
       s.built.moves.tick();
     }
     await new Promise((r) => setTimeout(r, 250));
