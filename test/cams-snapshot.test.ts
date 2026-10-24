@@ -32,7 +32,7 @@ describe('the cams snapshot (GET /cams/v1/config)', () => {
     piProxy = await s.api('POST', `/accounts/${home.id}/proxies`, { name: 'pi', displayName: 'Pi', runsOn: 'local-host', url: 'https://proxy.example.net:8480', caFingerprints: ['ab'.repeat(32)] });
     clusterProxy = await s.api('POST', `/accounts/${home.id}/proxies`, { name: 'cluster', displayName: 'Cluster', runsOn: 'cluster', url: 'https://cluster.example.net' });
     b1 = await s.api('POST', `/accounts/${beta.id}/proxies`, { name: 'b1', displayName: 'B1', runsOn: 'cloud', url: 'https://b1.example.net' });
-    await s.api('POST', `/accounts/${home.id}/cameras`, { camsId: 'cam1', name: 'Yard', kind: 'camera', proxyId: piProxy.id, proxyCameraId: 'cam1', host: 'from-proxy', protocol: 'https', cameraUser: 'cams' });
+    await s.api('POST', `/accounts/${home.id}/cameras`, { camsId: 'cam1', name: 'Yard', kind: 'camera', model: 'RLC-1224A', proxyId: piProxy.id, proxyCameraId: 'cam1', host: 'from-proxy', protocol: 'https', cameraUser: 'cams' });
     await s.api('POST', `/accounts/${home.id}/cameras`, { camsId: 'cam2', name: 'Drive', kind: 'camera', proxyId: clusterProxy.id, proxyCameraId: 'cam2' });
     await s.api('POST', `/accounts/${home.id}/cameras`, { camsId: 'loose', name: 'Loose', kind: 'camera' });
     await s.api('POST', `/accounts/${beta.id}/cameras`, { camsId: 'cam1', name: 'Gate', kind: 'camera', proxyId: b1.id, proxyCameraId: 'cam1' });

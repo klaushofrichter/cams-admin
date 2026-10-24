@@ -88,7 +88,7 @@ const settle = () => new Promise((r) => setTimeout(r, 250));
 async function awaiting(camsId = 'cam1', summary?: Record<string, unknown>) {
   const src = await proxy();
   const tgt = await proxy();
-  const cam = s.built.registry.createCamera(ACTOR, src.accountId, { camsId, name: 'Cam 1', kind: 'camera', proxyId: src.proxyId, proxyCameraId: 'cam1', host: '192.0.2.10', protocol: 'https' });
+  const cam = s.built.registry.createCamera(ACTOR, src.accountId, { camsId, name: 'Cam 1', kind: 'camera', model: 'RLC-1224A', proxyId: src.proxyId, proxyCameraId: 'cam1', host: '192.0.2.10', protocol: 'https' });
   const { proxyId: _p, connId: _c, ...rest } = fx('valid-event-move-request.json');
   const requestId = rq();
   src.client.emitEvent({ ...rest, requestId, target: tgt.proxyId, camera: { ...rest.camera, proxyCameraId: 'cam1' }, ...(summary ? { summary: { ...rest.summary, ...summary } } : {}) });
