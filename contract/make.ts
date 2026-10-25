@@ -226,6 +226,7 @@ export function fixtures(): Record<string, unknown> {
     'valid-heartbeat-profile-unset': valid('heartbeat', env('heartbeat', 2, { summary: pi, proxy: makeProxyInfo({ now: NOW }), truncated: false, profile: makeProfile({
       set: false, name: null, cameras: 1, storageGB: null, held: 1, ftp: false, passive: null, pi: 'Raspberry Pi 4 Model B Rev 1.5', budgetBytes: 50_000_000_000, diskBytes: 64_000_000_000, freeBytes: 40_000_000_000, usedBytes: 9_000_000_000,
     }) }), 'a profile not set yet: the defaults (cameras = cameras held), no name, no storageGB; FTP off, no firewall lines'),
+    'valid-heartbeat-profile-null': valid('heartbeat', env('heartbeat', 2, { summary: pi, proxy: makeProxyInfo({ now: NOW }), truncated: false, profile: null }), 'profile null: the same as none'),
     'drift-heartbeat-profile-cameras-0': drift('heartbeat', env('heartbeat', 2, { summary: pi, proxy: makeProxyInfo({ now: NOW }), truncated: false, profile: { ...makeProfile(), cameras: 0 } }),
       'run time drops an unreadable profile and keeps the heartbeat; strict refuses (cameras is 1..64)'),
     'valid-heartbeat-truncated': valid('heartbeat', hb(truncateSummary(four), true), 'over 192 KiB: header, items, cameras[].camera and .items'),

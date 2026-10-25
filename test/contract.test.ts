@@ -155,6 +155,12 @@ describe('the v1 contract', () => {
     // lenient: never a reason to refuse the heartbeat (the server reads it with clamps)
     expect(runtimeVerdict('heartbeat', withProfile((p) => { p.cameras = 'three'; p.extra = 1; }))).toBe('accepted');
     expect(fixture('drift-heartbeat-profile-cameras-0').$expect).toEqual({ runtime: 'accepted', strict: 'invalid' });
+    // null means none, in both modes
+    const nul = structuredClone(full);
+    nul.body.profile = null;
+    expect(hb(nul), JSON.stringify(ajv.errors)).toBe(true);
+    expect(runtimeVerdict('heartbeat', nul)).toBe('accepted');
+    expect(fixture('valid-heartbeat-profile-null').message.body.profile).toBeNull();
   });
   it('a P1 heartbeat stays valid in strict (the new proxy fields are optional)', () => {
     expect(strictValidator('heartbeat')(fixture('valid-heartbeat-1cam-pi').message)).toBe(true);

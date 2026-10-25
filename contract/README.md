@@ -97,7 +97,7 @@ valid. A P2 proxy announces `capabilities: ["status", "commands"]`.
 Additive (design: `docs/superpowers/specs/2026-10-25-proxy-profile-design.md`
 §2): the heartbeat body gains an optional `profile` object, optional in strict
 too, so a heartbeat without one (a proxy before cam-proxy 2026.10.26) stays
-valid. **Lenient** takes any object: cams-admin reads it with clamps and drops
+valid; `null` means the same as none. **Lenient** takes any object or null: cams-admin reads it with clamps and drops
 an unreadable profile, never the heartbeat (`drift-heartbeat-profile-cameras-0`).
 **Strict** is the closed shape, every field required:
 
@@ -115,7 +115,7 @@ an unreadable profile, never the heartbeat (`drift-heartbeat-profile-cameras-0`)
 | `firewall` | `{tool: ufw or nft (FIREWALL_TOOLS), lines: at most 64 strings of ≤ 200 characters}` |
 
 Fixtures: `valid-heartbeat-profile` (set, FTP on, firewall lines),
-`valid-heartbeat-profile-unset` (the defaults, FTP off). The firewall lines
+`valid-heartbeat-profile-unset` (the defaults, FTP off), `valid-heartbeat-profile-null`. The firewall lines
 hold camera LAN addresses: never logged on either side. cams-admin never sets
 the profile (it holds the storage budget).
 

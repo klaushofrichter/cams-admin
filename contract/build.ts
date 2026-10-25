@@ -154,17 +154,17 @@ export function buildSchemas(mode: Mode): Record<string, S> {
   // §2): what the proxy may hold, as the person set it on the proxy. Optional in
   // both modes (an older proxy sends none). Lenient: any object; the server reads
   // it with clamps and drops an unreadable one (never a reason to refuse the
-  // heartbeat). Strict: the closed shape.
+  // heartbeat). Strict: the closed shape. null (both modes) means none.
   const bytes = nullable(int());
   const tcpPort: S = int(1, { maximum: 65535 });
-  const profile: S = strict ? obj({
+  const profile: S = strict ? nullable(obj({
     set: bool, name: nullable(str(60, { minLength: 1 })), cameras: int(1, { maximum: 64 }), storageGB: nullable(int(1, { maximum: 100000 })), held: int(0, { maximum: 64 }),
     ftp: obj({ enabled: bool, port: tcpPort, passive: nullable(obj({ from: tcpPort, to: tcpPort }, [])) }, []),
     storage: obj({ budgetBytes: bytes, usedBytes: bytes, diskBytes: bytes, freeBytes: bytes }, []),
     hardware: obj({ pi: nullable(str()), cpuCores: int(1, { maximum: 1024 }), cpuModel: nullable(str(100)), memoryBytes: int(), load5: { type: 'number', minimum: 0 }, cpuTempC: nullable(num) }, []),
     warnings: arr(en([...PROFILE_WARNINGS]), PROFILE_WARNINGS.length, { uniqueItems: true }),
     firewall: obj({ tool: en([...FIREWALL_TOOLS]), lines: arr(str(), 64) }, []),
-  }, []) : { type: 'object' };
+  }, [])) : { type: ['object', 'null'] };
   const heartbeatBody: S = {
     ...obj({ summary: { type: 'object' }, proxy: proxyInfo, truncated: bool, profile }, ['summary'], ['profile']),
     // The summary's own checks run separately at run time (an unreadable
