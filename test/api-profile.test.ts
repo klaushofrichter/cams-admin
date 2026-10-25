@@ -35,7 +35,7 @@ describe('GET /proxies/:proxyId/profile', () => {
     expect(r.status).toBe(200);
     expect(r.body).toEqual({
       proxyId: een, accountId: acc, name: 'een', displayName: 'een', state: 'online', version: 'v2026.10.06.1', reportedAt: expect.any(Number),
-      profile: makeProfile(), unreadable: false, homeUrl: 'https://192.0.2.5:8443',
+      profile: { ...makeProfile(), firewall: { ...makeProfile().firewall, dropped: 0 } }, unreadable: false, homeUrl: 'https://192.0.2.5:8443',
     });
     expect((await a.api('get', `/proxies/${pi}/profile`)).body).toMatchObject({ profile: { set: false }, homeUrl: 'http://192.0.2.6:8480/' });
   });
@@ -53,7 +53,7 @@ describe('diagnostics', () => {
     const token = (await a.api('post', '/diag-tokens', { name: 'profile2', days: 1 })).body.token as string;
     const bearer = (path: string) => request(a.app).get(`/api/v1${path}`).set('Authorization', `Bearer ${token}`);
     const items = (await bearer('/diag/proxies')).body.items as { id: string; reported: { profile: unknown; profileUnreadable: boolean } | null }[];
-    expect(items.find((x) => x.id === een)!.reported).toMatchObject({ profile: makeProfile(), profileUnreadable: false });
+    expect(items.find((x) => x.id === een)!.reported).toMatchObject({ profile: { ...makeProfile(), firewall: { ...makeProfile().firewall, dropped: 0 } }, profileUnreadable: false });
     expect(items.find((x) => x.id === old)!.reported).toMatchObject({ profile: null });
     const one = await bearer(`/diag/proxies/${een}/profile`);
     expect(one.status).toBe(200);

@@ -1,6 +1,6 @@
 <script lang="ts">
   // The proxy profile as the proxy reports it (proxy profile design §3): read only, a person sets it on the proxy.
-  import { camerasLine, hardwareLine, NO_PROFILE, storageLine, warningText, type Profile } from '../lib/profile';
+  import { camerasLine, droppedText, hardwareLine, NO_PROFILE, storageLine, warningText, type Profile } from '../lib/profile';
   import FirewallLines from './FirewallLines.svelte';
 
   let { profile, unreadable = false, runsOn = '' }: { profile: Profile | null; unreadable?: boolean; runsOn?: string } = $props();
@@ -26,6 +26,7 @@
       <p class="muted">Firewall lines for its cameras{profile.firewall.tool ? ` (${profile.firewall.tool})` : ''}, to run on the proxy's host:</p>
       <FirewallLines lines={profile.firewall.lines} testid="profile-firewall" />
     {/if}
+    {#if profile.firewall.dropped}<p class="muted" data-testid="profile-firewall-dropped">{droppedText(profile.firewall.dropped)}</p>{/if}
   {/if}
 </section>
 

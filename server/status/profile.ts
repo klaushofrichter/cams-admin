@@ -3,6 +3,7 @@
 // proxy. Read with clamps whatever a proxy sends: an unreadable profile is
 // dropped (null), never a reason to refuse the heartbeat. cams-admin never
 // sets it. The firewall lines hold camera LAN addresses: never logged.
+import { isFirewallLine } from '../../contract/firewall';
 
 export interface Profile {
   set: boolean; name: string | null; cameras: number; storageGB: number | null; held: number;
@@ -10,7 +11,8 @@ export interface Profile {
   storage: { budgetBytes: number | null; usedBytes: number | null; diskBytes: number | null; freeBytes: number | null };
   hardware: { pi: string | null; cpuCores: number | null; cpuModel: string | null; memoryBytes: number | null; load5: number | null; cpuTempC: number | null };
   warnings: string[];
-  firewall: { tool: 'ufw' | 'nft' | null; lines: string[] };
+  // Only lines of the ufw/nft templates (contract/firewall.ts); `dropped` counts the others, never shown.
+  firewall: { tool: 'ufw' | 'nft' | null; lines: string[]; dropped: number };
 }
 
 const isRecord = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x);
@@ -31,6 +33,8 @@ export function parseProfile(x: unknown): Profile | null {
   const st = isRecord(x.storage) ? x.storage : {};
   const hw = isRecord(x.hardware) ? x.hardware : {};
   const fw = isRecord(x.firewall) ? x.firewall : {};
+  // Read whole (at most 64): a line cut short is no template line, so it is dropped, never shown cut.
+  const lines = Array.isArray(fw.lines) ? fw.lines.slice(0, 64).filter((l): l is string => typeof l === 'string') : [];
   return {
     set: x.set, name: text(x.name, 60), cameras, storageGB: intIn(x.storageGB, 1, 100000), held,
     ftp: { enabled: ftp.enabled === true, port: intIn(ftp.port, 1, 65535), passive: from !== null && to !== null && to >= from ? { from, to } : null },
@@ -40,7 +44,7 @@ export function parseProfile(x: unknown): Profile | null {
       load5: numMin(hw.load5, 0), cpuTempC: numMin(hw.cpuTempC, -273),
     },
     warnings: [...new Set(strs(x.warnings, 8, 64))],
-    firewall: { tool: fw.tool === 'ufw' || fw.tool === 'nft' ? fw.tool : null, lines: strs(fw.lines, 64, 200) },
+    firewall: { tool: fw.tool === 'ufw' || fw.tool === 'nft' ? fw.tool : null, lines: lines.filter(isFirewallLine), dropped: lines.filter((l) => !isFirewallLine(l)).length },
   };
 }
 

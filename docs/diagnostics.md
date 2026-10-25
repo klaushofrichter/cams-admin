@@ -68,6 +68,11 @@ latest one with the proxy's status (in memory and the 10-minute snapshot).
     "warnings": [], "firewall": { "tool": "ufw", "lines": ["sudo ufw allow from 192.0.2.85 to any port 2121 proto tcp", "…"] } } }
 ```
 
+The firewall lines are kept only when they match the ufw or nft template
+exactly with an IP address (`contract/firewall.ts`); `firewall.dropped`
+counts the others, which are never shown. The Start move form builds lines
+only for a camera whose registry host is an IP address.
+
 `profile` is `null` for a proxy that sends none (older than the profile) and
 for one cams-admin could not read (`unreadable: true`; the heartbeat still
 counts). `homeUrl` is the registry's admin UI URL, else its URL, else `null`.

