@@ -497,4 +497,9 @@ CREATE TRIGGER moves_proxy_busy BEFORE INSERT ON moves
 WHEN NEW.ended_at IS NULL AND EXISTS (SELECT 1 FROM moves WHERE ended_at IS NULL AND (source_proxy_id IN (NEW.source_proxy_id, NEW.target_proxy_id) OR target_proxy_id IN (NEW.source_proxy_id, NEW.target_proxy_id)))
 BEGIN SELECT RAISE(ABORT, 'moves: proxy busy'); END;
 `),
+  // 16: the space a move needs against the target's reported profile, as it was
+  // when the source's request arrived (proxy profile design §3, "space"; JSON:
+  // need, budget, used, left, fits, the kinds over their cap). NULL when the
+  // target reported no profile then, and for every move from before.
+  (db) => db.exec(`ALTER TABLE moves ADD COLUMN space TEXT;`),
 ];

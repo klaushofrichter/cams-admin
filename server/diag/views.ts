@@ -42,6 +42,8 @@ export function diagProxies(d: ApiDeps) {
           site: rep.site ?? null, publicUrl: rep.publicUrl ?? null, caFingerprints: rep.caFingerprint, uptimeS: rep.uptimeS ?? null, configRevision: rep.configRevision ?? null,
           capabilities: rep.capabilities ?? [], tokens: rep.tokens ? { revision: rep.tokens.revision, client: rep.tokens.client, admin: rep.tokens.admin, blocked: rep.tokens.blocked.length } : null,
           commands: rep.commands ? { enabled: rep.commands.enabled, paused: rep.commands.paused, pauseReason: rep.commands.pauseReason } : null,
+          // The proxy profile (proxy profile design §3), parsed field by field on arrival (server/status/profile.ts).
+          profile: rep.profile ?? null, profileUnreadable: rep.profileUnreadable === true,
         },
         reconcile: reconcile(px, accCams.filter((c) => c.proxyId === px.id), new Set(accCams.map((c) => c.camsId)), row),
       };

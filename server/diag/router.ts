@@ -1,6 +1,6 @@
 import express from 'express';
 import type { Request, RequestHandler, Response } from 'express';
-import type { ApiDeps } from '../api/router';
+import { proxyProfile, type ApiDeps } from '../api/router';
 import { ApiError } from '../registry';
 import { SESSION_COOKIE } from '../auth/session';
 import { bearerOf } from '../auth/middleware';
@@ -14,7 +14,7 @@ import { diagAudit, diagCameras, diagCamsInstances, diagMoves, diagOpsTokens, di
 // diagnostics token (Authorization: Bearer cad_…) or a sysadmin session.
 // GET only; the token opens nothing outside this router.
 
-const ROUTES = ['/diag', '/diag/proxies', '/diag/cams-instances', '/diag/cameras', '/diag/tokens', '/diag/ops-tokens', '/diag/moves?accountId=&requestId=', '/diag/moves/precheck?source=&target=&camera=', '/diag/audit?account=&actorType=&action=&from=&to=&limit=&cursor='];
+const ROUTES = ['/diag', '/diag/proxies', '/diag/proxies/:proxyId/profile', '/diag/cams-instances', '/diag/cameras', '/diag/tokens', '/diag/ops-tokens', '/diag/moves?accountId=&requestId=', '/diag/moves/precheck?source=&target=&camera=', '/diag/audit?account=&actorType=&action=&from=&to=&limit=&cursor='];
 
 export function diagAuth(d: Pick<ApiDeps, 'sessions' | 'audit'> & { diag: DiagTokens }): RequestHandler {
   return (req, res, next) => {
@@ -59,6 +59,7 @@ export function diagRouter(d: ApiDeps & { diag: DiagTokens }): express.Router {
 
   r.get('/', h(() => ({ version: version(), serverTime: d.clock.now(), routes: ROUTES })));
   r.get('/proxies', h(() => diagProxies(d)));
+  r.get('/proxies/:proxyId/profile', h((req) => proxyProfile(d, String(req.params.proxyId))));
   r.get('/cams-instances', h(() => diagCamsInstances(d)));
   r.get('/cameras', h(() => diagCameras(d)));
   r.get('/tokens', h(() => diagTokens(d)));

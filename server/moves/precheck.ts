@@ -2,11 +2,12 @@ import type { Db } from '../db/open';
 import type { Proxy, Registry } from '../registry';
 import type { StatusStore } from '../status/store';
 import type { MoveStore } from './store';
+import { passivePorts, type Profile } from '../status/profile';
 
 // cams-admin's own checks before a move is offered (S §4, §6; plan R7, X21).
 // The proxies re-check everything they can see themselves.
 
-export type PrecheckReason = 'other_account' | 'target_offline' | 'moves_not_allowed' | 'busy' | 'no_site_ca' | 'not_routed' | 'host_overridden' | 'id_taken';
+export type PrecheckReason = 'other_account' | 'target_offline' | 'moves_not_allowed' | 'camera_limit' | 'busy' | 'no_site_ca' | 'not_routed' | 'host_overridden' | 'id_taken';
 export interface PrecheckDeps { db: Db; registry: Registry; status: StatusStore; store: MoveStore }
 export interface Candidate { accountId: string; sourceProxyId: string; targetProxyId: string; cameraId?: string | null }
 export interface EligibleTarget { proxyId: string; name: string; site: string }
@@ -52,6 +53,27 @@ export function hostOverridden(d: PrecheckDeps, cameraId: string): boolean {
   return !!d.db.prepare('SELECT 1 FROM cams_camera_overrides WHERE camera_id = ? AND host IS NOT NULL').get(cameraId);
 }
 
+// FTP passive ports a proxy needs per camera (cam-proxy: 10 per camera from 30000).
+export const FTP_PORTS_PER_CAMERA = 10;
+
+// The proxy profile's rules (proxy profile design §3), on the target's reported profile. Each passes (skipped) when
+// the target reports none (a cam-proxy before the profile). The target's own offer check stays the final word.
+export function profileRules(targetName: string, p: Profile | null | undefined): PrecheckRule[] {
+  if (!p) {
+    const skipped = `${targetName} reports no profile`;
+    return [{ rule: 'capacity', ok: true, reason: 'camera_limit', detail: skipped }, { rule: 'ftp_ports', ok: true, reason: 'camera_limit', detail: skipped }];
+  }
+  const unset = p.set ? '' : " (its profile is not set: set it on the proxy's home page)";
+  const capacity: PrecheckRule = { rule: 'capacity', ok: p.held < p.cameras, reason: 'camera_limit', detail: `${targetName} holds ${p.held} of ${p.cameras} camera${p.cameras === 1 ? '' : 's'}${unset}` };
+  const need = FTP_PORTS_PER_CAMERA * (p.held + 1);
+  const have = passivePorts(p);
+  const ftp: PrecheckRule = !p.ftp.enabled ? { rule: 'ftp_ports', ok: true, reason: 'camera_limit', detail: `FTP is off on ${targetName}` }
+    : !p.ftp.passive ? { rule: 'ftp_ports', ok: true, reason: 'camera_limit', detail: `${targetName} reports no FTP passive range` }
+      : { rule: 'ftp_ports', ok: have >= need, reason: 'camera_limit', detail: `${targetName}'s FTP passive range ${p.ftp.passive.from}-${p.ftp.passive.to} has ${have} ports; ${p.held + 1} camera${p.held === 0 ? '' : 's'} need${p.held === 0 ? 's' : ''} ${need}` };
+  return [capacity, ftp];
+}
+const profileFits = (d: PrecheckDeps, p: Proxy) => profileRules(p.name, d.status.row(p.id)?.reported?.profile).every((r) => r.ok);
+
 // Every rule in the order precheck applies them, with a detail where one helps
 // (diagnostics, issue #45). After a failed proxy lookup the proxy rules are not run.
 export interface PrecheckRule { rule: string; ok: boolean; reason: PrecheckReason; detail?: string }
@@ -73,6 +95,7 @@ export function precheckReport(d: PrecheckDeps, m: Candidate): PrecheckReport {
   const tv = d.status.viewOf(t);
   add('target_online', online(d, t), 'target_offline', `target ${t.state === 'enrolled' ? tv.state : t.state}`);
   add('target_receives', receives(d, t), 'moves_not_allowed', `commands ${tv.commands}; move.receive ${tv.allow.includes('move.receive') ? 'allowed' : 'not allowed'}`);
+  for (const pr of profileRules(t.name, d.status.row(t.id)?.reported?.profile)) rules.push(pr);
   const busy = [d.store.byProxy(src.id) && 'source', d.store.byProxy(t.id) && 'target'].filter(Boolean).join(', ');
   add('not_busy', !busy, 'busy', busy ? `a move is open on the ${busy}` : undefined);
   const siteDetail = (p: Proxy) => `${p.id}: registry ${p.tlsSite ?? 'none'}, reported ${d.status.row(p.id)?.reported?.site ?? 'none'}`;
@@ -95,7 +118,7 @@ export function precheck(d: PrecheckDeps, m: Candidate): { ok: true } | { ok: fa
 export function eligibleTargets(d: PrecheckDeps, accountId: string, sourceProxyId: string): EligibleTarget[] {
   const out: EligibleTarget[] = [];
   for (const p of d.registry.listProxies(accountId)) {
-    if (p.id === sourceProxyId || !online(d, p) || !receives(d, p) || d.store.byProxy(p.id)) continue;
+    if (p.id === sourceProxyId || !online(d, p) || !receives(d, p) || !profileFits(d, p) || d.store.byProxy(p.id)) continue;
     const site = siteOf(d, p);
     if (!site || !routed(d, sourceProxyId, p.id)) continue;
     out.push({ proxyId: p.id, name: p.name, site });
