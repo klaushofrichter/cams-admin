@@ -233,6 +233,18 @@ Rulings of the camera-move plan that the schemas carry:
   anything else, or ended unknown or expired). They are answered at once so the
   source page does not wait. A proxy that validates the reason against a closed
   list must add `not_registered` and `internal`.
+- A refusal may say why in words: the `move.offer` result's refusal branch is
+  `{accept: false, reason, detail?}` (closed in strict), and `move.answer` takes
+  the same optional `detail` (1–300 characters each). cams-admin keeps the
+  target's detail on the move and passes it on in `move.answer`; its own
+  refusals carry their own detail (the values that disagree, or the failing
+  precheck rule's detail). Both are optional: a proxy from before sends and
+  takes none (`valid-result-move-offer-refused`), a newer one may
+  (`valid-result-move-offer-refused-detail`, `valid-command-move-answer-refused-detail`).
+  cams-admin does not send `move.answer.detail` yet (released cam-proxy refuses
+  it): the cross-check lists that fixture as `pending` until cam-proxy takes it.
+- A `move.request` that repeats a `requestId` which already has a move (also a
+  rejected one) is ignored: no second row, no second answer.
 
 - `requestId` is `rq_` + 20 characters like every other id; `camera` (in
   `move.targets`, `move.open`, and `move.request.camera.proxyCameraId`) is the

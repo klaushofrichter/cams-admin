@@ -175,6 +175,13 @@ export function fixtures(): Record<string, unknown> {
     'valid-command-move-open': moveValid('move.open', ['move.send'], { v: 1, moveId: MV, requestId: RQ, camera: 'cam1', tokenHash: HASH(9), targetIp: '192.0.2.20' }, 'the source accepts one bearer token (its hash), bound to the target address'),
     'valid-command-move-offer': moveValid('move.offer', ['move.receive'], offerArgs, 'the target (move.receive) is offered a camera; the plaintext token is in non-final args only'),
     'valid-command-move-answer': moveValid('move.answer', ['move.send'], { v: 1, moveId: MV, requestId: RQ, target: { proxyId: PRX_T, name: 'Pi' }, accept: true, space, estimateS: 1800 }, 'the target accepted'),
+    'valid-command-move-answer-refused-detail': moveValid('move.answer', ['move.send'], {
+      v: 1, moveId: MV, requestId: RQ, target: { proxyId: PRX_T, name: 'Pi' }, accept: false, reason: 'incompatible', detail: 'cameras.cam1.protocol is http here; the target needs https',
+    }, 'the target refused; detail (optional, 1-300 characters) says what refused, in words'),
+    'valid-result-move-offer-refused-detail': { $note: 'the target refuses the offer; detail (optional) says why in words, older proxies send none', $command: 'move.offer', schema: 'result',
+      message: result(5, { phase: 'done', status: 'ok', result: { accept: false, reason: 'incompatible', detail: 'cameras.cam1.protocol is http here; the target needs https' } }) },
+    'valid-result-move-offer-refused': { $note: 'a refusal without detail (a proxy from before detail)', $command: 'move.offer', schema: 'result',
+      message: result(5, { phase: 'done', status: 'ok', result: { accept: false, reason: 'camera_unreachable' } }) },
     'valid-command-move-start': moveValid('move.start', ['move.receive'], { v: 1, moveId: MV, plan, settings, done: ['clips:2026-10-20'] }, 'the approved plan; the target answers with its public key and leaf fingerprint'),
     'valid-command-move-go': moveValid('move.go', ['move.send'], { v: 1, moveId: MV, plan, targetPublicKey: X25519, expectedLeaf: LEAF }, 'the source switches the camera over'),
     'valid-command-move-release': moveValid('move.release', ['move.send'], { v: 1, moveId: MV }, 'the source drops the camera'),

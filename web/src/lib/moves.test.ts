@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cancelable, etaText, phaseClass, phaseText, progressText, reasonText, boundsText, startBody, refusalText, cameraLabel, activeMoves, activeLine, checkText, endLabel, canGiveUp, phaseReason } from './moves';
+import { cancelable, etaText, phaseClass, phaseText, progressText, reasonText, boundsText, startBody, refusalText, cameraLabel, activeMoves, activeLine, checkText, endLabel, canGiveUp, phaseReason, refusedByText, refusalLine, contentLine, contentBasisText, canDelete } from './moves';
 
 const PHASES = ['requested', 'offered', 'awaiting-approval', 'approved', 'switching', 'copying', 'cleaning', 'done', 'rejected', 'cancelling', 'cancelled', 'failed', 'returning', 'returned'];
 
@@ -168,3 +168,40 @@ describe('copy back, check, End after Archive', () => {
     expect(cancelable('returning')).toBe(false);
   });
 });
+
+describe('rejections and the content checklist', () => {
+  const tgt = { target: { name: 'Pi' } };
+  it('who refused: the target by name, or cams-admin; nothing for a move that was not rejected', () => {
+    expect(refusedByText({ ...tgt, phase: 'rejected', refusedBy: 'target' })).toBe('Pi refused');
+    expect(refusedByText({ ...tgt, phase: 'rejected', refusedBy: 'cams-admin' })).toBe('cams-admin refused');
+    expect(refusedByText({ ...tgt, phase: 'failed', refusedBy: null })).toBe('');
+    // An older server's view without refusedBy: the reason only.
+    expect(refusedByText({ ...tgt, phase: 'rejected' })).toBe('');
+  });
+  it('the row line: who refused and the reason in plain words', () => {
+    expect(refusalLine({ ...tgt, phase: 'rejected', refusedBy: 'target', reason: 'incompatible' })).toBe("Pi refused: its configuration can't take this camera");
+    expect(refusalLine({ ...tgt, phase: 'rejected', refusedBy: 'cams-admin', reason: 'incompatible' })).toBe("cams-admin refused: the source's camera address or protocol differs from the registry");
+    expect(refusalLine({ ...tgt, phase: 'rejected', refusedBy: 'cams-admin', reason: 'busy' })).toBe('cams-admin refused: a proxy is busy with another move');
+    expect(refusalLine({ ...tgt, phase: 'rejected', refusedBy: 'target', reason: 'camera_unreachable' })).toBe('Pi refused: the target cannot reach the camera');
+    expect(refusalLine({ ...tgt, phase: 'rejected', reason: 'incompatible' })).toBe("its configuration can't take this camera");
+    expect(reasonText('incompatible')).not.toContain('not compatible');
+  });
+  it('only a rejected move can be deleted', () => {
+    expect(canDelete('rejected')).toBe(true);
+    for (const p of PHASES.filter((x) => x !== 'rejected')) expect(canDelete(p), p).toBe(false);
+  });
+  it('a content line: included or left out, the size, the copy progress', () => {
+    const chunks = (total: number, done: number, failed = 0, abandoned = 0) => ({ total, done, failed, abandoned });
+    expect(contentLine({ kind: 'clips', included: true, files: 12, bytes: 3072, chunks: chunks(3, 1, 1) })).toBe('Clips: included, 12 files, 3.0 KiB; 1 of 3 days copied, 1 with failures');
+    expect(contentLine({ kind: 'stills', included: false, files: 5, bytes: 500, chunks: chunks(0, 0) })).toBe('Stills: left out, 5 files, 500 B');
+    expect(contentLine({ kind: 'archive', included: true, files: 1, bytes: null, chunks: chunks(2, 2) })).toBe('Archive: included, 1 file; 2 of 2 days copied');
+    expect(contentLine({ kind: 'checks', included: null, files: null, bytes: null, chunks: chunks(0, 0) })).toBe('Checks: not decided yet');
+    expect(contentLine({ kind: 'events', included: true, files: 0, bytes: 0, chunks: chunks(4, 1, 0, 3) })).toBe('Events: included, nothing to copy; 1 of 4 days copied, 3 left behind');
+  });
+  it('the basis of the checklist', () => {
+    expect(contentBasisText('plan')).toBe('As approved');
+    expect(contentBasisText('bounds')).toBe('Within the pre-approval bounds');
+    expect(contentBasisText(null)).toBe('Not approved yet: sizes as the source reported them');
+  });
+});
+

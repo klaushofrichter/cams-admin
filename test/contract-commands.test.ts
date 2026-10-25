@@ -20,7 +20,7 @@ const resign = (m: Record<string, any>) => { const { sig: _s, ...rest } = m; ret
 
 describe('the reference proxy check agrees with every proxy fixture', () => {
   const cases = all.filter((x) => x.$expect?.receiver === 'proxy' || (x.schema === 'command' && x.name.startsWith('valid-')));
-  it('covers 59 fixtures (P2 17, P3 24, moves 18)', () => expect(cases).toHaveLength(59));
+  it('covers 60 fixtures (P2 17, P3 24, moves 19)', () => expect(cases).toHaveLength(60));
   for (const f of cases) {
     it(f.name, () => {
       const c = f.$context;
@@ -278,6 +278,23 @@ describe('move commands', () => {
     expect(run('move.finish', fin('source'), ['move.send'])).toEqual({ kind: 'nack', code: 'not_allowed' });
     expect(run('move.finish', fin('target'), ['move.send']).kind).toBe('run');
   });
+  it('a refusal may carry a detail (1-300 characters): move.offer result and move.answer args, both optional', () => {
+    const fxr = (n: string) => all.find((x) => x.name === n)!.message.body.result;
+    const refused = fxr('valid-result-move-offer-refused-detail');
+    expect(refused).toMatchObject({ accept: false, reason: 'incompatible', detail: expect.any(String) });
+    expect(resultOk('move.offer', refused)).toBe(true);
+    expect(resultOk('move.offer', fxr('valid-result-move-offer-refused'))).toBe(true);
+    expect(resultOk('move.offer', { ...refused, detail: '' })).toBe(false);
+    expect(resultOk('move.offer', { ...refused, detail: 'x'.repeat(301) })).toBe(false);
+    expect(resultOk('move.offer', { ...refused, detail: 'x'.repeat(300) })).toBe(true);
+    expect(resultOk('move.offer', { ...refused, extra: 1 })).toBe(false);
+    const ans = all.find((x) => x.name === 'valid-command-move-answer-refused-detail')!.message.body.args;
+    expect(argsOk('move.answer', ans)).toBe(true);
+    const { detail: _d, ...noDetail } = ans;
+    expect(argsOk('move.answer', noDetail)).toBe(true);
+    expect(argsOk('move.answer', { ...ans, detail: '' })).toBe(false);
+    expect(argsOk('move.answer', { ...ans, detail: 'x'.repeat(301) })).toBe(false);
+  });
   it('A33: the token is a plain string in move.offer only; move.open carries its hash', () => {
     expect(argsOk('move.offer', { ...(args('move.offer') as object), token: undefined })).toBe(false);
     expect(argsOk('move.open', { ...(args('move.open') as object), tokenHash: 'sha256:ABC' })).toBe(false);
@@ -285,7 +302,7 @@ describe('move commands', () => {
   });
   it('move fixtures: the valid ones pass their args schema; the refused ones fail it or the allow check', () => {
     const names = readdirSync(DIR).map((f) => f.replace(/\.json$/, '')).filter((n) => /-move-/.test(n));
-    expect(names.filter((n) => n.startsWith('valid-command-move-') && n !== 'valid-command-move-begin-no-bounds' && n !== 'valid-command-move-finish-return').sort()).toEqual(MOVE.map((c) => `valid-command-${c.replaceAll('.', '-')}`).sort());
+    expect(names.filter((n) => n.startsWith('valid-command-move-') && n !== 'valid-command-move-begin-no-bounds' && n !== 'valid-command-move-finish-return' && n !== 'valid-command-move-answer-refused-detail').sort()).toEqual(MOVE.map((c) => `valid-command-${c.replaceAll('.', '-')}`).sort());
     for (const f of all.filter((x) => /^valid-command-move-/.test(x.name))) expect(argsOk(f.message.body.command, f.message.body.args), f.name).toBe(true);
     expect(names.filter((n) => n.startsWith('valid-command-move-begin')).sort()).toEqual(['valid-command-move-begin', 'valid-command-move-begin-no-bounds']);
     expect(all.find((x) => x.name === 'valid-command-move-begin-no-bounds')!.message.body.args.bounds).toBeNull();

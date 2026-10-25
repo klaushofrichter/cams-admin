@@ -18,7 +18,10 @@ const ENDED: MovePhase[] = ['done', 'rejected', 'cancelled', 'failed', 'returned
 
 export interface Move {
   id: string; accountId: string; cameraId: string; sourceProxyId: string; targetProxyId: string; requestId: string; phase: MovePhase;
-  reason: string | null; plan: unknown; summary: unknown; settings: unknown; tokenHash: string | null;
+  reason: string | null;
+  // A refusal's detail in words (the target's, or cams-admin's own); null when there is none.
+  detail: string | null;
+  plan: unknown; summary: unknown; settings: unknown; tokenHash: string | null;
   targetIp: string | null; targetPublicKey: string | null; leafFingerprint: string | null; copiedChoice: string | null;
   offeredAt: number | null; approvedAt: number | null; budgetExceededAt: number | null;
   bytesTotal: number | null; bytesDone: number | null; rateBps: number | null; etaS: number | null;
@@ -40,7 +43,7 @@ export interface Move {
 }
 export interface NewMove {
   accountId: string; cameraId: string; sourceProxyId: string; targetProxyId: string; requestId: string;
-  reason?: string | null; plan?: unknown; summary?: unknown; settings?: unknown; tokenHash?: string | null;
+  reason?: string | null; detail?: string | null; plan?: unknown; summary?: unknown; settings?: unknown; tokenHash?: string | null;
   targetIp?: string | null; actor?: string | null; bounds?: MoveBounds | null;
   // A return starts at 'returning' and names the cancelled move.
   returnOf?: string; phase?: 'requested' | 'returning';
@@ -56,18 +59,18 @@ type Row = Record<string, unknown>;
 const JSON_COLS = new Set(['plan', 'summary', 'settings', 'bounds', 'check_result', 'end_requested']);
 // Patchable Move fields -> columns (id, account, camera, proxies, request id and timestamps are not patchable).
 const PATCH_COLS: Record<string, string> = {
-  reason: 'reason', plan: 'plan', summary: 'summary', settings: 'settings', tokenHash: 'token_hash', targetIp: 'target_ip',
+  reason: 'reason', detail: 'detail', plan: 'plan', summary: 'summary', settings: 'settings', tokenHash: 'token_hash', targetIp: 'target_ip',
   targetPublicKey: 'target_public_key', leafFingerprint: 'leaf_fingerprint', copiedChoice: 'copied_choice', offeredAt: 'offered_at',
   approvedAt: 'approved_at', budgetExceededAt: 'budget_exceeded_at', bytesTotal: 'bytes_total', bytesDone: 'bytes_done', rateBps: 'rate_bps',
   etaS: 'eta_s', actor: 'actor', cleanupPending: 'cleanup_pending', targetCleanupPending: 'target_cleanup_pending',
   check: 'check_result', keepDays: 'keep_days', endRequested: 'end_requested',
 };
-const enc = (col: string, v: unknown): SQLInputValue => (v === undefined || v === null ? null : JSON_COLS.has(col) ? JSON.stringify(v) : typeof v === 'boolean' ? (v ? 1 : 0) : (v as SQLInputValue));
+const enc = (col: string, v: unknown): SQLInputValue => (col === 'detail' ? detailOf(v) : v === undefined || v === null ? null : JSON_COLS.has(col) ? JSON.stringify(v) : typeof v === 'boolean' ? (v ? 1 : 0) : (v as SQLInputValue));
 const dec = (v: unknown) => (v === null ? null : JSON.parse(v as string));
 
 const toMove = (r: Row): Move => ({
   id: r.id as string, accountId: r.account_id as string, cameraId: r.camera_id as string, sourceProxyId: r.source_proxy_id as string,
-  targetProxyId: r.target_proxy_id as string, requestId: r.request_id as string, phase: r.phase as MovePhase, reason: r.reason as string | null,
+  targetProxyId: r.target_proxy_id as string, requestId: r.request_id as string, phase: r.phase as MovePhase, reason: r.reason as string | null, detail: (r.detail ?? null) as string | null,
   plan: dec(r.plan), summary: dec(r.summary), settings: dec(r.settings), tokenHash: r.token_hash as string | null,
   targetIp: r.target_ip as string | null, targetPublicKey: r.target_public_key as string | null, leafFingerprint: r.leaf_fingerprint as string | null,
   copiedChoice: r.copied_choice as string | null, offeredAt: r.offered_at as number | null, approvedAt: r.approved_at as number | null,
@@ -93,25 +96,50 @@ const openClosed = `COALESCE((SELECT c.state IN ('refused', 'failed') AND c.outc
     ORDER BY c.rowid DESC LIMIT 1), 0) = 1`;
 export const GIVE_UP_CLOSED = `(${abandonedAnswered('moves.source_proxy_id')} OR ${openClosed}) AND ${abandonedAnswered('moves.target_proxy_id')}`;
 
+// A refusal's detail as the column takes it: 1–300 characters, or null.
+// Cut by code points (as JSON Schema maxLength and SQLite length() count), never inside a surrogate pair.
+export const detailOf = (x: unknown): string | null => (typeof x === 'string' && x.trim() ? Array.from(x.trim()).slice(0, 300).join('') : null);
+
 export class MoveStore {
-  constructor(private db: Db, private clock: Clock) {}
+  // onChange: every write that creates, changes or deletes a move row names it (the live 'move' event); one place, so no transition is missed.
+  constructor(private db: Db, private clock: Clock, private onChange: (moveId: string) => void = () => undefined) {}
 
   create(m: NewMove): Move {
-    return tx(this.db, () => {
+    return this.insert(m, m.phase ?? 'requested', null);
+  }
+
+  // A request refused before it became a move (cams-admin's own checks): written ended, so it never holds a proxy
+  // or the camera (the busy trigger and the unique indexes skip ended rows) and shows in the list with its reason.
+  createRejected(m: Omit<NewMove, 'phase' | 'returnOf'> & { reason: string; detail: string | null }): Move {
+    return this.insert(m, 'rejected', this.clock.now());
+  }
+
+  private insert(m: NewMove, phase: MovePhase, endedAt: number | null): Move {
+    const mv = tx(this.db, () => {
       const id = newId('mv');
       const now = this.clock.now();
       try {
         this.db.prepare(
-          `INSERT INTO moves (id, account_id, camera_id, source_proxy_id, target_proxy_id, request_id, phase, reason, plan, summary, settings, token_hash, target_ip, created_at, updated_at, actor, bounds, return_of, version)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)`,
-        ).run(id, m.accountId, m.cameraId, m.sourceProxyId, m.targetProxyId, m.requestId, m.phase ?? 'requested', m.reason ?? null, enc('plan', m.plan), enc('summary', m.summary),
-          enc('settings', m.settings), m.tokenHash ?? null, m.targetIp ?? null, now, now, m.actor ?? null, enc('bounds', m.bounds), m.returnOf ?? null);
+          `INSERT INTO moves (id, account_id, camera_id, source_proxy_id, target_proxy_id, request_id, phase, reason, detail, plan, summary, settings, token_hash, target_ip, created_at, updated_at, ended_at, actor, bounds, return_of, version)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)`,
+        ).run(id, m.accountId, m.cameraId, m.sourceProxyId, m.targetProxyId, m.requestId, phase, m.reason ?? null, detailOf(m.detail), enc('plan', m.plan), enc('summary', m.summary),
+          enc('settings', m.settings), m.tokenHash ?? null, m.targetIp ?? null, now, now, endedAt, m.actor ?? null, enc('bounds', m.bounds), m.returnOf ?? null);
       } catch (e) {
         if (/UNIQUE constraint failed: moves\.|moves: proxy busy/.test(String((e as Error).message))) throw new MoveBusy();
         throw e;
       }
       return this.get(id)!;
     });
+    this.onChange(mv.id);
+    return mv;
+  }
+
+  // Deletes a rejected move (a refusal is final; its row holds no content) with its chunk rows (ON DELETE CASCADE).
+  // False when there is no such move or it is not rejected.
+  deleteRejected(id: string): boolean {
+    const n = tx(this.db, () => Number(this.db.prepare(`DELETE FROM moves WHERE id = ? AND phase = 'rejected'`).run(id).changes));
+    if (n) this.onChange(id);
+    return n > 0;
   }
 
   // Names the move on the camera (cameras.move_id; never cleared, the next move
@@ -178,11 +206,13 @@ export class MoveStore {
   // there are none. cameras.move_id may keep naming a pruned move (it has no FK).
   prune(now: number, defaultDays: number): string[] {
     if (!this.prunable(now, defaultDays).length) return [];
-    return tx(this.db, () => (this.db.prepare(`DELETE ${MoveStore.PRUNABLE} RETURNING id`).all(defaultDays, now) as Row[]).map((r) => r.id as string));
+    const ids = tx(this.db, () => (this.db.prepare(`DELETE ${MoveStore.PRUNABLE} RETURNING id`).all(defaultDays, now) as Row[]).map((r) => r.id as string));
+    for (const id of ids) this.onChange(id);
+    return ids;
   }
 
   setPhase(id: string, phase: MovePhase, patch: Partial<Move> = {}): Move {
-    return tx(this.db, () => {
+    const mv = tx(this.db, () => {
       const cur = this.get(id);
       if (!cur) throw new ApiError(404, 'not_found');
       const now = this.clock.now();
@@ -200,6 +230,8 @@ export class MoveStore {
       this.db.prepare(`UPDATE moves SET ${sets.join(', ')} WHERE id = ?`).run(...args, id);
       return this.get(id)!;
     });
+    this.onChange(id);
+    return mv;
   }
 
   // Upsert; chunks not named stay. One transaction.

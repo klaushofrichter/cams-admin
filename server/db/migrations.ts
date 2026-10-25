@@ -486,4 +486,15 @@ CREATE TABLE move_chunks (
 INSERT INTO move_chunks (move_id, chunk_id, state) SELECT move_id, chunk_id, state FROM move_chunks_m14;
 DROP TABLE move_chunks_m14;
 `),
+  // 15: a refusal's detail (the target's own words, or cams-admin's: which
+  // check refused and with what values); NULL when there is none. cams-admin's
+  // own refusals get a rejected row too, written ended: the busy trigger now
+  // guards rows that are not ended only (the partial unique indexes already did).
+  (db) => db.exec(`
+ALTER TABLE moves ADD COLUMN detail TEXT CHECK (detail IS NULL OR length(detail) BETWEEN 1 AND 300);
+DROP TRIGGER moves_proxy_busy;
+CREATE TRIGGER moves_proxy_busy BEFORE INSERT ON moves
+WHEN NEW.ended_at IS NULL AND EXISTS (SELECT 1 FROM moves WHERE ended_at IS NULL AND (source_proxy_id IN (NEW.source_proxy_id, NEW.target_proxy_id) OR target_proxy_id IN (NEW.source_proxy_id, NEW.target_proxy_id)))
+BEGIN SELECT RAISE(ABORT, 'moves: proxy busy'); END;
+`),
 ];

@@ -79,6 +79,7 @@ actor `ops-token:<8 hex>`. The list is also at `/diag/ops-tokens`.
 | `moves` | `POST /moves` |
 | `moves` | `POST /moves/:moveId/cancel` |
 | `moves` | `POST /moves/:moveId/end-transfer` |
+| `moves` | `DELETE /moves/:moveId` |
 
 Paths must be exactly as listed (the fixed words in lower case, ids as issued, no trailing slash). Anything else,
 and every route not in the table, gets 403 `scope`. No token can issue proxy
@@ -164,6 +165,47 @@ The Moves page has a Start move form (account, source proxy, camera, target
 proxy; one click) that sends this same `POST /moves` with the default bounds
 (everything, space `fit`, 24 h). A 409 or 422 answer is shown as the failed
 precheck rules.
+
+## Refused moves
+
+A refused move is `rejected` in `/diag/moves` and on the Moves page, with
+`refusedBy` (`target`: the target proxy refused the offer; `cams-admin`:
+cams-admin's own checks refused the source's request before any offer),
+`reason` (the code) and `detail` (the refusal in words, or `null`). The target's
+detail is its own text (cam-proxy sends one from the release that knows it;
+older ones send none). cams-admin's details name the values that disagree,
+for example `registry host 192.0.2.10, source reports 192.0.2.11`,
+`registry protocol https, source reports http`, or the failing precheck rule's
+detail. The detail is not sent to the source in `move.answer` yet: released
+cam-proxy refuses an answer that carries it (`ANSWER_CARRIES_DETAIL` in
+`server/moves/service.ts` turns it on once every proxy takes it).
+
+cams-admin's own refusals get a move row only when the camera is in the
+registry and the target is another proxy of the same account
+(`not_registered` and `other_account` are audit rows only, as before).
+
+A refusal is final. `DELETE /api/v1/moves/:moveId` removes a rejected move's
+row and its chunk rows (204); any other phase gets 409 `not_rejected`, an
+unknown id 404. It needs no confirm (a rejected move never copied anything),
+the move's audit rows stay, and it writes one `move-delete` row. A session
+works (with `X-Cams-Admin`), and so does an operations token with scope
+`moves`:
+
+```sh
+curl -fsS -X DELETE -H "Authorization: Bearer $(cat ~/.config/cams-admin/ops-token)" \
+  https://cams-admin.example.net/api/v1/moves/mv_…
+```
+
+`GET /api/v1/moves/:moveId` (session) also returns `content`: per kind
+(clips, stills, events, checks, archive) whether the move copies it
+(`included`: by the approved plan, else by the request's bounds, else `null`),
+its `files` and `bytes` (the target's per-kind space need from its accepted
+offer, else the source's summary), and its chunk progress (`total`, `done`,
+`failed`, `abandoned`; a chunk is one kind's day).
+
+Every change of a move row (created, a phase change, pruned, deleted)
+publishes the live `move` event, so an open Moves page follows without a
+reload.
 
 Follow the move with the diagnostics token (the command's own result is
 session-only):
