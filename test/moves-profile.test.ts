@@ -96,6 +96,8 @@ describe('camera moves and the proxy profile', () => {
     const tgt = await proxy(() => makeProfile({ cameras: 3, held: 1, budgetBytes: 100_000_000, usedBytes: 40_000_000 }));
     camera(src);
     expect(s.built.moves.eligibleTargets(src.accountId, src.proxyId).map((t) => t.proxyId)).toContain(tgt.proxyId);
+    // A stored settings view that is not JSON: no caps, never a throw.
+    s.built.db.prepare(`INSERT INTO proxy_config (proxy_id, revision, view, cmd_id, fetched_at) VALUES (?, ?, '{not json', 'cmd_x', 1)`).run(tgt.proxyId, 'sha256:' + 'a'.repeat(64));
     const requestId = request(src, tgt.proxyId);
     await until(() => s.built.moves.store.list().some((x) => x.requestId === requestId), 5000, 'move row');
     const m = s.built.moves.store.list().find((x) => x.requestId === requestId)!;

@@ -500,7 +500,9 @@ export class Moves {
   // The request's space figures against the target's reported profile and its per-kind caps (its last settings view).
   private spaceFor(targetProxyId: string, summary: unknown) {
     const view = this.d.db.prepare('SELECT view FROM proxy_config WHERE proxy_id = ?').get(targetProxyId) as { view: string } | undefined;
-    return spaceCheck(summary, this.d.status.row(targetProxyId)?.reported?.profile, capsOf(view ? JSON.parse(view.view) : null), this.d.clock.now());
+    let parsed: unknown = null;
+    try { parsed = view ? JSON.parse(view.view) : null; } catch { parsed = null; } // an unreadable view: no caps
+    return spaceCheck(summary, this.d.status.row(targetProxyId)?.reported?.profile, capsOf(parsed), this.d.clock.now());
   }
 
   // Which side holds an open move (the store refused the row as busy).
