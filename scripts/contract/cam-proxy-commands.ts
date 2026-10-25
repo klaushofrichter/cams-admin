@@ -75,14 +75,6 @@ for (const f of cmds) {
   // match (a forgotten IMPLEMENTED entry is drift).
   const cmd = f.message.body.command;
   const group = MOVE.includes(cmd) ? MOVE_STARTED : P3_STARTED;
-  // The one phased exception: a move.answer carrying the refusal `detail` (contract amendment of the move-rejection
-  // work) is pending while cam-proxy refuses it as invalid_args (its released args check has a closed key list).
-  // Every other fixture, and a move.answer without detail, stays strict.
-  if (got !== want && cmd === 'move.answer' && typeof f.message.body.args?.detail === 'string' && got === 'invalid_args') {
-    pending++;
-    console.log(`pending ${f.name} (cam-proxy does not take move.answer detail yet)`);
-    continue;
-  }
   if (got !== want && !implemented(cmd) && !group) {
     pending++;
     console.log(`pending ${f.name} (cam-proxy does not implement ${f.message.body.command} yet)`);
