@@ -108,3 +108,34 @@ export function makeProxyInfo(o: { now: number; startedAt?: number; site?: strin
 export function truncateSummary(s: Summary) {
   return { schema: s.schema, generatedAt: s.generatedAt, version: s.version, ok: s.ok, problemCount: s.problemCount, items: s.items, cameras: s.cameras.map((c) => ({ camera: c.camera, items: c.items })) };
 }
+
+// The heartbeat's proxy profile (proxy profile design §2). Default: the
+// design's example, een with three cameras of capacity, one held, FTP on.
+export function makeProfile(o: Partial<{
+  set: boolean; name: string | null; cameras: number; storageGB: number | null; held: number; tool: 'ufw' | 'nft'; ftp: boolean; port: number;
+  passive: { from: number; to: number } | null; cameraHosts: string[]; warnings: string[]; budgetBytes: number | null; usedBytes: number | null;
+  diskBytes: number | null; freeBytes: number | null; pi: string | null; cpuTempC: number | null;
+}> = {}) {
+  const port = o.port ?? 2121;
+  const passive = o.passive === undefined ? { from: 30000, to: 30029 } : o.passive;
+  const ftp = o.ftp ?? true;
+  const tool = o.tool ?? 'ufw';
+  const lines = !ftp ? [] : (o.cameraHosts ?? ['192.0.2.85']).flatMap((h) => firewallLines(tool, h, port, passive));
+  return {
+    set: o.set ?? true, name: o.name === undefined ? 'een (N100, 1 TB)' : o.name, cameras: o.cameras ?? 3, storageGB: o.storageGB === undefined ? 600 : o.storageGB, held: o.held ?? 1,
+    ftp: { enabled: ftp, port, passive },
+    storage: {
+      budgetBytes: o.budgetBytes === undefined ? 600_000_000_000 : o.budgetBytes, usedBytes: o.usedBytes === undefined ? 41_000_000_000 : o.usedBytes,
+      diskBytes: o.diskBytes === undefined ? 1_000_000_000_000 : o.diskBytes, freeBytes: o.freeBytes === undefined ? 880_000_000_000 : o.freeBytes,
+    },
+    hardware: { pi: o.pi ?? null, cpuCores: 4, cpuModel: 'Intel N100', memoryBytes: 16_000_000_000, load5: 0.7, cpuTempC: o.cpuTempC === undefined ? 48.5 : o.cpuTempC },
+    warnings: o.warnings ?? [],
+    firewall: { tool, lines },
+  };
+}
+
+// The lines a camera's host needs (cam-proxy prints the same).
+export function firewallLines(tool: 'ufw' | 'nft', host: string, port: number, passive: { from: number; to: number } | null): string[] {
+  if (tool === 'nft') return [`sudo nft add rule inet filter input ip saddr ${host} tcp dport ${port} accept`, ...(passive ? [`sudo nft add rule inet filter input ip saddr ${host} tcp dport ${passive.from}-${passive.to} accept`] : [])];
+  return [`sudo ufw allow from ${host} to any port ${port} proto tcp`, ...(passive ? [`sudo ufw allow from ${host} to any port ${passive.from}:${passive.to} proto tcp`] : [])];
+}

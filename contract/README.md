@@ -92,6 +92,33 @@ The heartbeat's `proxy` block gains three optional fields (`commands`,
 `tokens`, `configRevision`), optional in strict too, so P1 heartbeats stay
 valid. A P2 proxy announces `capabilities: ["status", "commands"]`.
 
+## The proxy profile (heartbeat `profile`)
+
+Additive (design: `docs/superpowers/specs/2026-10-25-proxy-profile-design.md`
+§2): the heartbeat body gains an optional `profile` object, optional in strict
+too, so a heartbeat without one (a proxy before cam-proxy 2026.10.26) stays
+valid. **Lenient** takes any object: cams-admin reads it with clamps and drops
+an unreadable profile, never the heartbeat (`drift-heartbeat-profile-cameras-0`).
+**Strict** is the closed shape, every field required:
+
+| field | value |
+|---|---|
+| `set` | boolean: the person set the profile on the proxy (false: the defaults) |
+| `name` | string 1..60, or null |
+| `cameras` | integer 1..64: the most cameras the proxy holds |
+| `storageGB` | integer 1..100000, or null (the `storage.*` budget applies) |
+| `held` | integer 0..64: the cameras it holds now |
+| `ftp` | `{enabled, port (1..65535), passive: {from, to} or null}` |
+| `storage` | `{budgetBytes, usedBytes, diskBytes, freeBytes}`: integers ≥ 0 or null |
+| `hardware` | `{pi: string or null, cpuCores 1..1024, cpuModel: string ≤ 100 or null, memoryBytes ≥ 0, load5 ≥ 0, cpuTempC: number or null}`, as seen by cam-proxy |
+| `warnings` | unique items of `profile_ftp_ports`, `profile_cameras_exceeded` (`PROFILE_WARNINGS`) |
+| `firewall` | `{tool: ufw or nft (FIREWALL_TOOLS), lines: at most 64 strings of ≤ 200 characters}` |
+
+Fixtures: `valid-heartbeat-profile` (set, FTP on, firewall lines),
+`valid-heartbeat-profile-unset` (the defaults, FTP off). The firewall lines
+hold camera LAN addresses: never logged on either side. cams-admin never sets
+the profile (it holds the storage budget).
+
 ## Remote configuration (P3)
 
 Additive: the envelope stays v1, the subprotocol `cams-admin.v1`, signatures

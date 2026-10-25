@@ -150,8 +150,23 @@ export function buildSchemas(mode: Mode): Record<string, S> {
     // P2, optional in both modes (a P1 heartbeat stays valid).
     commands: commandsInfo, tokens: tokensInfo, configRevision: nullable(hash),
   }, [], ['commands', 'tokens', 'configRevision']);
+  // The proxy profile (docs/superpowers/specs/2026-10-25-proxy-profile-design.md
+  // §2): what the proxy may hold, as the person set it on the proxy. Optional in
+  // both modes (an older proxy sends none). Lenient: any object; the server reads
+  // it with clamps and drops an unreadable one (never a reason to refuse the
+  // heartbeat). Strict: the closed shape.
+  const bytes = nullable(int());
+  const tcpPort: S = int(1, { maximum: 65535 });
+  const profile: S = strict ? obj({
+    set: bool, name: nullable(str(60, { minLength: 1 })), cameras: int(1, { maximum: 64 }), storageGB: nullable(int(1, { maximum: 100000 })), held: int(0, { maximum: 64 }),
+    ftp: obj({ enabled: bool, port: tcpPort, passive: nullable(obj({ from: tcpPort, to: tcpPort }, [])) }, []),
+    storage: obj({ budgetBytes: bytes, usedBytes: bytes, diskBytes: bytes, freeBytes: bytes }, []),
+    hardware: obj({ pi: nullable(str()), cpuCores: int(1, { maximum: 1024 }), cpuModel: nullable(str(100)), memoryBytes: int(), load5: { type: 'number', minimum: 0 }, cpuTempC: nullable(num) }, []),
+    warnings: arr(en([...PROFILE_WARNINGS]), PROFILE_WARNINGS.length, { uniqueItems: true }),
+    firewall: obj({ tool: en([...FIREWALL_TOOLS]), lines: arr(str(), 64) }, []),
+  }, []) : { type: 'object' };
   const heartbeatBody: S = {
-    ...obj({ summary: { type: 'object' }, proxy: proxyInfo, truncated: bool }, ['summary']),
+    ...obj({ summary: { type: 'object' }, proxy: proxyInfo, truncated: bool, profile }, ['summary'], ['profile']),
     // The summary's own checks run separately at run time (an unreadable
     // summary is stored as such, never a closed connection); strict picks
     // the full or the truncated shape.
@@ -394,6 +409,10 @@ export function buildSchemas(mode: Mode): Record<string, S> {
   if (strict) for (const s of Object.values(schemas)) s.$id = (s.$id as string).replace(BASE, BASE + 'strict/');
   return Object.fromEntries(Object.entries(schemas).map(([k, v]) => [k, { $schema: 'https://json-schema.org/draft/2020-12/schema', ...v }]));
 }
+
+// The proxy profile's warnings and firewall tools (proxy profile design §1, §2).
+export const PROFILE_WARNINGS = ['profile_ftp_ports', 'profile_cameras_exceeded'] as const;
+export const FIREWALL_TOOLS = ['ufw', 'nft'] as const;
 
 export const MESSAGE_TYPES = ['challenge', 'hello', 'welcome', 'heartbeat', 'ack', 'error', 'bye', 'command', 'result', 'event'] as const;
 // Reserved: defined, not implemented; answered with unsupported_type.
