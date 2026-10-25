@@ -187,6 +187,8 @@ Cost if wrong: these stay local; adding them later is a contract change.
 `cameras.*.moved` and `moves` (the moved marker of a camera and the `moves.*`
 settings such as `moves.maxCameras`) are also in `denied`: cam-proxy marks them local only, and cams-admin
 refuses to set them (`not_remote_settable`) whatever a proxy reports.
+`profile` (the proxy profile, every `profile.*` path) is in `denied` too: it is
+set on the proxy only.
 
 **Camera names** (`CAMERA_NAME_PATTERN`, a `u` regex, from cam-proxy #196):
 1–64 assigned characters (no `Cn`), none of them a control (`Cc`), a format

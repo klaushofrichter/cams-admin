@@ -267,6 +267,9 @@ describe('the v1 contract', () => {
     }
     expect(r.denied.some((d: string) => under('moves.maxCameras', d))).toBe(true);
     expect(r.denied.some((d: string) => under('cameras.*.moved', d))).toBe(true);
+    // The proxy profile is set on the proxy only (proxy profile design §0): never remote.
+    expect(r.denied).toContain('profile');
+    for (const p of ['profile.cameras', 'profile.storageGB', 'profile.name', 'profile.firewall']) expect(r.denied.some((d: string) => under(p, d)), p).toBe(true);
     for (const p of r.remote) expect(p.endsWith('.enabled'), p).toBe(false);
     // No remote path looks secret; the secret pattern catches the usual names.
     const secret = new RegExp(SECRET_KEY_PATTERN, 'i');

@@ -516,5 +516,7 @@ export const REMOTE_SETTABLE: { v: 1; remote: string[]; narrow: Record<string, '
     ...LOCAL_ONLY,
     // cam-proxy marks these local only: the moved marker of a camera and the moves.* settings such as moves.maxCameras.
     'cameras.*.moved', 'moves',
+    // The proxy profile (proxy profile design §0): set on the proxy only; it holds the storage budget.
+    'profile',
   ],
 };
