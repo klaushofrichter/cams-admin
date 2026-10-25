@@ -114,6 +114,54 @@ describe('the v1 contract', () => {
     expect(strictValidator('command')({ ...m, body: { ...m.body, revocationOnly: 'yes' } })).toBe(false);
     expect(fixture('valid-command-revocation-while-paused').$context).toMatchObject({ paused: true, allow: [], tokens: expect.any(Array) });
   });
+  it('the heartbeat profile (proxy profile design §2): optional, closed in strict, a lenient object', () => {
+    const full = fixture('valid-heartbeat-profile').message;
+    const unset = fixture('valid-heartbeat-profile-unset').message;
+    expect(full.body.profile).toMatchObject({ set: true, cameras: 3, held: 1, ftp: { enabled: true, port: 2121, passive: { from: 30000, to: 30029 } }, firewall: { tool: 'ufw' } });
+    expect(unset.body.profile).toMatchObject({ set: false, name: null, storageGB: null });
+    const hb = strictValidator('heartbeat');
+    expect(hb(full), JSON.stringify(ajv.errors)).toBe(true);
+    expect(hb(unset), JSON.stringify(ajv.errors)).toBe(true);
+    expect(hb(fixture('valid-heartbeat-p2').message)).toBe(true); // an older proxy sends none
+    const withProfile = (f: (p: Record<string, any>) => void) => {
+      const m = structuredClone(full);
+      f(m.body.profile);
+      return m;
+    };
+    // strict refuses what §2 rules out
+    for (const [why, f] of [
+      ['cameras 0', (p) => { p.cameras = 0; }],
+      ['cameras 65', (p) => { p.cameras = 65; }],
+      ['held 65', (p) => { p.held = 65; }],
+      ['storageGB 0', (p) => { p.storageGB = 0; }],
+      ['storageGB 100001', (p) => { p.storageGB = 100001; }],
+      ['empty name', (p) => { p.name = ''; }],
+      ['name 61', (p) => { p.name = 'x'.repeat(61); }],
+      ['an unknown field', (p) => { p.extra = 1; }],
+      ['a missing field', (p) => { delete p.hardware; }],
+      ['an unknown warning', (p) => { p.warnings = ['profile_over_disk']; }],
+      ['an unknown firewall tool', (p) => { p.firewall.tool = 'iptables'; }],
+      ['65 firewall lines', (p) => { p.firewall.lines = Array.from({ length: 65 }, () => 'x'); }],
+      ['a line of 201', (p) => { p.firewall.lines = ['x'.repeat(201)]; }],
+      ['port 0', (p) => { p.ftp.port = 0; }],
+      ['cpuCores 0', (p) => { p.hardware.cpuCores = 0; }],
+      ['cpuModel 101', (p) => { p.hardware.cpuModel = 'x'.repeat(101); }],
+      ['negative load', (p) => { p.hardware.load5 = -1; }],
+      ['negative bytes', (p) => { p.storage.usedBytes = -1; }],
+      ['an unknown storage field', (p) => { p.storage.capBytes = 1; }],
+    ] as [string, (p: Record<string, any>) => void][]) expect(hb(withProfile(f)), why).toBe(false);
+    // nullable where §2 says so
+    expect(hb(withProfile((p) => { p.ftp.passive = null; p.hardware.cpuTempC = null; p.hardware.cpuModel = null; p.hardware.pi = 'Raspberry Pi 4 Model B'; p.storage.budgetBytes = null; }))).toBe(true);
+    // lenient: never a reason to refuse the heartbeat (the server reads it with clamps)
+    expect(runtimeVerdict('heartbeat', withProfile((p) => { p.cameras = 'three'; p.extra = 1; }))).toBe('accepted');
+    expect(fixture('drift-heartbeat-profile-cameras-0').$expect).toEqual({ runtime: 'accepted', strict: 'invalid' });
+    // null means none, in both modes
+    const nul = structuredClone(full);
+    nul.body.profile = null;
+    expect(hb(nul), JSON.stringify(ajv.errors)).toBe(true);
+    expect(runtimeVerdict('heartbeat', nul)).toBe('accepted');
+    expect(fixture('valid-heartbeat-profile-null').message.body.profile).toBeNull();
+  });
   it('a P1 heartbeat stays valid in strict (the new proxy fields are optional)', () => {
     expect(strictValidator('heartbeat')(fixture('valid-heartbeat-1cam-pi').message)).toBe(true);
     expect(strictValidator('heartbeat')(fixture('valid-heartbeat-p2').message)).toBe(true);
@@ -219,6 +267,9 @@ describe('the v1 contract', () => {
     }
     expect(r.denied.some((d: string) => under('moves.maxCameras', d))).toBe(true);
     expect(r.denied.some((d: string) => under('cameras.*.moved', d))).toBe(true);
+    // The proxy profile is set on the proxy only (proxy profile design §0): never remote.
+    expect(r.denied).toContain('profile');
+    for (const p of ['profile.cameras', 'profile.storageGB', 'profile.name', 'profile.firewall']) expect(r.denied.some((d: string) => under(p, d)), p).toBe(true);
     for (const p of r.remote) expect(p.endsWith('.enabled'), p).toBe(false);
     // No remote path looks secret; the secret pattern catches the usual names.
     const secret = new RegExp(SECRET_KEY_PATTERN, 'i');

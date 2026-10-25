@@ -96,6 +96,14 @@ describe('camera overrides per cams instance', () => {
     }
   });
 
+  it('a new camera\'s host is checked like an override host (shell-safe firewall lines need a sane address)', async () => {
+    for (const host of ['192.0.2.10/x', 'user@host', '192.0.2.1;id', '$(id)', 'a b']) {
+      expect((await a.api('post', `/accounts/${home.id}/cameras`, { camsId: 'newcam', name: 'New', kind: 'camera', host })).body, host).toMatchObject({ error: 'invalid', field: 'host' });
+    }
+    const r = await a.api('post', `/accounts/${home.id}/cameras`, { camsId: 'newcam', name: 'New', kind: 'camera', host: '192.0.2.40:443' });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+  });
+
   it('a changed shared host is checked like an override host; an old free-form host does not block other edits (review M2)', async () => {
     const c = (await a.api('get', `/accounts/${home.id}/cameras/${cam2.id}`)).body;
     for (const host of ['192.0.2.10/x', 'user@host']) expect((await a.api('patch', `/accounts/${home.id}/cameras/${cam2.id}`, { host, version: c.version })).body).toMatchObject({ error: 'invalid', field: 'host' });

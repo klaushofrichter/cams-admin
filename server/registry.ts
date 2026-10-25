@@ -361,6 +361,7 @@ export class Registry {
     return guard(() => tx(this.db, () => {
       this.getAccount(accountId);
       const f = cameraInput(input, false) as CameraFields;
+      if (f.host) checkCameraHost(f.host); // as update and import check it
       const now = this.clock.now();
       const id = newId('cam');
       this.insert('cameras', {

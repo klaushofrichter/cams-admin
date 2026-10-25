@@ -202,6 +202,8 @@ export function apiRouter(d: ApiDeps): express.Router {
     return px;
   }));
   r.get(`${proxyBase}/status`, h((req) => proxyDetail(d, p(req, 'accountId'), p(req, 'proxyId'))));
+  // The proxy profile as the proxy reports it (read only: cams-admin never sets it).
+  r.get('/proxies/:proxyId/profile', h((req) => proxyProfile(d, p(req, 'proxyId'))));
 
   // --- P2: command history and managed tokens (shown once, stored as hashes) -----------
   const tokenBase = `${proxyBase}/tokens`;
@@ -430,6 +432,20 @@ export function proxyDetail(d: ApiDeps, accountId: string, proxyId: string) {
   };
 }
 
+// A proxy's latest reported profile (proxy profile design §3): the session route and the diagnostics route answer
+// the same. homeUrl: where a person sets the profile (the proxy's admin UI, else its URL; null when the registry has neither).
+export function proxyProfile(d: Pick<ApiDeps, 'registry' | 'status'>, proxyId: string) {
+  const px = d.registry.proxyById(proxyId);
+  if (!px) throw new ApiError(404, 'not_found');
+  const v = d.status.viewOf(px);
+  const rep = d.status.row(proxyId)?.reported ?? null;
+  return {
+    proxyId, accountId: px.accountId, name: px.name, displayName: px.displayName, state: v.state, version: v.version, reportedAt: v.lastHeartbeatAt,
+    profile: rep?.profile ?? null, unreadable: rep?.profileUnreadable === true, homeUrl: homeUrlOf(px),
+  };
+}
+export const homeUrlOf = (px: { adminUiUrl: string | null; url: string | null }): string | null => px.adminUiUrl || px.url || null;
+
 export function dashboard(d: ApiDeps) {
   const accounts = d.registry.listAccounts();
   // Three queries in all, grouped here (not one per account).
@@ -445,7 +461,8 @@ export function dashboard(d: ApiDeps) {
       proxies++;
       if (v.state === 'online') proxiesOnline++;
       if (v.state === 'online' && (v.problemCount ?? 0) > 0) problems += v.problemCount ?? 0;
-      return { id: px.id, name: px.name, displayName: px.displayName, runsOn: px.runsOn, state: v.state, connected: v.connected, lastHeartbeatAt: v.lastHeartbeatAt, ok: v.ok, problemCount: v.problemCount, version: v.version, pin: v.pin, skewMs: v.skewMs, skewProblem: v.skewProblem, stale: v.stale, unreadable: v.unreadable, cameras: v.cameras, commands: v.commands, allow: v.allow, reconcile: rec };
+      const prof = d.status.row(px.id)?.reported?.profile ?? null;
+      return { id: px.id, name: px.name, displayName: px.displayName, runsOn: px.runsOn, profile: prof && { set: prof.set, held: prof.held, cameras: prof.cameras }, homeUrl: homeUrlOf(px), state: v.state, connected: v.connected, lastHeartbeatAt: v.lastHeartbeatAt, ok: v.ok, problemCount: v.problemCount, version: v.version, pin: v.pin, skewMs: v.skewMs, skewProblem: v.skewProblem, stale: v.stale, unreadable: v.unreadable, cameras: v.cameras, commands: v.commands, allow: v.allow, reconcile: rec };
     });
     const camRows = accCams.map((c) => {
       const px = pxs.find((x) => x.id === c.proxyId);

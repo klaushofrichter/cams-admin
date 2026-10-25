@@ -89,6 +89,27 @@ describe('MoveStore', () => {
     expect(store.createRejected({ ...nm({ requestId: 'rq_new3' }), reason: 'busy', detail: 'x' }).phase).toBe('rejected');
   });
 
+  it('migration 16 adds moves.space (NULL for old rows); a move keeps the request-time space figures', () => {
+    const f = join(tmpDir(), 'm16.db');
+    const raw = new DatabaseSync(f);
+    for (let i = 0; i < 15; i++) MIGRATIONS[i](raw);
+    raw.exec('PRAGMA user_version = 15');
+    raw.exec(`INSERT INTO accounts (id,name,display_name,created_at,updated_at) VALUES ('acc_a','alpha','A',1,1);
+      INSERT INTO proxies (id,account_id,name,display_name,runs_on,state,created_at,updated_at) VALUES
+        ('prx_1','acc_a','p1','P1','cluster','enrolled',1,1),('prx_2','acc_a','p2','P2','cluster','enrolled',1,1);
+      INSERT INTO cameras (id,account_id,proxy_id,cams_id,proxy_camera_id,name,kind,host,created_at,updated_at) VALUES ('cam_1','acc_a','prx_1','c1','pc1','C1','camera','192.0.2.1',1,1);
+      INSERT INTO moves (id,account_id,camera_id,source_proxy_id,target_proxy_id,request_id,phase,reason,created_at,updated_at,ended_at,version) VALUES ('mv_OLD','acc_a','cam_1','prx_1','prx_2','rq_old','rejected','incompatible',1,1,1,1);`);
+    raw.close();
+    const db = openDb(f);
+    expect(LATEST_VERSION).toBeGreaterThanOrEqual(16);
+    const store = new MoveStore(db, fakeClock());
+    expect(store.get('mv_OLD')?.space).toBeNull();
+    const space = { at: 1, needBytes: 10, budgetBytes: 100, usedBytes: 95, leftBytes: 5, fits: false, overCaps: [] };
+    const m = store.create(nm({ requestId: 'rq_new', space }));
+    expect(store.get(m.id)?.space).toEqual(space);
+    expect(store.createRejected({ ...nm({ requestId: 'rq_new3' }), reason: 'busy', detail: 'x' }).space).toBeNull();
+  });
+
   it('creates a move and reads it back', () => {
     const { store, db, clock } = setup();
     const m = store.create(nm({ reason: 'new host', tokenHash: 'sha256:' + 'a'.repeat(64) }));
@@ -316,8 +337,8 @@ describe('MoveStore', () => {
     const db = openDb(f);
     expect(LATEST_VERSION).toBeGreaterThanOrEqual(14);
     const after = db.prepare('SELECT * FROM moves ORDER BY id').all() as Record<string, unknown>[];
-    expect(after.map(({ return_of, check_result, keep_days, end_requested, detail, ...rest }) => {
-      expect([return_of, check_result, keep_days, end_requested, detail]).toEqual([null, null, null, null, null]);
+    expect(after.map(({ return_of, check_result, keep_days, end_requested, detail, space, ...rest }) => {
+      expect([return_of, check_result, keep_days, end_requested, detail, space]).toEqual([null, null, null, null, null, null]);
       return rest;
     })).toEqual(movesBefore);
     expect(db.prepare('SELECT * FROM move_chunks ORDER BY move_id, chunk_id').all()).toEqual(chunksBefore);
