@@ -1,6 +1,8 @@
 # Proxy profile: what a proxy can hold
 
-Status: approved by Klaus 2026-10-25 ("Ok to go!"), with his answers in §0. Repos: cam-proxy (the profile, its
+Status: approved by Klaus 2026-10-25 ("Ok to go!"), with his answers in §0.
+Built and released 2026-10-25: cam-proxy v2026.10.25.2 (#256), cams-admin
+2026.10.25.3 (#83). §4 is deferred (cam-proxy #255). Repos: cam-proxy (the profile, its
 report), cams-admin (shows it, checks moves against it), contract v1 (the report).
 
 ## 0. Klaus's answers (2026-10-25), binding over the rest
@@ -27,8 +29,13 @@ Rulings made from these (Claude, 2026-10-25):
 - Defaults until set (`profile.set` false): `cameras` = cameras held (at least
   1), `storageGB` = none (today's `storage.*` budget applies), `name` = none.
 - `profile.storageGB` (1..100000, optional): the storage this proxy may use. When
-  set it is the size budget, in place of `storage.maxBytes`. Setting both is a
-  config error; `storage.maxPercent` and `minFreeBytes` still apply as limits.
+  set it is the size budget, in place of `storage.maxBytes`; `storage.maxPercent`
+  and `minFreeBytes` still apply as limits. GB here is 10^9 bytes (not the GiB of
+  `*.maxGB`). Precedence (ruling at build time, cam-proxy #256): a value in a
+  higher layer wins (overrides.json, i.e. `PUT /control/profile`, over
+  config.json), and the other is reported as ignored; both in the same file is a
+  config error naming the file. So the API sets it on hosts whose config.json
+  holds `storage.maxBytes`.
 - Warnings dropped (no verification): `profile_over_disk`, `profile_storage_thin`.
   `profile_ftp_ports` and `profile_cameras_exceeded` stay: they are about ports
   and cameras the proxy really has, not the hardware.
