@@ -45,7 +45,7 @@
     <nav class="row">
       <a href="#/" data-testid="nav-dashboard" class:on={route.page === 'dashboard'}>Dashboard</a>
       <a href="#/accounts" data-testid="nav-accounts" class:on={route.page === 'accounts' || route.page === 'account' || route.page === 'proxy'}>Accounts</a>
-      <a href="#/cams-instances" data-testid="nav-cams" class:on={route.page === 'cams-instances' || route.page === 'cams-instance'}>cams</a>
+      <a href="#/cams-instances" data-testid="nav-cams" class:on={route.page === 'cams-instances' || route.page === 'cams-instance'}>Cams</a>
       <a href="#/moves" data-testid="nav-moves" class:on={route.page === 'moves'}>Moves{#if moving.items.length}<span class="nav-badge" data-testid="nav-moves-active" title="{moving.items.length} move{moving.items.length === 1 ? '' : 's'} under way">{moving.items.length}</span>{/if}</a>
       <a href="#/audit" data-testid="nav-audit" class:on={route.page === 'audit'}>Audit</a>
       <a href="#/backup" data-testid="nav-backup" class:on={route.page === 'backup'}>Backup</a>
