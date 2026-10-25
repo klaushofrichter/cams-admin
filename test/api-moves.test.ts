@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { tmpDir } from './helpers/tmp';
 import { testApp } from './helpers/app';
 import { makeProxyInfo, makeSummary } from '../test-client/summaries';
+import { moveContent } from '../server/moves/view';
 
 const dir = tmpDir();
 const a = testApp(dir);
@@ -42,7 +43,7 @@ describe('moves API', () => {
     expect(r.body.items).toHaveLength(1);
     expect(r.body.items[0]).toEqual({
       id: m1.mv, requestId: expect.stringMatching(/^rq_/), accountId: acc, camsId: expect.stringMatching(/^porch/), cameraName: expect.stringMatching(/^Porch/), source: { id: m1.s, name: expect.stringMatching(/^Source /) }, target: { id: m1.t, name: expect.stringMatching(/^Target /) },
-      phase: 'copying', reason: null, plan: { transfer: true, kinds: ['clips'], space: 'all', budgetS: 60 }, bytesTotal: 1000, bytesDone: 400, rateBps: 50, etaS: 12, budgetExceeded: false,
+      phase: 'copying', reason: null, refusedBy: null, detail: null, plan: { transfer: true, kinds: ['clips'], space: 'all', budgetS: 60 }, bytesTotal: 1000, bytesDone: 400, rateBps: 50, etaS: 12, budgetExceeded: false,
       cleanupPending: false, targetCleanupPending: false, autoApprove: false, bounds: null, createdAt: expect.any(Number), updatedAt: expect.any(Number), endedAt: null,
       returnOf: null, returnId: null, check: null, archivePending: false, endRequested: false, keepDays: null,
     });
@@ -57,6 +58,76 @@ describe('moves API', () => {
     expect(r.status).toBe(200);
     expect(r.body).toMatchObject({ id: m.mv, phase: 'cleaning', chunks: { pending: 1, copied: 0, verified: 2, skipped: 0, failed: 1, abandoned: 1 } });
     expect((await a.api('get', '/moves/mv_NOPE')).status).toBe(404);
+  });
+
+  it('detail lists the content kinds: included by the plan, the summary sizes, chunk progress per kind', async () => {
+    const m = fixture(acc, 'copying');
+    const summary = { clips: { files: 12, bytes: 3000, rows: 12, oldest: 1, newest: 2 }, stills: { files: 5, bytes: 500, rows: 5, oldest: 1, newest: 2 }, events: { files: 0, bytes: 0, rows: 4, oldest: null, newest: null } };
+    a.db.prepare('UPDATE moves SET summary = ? WHERE id = ?').run(JSON.stringify(summary), m.mv);
+    chunk(m.mv, 'clips:2026-10-20', 'verified'); chunk(m.mv, 'clips:2026-10-21', 'pending'); chunk(m.mv, 'clips:2026-10-22', 'failed');
+    const r = await a.api('get', `/moves/${m.mv}`);
+    expect(r.body.content.basis).toBe('plan');
+    const k = Object.fromEntries(r.body.content.kinds.map((x: { kind: string }) => [x.kind, x]));
+    expect(r.body.content.kinds.map((x: { kind: string }) => x.kind)).toEqual(['clips', 'stills', 'events', 'checks', 'archive']);
+    expect(k.clips).toEqual({ kind: 'clips', included: true, files: 12, bytes: 3000, chunks: { total: 3, done: 1, failed: 1, abandoned: 0 } });
+    expect(k.stills).toEqual({ kind: 'stills', included: false, files: 5, bytes: 500, chunks: { total: 0, done: 0, failed: 0, abandoned: 0 } });
+    expect(k.checks).toMatchObject({ included: false, files: null, bytes: null });
+  });
+
+  it('moveContent: the bounds decide before a plan exists, the offer\'s per-kind space over the summary; nothing decided is null', () => {
+    const summary = { clips: { files: 2, bytes: 100 }, archive: { files: 1, bytes: 9 } };
+    const byBounds = moveContent({ plan: null, bounds: { transfer: true, kinds: ['clips'], space: 'fit', maxBudgetS: 60 }, summary }, [], { clips: 80 });
+    expect(byBounds.basis).toBe('bounds');
+    expect(byBounds.kinds.find((k) => k.kind === 'clips')).toMatchObject({ included: true, bytes: 80, files: 2 });
+    expect(byBounds.kinds.find((k) => k.kind === 'archive')).toMatchObject({ included: false, bytes: 9 });
+    const none = moveContent({ plan: null, bounds: null, summary }, []);
+    expect(none.basis).toBeNull();
+    expect(none.kinds.every((k) => k.included === null)).toBe(true);
+    const noTransfer = moveContent({ plan: { transfer: false, kinds: ['clips'] }, bounds: null, summary }, []);
+    expect(noTransfer.kinds.every((k) => k.included === false)).toBe(true);
+  });
+
+  it('delete: only a rejected move (409 otherwise); its chunk rows go, the audit stays; a move-delete record; a live event', async () => {
+    const live = fixture(acc, 'copying');
+    expect((await a.api('delete', `/moves/${live.mv}`)).body).toEqual({ error: 'not_rejected' });
+    expect((await a.api('delete', `/moves/${live.mv}`)).status).toBe(409);
+    expect((await a.api('delete', '/moves/mv_NOPE')).status).toBe(404);
+    const m = fixture(acc, 'rejected');
+    a.db.prepare(`UPDATE moves SET ended_at = 200, reason = 'incompatible', detail = 'the target needs https' WHERE id = ?`).run(m.mv);
+    chunk(m.mv, 'clips:2026-10-20', 'pending');
+    a.audit.write({ actorType: 'system', actor: 'system', action: 'move-offer', accountId: acc, outcome: 'refused', detail: { moveId: m.mv } });
+    const events: string[] = [];
+    const orig = a.live.publishRegistry.bind(a.live);
+    a.live.publishRegistry = (type: string, id: string) => { if (type === 'move') events.push(id); orig(type, id); };
+    try {
+      const r = await a.api('delete', `/moves/${m.mv}`);
+      expect(r.status).toBe(204);
+    } finally {
+      a.live.publishRegistry = orig;
+    }
+    expect(events).toEqual([m.mv]);
+    expect(a.moves.store.get(m.mv)).toBeNull();
+    expect(a.db.prepare('SELECT count(*) n FROM move_chunks WHERE move_id = ?').get(m.mv)).toEqual({ n: 0 });
+    expect((await a.api('get', `/moves/${m.mv}`)).status).toBe(404);
+    const rows = a.db.prepare(`SELECT action, actor_type, actor, outcome, target_id, detail FROM audit_log WHERE json_extract(detail, '$.moveId') = ? ORDER BY rowid`).all(m.mv) as { action: string; detail: string }[];
+    expect(rows.map((x) => x.action)).toEqual(['move-offer', 'move-delete']);
+    expect(rows[1]).toMatchObject({ actor_type: 'sysadmin', actor: 'admin@example.com', outcome: 'ok', target_id: m.cam });
+    expect(JSON.parse(rows[1].detail)).toEqual({ moveId: m.mv, camsId: expect.stringMatching(/^porch/), reason: 'incompatible', source: m.s, target: m.t });
+    expect((await a.api('delete', `/moves/${m.mv}`)).status).toBe(404);
+  });
+
+  it('delete with an operations token needs the moves scope', async () => {
+    const m = fixture(acc, 'rejected');
+    a.db.prepare('UPDATE moves SET ended_at = 200 WHERE id = ?').run(m.mv);
+    const del = (tok: string) => request(a.app).delete(`/api/v1/moves/${m.mv}`).set('Authorization', `Bearer ${tok}`);
+    const routes = (await a.api('post', '/ops-tokens', { name: 'routes', scopes: ['routes'], days: 1 })).body.token as string;
+    expect((await del(routes)).status).toBe(403);
+    const moves = (await a.api('post', '/ops-tokens', { name: 'moves', scopes: ['moves'], days: 1 })).body.token as string;
+    expect((await del(moves)).status).toBe(204);
+    expect(a.moves.store.get(m.mv)).toBeNull();
+    const au = a.db.prepare(`SELECT actor_type, actor FROM audit_log WHERE action = 'move-delete' AND json_extract(detail, '$.moveId') = ?`).get(m.mv) as { actor_type: string; actor: string };
+    expect(au.actor_type).toBe('sysadmin');
+    expect(au.actor).toMatch(/^ops-token:[0-9a-f]{8}$/);
   });
 
   it('cancel needs the typed confirm', async () => {

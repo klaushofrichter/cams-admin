@@ -1,20 +1,29 @@
 <script lang="ts">
-  // One move: chunk counts, the check, the cleanup note, the copy back; Cancel move…, End transfer… (after Archive when it is still copying) and Give up behind typed confirms.
+  // One move: who refused it and why (a rejected move, with Delete), the content checklist, chunk counts, the check, the cleanup note, the copy back;
+  // Cancel move…, End transfer… (after Archive when it is still copying) and Give up behind typed confirms. Delete has no confirm: a rejected record holds no content.
   import { api, errorText } from '../lib/api';
-  import { boundsText, canGiveUp, cancelable, checkText, endLabel, phaseReason, phaseText } from '../lib/moves';
+  import { boundsText, canDelete, canGiveUp, cancelable, checkText, contentBasisText, contentLine, endLabel, phaseReason, phaseText, refusalReason, refusedByText, type ContentKind } from '../lib/moves';
   import Confirm from './Confirm.svelte';
 
   let { move, onchange, onopen }: { move: any; onchange: () => void; onopen?: (id: string) => void } = $props();
   let chunks = $state<Record<string, number> | null>(null);
+  let content = $state<{ basis: string | null; kinds: ContentKind[] } | null>(null);
   let error = $state('');
   let dialog = $state<null | 'cancel' | 'end' | 'giveup'>(null);
   let copied = $state<'delete' | 'age-out'>('delete');
 
   $effect(() => {
     void move.updatedAt;
-    api('GET', `/moves/${move.id}`).then((r) => (chunks = r.chunks)).catch((e) => (error = errorText(e)));
+    api('GET', `/moves/${move.id}`).then((r) => { chunks = r.chunks; content = r.content ?? null; }).catch((e) => (error = errorText(e)));
   });
 
+  let deleting = $state(false);
+  async function remove() {
+    error = '';
+    deleting = true;
+    try { await api('DELETE', `/moves/${move.id}`); onchange(); } catch (e) { error = errorText(e); }
+    deleting = false;
+  }
   async function run(path: string, body: object) {
     error = '';
     dialog = null;
@@ -28,9 +37,30 @@
 <div class="grid detail" data-testid="move-detail-{move.id}">
   <div class="row muted">
     <span>{move.camsId}: {move.source.name} → {move.target.name}</span>
-    <span>· {phaseText(move.phase, move.reason)}{phaseReason(move.phase, move.reason) ? ` (${phaseReason(move.phase, move.reason)})` : ''}</span>
+    <span>· {phaseText(move.phase, move.reason)}{move.phase !== 'rejected' && phaseReason(move.phase, move.reason) ? ` (${phaseReason(move.phase, move.reason)})` : ''}</span>
   </div>
+  {#if move.phase === 'rejected'}
+    <div class="refusal" data-testid="move-refusal">
+      <strong data-testid="move-refused-by">{refusedByText(move) || 'Refused'}</strong>
+      <p class="small" data-testid="move-refusal-reason">Reason: {refusalReason(move) || 'none given'}</p>
+      {#if move.detail}<p class="small" data-testid="move-refusal-detail">Detail: <span class="verbatim">{move.detail}</span></p>
+      {:else}<p class="muted small" data-testid="move-refusal-no-detail">No detail given{move.refusedBy === 'target' ? ` (${move.target.name} may need the cam-proxy update)` : ''}.</p>{/if}
+      <p class="muted small">A refusal is final: start the move again once the cause is fixed.</p>
+    </div>
+  {/if}
   <p class="muted small" data-testid="move-bounds">{boundsText(move.bounds ?? null)}</p>
+  {#if content}
+    <div class="grid content" data-testid="move-content">
+      <span class="muted small" data-testid="move-content-basis">Content: {contentBasisText(content.basis)}</span>
+      <ul>
+        {#each content.kinds as k (k.kind)}
+          <li class={k.included === true ? 'in' : k.included === false ? 'out' : 'open'} data-testid="move-content-{k.kind}">
+            <span class="mark" aria-hidden="true">{k.included === true ? '✓' : k.included === false ? '–' : '?'}</span> {contentLine(k)}
+          </li>
+        {/each}
+      </ul>
+    </div>
+  {/if}
   {#if chunks && CHUNK_ORDER.some((k) => chunks![k])}
     <div class="row" data-testid="move-chunks-{move.id}">{#each CHUNK_ORDER as k}{#if chunks[k]}<span class="badge">{k}: {chunks[k]}</span>{/if}{/each}</div>
   {/if}
@@ -49,6 +79,11 @@
     <div class="row">
       <button class="btn danger" data-testid="move-cancel" onclick={() => { copied = 'delete'; dialog = 'cancel'; }}>Cancel move…</button>
       {#if move.phase === 'copying'}<button class="btn" data-testid="move-end-transfer" disabled={move.endRequested} onclick={() => (dialog = 'end')}>{endLabel(move)}</button>{/if}
+    </div>
+  {/if}
+  {#if canDelete(move.phase)}
+    <div class="row">
+      <button class="btn danger" data-testid="move-delete" disabled={deleting} onclick={remove}>Delete</button>
     </div>
   {/if}
   {#if canGiveUp(move.phase)}
@@ -85,4 +120,10 @@
   .link { background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; font: inherit; text-decoration: underline; }
   .choice { border: 0; padding: 0; margin: 0; display: grid; gap: 6px; }
   .check { display: flex; flex-direction: row; align-items: center; gap: 6px; color: var(--text); }
+  .refusal { border-left: 3px solid var(--danger); padding: 4px 0 4px 10px; display: grid; gap: 4px; }
+  .verbatim { font-family: var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .content ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; font-size: 13px; }
+  .content li.out { color: var(--muted); }
+  .content .mark { display: inline-block; width: 1em; text-align: center; }
+  .content li.in .mark { color: var(--ok); }
 </style>

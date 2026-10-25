@@ -261,6 +261,8 @@ export function buildSchemas(mode: Mode): Record<string, S> {
   const moveCameraEvent = all({ proxyCameraId: camId, ...connectionFields });
   const moveCameraOffer = all({ camsId: camId, proxyCameraId: camId, ...connectionFields });
   const offerReason = en([...MOVE_OFFER_REASONS]);
+  // A refusal's detail (cam-proxy: which setting or check refused, in words); optional: older proxies send none.
+  const refusalDetail = str(300, { minLength: 1 });
   const answerReason = en([...MOVE_ANSWER_REASONS]);
   const empty = obj({}, []);
   const mv = { v: { const: 1 }, moveId: mvId };
@@ -277,8 +279,8 @@ export function buildSchemas(mode: Mode): Record<string, S> {
       camera: moveCameraOffer, summary: moveSummary, settings: moveSettings,
     }),
     'move.answer': obj({
-      ...mv, requestId, target: all({ proxyId: prxId, name: nameS }), accept: bool, reason: answerReason, space: moveSpace, estimateS: int(),
-    }, ['v', 'moveId', 'requestId', 'target', 'accept'], ['reason', 'space', 'estimateS']),
+      ...mv, requestId, target: all({ proxyId: prxId, name: nameS }), accept: bool, reason: answerReason, detail: refusalDetail, space: moveSpace, estimateS: int(),
+    }, ['v', 'moveId', 'requestId', 'target', 'accept'], ['reason', 'detail', 'space', 'estimateS']),
     'move.start': all({ ...mv, plan: movePlan, settings: moveSettings, done: arr(chunkId, 512) }),
     'move.go': all({ ...mv, plan: movePlan, targetPublicKey: x25519, expectedLeaf: fp }),
     'move.release': all(mv),
@@ -303,7 +305,7 @@ export function buildSchemas(mode: Mode): Record<string, S> {
     'move.begin': all({ requestId }),
     'move.targets': empty, 'move.open': empty, 'move.answer': empty, 'move.go': empty, 'move.release': empty, 'move.cancel': empty, 'move.return.start': empty,
     'move.return.open': all({ chunks: int(), bytes: int() }),
-    'move.offer': { anyOf: [all({ accept: { const: true }, space: moveSpace, probeBps: int() }), all({ accept: { const: false }, reason: offerReason })] },
+    'move.offer': { anyOf: [all({ accept: { const: true }, space: moveSpace, probeBps: int() }), obj({ accept: { const: false }, reason: offerReason, detail: refusalDetail }, ['accept', 'reason'], ['detail'])] },
     'move.start': all({ publicKey: x25519, leafFingerprint: fp }),
     // Only the five kinds: the recordings cache is not content.
     'move.finish': all({ deleted: optionalOnly(kindMap(all({ files: int(), bytes: int() }))) }),

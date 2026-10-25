@@ -270,8 +270,10 @@ export function apiRouter(d: ApiDeps): express.Router {
   }));
   r.get('/moves/:moveId', h((req) => {
     const m = moveOf(p(req, 'moveId'));
-    return { ...mview(m), chunks: chunkCounts(d.moves.chunkStates(m.id)) };
+    return { ...mview(m), chunks: chunkCounts(d.moves.chunkStates(m.id)), content: d.moves.content(m) };
   }));
+  // A rejected move's record (409 not_rejected otherwise): no confirm, it touches no content. Ops scope `moves`.
+  r.delete('/moves/:moveId', h((req, res) => d.moves.deleteRejected(actor(res), p(req, 'moveId'))));
   r.post('/moves/:moveId/cancel', h((req, res) => {
     typed(req, 'cancel');
     moveOf(p(req, 'moveId'));

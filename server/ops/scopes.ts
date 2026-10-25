@@ -18,6 +18,7 @@ export const OPS_ROUTES: readonly OpsRoute[] = [
   { method: 'POST', path: '/moves', scope: 'moves' },
   { method: 'POST', path: '/moves/:moveId/cancel', scope: 'moves' },
   { method: 'POST', path: '/moves/:moveId/end-transfer', scope: 'moves' },
+  { method: 'DELETE', path: '/moves/:moveId', scope: 'moves' },
 ];
 
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

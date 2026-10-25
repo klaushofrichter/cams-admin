@@ -1,5 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { DatabaseSync } from 'node:sqlite';
+import { readFileSync } from 'fs';
+import { join } from 'path';
 import { ENV } from './env';
 import { BASE } from './env';
 import { api, client, enroll, signIn, uniq } from './helpers';
@@ -9,13 +11,13 @@ test.beforeEach(async ({ context }) => signIn(context));
 // Two connected fake proxies (so the move service does not fail the move for an absent proxy) in one new account.
 async function twoProxies(page: import('@playwright/test').Page, info: import('@playwright/test').TestInfo, base: string) {
   const acc = await api(page, 'POST', '/accounts', { name: uniq(info, base), displayName: 'Moves' });
-  const out: { id: string; stop: () => void }[] = [];
+  const out: { id: string; stop: () => void; client: ReturnType<typeof client> }[] = [];
   for (const [name, displayName] of [['old', 'Old proxy'], ['new', 'New proxy']]) {
     const px = await api(page, 'POST', `/accounts/${acc.id}/proxies`, { name, displayName, runsOn: 'cluster' });
     const code = (await api(page, 'POST', `/accounts/${acc.id}/proxies/${px.id}/enrollment-codes`, {})).code;
     const c = client(await enroll(BASE, code), undefined, { commands: { allow: ['move.send', 'move.receive'] } });
     c.start();
-    out.push({ id: px.id, stop: () => c.abort() });
+    out.push({ id: px.id, stop: () => c.abort(), client: c });
   }
   return { acc, a: out[0], b: out[1] };
 }
@@ -147,6 +149,76 @@ test('cancelling a copying move offers no copied choice and says what is copied 
   await page.getByTestId('confirm-input').fill('cancel');
   await page.getByTestId('confirm-ok').click();
   await expect(page.getByTestId(`move-phase-${id}`)).toHaveText(/^(cancelling|cancelled)$/);
+});
+
+// The source's move.request event (the contract fixture), for the camera `proxyCameraId` with a connection override.
+function moveRequest(target: string, proxyCameraId: string, conn: Record<string, unknown>) {
+  const body = JSON.parse(readFileSync(join(__dirname, '../contract/v1/fixtures/valid-event-move-request.json'), 'utf8')).message.body;
+  const { proxyId: _p, connId: _c, ...rest } = body;
+  const requestId = `rq_${Array.from({ length: 20 }, () => '0123456789ABCDEFGHJKMNPQRSTVWXYZ'[Math.floor(Math.random() * 32)]).join('')}`;
+  return { ...rest, requestId, target, camera: { ...rest.camera, proxyCameraId, ...conn } };
+}
+
+test('a move cams-admin refuses appears without a reload, says who refused and why, and Delete removes it', async ({ page }, info) => {
+  const { acc, a, b } = await twoProxies(page, info, 'mj');
+  await api(page, 'POST', `/accounts/${acc.id}/cameras`, { camsId: 'yard', name: 'Yard', kind: 'camera', proxyId: a.id, proxyCameraId: 'cam1', host: '192.0.2.10', protocol: 'https' });
+  await page.goto('/#/moves');
+  await expect(page.getByRole('heading', { name: 'Moves' })).toBeVisible();
+  await expect.poll(() => a.client.state).toBe('connected');
+  let navigations = 0;
+  page.on('framenavigated', () => navigations++);
+  expect(a.client.emitEvent(moveRequest(b.id, 'cam1', { host: '192.0.2.11' }))).toBe(true);
+  const row = page.locator('[data-testid^="move-row-"]', { hasText: 'Yard' });
+  await expect(row).toBeVisible();
+  const id = (await row.getAttribute('data-testid'))!.replace('move-row-', '');
+  expect(navigations).toBe(0);
+  await expect(page.getByTestId(`move-phase-${id}`)).toHaveText('rejected');
+  await expect(page.getByTestId(`move-reason-${id}`)).toHaveText("cams-admin refused: the source's camera address or protocol differs from the registry");
+  await page.getByTestId(`move-toggle-${id}`).click();
+  const d = page.getByTestId(`move-detail-${id}`);
+  await expect(d.getByTestId('move-refused-by')).toHaveText('cams-admin refused');
+  await expect(d.getByTestId('move-refusal-detail')).toHaveText('Detail: registry host 192.0.2.10, source reports 192.0.2.11');
+  await expect(d.getByTestId('move-cancel')).toHaveCount(0);
+  // Delete: no confirm; the row goes.
+  await d.getByTestId('move-delete').click();
+  await expect(page.getByTestId('confirm')).toHaveCount(0);
+  await expect(page.getByTestId(`move-row-${id}`)).toHaveCount(0);
+});
+
+test('a move the target refused names the target, the reason in words and its detail, with the content checklist', async ({ page }, info) => {
+  const { acc, a, b } = await twoProxies(page, info, 'mk');
+  const id = insertMove(acc.id, a.id, b.id, 'rejected', 7);
+  patchMove(id, `offered_at = 1, ended_at = 2, reason = 'incompatible', detail = ?, plan = NULL, bounds = ?, summary = ?`, 'cameras.cam1.protocol is http here; the target needs https',
+    JSON.stringify({ transfer: true, kinds: ['clips', 'events'], space: 'fit', maxBudgetS: 3600 }), JSON.stringify({ clips: { files: 12, bytes: 3072, rows: 12, oldest: 1, newest: 2 }, stills: { files: 5, bytes: 500, rows: 5, oldest: 1, newest: 2 } }));
+  await page.goto('/#/moves');
+  await expect(page.getByTestId(`move-reason-${id}`)).toHaveText("New proxy refused: its configuration can't take this camera");
+  await page.getByTestId(`move-toggle-${id}`).click();
+  const d = page.getByTestId(`move-detail-${id}`);
+  await expect(d.getByTestId('move-refused-by')).toHaveText('New proxy refused');
+  await expect(d.getByTestId('move-refusal-reason')).toHaveText("Reason: its configuration can't take this camera");
+  await expect(d.getByTestId('move-refusal-detail')).toHaveText('Detail: cameras.cam1.protocol is http here; the target needs https');
+  await expect(d.getByTestId('move-content-basis')).toHaveText('Content: Within the pre-approval bounds');
+  await expect(d.getByTestId('move-content-clips')).toContainText('Clips: included, 12 files, 3.0 KiB');
+  await expect(d.getByTestId('move-content-stills')).toContainText('Stills: left out, 5 files, 500 B');
+  await expect(d.getByTestId('move-content-archive')).toContainText('Archive: left out');
+  await expect(d.getByTestId('move-delete')).toBeVisible();
+});
+
+test('the content checklist of a copying move shows the copy progress per kind', async ({ page }, info) => {
+  const { acc, a, b } = await twoProxies(page, info, 'ml');
+  const id = insertMove(acc.id, a.id, b.id, 'copying', 8);
+  patchMove(id, 'plan = ?, summary = ?', JSON.stringify({ transfer: true, kinds: ['clips', 'stills'], space: 'all', budgetS: 60 }), JSON.stringify({ clips: { files: 12, bytes: 3072 }, stills: { files: 1, bytes: 10 } }));
+  const db = new DatabaseSync(ENV.DB_FILE);
+  db.exec('PRAGMA busy_timeout = 5000');
+  for (const [c, st] of [['clips:2026-10-20', 'verified'], ['clips:2026-10-21', 'pending']]) db.prepare('INSERT INTO move_chunks (move_id,chunk_id,state) VALUES (?,?,?)').run(id, c, st);
+  db.close();
+  await page.goto('/#/moves');
+  const d = page.getByTestId(`move-detail-${id}`);
+  await expect(d.getByTestId('move-content-basis')).toHaveText('Content: As approved');
+  await expect(d.getByTestId('move-content-clips')).toContainText('Clips: included, 12 files, 3.0 KiB; 1 of 2 days copied');
+  await expect(d.getByTestId('move-content-stills')).toContainText('Stills: included, 1 file, 10 B');
+  await expect(d.getByTestId('move-content-events')).toContainText('Events: left out');
+  await expect(d.getByTestId('move-delete')).toHaveCount(0);
 });
 
 // The Start move form. The answers of POST /moves are stubbed (a real 202 needs online proxies that pass the whole precheck); the lists come from the real API.

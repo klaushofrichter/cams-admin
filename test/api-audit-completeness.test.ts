@@ -71,6 +71,7 @@ describe('audit completeness', () => {
     ['post', '/moves/:moveId/cancel', () => `/moves/${ids.mvCancel}/cancel`, () => ({ copied: 'delete', confirm: 'cancel' }), 'move-cancel'],
     ['post', '/moves/:moveId/end-transfer', () => `/moves/${ids.mvEnd}/end-transfer`, () => ({ confirm: 'end transfer' }), 'move-end-transfer'],
     ['post', '/moves/:moveId/give-up', () => `/moves/${ids.mvGive}/give-up`, () => ({ confirm: 'give up' }), 'move-give-up'],
+    ['delete', '/moves/:moveId', () => `/moves/${ids.mvRejected}`, () => ({}), 'move-delete'],
     // move.begin: a clean precheck (no fix), so the move-begin record and the command's.
     ['post', '/moves', () => '/moves', () => ({ sourceProxyId: ids.bgs, targetProxyId: ids.bgt, cameraId: 'beginporch', bounds: null }), ['move-begin', 'command-create']],
     // Diagnostics tokens (issue #45).
@@ -145,6 +146,8 @@ describe('audit completeness', () => {
       ids.mvCancel = mk('c');
       ids.mvEnd = mk('e');
       ids.mvGive = mk('g', 'returning');
+      ids.mvRejected = mk('r', 'rejected');
+      a.db.prepare('UPDATE moves SET ended_at = 1 WHERE id = ?').run(ids.mvRejected);
       // Two online proxies that take moves, and a camera on the first, for the POST /moves row.
       const live = (tag: string) => {
         const id = `prx_${tag.padEnd(20, '0')}`;

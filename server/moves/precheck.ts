@@ -85,9 +85,10 @@ export function precheckReport(d: PrecheckDeps, m: Candidate): PrecheckReport {
 
 const instanceName = (d: PrecheckDeps, id: string) => (d.db.prepare('SELECT name FROM cams_instances WHERE id = ?').get(id) as { name: string } | undefined)?.name ?? id;
 
-export function precheck(d: PrecheckDeps, m: Candidate): { ok: true } | { ok: false; reason: PrecheckReason } {
-  const r = precheckReport(d, m);
-  return r.ok ? { ok: true } : { ok: false, reason: r.reason! };
+// The first failing rule: its reason, its name and its detail (when it has one).
+export function precheck(d: PrecheckDeps, m: Candidate): { ok: true } | { ok: false; reason: PrecheckReason; rule: string; detail?: string } {
+  const f = precheckReport(d, m).rules.find((x) => !x.ok);
+  return !f ? { ok: true } : { ok: false, reason: f.reason, rule: f.rule, ...(f.detail ? { detail: f.detail } : {}) };
 }
 
 // What the source's "Move to…" list offers (S §4): every proxy precheck would let through.

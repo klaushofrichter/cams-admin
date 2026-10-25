@@ -39,19 +39,19 @@ export function etaText(s: number | null | undefined): string {
 }
 
 const REASONS: Record<string, string> = {
-  moves_not_allowed: 'the proxy does not allow moves',
+  moves_not_allowed: 'the proxy does not allow camera moves',
   camera_unreachable: 'the target cannot reach the camera',
   camera_limit: 'the target has no room for another camera',
   id_taken: 'the target already has a camera with that id',
   busy: 'a proxy is busy with another move',
-  incompatible: 'the proxies are not compatible',
+  incompatible: "its configuration can't take this camera",
   no_site_ca: 'a proxy has no site certificate authority',
   ca_does_not_cover_camera: "the site CA does not cover the camera's address",
   external_cert: 'a proxy uses an external certificate',
   other_account: 'the target is in another account',
   target_offline: 'the target is offline',
-  not_routed: 'the target is not routed to the same cams instances',
-  host_overridden: 'a cams instance overrides the camera address',
+  not_routed: "the target can't be reached the same way as the source",
+  host_overridden: "a cams instance overrides the camera's address",
   target_failed: 'the target failed',
   offer_expired: 'the offer expired unanswered',
   end_transfer: 'the transfer was ended early',
@@ -86,6 +86,47 @@ export function reasonText(r: string | null | undefined): string {
   if (!step) return r;
   const code = r.slice(i + 1);
   return `${step}: ${REASONS[code] ?? code}`;
+}
+
+// cams-admin's own refusals (its checks before any offer) where the reason reads differently than from the target.
+const CAMS_ADMIN_REASONS: Record<string, string> = {
+  incompatible: "the source's camera address or protocol differs from the registry",
+};
+
+// Who refused a rejected move: the target proxy by name, or cams-admin's own checks; '' otherwise (or an older server).
+export function refusedByText(m: { phase: string; refusedBy?: string | null; target: { name: string } }): string {
+  if (m.phase !== 'rejected') return '';
+  return m.refusedBy === 'target' ? `${m.target.name} refused` : m.refusedBy === 'cams-admin' ? 'cams-admin refused' : '';
+}
+// The refusal's reason in plain words, as the one who refused means it.
+export const refusalReason = (m: { refusedBy?: string | null; reason: string | null }): string =>
+  (m.refusedBy === 'cams-admin' && m.reason && CAMS_ADMIN_REASONS[m.reason]) || reasonText(m.reason);
+// "Pi refused: its configuration can't take this camera" (the reason alone when who is not known).
+export function refusalLine(m: { phase: string; refusedBy?: string | null; reason: string | null; target: { name: string } }): string {
+  const who = refusedByText(m);
+  const why = refusalReason(m);
+  return who && why ? `${who}: ${why}` : who || why;
+}
+
+// A rejection is final: its record may be deleted (it holds no content).
+export const canDelete = (phase: string): boolean => phase === 'rejected';
+
+// The content checklist of the move detail (GET /moves/:id content).
+export interface ContentKind { kind: string; included: boolean | null; files: number | null; bytes: number | null; chunks: { total: number; done: number; failed: number; abandoned: number } }
+const KIND_LABEL: Record<string, string> = { clips: 'Clips', stills: 'Stills', events: 'Events', checks: 'Checks', archive: 'Archive' };
+// "Clips: included, 12 files, 3.0 KiB; 1 of 3 days copied, 1 with failures".
+export function contentLine(k: ContentKind): string {
+  const name = KIND_LABEL[k.kind] ?? k.kind;
+  if (k.included === null && !k.chunks.total) return `${name}: not decided yet`;
+  const size = k.files === 0 ? ['nothing to copy'] : [k.files !== null ? `${k.files} ${k.files === 1 ? 'file' : 'files'}` : '', k.bytes !== null ? bytes(k.bytes) : ''].filter(Boolean);
+  const head = [k.included === null ? 'not decided yet' : k.included ? 'included' : 'left out', ...size].join(', ');
+  if (!k.chunks.total) return `${name}: ${head}`;
+  const c = k.chunks;
+  const progress = [`${c.done} of ${c.total} ${c.total === 1 ? 'day' : 'days'} copied`, c.failed ? `${c.failed} with failures` : '', c.abandoned ? `${c.abandoned} left behind` : ''].filter(Boolean).join(', ');
+  return `${name}: ${head}; ${progress}`;
+}
+export function contentBasisText(basis: string | null): string {
+  return basis === 'plan' ? 'As approved' : basis === 'bounds' ? 'Within the pre-approval bounds' : 'Not approved yet: sizes as the source reported them';
 }
 
 // The reason beside the phase text; none when the phase text already says it (a given-up copy back).
