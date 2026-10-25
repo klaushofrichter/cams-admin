@@ -94,11 +94,8 @@ const DONE_MAX = 512;
 const SEEN_MAX = 2000;
 
 const ANSWER_REASONS = new Set<string>(MOVE_ANSWER_REASONS);
-// move.answer may carry the refusal's detail (contract v1), but released cam-proxy refuses an answer with it
-// (invalid_args: a closed key list), and the source would then never hear of the refusal. Off until every proxy runs
-// the cam-proxy release that accepts it; until then the detail stays on the move row, in the audit and the UI.
-export const ANSWER_CARRIES_DETAIL = false;
-const answerDetail = (detail: string | null | undefined) => (ANSWER_CARRIES_DETAIL && detail ? { detail } : {});
+// move.answer carries the refusal's detail to the source (cam-proxy v2026.10.25.1 and later take it).
+const answerDetail = (detail: string | null | undefined) => (detail ? { detail } : {});
 // Plans compared by value: key order and the order of the kinds are not meaning (like cam-proxy's canonical).
 const canonical = (x: unknown): string => JSON.stringify(x, (_k, v) => {
   if (Array.isArray(v)) return v.every((e) => typeof e !== 'object') ? [...v].sort() : v;
