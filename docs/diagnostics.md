@@ -176,9 +176,8 @@ detail is its own text (cam-proxy sends one from the release that knows it;
 older ones send none). cams-admin's details name the values that disagree,
 for example `registry host 192.0.2.10, source reports 192.0.2.11`,
 `registry protocol https, source reports http`, or the failing precheck rule's
-detail. The detail is not sent to the source in `move.answer` yet: released
-cam-proxy refuses an answer that carries it (`ANSWER_CARRIES_DETAIL` in
-`server/moves/service.ts` turns it on once every proxy takes it).
+detail. The detail also goes to the source in `move.answer` (cam-proxy
+v2026.10.25.1 and later show it with the refusal).
 
 cams-admin's own refusals get a move row only when the camera is in the
 registry and the target is another proxy of the same account

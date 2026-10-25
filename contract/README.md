@@ -241,8 +241,8 @@ Rulings of the camera-move plan that the schemas carry:
   precheck rule's detail). Both are optional: a proxy from before sends and
   takes none (`valid-result-move-offer-refused`), a newer one may
   (`valid-result-move-offer-refused-detail`, `valid-command-move-answer-refused-detail`).
-  cams-admin does not send `move.answer.detail` yet (released cam-proxy refuses
-  it): the cross-check lists that fixture as `pending` until cam-proxy takes it.
+  cams-admin sends `move.answer.detail` to the source (cam-proxy v2026.10.25.1
+  and later take it).
 - A `move.request` that repeats a `requestId` which already has a move (also a
   rejected one) is ignored: no second row, no second answer.
 
