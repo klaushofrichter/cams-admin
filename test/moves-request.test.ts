@@ -218,8 +218,9 @@ describe('move request', () => {
     const third = request(src2, tgt.proxyId);
     expect(await answerOf(src, second)).toMatchObject({ accept: false, reason: 'busy' });
     expect(await answerOf(src2, third)).toMatchObject({ accept: false, reason: 'busy' });
-    expect(moves()).toHaveLength(1);
-    expect(moves()[0].requestId).toBe(first);
+    // The refusals are rejected rows (ended); the first move is the only active one.
+    expect(s.built.moves.store.active().map((m) => m.requestId)).toEqual([first]);
+    expect(moves().filter((m) => m.phase === 'rejected').map((m) => m.requestId).sort()).toEqual([second, third].sort());
     const refused = auditFor('move-request').filter((a) => a.outcome === 'refused').map((a) => JSON.parse(a.detail));
     expect(refused.map((d) => d.reason)).toEqual(['busy', 'busy']);
   });
@@ -250,7 +251,7 @@ describe('move request', () => {
     expect(rule('target_receives')).toMatchObject({ ok: false, detail: 'commands allowed; move.receive not allowed' });
     expect(rule('site_ca')).toMatchObject({ ok: true });
     expect(rule('routed')).toEqual({ rule: 'routed', ok: false, reason: 'not_routed', detail: 'cams instances that see the source but not the target: cluster' });
-    expect(s.built.moves.precheck({ accountId: src.accountId, sourceProxyId: src.proxyId, targetProxyId: tgt.proxyId })).toEqual({ ok: false, reason: 'moves_not_allowed' });
+    expect(s.built.moves.precheck({ accountId: src.accountId, sourceProxyId: src.proxyId, targetProxyId: tgt.proxyId })).toEqual({ ok: false, reason: 'moves_not_allowed', rule: 'target_receives', detail: 'commands allowed; move.receive not allowed' });
     s.built.camsInstances.setRoute(ACTOR, i.id, tgt.proxyId, { url: null, hidden: false });
     expect(rule('routed')).toEqual({ rule: 'routed', ok: true, reason: 'not_routed' });
   });
@@ -435,9 +436,9 @@ describe('move request, the camera connection must match the registry', () => {
     camera(src);
     const requestId = request(src, tgt.proxyId, { conn: { host: '192.0.2.99' } });
     expect(await answerOf(src, requestId)).toMatchObject({ accept: false, reason: 'incompatible' });
-    expect(moves()).toHaveLength(0);
+    expect(moves().map((m) => m.phase)).toEqual(['rejected']);
     const d = JSON.parse(auditFor('move-request').at(-1)!.detail);
-    expect(d).toMatchObject({ reason: 'incompatible', detail: 'camera_host', phase: 'rejected' });
+    expect(d).toMatchObject({ reason: 'incompatible', rule: 'camera_host', detail: 'registry host 192.0.2.10, source reports 192.0.2.99', phase: 'rejected' });
     expect(got(tgt.client, 'move.offer')).toHaveLength(0);
   });
 
@@ -447,8 +448,8 @@ describe('move request, the camera connection must match the registry', () => {
     camera(src);
     const requestId = request(src, tgt.proxyId, { conn: { protocol: 'http' } });
     expect(await answerOf(src, requestId)).toMatchObject({ accept: false, reason: 'incompatible' });
-    expect(JSON.parse(auditFor('move-request').at(-1)!.detail)).toMatchObject({ detail: 'camera_protocol' });
-    expect(moves()).toHaveLength(0);
+    expect(JSON.parse(auditFor('move-request').at(-1)!.detail)).toMatchObject({ rule: 'camera_protocol' });
+    expect(moves().map((m) => m.phase)).toEqual(['rejected']);
   });
 
   const camWith = (src: Px, f: { host: string | null; protocol: string | null }) =>

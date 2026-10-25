@@ -66,7 +66,6 @@ export interface ReturnHost {
   retryDue(m: Move, proxyId: string, command: WireCommand, base: number, last: CommandRow): boolean;
   chunkStates(moveId: string): ChunkState[];
   flushIn(moveId: string): Partial<Move>;
-  publish(moveId: string): void;
 }
 
 // The plaintext token of a return and the commands sent with it (memory only).
@@ -171,7 +170,6 @@ export class Returns {
       if (reason?.startsWith('paused:proxy_update')) this.h.audit(mv, 'move-return', 'refused', { step: 'needs-update', phase: 'returning', role: reason.slice(reason.lastIndexOf(':') + 1) });
     });
     m.reason = reason;
-    this.h.publish(m.id);
   }
 
   // A return command's result: the start's acceptance is audited, then the next step.
@@ -203,7 +201,6 @@ export class Returns {
         const mv = this.h.store.setPhase(m.id, 'returning', { ...this.h.flushIn(m.id), reason: want });
         this.h.audit(mv, 'move-return', 'ok', { step: want ? 'paused' : 'resumed', phase: 'returning' }, { actorType: 'proxy', actor: m.targetProxyId });
       });
-      this.h.publish(m.id);
       return;
     }
     if (ev.role === 'target' && ev.phase === 'copied') return this.copied(m, ev.check ?? null);
@@ -218,7 +215,6 @@ export class Returns {
       if (check) this.h.audit(mv, 'move-check', check.complete ? 'ok' : 'failed', { check }, { actorType: 'proxy', actor: m.targetProxyId });
       this.finishCommand(mv, 'target');
     });
-    this.h.publish(m.id);
     this.step(m);
   }
 
@@ -244,7 +240,6 @@ export class Returns {
     });
     this.keys.delete(m.id);
     this.failures.delete(m.id);
-    this.h.publish(m.id);
   }
 
   // The newest finish for this role, created when there is none and again when it went unanswered while its proxy is online.

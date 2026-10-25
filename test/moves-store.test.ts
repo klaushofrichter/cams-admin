@@ -24,6 +24,71 @@ const nm = (o: Record<string, unknown> = {}) => ({
 });
 
 describe('MoveStore', () => {
+  it('every create, phase change, prune and delete reports the move id (the live event)', () => {
+    const { db, clock } = setup();
+    const seen: string[] = [];
+    const store = new MoveStore(db, clock, (id) => seen.push(id));
+    const m = store.create(nm());
+    expect(seen).toEqual([m.id]);
+    store.setPhase(m.id, 'offered', { offeredAt: 1 });
+    store.setPhase(m.id, 'rejected', { reason: 'incompatible', detail: 'the target needs https' });
+    expect(seen).toEqual([m.id, m.id, m.id]);
+    const r = store.createRejected({ ...nm({ cameraId: 'cam_2', sourceProxyId: 'prx_3', targetProxyId: 'prx_4', requestId: 'req-2' }), reason: 'busy', detail: 'a move is open on the source' });
+    expect(seen.at(-1)).toBe(r.id);
+    clock.advance(400 * 86_400_000);
+    seen.length = 0;
+    expect(store.prune(clock.now(), 30).sort()).toEqual([m.id, r.id].sort());
+    expect(seen.sort()).toEqual([m.id, r.id].sort());
+  });
+
+  it('createRejected: an ended rejected row with reason and detail, also while the proxies are busy', () => {
+    const { store, clock } = setup();
+    const active = store.create(nm());
+    const r = store.createRejected({ ...nm({ requestId: 'req-2' }), reason: 'busy', detail: 'a move is open on the source, target' });
+    expect(r).toMatchObject({ phase: 'rejected', reason: 'busy', detail: 'a move is open on the source, target', endedAt: clock.now(), offeredAt: null });
+    expect(store.active().map((x) => x.id)).toEqual([active.id]);
+    // The busy rule still holds for rows that are not ended.
+    expect(() => store.create(nm({ requestId: 'req-3' }))).toThrow(MoveBusy);
+    expect(store.createRejected({ ...nm({ requestId: 'req-4' }), reason: 'incompatible', detail: null }).detail).toBeNull();
+  });
+
+  it('deleteRejected removes a rejected move and its chunks only', () => {
+    const { db, clock } = setup();
+    const seen: string[] = [];
+    const store = new MoveStore(db, clock, (id) => seen.push(id));
+    const live = store.create(nm());
+    const r = store.createRejected({ ...nm({ requestId: 'req-2' }), reason: 'busy', detail: null });
+    store.saveChunks(r.id, [{ id: 'clips:2026-10-20', state: 'pending' }]);
+    expect(store.deleteRejected(live.id)).toBe(false);
+    expect(store.get(live.id)).not.toBeNull();
+    seen.length = 0;
+    expect(store.deleteRejected(r.id)).toBe(true);
+    expect(store.get(r.id)).toBeNull();
+    expect(db.prepare('SELECT count(*) n FROM move_chunks WHERE move_id = ?').get(r.id)).toEqual({ n: 0 });
+    expect(seen).toEqual([r.id]);
+    expect(store.deleteRejected(r.id)).toBe(false);
+  });
+
+  it('migration 15 adds moves.detail (NULL for old rows) and lets an ended row in beside an active move', () => {
+    const f = join(tmpDir(), 'm15.db');
+    const raw = new DatabaseSync(f);
+    for (let i = 0; i < 14; i++) MIGRATIONS[i](raw);
+    raw.exec('PRAGMA user_version = 14');
+    raw.exec(`INSERT INTO accounts (id,name,display_name,created_at,updated_at) VALUES ('acc_a','alpha','A',1,1);
+      INSERT INTO proxies (id,account_id,name,display_name,runs_on,state,created_at,updated_at) VALUES
+        ('prx_1','acc_a','p1','P1','cluster','enrolled',1,1),('prx_2','acc_a','p2','P2','cluster','enrolled',1,1);
+      INSERT INTO cameras (id,account_id,proxy_id,cams_id,proxy_camera_id,name,kind,host,created_at,updated_at) VALUES ('cam_1','acc_a','prx_1','c1','pc1','C1','camera','192.0.2.1',1,1);
+      INSERT INTO moves (id,account_id,camera_id,source_proxy_id,target_proxy_id,request_id,phase,reason,created_at,updated_at,ended_at,version) VALUES ('mv_OLD','acc_a','cam_1','prx_1','prx_2','rq_old','rejected','incompatible',1,1,1,1);`);
+    raw.close();
+    const db = openDb(f);
+    expect(LATEST_VERSION).toBeGreaterThanOrEqual(15);
+    const store = new MoveStore(db, fakeClock());
+    expect(store.get('mv_OLD')).toMatchObject({ phase: 'rejected', reason: 'incompatible', detail: null });
+    store.create(nm({ requestId: 'rq_new' }));
+    expect(() => store.create(nm({ requestId: 'rq_new2' }))).toThrow(MoveBusy);
+    expect(store.createRejected({ ...nm({ requestId: 'rq_new3' }), reason: 'busy', detail: 'x' }).phase).toBe('rejected');
+  });
+
   it('creates a move and reads it back', () => {
     const { store, db, clock } = setup();
     const m = store.create(nm({ reason: 'new host', tokenHash: 'sha256:' + 'a'.repeat(64) }));
@@ -251,8 +316,8 @@ describe('MoveStore', () => {
     const db = openDb(f);
     expect(LATEST_VERSION).toBeGreaterThanOrEqual(14);
     const after = db.prepare('SELECT * FROM moves ORDER BY id').all() as Record<string, unknown>[];
-    expect(after.map(({ return_of, check_result, keep_days, end_requested, ...rest }) => {
-      expect([return_of, check_result, keep_days, end_requested]).toEqual([null, null, null, null]);
+    expect(after.map(({ return_of, check_result, keep_days, end_requested, detail, ...rest }) => {
+      expect([return_of, check_result, keep_days, end_requested, detail]).toEqual([null, null, null, null, null]);
       return rest;
     })).toEqual(movesBefore);
     expect(db.prepare('SELECT * FROM move_chunks ORDER BY move_id, chunk_id').all()).toEqual(chunksBefore);

@@ -10,12 +10,13 @@ import type { CommandRow, Commands, WireCommand } from '../commands/service';
 import { validateResultPayload } from '../contract';
 import { MOVE_ANSWER_REASONS, MOVE_KINDS } from '../../contract/build';
 import { newId } from '../ids';
-import { GIVE_UP_CLOSED, GIVE_UP_CLOSED_OPEN_CODES, MoveBusy, MoveStore, type ChunkState, type ChunkStateName, type Move } from './store';
+import { detailOf, GIVE_UP_CLOSED, GIVE_UP_CLOSED_OPEN_CODES, MoveBusy, MoveStore, type ChunkState, type ChunkStateName, type Move } from './store';
 import { eligibleTargets, precheck, type Candidate, type EligibleTarget, type PrecheckDeps } from './precheck';
 import { begin, type BeginResult } from './begin';
 import type { CamsInstances } from '../cams/instances';
 import { moveToken, targetAddress, type Resolve } from './token';
 import { Returns, type ReturnKey } from './returns';
+import { moveContent } from './view';
 import type { MoveCheck, MoveApproveEvent, MoveCameraConn, MoveCancelEvent, MoveEvent, MovePhaseEvent, MoveProgressEvent, MoveRequestEvent, MoveTargetsEvent } from './types';
 
 // The move job, its start (plan Task 4; S §4, §6, §7, §8.1): a source's
@@ -93,6 +94,11 @@ const DONE_MAX = 512;
 const SEEN_MAX = 2000;
 
 const ANSWER_REASONS = new Set<string>(MOVE_ANSWER_REASONS);
+// move.answer may carry the refusal's detail (contract v1), but released cam-proxy refuses an answer with it
+// (invalid_args: a closed key list), and the source would then never hear of the refusal. Off until every proxy runs
+// the cam-proxy release that accepts it; until then the detail stays on the move row, in the audit and the UI.
+export const ANSWER_CARRIES_DETAIL = false;
+const answerDetail = (detail: string | null | undefined) => (ANSWER_CARRIES_DETAIL && detail ? { detail } : {});
 // Plans compared by value: key order and the order of the kinds are not meaning (like cam-proxy's canonical).
 const canonical = (x: unknown): string => JSON.stringify(x, (_k, v) => {
   if (Array.isArray(v)) return v.every((e) => typeof e !== 'object') ? [...v].sort() : v;
@@ -111,6 +117,8 @@ const samePlan = (a: unknown, b: unknown) => a !== null && a !== undefined && ca
 // The fingerprint of the target's X25519 public key (as cam-proxy audits it): never the key itself in an audit record.
 const keyFingerprint = (spkiB64: string) => `SHA256:${createHash('sha256').update(Buffer.from(spkiB64, 'base64')).digest('hex').toUpperCase()}`;
 const isCount = (x: unknown): x is number => Number.isSafeInteger(x) && (x as number) >= 0;
+// Who asked, as the move row keeps it.
+const actorOf = (ev: MoveRequestEvent) => `${ev.actor.origin}:${ev.actor.label}`.slice(0, 100);
 
 export function estimateS(summary: unknown, probeBps: number): number {
   let bytes = 0;
@@ -181,7 +189,8 @@ export class Moves {
   private returns: Returns;
 
   constructor(private d: MovesDeps) {
-    this.store = new MoveStore(d.db, d.clock);
+    // Every row change (create, phase, prune, delete) publishes the live 'move' event (the Moves page reloads on it).
+    this.store = new MoveStore(d.db, d.clock, (id) => this.publish(id));
     this.returns = new Returns({
       db: d.db, clock: d.clock, log: d.log, registry: d.registry, commands: d.commands, store: this.store, resolve: d.resolve,
       send: (m, proxyId, command, args) => {
@@ -194,7 +203,6 @@ export class Moves {
       retryDue: (m, proxyId, command, base, last) => this.retryDue(m, proxyId, command, base, last),
       chunkStates: (id) => this.chunkStates(id),
       flushIn: (id) => this.flushIn(id),
-      publish: (id) => this.publish(id),
     }, this.returnTokens, CANCEL_RETRY_MS);
     d.commands.onFinal((r) => this.onFinal(r));
   }
@@ -452,26 +460,32 @@ export class Moves {
     // The offer hands the target the camera's address and protocol as the source reports them: they must be the
     // registry's. A NULL registry host or protocol, and a host "from-proxy", are whatever the source reports; hosts
     // compare by hostname only (case-insensitive, port ignored). Otherwise the proxies disagree: incompatible.
-    if (cam.host !== null && cam.host !== 'from-proxy' && hostnameOf(cam.host) !== hostnameOf(ev.camera.host)) return this.refuse(ctx, 'incompatible', 'camera_host');
-    if (cam.protocol !== null && cam.protocol !== ev.camera.protocol) return this.refuse(ctx, 'incompatible', 'camera_protocol');
+    if (cam.host !== null && cam.host !== 'from-proxy' && hostnameOf(cam.host) !== hostnameOf(ev.camera.host)) {
+      return this.refuse(ctx, 'incompatible', { rule: 'camera_host', text: `registry host ${cam.host}, source reports ${ev.camera.host}` });
+    }
+    if (cam.protocol !== null && cam.protocol !== ev.camera.protocol) {
+      return this.refuse(ctx, 'incompatible', { rule: 'camera_protocol', text: `registry protocol ${cam.protocol}, source reports ${ev.camera.protocol}` });
+    }
     const cand: Candidate = { accountId, sourceProxyId: proxyId, targetProxyId: ev.target, cameraId: cam.id };
     let pc = this.precheck(cand);
-    if (!pc.ok) return this.refuse(ctx, pc.reason);
+    if (!pc.ok) return this.refuse(ctx, pc.reason, { rule: pc.rule, text: pc.detail });
     const src = this.d.registry.proxyById(proxyId)!;
     const tgt = this.d.registry.proxyById(ev.target)!;
     // The offer names the source's url and TLS name; the token is bound to the target's LAN address (R4).
-    if (!src.url || !src.tlsServername) return this.refuse(ctx, 'not_routed', 'source_registry_incomplete');
+    if (!src.url || !src.tlsServername) {
+      return this.refuse(ctx, 'not_routed', { rule: 'source_registry_incomplete', text: `the source's registry entry has no ${!src.url ? 'url' : 'TLS name'}` });
+    }
     const targetIp = await targetAddress(tgt.url, this.d.resolve);
-    if (!targetIp) return this.refuse(ctx, 'not_routed', 'target_address');
+    if (!targetIp) return this.refuse(ctx, 'not_routed', { rule: 'target_address', text: tgt.url ? `the target's url ${tgt.url} gives no address` : "the target's registry entry has no url" });
     pc = this.precheck(cand); // again: things may have changed while resolving
-    if (!pc.ok) return this.refuse(ctx, pc.reason);
+    if (!pc.ok) return this.refuse(ctx, pc.reason, { rule: pc.rule, text: pc.detail });
     const { token, tokenHash } = moveToken();
     let m: Move;
     try {
       m = tx(this.d.db, () => {
         const mv = this.store.create({
           accountId, cameraId: cam.id, sourceProxyId: proxyId, targetProxyId: ev.target, requestId: ev.requestId, summary: ev.summary, settings: ev.settings,
-          tokenHash, targetIp, actor: `${ev.actor.origin}:${ev.actor.label}`.slice(0, 100), bounds: ev.bounds ?? null,
+          tokenHash, targetIp, actor: actorOf(ev), bounds: ev.bounds ?? null,
         });
         this.audit(mv, 'move-request', 'ok', { phase: 'requested', by: ev.actor, autoApprove: (ev.bounds ?? null) !== null }, { actorType: 'proxy', actor: proxyId });
         const open = this.send(accountId, proxyId, 'move.open', { v: 1, moveId: mv.id, requestId: ev.requestId, camera: ev.camera.proxyCameraId, tokenHash, targetIp });
@@ -479,24 +493,42 @@ export class Moves {
         return mv;
       });
     } catch (e) {
-      if (e instanceof MoveBusy) return this.refuse(ctx, 'busy');
+      if (e instanceof MoveBusy) return this.refuse(ctx, 'busy', { rule: 'not_busy', text: this.busyText(proxyId, ev.target, cam.id) });
       throw e;
     }
     if (m.phase === 'requested') this.pending.set(m.id, { token, camera: ev.camera });
   }
 
-  // A request cams-admin refuses before any move row exists (busy and other_account can't have one).
-  private refuse(c: { proxyId: string; accountId: string; ev: MoveRequestEvent; cameraId: string | null; camsId: string | null }, reason: string, detail?: string): void {
+  // Which side holds an open move (the store refused the row as busy).
+  private busyText(source: string, target: string, cameraId: string): string {
+    const open = (id: string) => this.store.byProxy(id) !== null;
+    const sides = [open(source) && 'source', open(target) && 'target'].filter(Boolean).join(', ');
+    return sides ? `a move is open on the ${sides}` : this.store.active().some((m) => m.cameraId === cameraId) ? 'a move of this camera is open' : 'a move is open';
+  }
+
+  // A request cams-admin refuses itself (before any move.open). A camera in the registry and a target of the same
+  // account (another proxy than the source) get a rejected move row (written ended: it never holds a proxy), so the
+  // refusal shows on the Moves page; otherwise (not_registered, other_account) the audit row and the answer only.
+  // why: the check that refused (audited as `rule`) and its detail in words (the row's detail, sent in move.answer).
+  private refuse(c: { proxyId: string; accountId: string; ev: MoveRequestEvent; cameraId: string | null; camsId: string | null }, reason: string, why: { rule?: string; text?: string | null } = {}): void {
     const t = this.d.registry.proxyById(c.ev.target);
+    const sameAccount = !!t && t.accountId === c.accountId;
     // Another account's proxy: its id only, never its name.
-    const target = { proxyId: c.ev.target, name: t && t.accountId === c.accountId ? t.name : c.ev.target };
-    const moveId = newId('mv');
+    const target = { proxyId: c.ev.target, name: sameAccount ? t.name : c.ev.target };
+    const detail = detailOf(why.text);
     tx(this.d.db, () => {
+      const row = c.cameraId && sameAccount && c.ev.target !== c.proxyId
+        ? this.store.createRejected({
+          accountId: c.accountId, cameraId: c.cameraId, sourceProxyId: c.proxyId, targetProxyId: c.ev.target, requestId: c.ev.requestId, reason, detail,
+          summary: c.ev.summary, settings: c.ev.settings, actor: actorOf(c.ev), bounds: c.ev.bounds ?? null,
+        })
+        : null;
+      const moveId = row?.id ?? newId('mv');
       this.d.audit.write({
         actorType: 'proxy', actor: c.proxyId, action: 'move-request', accountId: c.accountId, targetType: 'camera', targetId: c.cameraId, targetLabel: c.camsId, outcome: 'refused',
-        detail: { moveId, requestId: c.ev.requestId, camsId: c.camsId, source: c.proxyId, target: c.ev.target, reason, phase: 'rejected', by: c.ev.actor, ...(detail ? { detail } : {}) },
+        detail: { moveId, requestId: c.ev.requestId, camsId: c.camsId, source: c.proxyId, target: c.ev.target, reason, phase: 'rejected', by: c.ev.actor, ...(why.rule ? { rule: why.rule } : {}), ...(detail ? { detail } : {}) },
       });
-      if (ANSWER_REASONS.has(reason)) this.send(c.accountId, c.proxyId, 'move.answer', { v: 1, moveId, requestId: c.ev.requestId, target, accept: false, reason });
+      if (ANSWER_REASONS.has(reason)) this.send(c.accountId, c.proxyId, 'move.answer', { v: 1, moveId, requestId: c.ev.requestId, target, accept: false, reason, ...answerDetail(detail) });
     });
   }
 
@@ -612,7 +644,7 @@ export class Moves {
       });
       return;
     }
-    if (r.state === 'done' && res?.accept === false) return this.reject(m, typeof res.reason === 'string' && ANSWER_REASONS.has(res.reason) ? res.reason : 'target_failed');
+    if (r.state === 'done' && res?.accept === false) return this.reject(m, typeof res.reason === 'string' && ANSWER_REASONS.has(res.reason) ? res.reason : 'target_failed', detailOf(res.detail));
     // A2: the proxy's own command check refused it (move.receive not allowed there).
     if (r.state === 'refused' && r.outcomeCode === 'not_allowed') return this.reject(m, 'moves_not_allowed');
     this.fail(m, r.state === 'done' ? 'bad_result' : r.outcomeCode ?? r.state, 'target_failed');
@@ -823,6 +855,7 @@ export class Moves {
       });
     } else if (now - p.savedAt >= PROGRESS_SAVE_MS) this.saveProgress(m);
     this.maybeEndAfterArchive(m);
+    // Progress lives in memory (written at most once a minute): published here, not by the store.
     this.publish(m.id);
   }
 
@@ -949,7 +982,6 @@ export class Moves {
     const mv = this.store.setPhase(m.id, back ? 'cancelling' : 'cancelled', { ...this.flushIn(m.id), copiedChoice: back ? null : copied });
     this.audit(mv, 'move-cancel', 'ok', { phase: mv.phase, from: m.phase, copied: back ? null : copied, ...(back ? { copyBack: true } : {}) }, who);
     this.ensureCancels(mv);
-    this.publish(m.id);
     return mv;
   }
 
@@ -981,11 +1013,30 @@ export class Moves {
       this.d.log.error({ moveId: m.id, code: e instanceof ApiError ? e.code : 'busy' }, 'move_cancel_registry_failed');
       return;
     }
-    this.publish(m.id);
-    if (ret) {
-      this.publish(ret.id);
-      this.resume(ret.id);
-    }
+    if (ret) this.resume(ret.id);
+  }
+
+  // A rejection is final: the sysadmin removes the record (no content is touched: a rejected move never copied).
+  // 404 unknown, 409 not_rejected for any other phase. The move's audit entries stay; one move-delete is added.
+  deleteRejected(actor: string, moveId: string): void {
+    const m = this.store.get(moveId);
+    if (!m) throw new ApiError(404, 'not_found');
+    if (m.phase !== 'rejected') throw new ApiError(409, 'not_rejected');
+    tx(this.d.db, () => {
+      const camsId = this.camsId(m);
+      this.d.audit.write({
+        actorType: 'sysadmin', actor, action: 'move-delete', accountId: m.accountId, targetType: 'camera', targetId: m.cameraId, targetLabel: camsId, outcome: 'ok',
+        detail: { moveId: m.id, camsId, reason: m.reason, source: m.sourceProxyId, target: m.targetProxyId },
+      });
+      if (!this.store.deleteRejected(m.id)) throw new ApiError(409, 'not_rejected');
+    });
+  }
+
+  // The content checklist of the detail; the per-kind sizes of the target's accepted offer when there is one.
+  content(m: Move) {
+    const offer = this.lastCommand(m, m.targetProxyId, 'move.offer');
+    const space = offer?.state === 'done' && offer.result?.accept === true ? answerSpace(offer.result.space) : null;
+    return moveContent(m, this.chunkStates(m.id), (space?.perKind ?? {}) as Record<string, unknown>);
   }
 
   // --- finish, end transfer, done (S §10.4, §11, A5, A9) ----------------------------------------
@@ -998,7 +1049,6 @@ export class Moves {
       this.audit(mv, 'move-phase', 'ok', { phase: 'cleaning' }, { actorType: 'proxy', actor: m.targetProxyId });
       this.ensureFinishes(mv);
     });
-    this.publish(m.id);
   }
 
   // The sysadmin ends the transfer early (S §10.4): only in copying. While
@@ -1014,7 +1064,6 @@ export class Moves {
       return tx(this.d.db, () => {
         const mv = this.store.setPhase(m.id, 'copying', { ...this.flushIn(m.id), endRequested: { at: this.d.clock.now(), actorType: 'sysadmin', actor } });
         this.audit(mv, 'move-end-after-archive', 'ok', { phase: 'copying', archiveChunks: this.archiveChunks(m.id).length }, { actorType: 'sysadmin', actor });
-        this.publish(m.id);
         return mv;
       });
     }
@@ -1035,7 +1084,6 @@ export class Moves {
     });
     this.returnTokens.delete(m.id);
     this.giveUpFinishes(mv);
-    this.publish(m.id);
     return mv;
   }
 
@@ -1135,7 +1183,6 @@ export class Moves {
     const failure = reason === END_TRANSFER ? null : mv.reason;
     this.audit(mv, 'move-end-transfer', failure ? 'failed' : 'ok', { phase: 'cleaning', abandoned: left.length, sourceOnline: this.online(m.sourceProxyId), ...(failure ? { failure } : {}) }, who);
     this.ensureFinishes(mv);
-    this.publish(m.id);
     return mv;
   }
 
@@ -1221,7 +1268,6 @@ export class Moves {
     this.audit(mv, 'move-done', failure ? 'failed' : 'ok', {
       phase: 'done', abandoned, ...this.cleanupDetail(src, pending), ...(targetPending ? { targetCleanup: 'pending' } : {}), ...(failure ? { failure } : {}), chunks: counts, bytesDone: mv.bytesDone, bytesTotal: mv.bytesTotal, durationS,
     });
-    this.publish(m.id);
   }
 
   private cleanupDetail(src: CommandRow | null, pending: boolean): Record<string, unknown> {
@@ -1244,7 +1290,6 @@ export class Moves {
       const mv = this.store.setPhase(m.id, 'done', { cleanupPending: false });
       this.audit(mv, 'move-done', 'ok', { phase: 'done', followUp: true, role: 'source', cleanupAt: this.d.clock.now(), ...this.cleanupDetail(fin, false) }, { actorType: 'proxy', actor: m.sourceProxyId });
     });
-    this.publish(m.id);
   }
 
   // A done move's pending target finish: sent again while the target is online; once answered the marker goes and a
@@ -1261,16 +1306,16 @@ export class Moves {
         phase: 'done', followUp: true, role: 'target', cleanupAt: this.d.clock.now(), targetCleanup: fin.state === 'done' ? 'done' : 'not-done', ...(fin.state !== 'done' ? { targetCleanupCode: fin.outcomeCode ?? fin.state } : {}),
       }, { actorType: 'proxy', actor: m.targetProxyId });
     });
-    this.publish(m.id);
   }
 
   // --- endings ---------------------------------------------------------------------------------
 
-  private reject(m: Move, reason: string): void {
+  // The target refused the offer: final. Its detail (its own words, absent from older proxies) is kept and passed on to the source.
+  private reject(m: Move, reason: string, detail: string | null = null): void {
     tx(this.d.db, () => {
-      this.answer(m, { accept: false, reason });
-      const mv = this.store.setPhase(m.id, 'rejected', { reason });
-      this.audit(mv, 'move-offer', 'refused', { phase: 'rejected', accept: false, reason });
+      this.answer(m, { accept: false, reason, ...answerDetail(detail) });
+      const mv = this.store.setPhase(m.id, 'rejected', { reason, detail });
+      this.audit(mv, 'move-offer', 'refused', { phase: 'rejected', accept: false, reason, ...(detail ? { detail } : {}) });
     });
   }
 
@@ -1288,7 +1333,7 @@ export class Moves {
     return mv;
   }
 
-  private answer(m: Move, a: { accept: boolean; reason?: string; space?: Record<string, unknown>; estimateS?: number }): boolean {
+  private answer(m: Move, a: { accept: boolean; reason?: string; detail?: string; space?: Record<string, unknown>; estimateS?: number }): boolean {
     const t = this.d.registry.proxyById(m.targetProxyId);
     return this.send(m.accountId, m.sourceProxyId, 'move.answer', { v: 1, moveId: m.id, requestId: m.requestId, target: { proxyId: m.targetProxyId, name: t?.name ?? m.targetProxyId }, ...a }).ok;
   }

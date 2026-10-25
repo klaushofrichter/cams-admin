@@ -3,7 +3,7 @@
   import { onMount } from 'svelte';
   import { api, errorText, ApiFailure } from '../lib/api';
   import { coalesced, live } from '../lib/live';
-  import { cancelable, etaText, phaseClass, phaseReason, phaseText, progressText, refusalText, startBody, cameraLabel } from '../lib/moves';
+  import { cancelable, etaText, phaseClass, phaseReason, phaseText, progressText, refusalLine, refusalText, startBody, cameraLabel } from '../lib/moves';
   import MoveDetail from '../components/MoveDetail.svelte';
 
   let items = $state<any[]>([]);
@@ -109,7 +109,7 @@
 
 <section class="card grid">
   <h2>Moves</h2>
-  <p class="muted">A camera moving from one proxy to another of the same account: its phase and progress, cancel, end the transfer early, and the copy back after a cancel.</p>
+  <p class="muted">A camera moving from one proxy to another of the same account: its phase and progress, cancel, end the transfer early, and the copy back after a cancel. A refused move says who refused it and why; delete it once you have read it.</p>
   {#if error}<p class="error" data-testid="moves-error">{error}</p>{/if}
   <div class="scroll-x">
     <table data-testid="moves-list">
@@ -122,7 +122,8 @@
             <td>{m.target.name}</td>
             <td>
               <span class="chip {phaseClass(m.phase)}" data-testid="move-phase-{m.id}">{phaseText(m.phase, m.reason)}</span>
-              {#if phaseReason(m.phase, m.reason) && (m.phase === 'rejected' || m.phase === 'failed' || m.phase === 'returning' || m.phase === 'returned')}<span class="muted small" data-testid="move-reason-{m.id}"> {phaseReason(m.phase, m.reason)}</span>{/if}
+              {#if m.phase === 'rejected'}<span class="muted small" data-testid="move-reason-{m.id}"> {refusalLine(m)}</span>
+              {:else if phaseReason(m.phase, m.reason) && (m.phase === 'failed' || m.phase === 'returning' || m.phase === 'returned')}<span class="muted small" data-testid="move-reason-{m.id}"> {phaseReason(m.phase, m.reason)}</span>{/if}
               {#if m.budgetExceeded}<span class="badge warn" data-testid="move-budget-{m.id}">Over time budget</span>{/if}
             </td>
             <td>{progressText(m)}{#if (m.phase === 'copying' || m.phase === 'returning') && etaText(m.etaS)}<div class="muted small">{etaText(m.etaS)}</div>{/if}</td>

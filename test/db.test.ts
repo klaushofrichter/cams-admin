@@ -338,7 +338,10 @@ describe('database', () => {
     raw.close();
     const db = openDb(f);
     const after = objects(db) as { name: string }[];
-    expect(after.filter((o) => o.name !== 'moves_return_of')).toEqual(before);
+    // Migration 15 rewrites the busy trigger (rows not ended only); every other object is migration 8's.
+    const notBusy = (o: { name: string }) => o.name !== 'moves_return_of' && o.name !== 'moves_proxy_busy';
+    expect(after.filter(notBusy)).toEqual((before as { name: string }[]).filter(notBusy));
+    expect(after.find((o) => o.name === 'moves_proxy_busy')).toMatchObject({ type: 'trigger', tbl_name: 'moves', sql: expect.stringContaining('WHEN NEW.ended_at IS NULL AND EXISTS') });
     expect(after.find((o) => o.name === 'moves_return_of')).toMatchObject({ type: 'index', tbl_name: 'moves' });
     expect(fks(db)).toEqual(fksBefore);
     expect(db.prepare(`SELECT strict FROM pragma_table_list WHERE name IN ('moves','move_chunks') ORDER BY name`).all()).toEqual([{ strict: 1 }, { strict: 1 }]);
