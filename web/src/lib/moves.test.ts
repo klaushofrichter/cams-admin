@@ -182,6 +182,10 @@ describe('rejections and the content checklist', () => {
     expect(refusalLine({ ...tgt, phase: 'rejected', refusedBy: 'target', reason: 'incompatible' })).toBe("Pi refused: its configuration can't take this camera");
     expect(refusalLine({ ...tgt, phase: 'rejected', refusedBy: 'cams-admin', reason: 'incompatible' })).toBe("cams-admin refused: the source's camera address or protocol differs from the registry");
     expect(refusalLine({ ...tgt, phase: 'rejected', refusedBy: 'cams-admin', reason: 'busy' })).toBe('cams-admin refused: a proxy is busy with another move');
+    // camera_limit: the target's own refusal, and cams-admin's from the target's reported profile (precheck capacity, ftp_ports).
+    expect(refusalLine({ ...tgt, phase: 'rejected', refusedBy: 'target', reason: 'camera_limit' })).toBe('Pi refused: the target has no room for another camera');
+    expect(refusalLine({ ...tgt, phase: 'rejected', refusedBy: 'cams-admin', reason: 'camera_limit' })).toBe("cams-admin refused: the target's profile has no room for another camera (cameras or FTP ports)");
+    expect(refusalText({ error: 'precheck', reason: 'camera_limit', report: { rules: [{ rule: 'capacity', ok: false, reason: 'camera_limit', detail: 'een holds 3 of 3 cameras' }] } })).toBe('een holds 3 of 3 cameras');
     expect(refusalLine({ ...tgt, phase: 'rejected', refusedBy: 'target', reason: 'camera_unreachable' })).toBe('Pi refused: the target cannot reach the camera');
     expect(refusalLine({ ...tgt, phase: 'rejected', reason: 'incompatible' })).toBe("its configuration can't take this camera");
     expect(reasonText('incompatible')).not.toContain('not compatible');
