@@ -17,7 +17,9 @@ describe('firewall lines', () => {
     expect(() => firewallLines('ufw', 'cam.example.net', 21, null)).toThrow();
   });
   it('isFirewallLine: exactly the templates, every line built passes', () => {
-    for (const tool of ['ufw', 'nft'] as const) for (const ip of ['192.0.2.5', '2001:db8::1']) for (const l of firewallLines(tool, ip, 2121, { from: 30000, to: 30029 })) expect(isFirewallLine(l), l).toBe(true);
+    for (const tool of ['ufw', 'nft'] as const) for (const l of firewallLines(tool, '192.0.2.5', 2121, { from: 30000, to: 30029 })) expect(isFirewallLine(l), l).toBe(true);
+    // cam-proxy makes lines only for IPv4 cameras: a reported IPv6 line is none of its formats.
+    for (const tool of ['ufw', 'nft'] as const) for (const l of firewallLines(tool, '2001:db8::1', 2121, { from: 30000, to: 30029 })) expect(isFirewallLine(l), l).toBe(false);
     for (const bad of [
       'sudo ufw allow from 192.0.2.5 to any port 2121 proto tcp; rm -rf /',
       'sudo ufw allow from cam.example.net to any port 2121 proto tcp',
