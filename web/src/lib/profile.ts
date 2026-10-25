@@ -1,5 +1,7 @@
 // The proxy profile (proxy profile design §3): text for the Profile card, the dashboard notice and the firewall
 // lines the Start move form shows. cams-admin only reads the profile: a person sets it on the proxy.
+import { firewallLines, ipLiteral } from '../../../contract/firewall';
+export { firewallLines };
 
 export interface Profile {
   set: boolean; name: string | null; cameras: number; storageGB: number | null; held: number;
@@ -7,7 +9,7 @@ export interface Profile {
   storage: { budgetBytes: number | null; usedBytes: number | null; diskBytes: number | null; freeBytes: number | null };
   hardware: { pi: string | null; cpuCores: number | null; cpuModel: string | null; memoryBytes: number | null; load5: number | null; cpuTempC: number | null };
   warnings: string[];
-  firewall: { tool: 'ufw' | 'nft' | null; lines: string[] };
+  firewall: { tool: 'ufw' | 'nft' | null; lines: string[]; dropped?: number };
 }
 
 // The first cam-proxy release that reports a profile.
@@ -48,6 +50,9 @@ const WARNINGS: Record<string, string> = {
 };
 export const warningText = (w: string): string => WARNINGS[w] ?? w;
 
+// The lines of the proxy's report cams-admin did not show (not one of the ufw/nft templates).
+export const droppedText = (n: number | undefined): string => (n ? `${n} unrecognised line${n === 1 ? '' : 's'} not shown` : '');
+
 // A camera address without a port (an IPv6 address without its brackets); null when the registry has none to use.
 export function hostOnly(host: string | null | undefined): string | null {
   const h = (host ?? '').trim();
@@ -57,12 +62,6 @@ export function hostOnly(host: string | null | undefined): string | null {
   return i >= 0 && h.indexOf(':', i + 1) < 0 ? h.slice(0, i) : h;
 }
 
-// The lines a camera's host needs on the proxy's host (as cam-proxy prints them): the FTP port and the passive range.
-export function firewallLines(tool: 'ufw' | 'nft' | null, host: string, port: number, passive: { from: number; to: number } | null): string[] {
-  if (tool === 'nft') return [`sudo nft add rule inet filter input ip saddr ${host} tcp dport ${port} accept`, ...(passive ? [`sudo nft add rule inet filter input ip saddr ${host} tcp dport ${passive.from}-${passive.to} accept`] : [])];
-  return [`sudo ufw allow from ${host} to any port ${port} proto tcp`, ...(passive ? [`sudo ufw allow from ${host} to any port ${passive.from}:${passive.to} proto tcp`] : [])];
-}
-
 // What the Start move form shows for the chosen camera and target: the lines to run on the target first, or why there are none.
 export type MoveFirewall = { lines: string[]; tool: 'ufw' | 'nft' } | { none: string };
 export function moveFirewall(targetName: string, p: Profile | null | undefined, cameraHost: string | null | undefined): MoveFirewall {
@@ -70,6 +69,8 @@ export function moveFirewall(targetName: string, p: Profile | null | undefined, 
   if (!p.ftp.enabled) return { none: `FTP is off on ${targetName}: no firewall lines needed.` };
   const host = hostOnly(cameraHost);
   if (!host) return { none: "The camera's address is not in the registry: the firewall lines need it." };
+  // Shell safety: only an IP literal goes into a line a person pastes into a shell.
+  if (!ipLiteral(host)) return { none: "No firewall lines: the camera's address is not an IP address." };
   if (p.ftp.port === null) return { none: `${targetName} reports no FTP port.` };
   const tool = p.firewall.tool ?? 'ufw';
   return { lines: firewallLines(tool, host, p.ftp.port, p.ftp.passive), tool };

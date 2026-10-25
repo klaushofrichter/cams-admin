@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { camerasLine, firewallLines, hardwareLine, hostOnly, moveFirewall, NO_PROFILE, size, spaceText, storageLine, warningText, type Profile } from './profile';
+import { camerasLine, droppedText, firewallLines, hardwareLine, hostOnly, moveFirewall, NO_PROFILE, size, spaceText, storageLine, warningText, type Profile } from './profile';
 import { makeProfile, firewallLines as clientLines } from '../../../test-client/summaries';
 
 const een = makeProfile() as Profile;
@@ -29,6 +29,9 @@ describe('profile (UI text)', () => {
     expect(een.firewall.lines).toEqual(firewallLines('ufw', '192.0.2.85', 2121, { from: 30000, to: 30029 }));
     expect(firewallLines(null, '192.0.2.9', 21, null)).toEqual(['sudo ufw allow from 192.0.2.9 to any port 21 proto tcp']);
   });
+  it('droppedText counts the lines not shown', () => {
+    expect([droppedText(0), droppedText(undefined), droppedText(1), droppedText(3)]).toEqual(['', '', '1 unrecognised line not shown', '3 unrecognised lines not shown']);
+  });
   it('hostOnly: the address without a port; none for from-proxy or empty', () => {
     expect(['192.0.2.10', '192.0.2.10:443', '[2001:db8::1]:443', '2001:db8::1', 'cam.example.net', 'from-proxy', '', null].map(hostOnly)).toEqual(['192.0.2.10', '192.0.2.10', '2001:db8::1', '2001:db8::1', 'cam.example.net', null, null, null]);
   });
@@ -38,6 +41,10 @@ describe('profile (UI text)', () => {
     expect(moveFirewall('old', null, '192.0.2.10')).toEqual({ none: `old: ${NO_PROFILE}; check its firewall by hand.` });
     expect(moveFirewall('cl', makeProfile({ ftp: false }) as Profile, '192.0.2.10')).toEqual({ none: 'FTP is off on cl: no firewall lines needed.' });
     expect(moveFirewall('een', een, 'from-proxy')).toEqual({ none: "The camera's address is not in the registry: the firewall lines need it." });
+    // Shell safety: only an IP literal goes into a line.
+    for (const host of ['cam.example.net', 'cam.example.net:443', '192.0.2.1;id', '$(id)', '192.0.2.300']) expect(moveFirewall('een', een, host), host).toEqual({ none: "No firewall lines: the camera's address is not an IP address." });
+    expect(moveFirewall('een', makeProfile({ tool: 'nft', passive: null }) as Profile, '[2001:db8::5]:443')).toEqual({ tool: 'nft', lines: ['sudo nft add rule inet filter input ip6 saddr 2001:db8::5 tcp dport 2121 accept'] });
+    expect(moveFirewall('een', een, '2001:db8::5')).toMatchObject({ lines: ['sudo ufw allow from 2001:db8::5 to any port 2121 proto tcp', expect.any(String)] });
   });
   it('spaceText names the figures kept at request time', () => {
     expect(spaceText('een', null)).toBe('');

@@ -111,6 +111,8 @@ export function truncateSummary(s: Summary) {
 
 // The heartbeat's proxy profile (proxy profile design §2). Default: the
 // design's example, een with three cameras of capacity, one held, FTP on.
+import { firewallLines } from '../contract/firewall';
+
 export function makeProfile(o: Partial<{
   set: boolean; name: string | null; cameras: number; storageGB: number | null; held: number; tool: 'ufw' | 'nft'; ftp: boolean; port: number;
   passive: { from: number; to: number } | null; cameraHosts: string[]; warnings: string[]; budgetBytes: number | null; usedBytes: number | null;
@@ -134,8 +136,5 @@ export function makeProfile(o: Partial<{
   };
 }
 
-// The lines a camera's host needs (cam-proxy prints the same).
-export function firewallLines(tool: 'ufw' | 'nft', host: string, port: number, passive: { from: number; to: number } | null): string[] {
-  if (tool === 'nft') return [`sudo nft add rule inet filter input ip saddr ${host} tcp dport ${port} accept`, ...(passive ? [`sudo nft add rule inet filter input ip saddr ${host} tcp dport ${passive.from}-${passive.to} accept`] : [])];
-  return [`sudo ufw allow from ${host} to any port ${port} proto tcp`, ...(passive ? [`sudo ufw allow from ${host} to any port ${passive.from}:${passive.to} proto tcp`] : [])];
-}
+// The lines a camera's host needs (cam-proxy prints the same): the contract's templates.
+export { firewallLines } from '../contract/firewall';
