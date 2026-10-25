@@ -9,8 +9,7 @@ then empties it on `main`.
 
 - A refused camera move now says who refused it (the target proxy by name, or
   cams-admin), the reason in plain words, and the detail of the refusal (for
-  example "registry host 192.0.2.10, source reports 192.0.2.11"). The detail is
-  also passed on to the source proxy.
+  example "registry host 192.0.2.10, source reports 192.0.2.11").
 - Moves that cams-admin itself refuses (the camera's address or protocol
   differs from the registry, a proxy is busy, a precheck rule fails) now show
   on the Moves page too, not only in the audit log.

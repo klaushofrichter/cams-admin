@@ -94,6 +94,11 @@ const DONE_MAX = 512;
 const SEEN_MAX = 2000;
 
 const ANSWER_REASONS = new Set<string>(MOVE_ANSWER_REASONS);
+// move.answer may carry the refusal's detail (contract v1), but released cam-proxy refuses an answer with it
+// (invalid_args: a closed key list), and the source would then never hear of the refusal. Off until every proxy runs
+// the cam-proxy release that accepts it; until then the detail stays on the move row, in the audit and the UI.
+export const ANSWER_CARRIES_DETAIL = false;
+const answerDetail = (detail: string | null | undefined) => (ANSWER_CARRIES_DETAIL && detail ? { detail } : {});
 // Plans compared by value: key order and the order of the kinds are not meaning (like cam-proxy's canonical).
 const canonical = (x: unknown): string => JSON.stringify(x, (_k, v) => {
   if (Array.isArray(v)) return v.every((e) => typeof e !== 'object') ? [...v].sort() : v;
@@ -523,7 +528,7 @@ export class Moves {
         actorType: 'proxy', actor: c.proxyId, action: 'move-request', accountId: c.accountId, targetType: 'camera', targetId: c.cameraId, targetLabel: c.camsId, outcome: 'refused',
         detail: { moveId, requestId: c.ev.requestId, camsId: c.camsId, source: c.proxyId, target: c.ev.target, reason, phase: 'rejected', by: c.ev.actor, ...(why.rule ? { rule: why.rule } : {}), ...(detail ? { detail } : {}) },
       });
-      if (ANSWER_REASONS.has(reason)) this.send(c.accountId, c.proxyId, 'move.answer', { v: 1, moveId, requestId: c.ev.requestId, target, accept: false, reason, ...(detail ? { detail } : {}) });
+      if (ANSWER_REASONS.has(reason)) this.send(c.accountId, c.proxyId, 'move.answer', { v: 1, moveId, requestId: c.ev.requestId, target, accept: false, reason, ...answerDetail(detail) });
     });
   }
 
@@ -1308,7 +1313,7 @@ export class Moves {
   // The target refused the offer: final. Its detail (its own words, absent from older proxies) is kept and passed on to the source.
   private reject(m: Move, reason: string, detail: string | null = null): void {
     tx(this.d.db, () => {
-      this.answer(m, { accept: false, reason, ...(detail ? { detail } : {}) });
+      this.answer(m, { accept: false, reason, ...answerDetail(detail) });
       const mv = this.store.setPhase(m.id, 'rejected', { reason, detail });
       this.audit(mv, 'move-offer', 'refused', { phase: 'rejected', accept: false, reason, ...(detail ? { detail } : {}) });
     });

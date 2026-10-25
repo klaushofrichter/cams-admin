@@ -10,7 +10,7 @@ import { enrolled, makeClient, resetAccounts, startServer, until, type Running }
 import { makeProxyInfo } from '../test-client/summaries';
 import type { ProxyClient } from '../test-client/client';
 import { GIVE_UP_AFTER_MS, RESEND_AFTER_MS } from '../server/commands/service';
-import { estimateS, FALLBACK_BPS, hostnameOf, MIN_ESTIMATE_S, OFFER_EXPIRY_MS, RESUME_GAP_MS } from '../server/moves/service';
+import { ANSWER_CARRIES_DETAIL, estimateS, FALLBACK_BPS, hostnameOf, MIN_ESTIMATE_S, OFFER_EXPIRY_MS, RESUME_GAP_MS } from '../server/moves/service';
 import { readEpoch } from '../server/db/open';
 import { AUDIT_ACTIONS } from '../server/audit';
 import { moveToken, targetAddress } from '../server/moves/token';
@@ -94,6 +94,19 @@ beforeEach(() => {
 const view = (id: string) => moveView(s.built.db, s.built.moves.store.get(id)!);
 
 describe('the target refuses with a detail', () => {
+  it('move.answer carries no detail today (ANSWER_CARRIES_DETAIL off until every proxy takes it)', async () => {
+    expect(ANSWER_CARRIES_DETAIL).toBe(false);
+    const src = await proxy();
+    const tgt = await proxy();
+    camera(src);
+    tgt.client.moveResults['move.offer'] = { status: 'ok', result: { accept: false, reason: 'incompatible', detail: 'the target needs https' } };
+    await answerOf(src, request(src, tgt.proxyId));
+    request(src, tgt.proxyId, { camera: 'cam1', conn: { host: '192.0.2.11' } });
+    await until(() => got(src.client, 'move.answer').length === 2, 5000, 'two answers');
+    for (const c of got(src.client, 'move.answer')) expect(Object.keys(c.body.args)).not.toContain('detail');
+    expect(moves().map((m) => m.detail).sort()).toEqual(['registry host 192.0.2.10, source reports 192.0.2.11', 'the target needs https']);
+  });
+
   it('stores the detail, forwards it in move.answer, audits it; the view says the target refused', async () => {
     const src = await proxy();
     const tgt = await proxy();
@@ -101,7 +114,9 @@ describe('the target refuses with a detail', () => {
     tgt.client.moveResults['move.offer'] = { status: 'ok', result: { accept: false, reason: 'incompatible', detail: 'cameras.cam1.protocol is http here; the target needs https' } };
     const requestId = request(src, tgt.proxyId);
     const a = await answerOf(src, requestId);
-    expect(a).toMatchObject({ accept: false, reason: 'incompatible', detail: 'cameras.cam1.protocol is http here; the target needs https' });
+    // Not forwarded yet (ANSWER_CARRIES_DETAIL): released cam-proxy refuses a move.answer with detail.
+    expect(a).toMatchObject({ accept: false, reason: 'incompatible' });
+    expect('detail' in a).toBe(false);
     const m = moves()[0];
     expect(m).toMatchObject({ id: a.moveId, phase: 'rejected', reason: 'incompatible', detail: 'cameras.cam1.protocol is http here; the target needs https' });
     expect(view(m.id)).toMatchObject({ refusedBy: 'target', reason: 'incompatible', detail: 'cameras.cam1.protocol is http here; the target needs https' });
@@ -143,7 +158,8 @@ describe("cams-admin's own refusals get a rejected move row", () => {
     const requestId = request(src, tgt.proxyId, { conn: { host: '192.0.2.11' } });
     const a = await answerOf(src, requestId);
     const want = 'registry host 192.0.2.10, source reports 192.0.2.11';
-    expect(a).toMatchObject({ accept: false, reason: 'incompatible', detail: want });
+    expect(a).toMatchObject({ accept: false, reason: 'incompatible' });
+    expect('detail' in a).toBe(false);
     expect(moves()).toHaveLength(1);
     const m = moves()[0];
     expect(m).toMatchObject({ id: a.moveId, requestId, phase: 'rejected', reason: 'incompatible', detail: want, sourceProxyId: src.proxyId, targetProxyId: tgt.proxyId });
@@ -164,7 +180,7 @@ describe("cams-admin's own refusals get a rejected move row", () => {
     const tgt = await proxy();
     camera(src);
     const a = await answerOf(src, request(src, tgt.proxyId, { conn: { protocol: 'http' } }));
-    expect(a).toMatchObject({ reason: 'incompatible', detail: 'registry protocol https, source reports http' });
+    expect(a).toMatchObject({ reason: 'incompatible' });
     expect(moves()[0]).toMatchObject({ phase: 'rejected', detail: 'registry protocol https, source reports http' });
   });
 
@@ -176,7 +192,7 @@ describe("cams-admin's own refusals get a rejected move row", () => {
     s.built.camsInstances.setRoute(ACTOR, i.id, src.proxyId, { url: null, hidden: false });
     const a = await answerOf(src, request(src, tgt.proxyId));
     const want = 'cams instances that see the source but not the target: cluster';
-    expect(a).toMatchObject({ reason: 'not_routed', detail: want });
+    expect(a).toMatchObject({ reason: 'not_routed' });
     expect(moves()[0]).toMatchObject({ phase: 'rejected', reason: 'not_routed', detail: want });
   });
 
@@ -189,7 +205,8 @@ describe("cams-admin's own refusals get a rejected move row", () => {
     const first = request(src, tgt.proxyId);
     await until(() => moves().length === 1, 5000, 'first');
     const second = request(src, tgt.proxyId, { camera: 'cam2' });
-    expect(await answerOf(src, second)).toMatchObject({ reason: 'busy', detail: 'a move is open on the source, target' });
+    expect(await answerOf(src, second)).toMatchObject({ reason: 'busy' });
+    expect(moves().find((m) => m.requestId === second)?.detail).toBe('a move is open on the source, target');
     expect(s.built.moves.store.active().map((m) => m.requestId)).toEqual([first]);
     expect(moves().find((m) => m.requestId === second)).toMatchObject({ phase: 'rejected', reason: 'busy' });
   });
