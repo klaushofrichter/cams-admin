@@ -5,6 +5,7 @@ import { tx } from '../db/open';
 import { newId } from '../ids';
 import { ApiError } from '../registry';
 import type { MoveBounds, MoveCheck } from './types';
+import type { SpaceCheck } from './space';
 
 // The move job's rows (plan Task 2). Every write is one transaction. Never
 // holds a token, password, sealed blob or private key: tokenHash is
@@ -40,11 +41,13 @@ export interface Move {
   keepDays: number | null;
   // An End transfer waiting for Archive to land.
   endRequested: { at: number; actorType: string; actor: string } | null;
+  // The space the move needs against the target's reported profile, at request time; null without a profile.
+  space: SpaceCheck | null;
 }
 export interface NewMove {
   accountId: string; cameraId: string; sourceProxyId: string; targetProxyId: string; requestId: string;
   reason?: string | null; detail?: string | null; plan?: unknown; summary?: unknown; settings?: unknown; tokenHash?: string | null;
-  targetIp?: string | null; actor?: string | null; bounds?: MoveBounds | null;
+  targetIp?: string | null; actor?: string | null; bounds?: MoveBounds | null; space?: SpaceCheck | null;
   // A return starts at 'returning' and names the cancelled move.
   returnOf?: string; phase?: 'requested' | 'returning';
 }
@@ -56,7 +59,7 @@ export class MoveBusy extends Error {
 }
 
 type Row = Record<string, unknown>;
-const JSON_COLS = new Set(['plan', 'summary', 'settings', 'bounds', 'check_result', 'end_requested']);
+const JSON_COLS = new Set(['plan', 'summary', 'settings', 'bounds', 'check_result', 'end_requested', 'space']);
 // Patchable Move fields -> columns (id, account, camera, proxies, request id and timestamps are not patchable).
 const PATCH_COLS: Record<string, string> = {
   reason: 'reason', detail: 'detail', plan: 'plan', summary: 'summary', settings: 'settings', tokenHash: 'token_hash', targetIp: 'target_ip',
@@ -79,6 +82,7 @@ const toMove = (r: Row): Move => ({
   endedAt: r.ended_at as number | null, actor: r.actor as string | null, version: r.version as number, cleanupPending: r.cleanup_pending === 1,
   targetCleanupPending: r.target_cleanup_pending === 1, bounds: dec(r.bounds),
   returnOf: r.return_of as string | null, check: dec(r.check_result), keepDays: r.keep_days as number | null, endRequested: dec(r.end_requested),
+  space: dec(r.space ?? null),
 });
 
 // How long a cancelled switched-over move without a return waits past its keep time.
@@ -120,10 +124,10 @@ export class MoveStore {
       const now = this.clock.now();
       try {
         this.db.prepare(
-          `INSERT INTO moves (id, account_id, camera_id, source_proxy_id, target_proxy_id, request_id, phase, reason, detail, plan, summary, settings, token_hash, target_ip, created_at, updated_at, ended_at, actor, bounds, return_of, version)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)`,
+          `INSERT INTO moves (id, account_id, camera_id, source_proxy_id, target_proxy_id, request_id, phase, reason, detail, plan, summary, settings, token_hash, target_ip, created_at, updated_at, ended_at, actor, bounds, return_of, space, version)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)`,
         ).run(id, m.accountId, m.cameraId, m.sourceProxyId, m.targetProxyId, m.requestId, phase, m.reason ?? null, detailOf(m.detail), enc('plan', m.plan), enc('summary', m.summary),
-          enc('settings', m.settings), m.tokenHash ?? null, m.targetIp ?? null, now, now, endedAt, m.actor ?? null, enc('bounds', m.bounds), m.returnOf ?? null);
+          enc('settings', m.settings), m.tokenHash ?? null, m.targetIp ?? null, now, now, endedAt, m.actor ?? null, enc('bounds', m.bounds), m.returnOf ?? null, enc('space', m.space));
       } catch (e) {
         if (/UNIQUE constraint failed: moves\.|moves: proxy busy/.test(String((e as Error).message))) throw new MoveBusy();
         throw e;

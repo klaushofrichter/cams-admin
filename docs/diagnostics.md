@@ -38,13 +38,72 @@ A signed-in sysadmin's browser session works on the same routes.
 | Route | Answer |
 |---|---|
 | `/diag` | version, server time, the route list |
-| `/diag/proxies` | registry fields (url, TLS site and server name, CA fingerprints), state, version, pin, clock skew, the problem items of the last summary, reported site / CA fingerprints / commands policy / allow list / token counts, last heartbeat, reconcile |
+| `/diag/proxies` | registry fields (url, TLS site and server name, CA fingerprints), state, version, pin, clock skew, the problem items of the last summary, reported site / CA fingerprints / commands policy / allow list / token counts / profile (`reported.profile`, `reported.profileUnreadable`), last heartbeat, reconcile |
+| `/diag/proxies/:proxyId/profile` | the proxy's latest reported profile, as `GET /api/v1/proxies/:proxyId/profile` answers it (see "Proxy profile" below) |
 | `/diag/cams-instances` | state, accounts, routes, the last report: mode, applied vs current revision, held changes and held proxies, kept-old, shadow, token counts, problems (code, account, detail) |
 | `/diag/cameras` | registry fields (cams id, model, proxy, proxy camera id, host, protocol, TLS name), move id, online |
 | `/diag/tokens` | per proxy, its managed tokens: holder (cams instance id and name, or `manual`), label, kind, state, on proxy, created, retire/revoke times, last token command; no hash |
 | `/diag/moves?accountId=` | the newest 100 moves with chunk counts |
 | `/diag/moves/precheck?source=&target=&camera=` | every precheck rule in order with ok, reason and a detail; `camera` is the registry id or the cams id |
 | `/diag/audit?account=&actorType=&action=&from=&to=&limit=&cursor=` | the audit log, as on the Audit page, with every e-mail address replaced by `email:` + 8 hex of its SHA-256 |
+
+## Proxy profile
+
+A proxy reports its profile in every heartbeat (cam-proxy 2026.10.26 and
+later; design `docs/superpowers/specs/2026-10-25-proxy-profile-design.md`,
+contract `contract/README.md`). A person sets it on the proxy (its home page
+or Settings); cams-admin only reads it and never sets it. cams-admin keeps the
+latest one with the proxy's status (in memory and the 10-minute snapshot).
+
+`GET /api/v1/proxies/:proxyId/profile` (a session) and
+`/diag/proxies/:proxyId/profile` (the diagnostics token) answer:
+
+```json
+{ "proxyId": "prx_…", "accountId": "acc_…", "name": "een", "displayName": "een", "state": "online",
+  "version": "v2026.10.26.1", "reportedAt": 1791273600000, "unreadable": false, "homeUrl": "https://192.0.2.5:8443",
+  "profile": { "set": true, "name": "een (N100, 1 TB)", "cameras": 3, "storageGB": 600, "held": 1,
+    "ftp": { "enabled": true, "port": 2121, "passive": { "from": 30000, "to": 30029 } },
+    "storage": { "budgetBytes": 600000000000, "usedBytes": 41000000000, "diskBytes": 1000000000000, "freeBytes": 880000000000 },
+    "hardware": { "pi": null, "cpuCores": 4, "cpuModel": "Intel N100", "memoryBytes": 16000000000, "load5": 0.7, "cpuTempC": 48.5 },
+    "warnings": [], "firewall": { "tool": "ufw", "lines": ["sudo ufw allow from 192.0.2.85 to any port 2121 proto tcp", "…"] } } }
+```
+
+The firewall lines are kept only when they match the ufw or nft template
+exactly with an IP address (`contract/firewall.ts`); `firewall.dropped`
+counts the others, which are never shown. The Start move form builds lines
+only for a camera whose registry host is an IP address.
+
+`profile` is `null` for a proxy that sends none (older than the profile) and
+for one cams-admin could not read (`unreadable: true`; the heartbeat still
+counts). `homeUrl` is the registry's admin UI URL, else its URL, else `null`.
+404 for an unknown proxy. An operations token never reads it (GET routes are
+session-only).
+
+```sh
+diag /proxies | jq '.items[] | {name, profile: .reported.profile | {set, held, cameras}}'
+```
+
+The move precheck (`/diag/moves/precheck`) has two rules on the target's
+profile after `target_receives`, each `ok` (detail "… reports no profile")
+when the target reports none:
+
+- `capacity`: the target holds fewer cameras than its profile's `cameras`,
+  else `camera_limit` ("een holds 3 of 3 cameras"; a profile that is not set
+  counts the cameras held as its capacity and says so).
+- `ftp_ports`: with FTP on, its passive range has at least 10 ports per
+  camera it would hold, else `camera_limit` ("een's FTP passive range
+  30000-30009 has 10 ports; 2 cameras need 20").
+
+A target that fails either is not in the source's "Move to…" list, and
+`POST /moves` answers 409 `precheck` (not one of the three fixable rules).
+
+On the source's request cams-admin also compares the request's content size
+with the target's budget left (`budgetBytes - usedBytes`) and its per-kind
+caps from its last settings view (`stills.maxGB`, `ftp.maxGB` for clips). A
+shortfall never refuses the move; the figures are kept on the move as
+`space` (`GET /api/v1/moves/:moveId`, `/diag/moves`): `{at, needBytes,
+budgetBytes, usedBytes, leftBytes, fits, overCaps}`, `null` when the target
+reported no profile then.
 
 ## Operations tokens
 

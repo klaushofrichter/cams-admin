@@ -1,6 +1,7 @@
 import type { Db } from '../db/open';
 import type { MoveBounds, MoveCheck } from './types';
 import type { Move, ChunkState, ChunkStateName } from './store';
+import type { SpaceCheck } from './space';
 
 // What the API shows of a move. Never the token, its hash, the target's
 // public key, the leaf fingerprint or the target's address: fields are named
@@ -14,6 +15,8 @@ export interface MoveView {
   budgetExceeded: boolean; cleanupPending: boolean; targetCleanupPending: boolean; autoApprove: boolean; bounds: MoveBounds | null; createdAt: number; updatedAt: number; endedAt: number | null;
   // A cancelled move's copy back (returnId) and a copy back's cancelled move (returnOf); the receiving side's check; Archive still to copy; End waiting for it.
   returnOf: string | null; returnId: string | null; check: MoveCheck | null; archivePending: boolean; endRequested: boolean; keepDays: number | null;
+  // The space the move needs against the target's profile when the request arrived (null: the target reported none).
+  space: SpaceCheck | null;
 }
 export type ChunkCounts = Record<ChunkStateName, number>;
 
@@ -32,6 +35,7 @@ export function moveView(db: Db, m: Move, archivePending = false): MoveView {
     refusedBy: m.phase === 'rejected' ? (m.offeredAt !== null ? 'target' : 'cams-admin') : null, detail: m.detail, plan: m.plan, bytesTotal: m.bytesTotal, bytesDone: m.bytesDone,
     rateBps: m.rateBps, etaS: m.etaS, budgetExceeded: m.budgetExceededAt !== null, cleanupPending: m.cleanupPending, targetCleanupPending: m.targetCleanupPending, autoApprove: m.bounds !== null, bounds: m.bounds, createdAt: m.createdAt, updatedAt: m.updatedAt, endedAt: m.endedAt,
     returnOf: m.returnOf, returnId: ret?.id ?? null, check: m.check, archivePending, endRequested: m.endRequested !== null, keepDays: m.keepDays,
+    space: m.space ?? null,
   };
 }
 

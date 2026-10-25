@@ -40,6 +40,8 @@
 
   const hasProblem = (p: any) => p.state !== 'online' || (p.problemCount ?? 0) > 0 || p.pin === 'mismatch' || p.skewProblem || p.reconcile.reportedNotRegistered.length || p.reconcile.registeredNotReported.length;
   const visible = $derived(d ? d.accounts.filter((a: any) => !onlyProblems || a.proxies.some(hasProblem) || a.warnings.length) : []);
+  // Proxies that report a profile not set yet (set: false); an older proxy reports none and is not listed.
+  const unset = $derived(d ? d.accounts.flatMap((a: any) => a.proxies.filter((p: any) => p.profile && !p.profile.set).map((p: any) => ({ ...p, accountId: a.id }))) : []);
   const counts = $derived.by(() => {
     if (!d) return null;
     const px = d.accounts.flatMap((a: any) => a.proxies);
@@ -78,6 +80,18 @@
           {#if c.shadowDifferences !== null}<span class="badge" class:warn={c.shadowDifferences > 0}>{c.shadowDifferences} shadow differences</span>{/if}
           {#if c.held}<span class="badge warn">{c.held} held</span>{/if}
           {#if c.problems}<span class="badge bad">{c.problems} problems</span>{/if}
+        </div>
+      {/each}
+    </section>
+  {/if}
+  {#if unset.length}
+    <section class="card cams-list" data-testid="dash-profile-unset">
+      <b>Proxies without a profile</b>
+      {#each unset as p (p.id)}
+        <div class="row" data-testid="dash-profile-unset-{p.name}">
+          <a href="#/accounts/{p.accountId}/proxies/{p.id}"><b>{p.displayName}</b></a>
+          <span class="muted">set its profile on the proxy's home page{p.homeUrl ? ':' : ''}</span>
+          {#if p.homeUrl}<a class="mono" href={p.homeUrl} target="_blank" rel="noopener noreferrer" data-testid="dash-profile-home-{p.name}">{p.homeUrl}</a>{/if}
         </div>
       {/each}
     </section>

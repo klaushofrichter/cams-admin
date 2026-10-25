@@ -4,6 +4,7 @@
   import { api, errorText } from '../lib/api';
   import { boundsText, canDelete, canGiveUp, cancelable, checkText, contentBasisText, contentLine, endLabel, phaseReason, phaseText, refusalReason, refusedByText, type ContentKind } from '../lib/moves';
   import Confirm from './Confirm.svelte';
+  import { spaceText } from '../lib/profile';
 
   let { move, onchange, onopen }: { move: any; onchange: () => void; onopen?: (id: string) => void } = $props();
   let chunks = $state<Record<string, number> | null>(null);
@@ -52,6 +53,7 @@
   {#if content}
     <div class="grid content" data-testid="move-content">
       <span class="muted small" data-testid="move-content-basis">Content: {contentBasisText(content.basis)}</span>
+      {#if move.space}<span class="small" class:warn={!move.space.fits} data-testid="move-space">{spaceText(move.target.name, move.space)}</span>{/if}
       <ul>
         {#each content.kinds as k (k.kind)}
           <li class={k.included === true ? 'in' : k.included === false ? 'out' : 'open'} data-testid="move-content-{k.kind}">
@@ -126,4 +128,5 @@
   .content li.out { color: var(--muted); }
   .content .mark { display: inline-block; width: 1em; text-align: center; }
   .content li.in .mark { color: var(--ok); }
+  .warn { color: var(--warning); }
 </style>

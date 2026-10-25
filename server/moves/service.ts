@@ -13,6 +13,7 @@ import { newId } from '../ids';
 import { detailOf, GIVE_UP_CLOSED, GIVE_UP_CLOSED_OPEN_CODES, MoveBusy, MoveStore, type ChunkState, type ChunkStateName, type Move } from './store';
 import { eligibleTargets, precheck, type Candidate, type EligibleTarget, type PrecheckDeps } from './precheck';
 import { begin, type BeginResult } from './begin';
+import { capsOf, spaceCheck } from './space';
 import type { CamsInstances } from '../cams/instances';
 import { moveToken, targetAddress, type Resolve } from './token';
 import { Returns, type ReturnKey } from './returns';
@@ -482,7 +483,7 @@ export class Moves {
       m = tx(this.d.db, () => {
         const mv = this.store.create({
           accountId, cameraId: cam.id, sourceProxyId: proxyId, targetProxyId: ev.target, requestId: ev.requestId, summary: ev.summary, settings: ev.settings,
-          tokenHash, targetIp, actor: actorOf(ev), bounds: ev.bounds ?? null,
+          tokenHash, targetIp, actor: actorOf(ev), bounds: ev.bounds ?? null, space: this.spaceFor(ev.target, ev.summary),
         });
         this.audit(mv, 'move-request', 'ok', { phase: 'requested', by: ev.actor, autoApprove: (ev.bounds ?? null) !== null }, { actorType: 'proxy', actor: proxyId });
         const open = this.send(accountId, proxyId, 'move.open', { v: 1, moveId: mv.id, requestId: ev.requestId, camera: ev.camera.proxyCameraId, tokenHash, targetIp });
@@ -494,6 +495,14 @@ export class Moves {
       throw e;
     }
     if (m.phase === 'requested') this.pending.set(m.id, { token, camera: ev.camera });
+  }
+
+  // The request's space figures against the target's reported profile and its per-kind caps (its last settings view).
+  private spaceFor(targetProxyId: string, summary: unknown) {
+    const view = this.d.db.prepare('SELECT view FROM proxy_config WHERE proxy_id = ?').get(targetProxyId) as { view: string } | undefined;
+    let parsed: unknown = null;
+    try { parsed = view ? JSON.parse(view.view) : null; } catch { parsed = null; } // an unreadable view: no caps
+    return spaceCheck(summary, this.d.status.row(targetProxyId)?.reported?.profile, capsOf(parsed), this.d.clock.now());
   }
 
   // Which side holds an open move (the store refused the row as busy).

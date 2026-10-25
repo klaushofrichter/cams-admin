@@ -4,6 +4,8 @@
 export type ProxyState = 'pending' | 'never-connected' | 'online' | 'offline' | 'stopped' | 'rejected' | 'revoked';
 export type PinState = 'match' | 'mismatch' | 'hint' | 'none';
 
+import type { Profile } from './profile';
+
 export interface ReportedCamera { ref: string; online: boolean; name?: string; model?: string | null }
 export interface CommandsInfo { enabled: boolean; paused: boolean; pauseReason: string | null; allow: string[]; seenWindow: number }
 export interface TokensInfo { revision: number; client: number; admin: number; blocked: string[] }
@@ -11,6 +13,8 @@ export interface Reported {
   cameras: ReportedCamera[]; caFingerprint: string[]; site?: string | null; publicUrl?: string | null; startedAt?: number | null; uptimeS?: number | null; configSchema?: number | null; pin?: PinState;
   // P2: the hello's capabilities and the heartbeat's command policy, token and config revisions.
   capabilities?: string[]; commands?: CommandsInfo | null; tokens?: TokensInfo | null; configRevision?: string | null;
+  // The heartbeat's proxy profile (proxy profile design §2); null when it sent none (an older proxy) or an unreadable one (marked).
+  profile?: Profile | null; profileUnreadable?: boolean;
 }
 
 export interface StatusRow {

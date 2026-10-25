@@ -12,6 +12,7 @@
   import ProxyTokens from '../components/ProxyTokens.svelte';
   import ProxySettings from '../components/ProxySettings.svelte';
   import ProxyCameraActions from '../components/ProxyCameraActions.svelte';
+  import ProxyProfile from '../components/ProxyProfile.svelte';
 
   let { accountId, proxyId, camera = undefined }: { accountId: string; proxyId: string; camera?: string } = $props();
 
@@ -150,6 +151,7 @@
     {/if}
   </section>
 
+  <ProxyProfile profile={d.reported?.profile ?? null} unreadable={d.reported?.profileUnreadable === true} runsOn={d.proxy.runsOn} />
   <ProxyCameraActions {accountId} {proxyId} {refresh} {camera} />
   <ProxySettings {accountId} {proxyId} policy={d.view.commands} {refresh} />
   <ProxyCommands {accountId} {proxyId} policy={d.view.commands} allow={d.view.allow} {refresh} />

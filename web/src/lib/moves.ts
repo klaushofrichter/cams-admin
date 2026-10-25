@@ -91,6 +91,7 @@ export function reasonText(r: string | null | undefined): string {
 // cams-admin's own refusals (its checks before any offer) where the reason reads differently than from the target.
 const CAMS_ADMIN_REASONS: Record<string, string> = {
   incompatible: "the source's camera address or protocol differs from the registry",
+  camera_limit: "the target's profile has no room for another camera (cameras or FTP ports)",
 };
 
 // Who refused a rejected move: the target proxy by name, or cams-admin's own checks; '' otherwise (or an older server).

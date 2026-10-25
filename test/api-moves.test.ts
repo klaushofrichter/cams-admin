@@ -45,7 +45,7 @@ describe('moves API', () => {
       id: m1.mv, requestId: expect.stringMatching(/^rq_/), accountId: acc, camsId: expect.stringMatching(/^porch/), cameraName: expect.stringMatching(/^Porch/), source: { id: m1.s, name: expect.stringMatching(/^Source /) }, target: { id: m1.t, name: expect.stringMatching(/^Target /) },
       phase: 'copying', reason: null, refusedBy: null, detail: null, plan: { transfer: true, kinds: ['clips'], space: 'all', budgetS: 60 }, bytesTotal: 1000, bytesDone: 400, rateBps: 50, etaS: 12, budgetExceeded: false,
       cleanupPending: false, targetCleanupPending: false, autoApprove: false, bounds: null, createdAt: expect.any(Number), updatedAt: expect.any(Number), endedAt: null,
-      returnOf: null, returnId: null, check: null, archivePending: false, endRequested: false, keepDays: null,
+      returnOf: null, returnId: null, check: null, archivePending: false, endRequested: false, keepDays: null, space: null,
     });
     expect((await a.api('get', '/moves')).body.items.length).toBeGreaterThanOrEqual(2);
     expect((await a.api('get', '/moves?accountId=acc_nope')).status).toBe(404);

@@ -5,6 +5,8 @@
   import { coalesced, live } from '../lib/live';
   import { cancelable, etaText, phaseClass, phaseReason, phaseText, progressText, refusalLine, refusalText, startBody, cameraLabel } from '../lib/moves';
   import MoveDetail from '../components/MoveDetail.svelte';
+  import FirewallLines from '../components/FirewallLines.svelte';
+  import { moveFirewall } from '../lib/profile';
 
   let items = $state<any[]>([]);
   let loaded = $state(false);
@@ -54,6 +56,16 @@
   });
   $effect(() => { if (!camerasOnSource.some((c) => c.id === cameraId)) cameraId = camerasOnSource.length === 1 ? camerasOnSource[0].id : ''; });
   $effect(() => { if (!targets.some((p) => p.id === targetId)) targetId = ''; });
+  // The target's reported profile: the firewall lines it will need for the chosen camera (run them there first).
+  let targetProfile = $state<{ id: string; profile: any } | null>(null);
+  $effect(() => {
+    const id = targetId;
+    targetProfile = null;
+    if (!id) return;
+    api('GET', `/proxies/${id}/profile`).then((r) => { if (targetId === id) targetProfile = { id, profile: r.profile }; }).catch(() => { if (targetId === id) targetProfile = { id, profile: null }; });
+  });
+  const targetName = $derived(proxies.find((p) => p.id === targetId)?.displayName ?? '');
+  const firewall = $derived(targetProfile && cameraId && targetProfile.id === targetId ? moveFirewall(targetName, targetProfile.profile, cameras.find((c) => c.id === cameraId)?.host) : null);
   async function start(e: Event) {
     e.preventDefault();
     sending = true; startError = ''; startOk = '';
@@ -103,6 +115,16 @@
     </label>
     <button class="btn primary" data-testid="start-move-submit" disabled={sending || !sourceId || !cameraId || !targetId}>Start move</button>
   </form>
+  {#if firewall}
+    <div class="grid" data-testid="start-move-firewall">
+      {#if 'lines' in firewall}
+        <p>Run these on {targetName} first, so the camera's FTP uploads reach it ({firewall.tool}):</p>
+        <FirewallLines lines={firewall.lines} testid="start-move-firewall-box" />
+      {:else}
+        <p class="muted" data-testid="start-move-firewall-none">{firewall.none}</p>
+      {/if}
+    </div>
+  {/if}
   {#if startOk}<p data-testid="start-move-ok">{startOk}</p>{/if}
   {#if startError}<p class="error" data-testid="start-move-error">{startError}</p>{/if}
 </section>
