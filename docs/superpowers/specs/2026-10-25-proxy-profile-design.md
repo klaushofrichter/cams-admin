@@ -1,7 +1,37 @@
 # Proxy profile: what a proxy can hold
 
-Status: draft for Klaus's review (2026-10-25). Repos: cam-proxy (the profile, its
+Status: approved by Klaus 2026-10-25 ("Ok to go!"), with his answers in §0. Repos: cam-proxy (the profile, its
 report), cams-admin (shows it, checks moves against it), contract v1 (the report).
+
+## 0. Klaus's answers (2026-10-25), binding over the rest
+
+- A proxy without a profile asks for one on its **home page**; the person sets the
+  values. No verification against the hardware (no storage or disk warnings).
+  The values can be edited later (Settings page).
+- Purpose: automatic resource management later. So: **APIs to query and set**
+  the profile.
+- **No presets.** Conservative defaults until the person sets values; getting
+  them right is the person's job.
+- The FTP check after a move (§4): wanted, lower priority, not in this round.
+- The existing proxies get their values set by Claude (known capacity).
+
+Rulings made from these (Claude, 2026-10-25):
+- Set API: on the proxy only, `GET`/`PUT /control/profile` (local admin token,
+  audited `config-change`). cams-admin reads it (heartbeat → proxy page, diag,
+  `GET /api/v1/proxies/:id/profile`). cams-admin setting it is not in this round:
+  the profile holds the storage budget, and cams-admin may never change storage
+  limits today. Revisit with automatic resource management — cost if wrong: one
+  more command later.
+- "Home page": the proxy's own home page shows a "Set this proxy's profile" card
+  until it is set; cams-admin's dashboard lists proxies without one.
+- Defaults until set (`profile.set` false): `cameras` = cameras held (at least
+  1), `storageGB` = none (today's `storage.*` budget applies), `name` = none.
+- `profile.storageGB` (1..100000, optional): the storage this proxy may use. When
+  set it is the size budget, in place of `storage.maxBytes`. Setting both is a
+  config error; `storage.maxPercent` and `minFreeBytes` still apply as limits.
+- Warnings dropped (no verification): `profile_over_disk`, `profile_storage_thin`.
+  `profile_ftp_ports` and `profile_cameras_exceeded` stay: they are about ports
+  and cameras the proxy really has, not the hardware.
 
 ## Why
 
@@ -52,7 +82,7 @@ A new local-only config block, set in config.json or on the proxy's Settings pag
 with the local admin token. cams-admin can never set it.
 
 ```json
-"profile": { "name": "een (N100, 1 TB)", "cameras": 3 }
+"profile": { "name": "een (N100, 1 TB)", "cameras": 3, "storageGB": 600 }
 ```
 
 - `profile.cameras` (1..10 while FTP is on, 1..64 otherwise): the most cameras
@@ -85,32 +115,35 @@ Derived values, never typed:
   `sudo ufw allow from 192.0.2.85 to any port 2121 proto tcp` and
   `sudo ufw allow from 192.0.2.85 to any port 30000:30029 proto tcp`.
   Plain text for a person to run; nothing executes them. A host with nftables
-  (the mini PC) gets the matching nft lines instead. Which tool is detected from
-  the host, and a person can pick the other one.
+  (the mini PC) gets the matching nft lines instead, by `profile.firewall`.
 
 Warnings, shown on the proxy page and reported (never a load error, so an upgrade
 can't stop a running proxy):
 
-- `profile_over_disk`: the storage budget is larger than the data volume.
-- `profile_storage_thin`: `budget / cameras` is below what one camera writes in
-  `retention` days at its measured rate (the builder picks the rate source:
-  catalog bytes per day of the last 7 days).
 - `profile_cameras_exceeded`: the proxy holds more cameras than `cameras` (set
   lower after the fact). Nothing is removed.
 - `profile_ftp_ports`: see above.
 
 ## 2. The report (cam-proxy → cams-admin)
 
-The heartbeat carries a `profile` object (contract v1, optional field; an older
-proxy sends none):
+The heartbeat body carries a `profile` object (contract v1, optional field; an
+older proxy sends none). Shape, closed objects in strict: `set` boolean; `name`
+string 1..60 or null; `cameras` 1..64; `storageGB` 1..100000 or null; `held`
+0..64; `ftp` {`enabled` boolean, `port` 1..65535, `passive` {`from`, `to`} or
+null}; `storage` {`budgetBytes`, `usedBytes`, `diskBytes`, `freeBytes`: integers
+≥ 0 or null}; `hardware` {`pi` string or null, `cpuCores` 1..1024, `cpuModel`
+string ≤ 100 or null, `memoryBytes` ≥ 0, `load5` number ≥ 0, `cpuTempC` number or
+null}; `warnings` array of `profile_ftp_ports` | `profile_cameras_exceeded`;
+`firewall` {`tool` `ufw` | `nft`, `lines`: at most 64 strings of ≤ 200
+characters}. Example:
 
 ```json
 "profile": {
-  "name": "een (N100, 1 TB)", "cameras": 3, "held": 1,
+  "set": true, "name": "een (N100, 1 TB)", "cameras": 3, "storageGB": 600, "held": 1,
   "ftp": { "enabled": true, "port": 2121, "passive": { "from": 30000, "to": 30029 } },
   "storage": { "budgetBytes": 600000000000, "usedBytes": 41000000000, "diskBytes": 1000000000000, "freeBytes": 880000000000 },
   "hardware": { "pi": null, "cpuCores": 4, "cpuModel": "Intel N100", "memoryBytes": 16000000000, "load5": 0.7, "cpuTempC": 48.5 },
-  "warnings": ["profile_storage_thin"],
+  "warnings": [],
   "firewall": { "tool": "ufw", "lines": ["…"] }
 }
 ```
@@ -164,7 +197,7 @@ Without a camera FTP test (*my call*): the check step ends as today, and the
 FTP result arrives later as an event on the move, after the first clip or after
 24 hours ("no FTP clip from cam3 on een in 24 h"). It never holds the move open.
 
-## Decisions for Klaus (with my recommendation)
+## Decisions for Klaus (answered in §0)
 
 1. **Who sets the profile:** recommended local only, on the proxy (like
    `maxCameras` today). Alternative: cams-admin may set `profile.name` only.
