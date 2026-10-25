@@ -134,6 +134,7 @@ test('the dashboard lists cams instances', async ({ page }, info) => {
   await api(page, 'POST', '/cams-instances', { name, displayName: 'Dash instance', accounts: [] });
   await page.goto('/#/');
   await expect(page.getByTestId(`dash-cms-${name}`)).toContainText('never pulled');
+  await expect(page.getByTestId('nav-cams')).toHaveText('Cams');
   await page.getByTestId('nav-cams').click();
   await expect(page.getByTestId(`cms-row-${name}`)).toBeVisible();
 });
