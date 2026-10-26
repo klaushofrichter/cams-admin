@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cancelable, etaText, phaseClass, phaseText, progressText, reasonText, boundsText, startBody, refusalText, cameraLabel, activeMoves, activeLine, checkText, endLabel, canGiveUp, phaseReason, refusedByText, refusalLine, contentLine, contentBasisText, canDelete } from './moves';
+import { cancelable, etaText, phaseClass, phaseText, progressText, reasonText, boundsText, startBody, refusalText, cameraLabel, activeMoves, activeLine, checkText, endLabel, canGiveUp, phaseReason, refusedByText, refusalLine, contentLine, contentBasisText, canDelete, presummaryLines, presummarySpaceText, presummaryErrorText } from './moves';
 
 const PHASES = ['requested', 'offered', 'awaiting-approval', 'approved', 'switching', 'copying', 'cleaning', 'done', 'rejected', 'cancelling', 'cancelled', 'failed', 'returning', 'returned'];
 
@@ -222,3 +222,40 @@ describe('rejections and the content checklist', () => {
   });
 });
 
+
+describe('the content before a move (Start move form, move.summary)', () => {
+  const k = (files: number, bytes: number, rows: number) => ({ files, bytes, rows, oldest: null, newest: null });
+  it('one line per kind in the checklist order, files and bytes for stills, clips and Archive, rows for events and checks', () => {
+    expect(presummaryLines({ clips: k(12, 3072, 14), stills: k(54556, 48350227367, 0), events: k(0, 0, 654), checks: k(0, 0, 1), archive: k(0, 0, 0) })).toEqual([
+      { kind: 'stills', text: 'Stills: 54556 files, 45.0 GiB' },
+      { kind: 'clips', text: 'Clips: 12 files, 3.0 KiB' },
+      { kind: 'events', text: 'Events: 654 events' },
+      { kind: 'checks', text: 'Checks: 1 check' },
+      { kind: 'archive', text: 'Archive: nothing to copy' },
+    ]);
+    // A kind the proxy left out is not shown; an unknown one is ignored.
+    expect(presummaryLines({ clips: k(1, 10, 0), extra: k(1, 1, 1) } as never)).toEqual([{ kind: 'clips', text: 'Clips: 1 file, 10 B' }]);
+    expect(presummaryLines({ events: k(0, 0, 0) })).toEqual([{ kind: 'events', text: 'Events: nothing to copy' }]);
+  });
+  it("the target's free budget and whether it fits; why it is unknown otherwise", () => {
+    const space = { at: 1, needBytes: 2_000_000_000, budgetBytes: 600_000_000_000, usedBytes: 41_000_000_000, leftBytes: 559_000_000_000, fits: true, overCaps: [] };
+    expect(presummarySpaceText({ name: 'een', profile: true }, space)).toBe('The move needs 2.0 GB; een has 559 GB of its 600 GB budget left (41 GB used). It fits.');
+    expect(presummarySpaceText({ name: 'een', profile: true }, { ...space, leftBytes: 1_000_000_000, fits: false })).toBe('The move needs 2.0 GB; een has 1.0 GB of its 600 GB budget left (41 GB used). It does not all fit.');
+    expect(presummarySpaceText({ name: 'een', profile: true }, { ...space, fits: false, overCaps: [{ kind: 'stills', bytes: 2_000_000_000, capBytes: 1_000_000_000 }] }))
+      .toBe('The move needs 2.0 GB; een has 559 GB of its 600 GB budget left (41 GB used). Stills 2.0 GB is over its 1.0 GB cap. It does not all fit.');
+    expect(presummarySpaceText({ name: 'Old proxy', profile: false }, null)).toBe('Old proxy: no profile reported (needs cam-proxy 2026.10.26 or later); its free budget is unknown.');
+    expect(presummarySpaceText({ name: 'een', profile: true }, null)).toBe('een reports no storage budget: whether it fits is unknown.');
+    expect(presummarySpaceText(null, null)).toBe('');
+  });
+  it('why the content is not available, in words', () => {
+    expect(presummaryErrorText({ error: 'proxy_update_needed', detail: 'the proxy needs cam-proxy 2026.10.26 or later' })).toBe('the proxy needs cam-proxy 2026.10.26 or later');
+    expect(presummaryErrorText({ error: 'proxy_update_needed' })).toBe('the proxy needs cam-proxy 2026.10.26 or later');
+    expect(presummaryErrorText({ error: 'source_offline' })).toBe('the source proxy is offline');
+    expect(presummaryErrorText({ error: 'timeout' })).toBe('the source proxy did not answer in time');
+    expect(presummaryErrorText({ error: 'not_allowed_on_proxy' })).toBe('the source proxy does not allow camera moves (move.send)');
+    expect(presummaryErrorText({ error: 'unknown_camera' })).toBe('the source proxy does not know this camera');
+    expect(presummaryErrorText({ error: 'proxy_failed', detail: 'internal' })).toBe('the source proxy failed: internal');
+    expect(presummaryErrorText({ error: 'something_new' })).toBe('something_new');
+    expect(presummaryErrorText(null)).toBe('no answer');
+  });
+});

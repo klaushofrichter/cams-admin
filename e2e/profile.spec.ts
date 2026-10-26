@@ -19,7 +19,7 @@ async function proxy(page: Page, accountId: string, name: string, displayName: s
   const c = client(await enroll(BASE, code), undefined, { commands: { allow: ['move.send', 'move.receive'] }, ...(profile ? { profile } : {}) });
   c.start();
   running.push(c);
-  return px as { id: string };
+  return { ...(px as { id: string }), client: c };
 }
 
 test('the Profile card shows what the proxy reports; an older proxy says it needs the update', async ({ page }, info) => {
@@ -82,4 +82,41 @@ test('Start move shows the firewall lines the target needs for the camera', asyn
   await expect(fw.getByTestId('start-move-firewall-box-copy')).toBeVisible();
   await page.getByTestId('start-move-target').selectOption(old.id);
   await expect(page.getByTestId('start-move-firewall-none')).toHaveText('Old proxy: no profile reported (needs cam-proxy 2026.10.26 or later); check its firewall by hand.');
+});
+
+test('Start move shows what the camera holds and whether it fits on the target, above the firewall lines; an older source says it needs the update', async ({ page }, info) => {
+  const acc = await account(page, info, 'ps');
+  const src = await proxy(page, acc.id, 'mini', 'Mini PC');
+  const tgt = await proxy(page, acc.id, 'een', 'een', () => makeProfile());
+  const old = await proxy(page, acc.id, 'old', 'Old proxy');
+  await api(page, 'POST', `/accounts/${acc.id}/cameras`, { camsId: 'porch', name: 'Porch', kind: 'camera', proxyId: src.id, proxyCameraId: 'cam1', host: '192.0.2.10' });
+  await expect.poll(async () => (await api(page, 'GET', `/proxies/${tgt.id}/profile`)).profile !== null).toBe(true);
+  await page.goto('/#/moves');
+  await page.getByTestId('start-move-account').selectOption(acc.id);
+  await page.getByTestId('start-move-source').selectOption(src.id);
+  await page.getByTestId('start-move-target').selectOption(tgt.id);
+  const box = page.getByTestId('start-move-summary');
+  await expect(box.getByTestId('start-move-summary-stills')).toHaveText('Stills: 2 files, 2.0 KiB');
+  await expect(box.getByTestId('start-move-summary-clips')).toHaveText('Clips: 2 files, 2.0 KiB');
+  await expect(box.getByTestId('start-move-summary-events')).toHaveText('Events: 2 events, 2.0 KiB');
+  await expect(box.getByTestId('start-move-summary-checks')).toHaveText('Checks: 2 checks, 2.0 KiB');
+  await expect(box.getByTestId('start-move-summary-archive')).toHaveText('Archive: 2 files, 2.0 KiB');
+  await expect(box.getByTestId('start-move-space')).toHaveText('The move needs 10 kB; een has 559 GB of its 600 GB budget left (41 GB used). It fits.');
+  // Above the firewall lines.
+  const [sumBox, fwBox] = [await box.boundingBox(), await page.getByTestId('start-move-firewall').boundingBox()];
+  expect(sumBox!.y).toBeLessThan(fwBox!.y);
+  // A target without a profile: its budget is unknown.
+  await page.getByTestId('start-move-target').selectOption(old.id);
+  await expect(page.getByTestId('start-move-space')).toHaveText('Old proxy: no profile reported (needs cam-proxy 2026.10.26 or later); its free budget is unknown.');
+  // The source answers like a cam-proxy before move.summary (not_allowed): a muted line, the form still works.
+  src.client.moveResults['move.summary'] = { status: 'refused', code: 'not_allowed' };
+  await api(page, 'POST', `/accounts/${acc.id}/cameras`, { camsId: 'yard', name: 'Yard', kind: 'camera', proxyId: src.id, proxyCameraId: 'cam2', host: '192.0.2.11' });
+  await page.reload();
+  await page.getByTestId('start-move-account').selectOption(acc.id);
+  await page.getByTestId('start-move-source').selectOption(src.id);
+  await page.getByTestId('start-move-camera').selectOption({ label: 'Yard (yard, cam2, 192.0.2.11)' });
+  await page.getByTestId('start-move-target').selectOption(tgt.id);
+  await expect(page.getByTestId('start-move-summary-none')).toHaveText('Content not available: the proxy needs cam-proxy 2026.10.26 or later. The move can start anyway.');
+  await expect(page.getByTestId('start-move-submit')).toBeEnabled();
+  await expect(page.getByTestId('start-move-firewall')).toContainText('Run these on een first');
 });

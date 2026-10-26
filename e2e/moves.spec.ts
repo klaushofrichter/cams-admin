@@ -304,3 +304,16 @@ test('start a move that is refused shows the reasons', async ({ page }, info) =>
   await expect(page.getByTestId('start-move-error')).toHaveText('target offline');
   await expect(page.getByTestId('start-move-ok')).toHaveCount(0);
 });
+
+test("a camera outside the target's site CA subnet: the Start move form shows the refusal with the subnet", async ({ page }, info) => {
+  await page.route('**/api/v1/moves', async (route) => {
+    if (route.request().method() !== 'POST') return route.fallback();
+    await route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: 'precheck', reason: 'ca_does_not_cover_camera', fixed: [], report: { ok: false, reason: 'ca_does_not_cover_camera', rules: [
+      { rule: 'site_ca', ok: true, reason: 'no_site_ca' }, { rule: 'ca_covers_camera', ok: false, reason: 'ca_does_not_cover_camera', detail: "een's site CA covers 192.0.2.80/29, not 192.0.2.90" },
+    ] } }) });
+  });
+  const { b } = await startForm(page, info, 'mc');
+  await page.getByTestId('start-move-target').selectOption(b.id);
+  await page.getByTestId('start-move-submit').click();
+  await expect(page.getByTestId('start-move-error')).toHaveText("een's site CA covers 192.0.2.80/29, not 192.0.2.90");
+});

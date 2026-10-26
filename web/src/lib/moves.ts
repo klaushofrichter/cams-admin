@@ -1,5 +1,6 @@
 // Camera moves between two proxies of one account: text for the Moves page.
 import { bytes } from './format';
+import { NO_PROFILE, PROFILE_SINCE, size, type SpaceCheck } from './profile';
 
 const PHASES: Record<string, string> = {
   requested: 'requested',
@@ -122,17 +123,62 @@ function rowSize(k: ContentKind, [one, many]: [string, string]): string[] {
   if (rows === 0) return ['nothing to copy'];
   return [rows !== null ? `${rows} ${rows === 1 ? one : many}` : '', k.bytes ? bytes(k.bytes) : ''].filter(Boolean);
 }
+// A kind's size: rows for events and checks, files and bytes for the others ("nothing to copy" when empty).
+function sizeParts(k: Pick<ContentKind, 'kind' | 'files' | 'bytes' | 'rows'>): string[] {
+  if (ROW_KINDS[k.kind]) return rowSize(k as ContentKind, ROW_KINDS[k.kind]);
+  return k.files === 0 ? ['nothing to copy'] : [k.files !== null ? `${k.files} ${k.files === 1 ? 'file' : 'files'}` : '', k.bytes !== null ? bytes(k.bytes) : ''].filter(Boolean);
+}
 // "Clips: included, 12 files, 3.0 KiB; 1 of 3 days copied, 1 with failures"; "Events: included, 654 events".
 export function contentLine(k: ContentKind): string {
   const name = KIND_LABEL[k.kind] ?? k.kind;
   if (k.included === null && !k.chunks.total) return `${name}: not decided yet`;
-  const size = ROW_KINDS[k.kind] ? rowSize(k, ROW_KINDS[k.kind]) : k.files === 0 ? ['nothing to copy'] : [k.files !== null ? `${k.files} ${k.files === 1 ? 'file' : 'files'}` : '', k.bytes !== null ? bytes(k.bytes) : ''].filter(Boolean);
-  const head = [k.included === null ? 'not decided yet' : k.included ? 'included' : 'left out', ...size].join(', ');
+  const head = [k.included === null ? 'not decided yet' : k.included ? 'included' : 'left out', ...sizeParts(k)].join(', ');
   if (!k.chunks.total) return `${name}: ${head}`;
   const c = k.chunks;
   const progress = [`${c.done} of ${c.total} ${c.total === 1 ? 'day' : 'days'} copied`, c.failed ? `${c.failed} with failures` : '', c.abandoned ? `${c.abandoned} left behind` : ''].filter(Boolean).join(', ');
   return `${name}: ${head}; ${progress}`;
 }
+// The content before a move (the Start move form, move.summary): one line per kind, as the move detail counts it.
+export interface KindSummary { files: number; bytes: number; rows: number; oldest: number | null; newest: number | null }
+const KIND_ORDER = ['stills', 'clips', 'events', 'checks', 'archive'];
+export function presummaryLines(summary: Partial<Record<string, KindSummary>>): { kind: string; text: string }[] {
+  return KIND_ORDER.filter((kind) => summary[kind]).map((kind) => {
+    const s = summary[kind]!;
+    return { kind, text: `${KIND_LABEL[kind]}: ${sizeParts({ kind, files: s.files, bytes: s.bytes, rows: s.rows }).join(', ')}` };
+  });
+}
+// The target's free budget against what the move needs (now, before the move); why it is unknown otherwise.
+export function presummarySpaceText(target: { name: string; profile: boolean } | null, s: SpaceCheck | null): string {
+  if (!target) return '';
+  if (!s) return target.profile ? `${target.name} reports no storage budget: whether it fits is unknown.` : `${target.name}: ${NO_PROFILE}; its free budget is unknown.`;
+  const head = `The move needs ${size(s.needBytes)}; ${target.name} has ${size(s.leftBytes)} of its ${size(s.budgetBytes)} budget left (${size(s.usedBytes)} used).`;
+  const caps = s.overCaps.map((c) => `${c.kind} ${size(c.bytes)} is over its ${size(c.capBytes)} cap`).join('; ');
+  return `${head}${caps ? ` ${caps[0].toUpperCase()}${caps.slice(1)}.` : ''} ${s.fits ? 'It fits.' : 'It does not all fit.'}`;
+}
+const PRESUMMARY_ERRORS: Record<string, string> = {
+  proxy_update_needed: `the proxy needs cam-proxy ${PROFILE_SINCE} or later`,
+  source_offline: 'the source proxy is offline',
+  timeout: 'the source proxy did not answer in time',
+  not_allowed_on_proxy: 'the source proxy does not allow camera moves (move.send)',
+  unsupported_by_proxy: 'the source proxy takes no commands',
+  paused_on_proxy: 'commands are paused on the source proxy',
+  unknown_camera: 'the source proxy does not know this camera',
+  camera_not_on_proxy: 'the camera is on no proxy',
+  bad_result: 'the source proxy answered something unexpected',
+  rate_limited: 'too many requests: wait a moment',
+  busy: 'the source proxy is busy',
+};
+// Why the content is not available (the answer of GET …/move-summary), in words.
+export function presummaryErrorText(answer: unknown): string {
+  const a = (typeof answer === 'object' && answer !== null ? answer : {}) as { error?: unknown; detail?: unknown };
+  const code = typeof a.error === 'string' ? a.error : '';
+  const detail = typeof a.detail === 'string' && a.detail ? a.detail : '';
+  if (!code) return 'no answer';
+  if (code === 'proxy_update_needed' && detail) return detail;
+  if (code === 'proxy_failed') return `the source proxy failed${detail ? `: ${detail}` : ''}`;
+  return PRESUMMARY_ERRORS[code] ?? code;
+}
+
 export function contentBasisText(basis: string | null): string {
   return basis === 'plan' ? 'As approved' : basis === 'bounds' ? 'Within the pre-approval bounds' : 'Not approved yet: sizes as the source reported them';
 }
