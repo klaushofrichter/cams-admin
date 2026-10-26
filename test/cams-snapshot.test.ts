@@ -230,6 +230,18 @@ describe('the cams snapshot (GET /cams/v1/config)', () => {
       expect(camera().move).toBeNull();
       cleanup();
     });
+    it('a source without a site CA (tls_site null) still gets the attestation, for the target', () => {
+      const db = s.built.db;
+      const was = db.prepare('SELECT tls_site FROM proxies WHERE id = ?').get(piProxy.id) as { tls_site: string | null };
+      db.prepare('UPDATE proxies SET tls_site = NULL WHERE id = ?').run(piProxy.id);
+      const { m, camera, cleanup } = setup('copying');
+      expect(camera().move).toEqual({ id: m.id, sourceProxyId: piProxy.id, targetProxyId: clusterProxy.id, expiresAt: T + 86_400_000 });
+      const proxies = buildSnapshot(d, cluster.id).accounts.flatMap((a) => a.proxies);
+      expect(proxies.find((p) => p.id === piProxy.id)!.site).toBeNull();
+      expect(strictCamsValidator('snapshot')(buildSnapshot(d, cluster.id)), strictCamsErrors()).toBe(true);
+      cleanup();
+      db.prepare('UPDATE proxies SET tls_site = ? WHERE id = ?').run(was.tls_site, piProxy.id);
+    });
     it('cameras without a move carry move: null', () => {
       const cams = buildSnapshot(d, cluster.id).accounts.flatMap((a) => a.cameras);
       expect(cams.every((c) => c.move === null)).toBe(true);

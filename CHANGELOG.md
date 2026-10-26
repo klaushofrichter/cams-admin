@@ -7,7 +7,4 @@ then empties it on `main`.
 
 ### Changed
 
-- Internal: the move job reads the database less often (one lookup per move
-  command, prepared statements reused, one camera lookup when a move starts).
-  Nothing changes in what cams-admin shows, sends or records.
-
+- A camera move needs a site CA only on the target proxy; a source without one (the Raspberry Pi proxy) is allowed, and `site_ca` no longer fixes or names the source.
