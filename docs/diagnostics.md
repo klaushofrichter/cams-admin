@@ -154,6 +154,8 @@ actor `ops-token:<8 hex>`. The list is also at `/diag/ops-tokens`.
 | `moves` | `POST /moves/:moveId/cancel` |
 | `moves` | `POST /moves/:moveId/end-transfer` |
 | `moves` | `DELETE /moves/:moveId` |
+| `registry` | `PATCH /accounts/:accountId/proxies/:proxyId` |
+| `registry` | `PATCH /accounts/:accountId/cameras/:cameraId` |
 
 Paths must be exactly as listed (the fixed words in lower case, ids as issued, no trailing slash). Anything else,
 and every route not in the table, gets 403 `scope`. No token can issue proxy
@@ -170,6 +172,19 @@ curl -fsS -X POST -H "Authorization: Bearer $(cat ~/.config/cams-admin/ops-token
 
 (`acc_…`, `prx_…` and `tok_…` are placeholders; take the real ids from
 `/diag/proxies` and `/diag/tokens`.)
+
+A `registry` token edits a proxy or a camera with the same body as the
+Accounts page (any of the fields, plus `version`), never creates or deletes
+one. `version` is the row's, `rowVersion` in `/diag/proxies` and
+`/diag/cameras` (409 on a stale one). A changed camera host, TLS name or proxy
+pin still holds that endpoint in each cams viewer until someone confirms its
+banner.
+
+```sh
+curl -fsS -X PATCH -H "Authorization: Bearer $(cat ~/.config/cams-admin/ops-token)" -H 'Content-Type: application/json' \
+  -d '{"version":3,"tlsSite":"cluster","caFingerprints":["SHA256:…"]}' \
+  "https://cams-admin.example.net/api/v1/accounts/acc_…/proxies/prx_…"
+```
 
 ## Start a move
 

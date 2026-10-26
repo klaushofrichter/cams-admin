@@ -5,7 +5,7 @@ import { FieldError } from '../validate';
 // route change or a move cancel needs no Google sign-in. Each token carries
 // the scopes it may use; the route to scope table lives with the router.
 
-export const OPS_SCOPES = ['tokens', 'routes', 'moves'] as const;
+export const OPS_SCOPES = ['tokens', 'routes', 'moves', 'registry'] as const;
 export type OpsScope = (typeof OPS_SCOPES)[number];
 export const OPS_PREFIX = 'cao_';
 export const OPS_MAX_LIVE = 5;
