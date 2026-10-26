@@ -56,7 +56,7 @@ export function literalAddress(url: string | null): string | null {
 // What the return needs of Moves (its command, audit and progress helpers).
 export interface ReturnHost {
   db: Db; clock: Clock; log: Logger; registry: Registry; commands: Commands; store: MoveStore; resolve?: Resolve;
-  send(m: Move, proxyId: string, command: WireCommand, args: Record<string, unknown>): { ok: true; id: string } | { ok: false; code: string };
+  send(m: Move, proxyId: string, command: WireCommand, args: Record<string, unknown>): { ok: true; row: CommandRow } | { ok: false; code: string };
   audit(m: Move, action: 'move-return' | 'move-check', outcome: 'ok' | 'refused' | 'failed', extra: Record<string, unknown>, who?: Who): void;
   online(proxyId: string): boolean;
   retryDue(m: Move, proxyId: string, command: WireCommand, base: number, last: CommandRow): boolean;
@@ -104,7 +104,7 @@ export class Returns {
     if (this.finishing(m)) return this.finishStep(m);
     const key = this.keys.get(m.id) ?? this.rekey(m);
     if (!key) return;
-    const sendOpen = () => this.queue(m, m.sourceProxyId, 'move.return.open', { v: 1, moveId: m.id, returnOf: m.returnOf, tokenHash: m.tokenHash, targetIp: m.targetIp }, (id) => {
+    const sendOpen = () => void this.queue(m, m.sourceProxyId, 'move.return.open', { v: 1, moveId: m.id, returnOf: m.returnOf, tokenHash: m.tokenHash, targetIp: m.targetIp }, (id) => {
       key.openId = id;
       key.startId = null;
     });
@@ -241,8 +241,7 @@ export class Returns {
     const proxyId = role === 'target' ? m.targetProxyId : m.sourceProxyId;
     const last = this.last(m, proxyId, 'move.finish');
     if (last && !(unanswered(last) && this.h.online(proxyId))) return last;
-    this.queue(m, proxyId, 'move.finish', { v: 1, moveId: m.id, role, abandoned: false, return: true });
-    return this.last(m, proxyId, 'move.finish');
+    return this.queue(m, proxyId, 'move.finish', { v: 1, moveId: m.id, role, abandoned: false, return: true }) ?? last;
   }
 
   // A new token after a restart (the plaintext is gone): its hash on the row; move.return.open goes out again with it.
@@ -267,17 +266,19 @@ export class Returns {
     return backoffDue(this.retryMs, this.count(m, proxyId, command), at, this.h.clock.now());
   }
 
-  private queue(m: Move, proxyId: string, command: WireCommand, args: Record<string, unknown>, sent?: (id: string) => void): void {
+  // The new command's row; null when it was not queued (now, or within RETURN_QUEUE_RETRY_MS of the last refusal).
+  private queue(m: Move, proxyId: string, command: WireCommand, args: Record<string, unknown>, sent?: (id: string) => void): CommandRow | null {
     const k = `${m.id}:${proxyId}:${command}`;
     const at = this.blocked.get(k);
-    if (at !== undefined && this.h.clock.now() - at < RETURN_QUEUE_RETRY_MS) return;
+    if (at !== undefined && this.h.clock.now() - at < RETURN_QUEUE_RETRY_MS) return null;
     const r = this.h.send(m, proxyId, command, args);
     if (!r.ok) {
       this.blocked.set(k, this.h.clock.now());
-      return;
+      return null;
     }
     this.blocked.delete(k);
-    sent?.(r.id);
+    sent?.(r.row.id);
+    return r.row;
   }
 
   // The original's address when its url names a host (looked up once, outside a transaction).
@@ -317,12 +318,10 @@ export class Returns {
   }
 
   private last(m: Move, proxyId: string, command: WireCommand): CommandRow | null {
-    const r = this.h.db.prepare(`SELECT id FROM commands WHERE proxy_id = ? AND command = ? AND json_extract(args, '$.moveId') = ? ORDER BY rowid DESC LIMIT 1`)
-      .get(proxyId, command, m.id) as { id: string } | undefined;
-    return r ? this.cmd(m, proxyId, r.id) : null;
+    return this.h.commands.latestForMove(proxyId, command, m.id);
   }
 
   private count(m: Move, proxyId: string, command: WireCommand): number {
-    return (this.h.db.prepare(`SELECT COUNT(*) AS n FROM commands WHERE proxy_id = ? AND command = ? AND json_extract(args, '$.moveId') = ?`).get(proxyId, command, m.id) as { n: number }).n;
+    return this.h.commands.countForMove(proxyId, command, m.id);
   }
 }

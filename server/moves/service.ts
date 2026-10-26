@@ -191,11 +191,7 @@ export class Moves {
     this.store = new MoveStore(d.db, d.clock, (id) => this.publish(id));
     this.returns = new Returns({
       db: d.db, clock: d.clock, log: d.log, registry: d.registry, commands: d.commands, store: this.store, resolve: d.resolve,
-      send: (m, proxyId, command, args) => {
-        const r = this.send(m.accountId, proxyId, command, args);
-        const last = r.ok ? this.lastCommand(m, proxyId, command) : null;
-        return r.ok && last ? { ok: true, id: last.id } : { ok: false, code: r.ok ? 'not_found' : r.code };
-      },
+      send: (m, proxyId, command, args) => this.send(m.accountId, proxyId, command, args),
       audit: (m, action, outcome, extra, who) => this.audit(m, action, outcome, extra, who),
       online: (proxyId) => this.online(proxyId),
       retryDue: (m, proxyId, command, base, last) => this.retryDue(m, proxyId, command, base, last),
@@ -404,9 +400,7 @@ export class Moves {
 
   // The newest command of this name for this move on this proxy.
   private lastCommand(m: Move, proxyId: string, command: WireCommand): CommandRow | null {
-    const r = this.d.db.prepare(`SELECT id FROM commands WHERE proxy_id = ? AND command = ? AND json_extract(args, '$.moveId') = ? ORDER BY rowid DESC LIMIT 1`)
-      .get(proxyId, command, m.id) as { id: string } | undefined;
-    return r ? this.d.commands.get(m.accountId, proxyId, r.id) : null;
+    return this.d.commands.latestForMove(proxyId, command, m.id);
   }
 
   // A step's command; one that can never be queued fails the move (and cancels both), a passing refusal waits for the next resume.
@@ -430,11 +424,10 @@ export class Moves {
     return true;
   }
 
-  // A system command; {ok:false} (logged) when it can't be queued (the proxy paused, the entry gone, invalid args).
-  private send(accountId: string, proxyId: string, command: WireCommand, args: Record<string, unknown>): { ok: true } | { ok: false; code: string } {
+  // A system command, with its new row; {ok:false} (logged) when it can't be queued (the proxy paused, the entry gone, invalid args).
+  private send(accountId: string, proxyId: string, command: WireCommand, args: Record<string, unknown>): { ok: true; row: CommandRow } | { ok: false; code: string } {
     try {
-      this.d.commands.create('system', accountId, proxyId, command, args, { actorType: 'system' });
-      return { ok: true };
+      return { ok: true, row: this.d.commands.create('system', accountId, proxyId, command, args, { actorType: 'system' }) };
     } catch (e) {
       if (!(e instanceof ApiError)) throw e;
       this.d.log.warn({ proxyId, command, code: e.code }, 'move_command_not_queued');
@@ -898,7 +891,7 @@ export class Moves {
     if (this.gaveUp.has(key)) return last;
     const r = this.send(m.accountId, proxyId, command, args);
     if (!r.ok && PERMANENT.has(r.code)) this.gaveUp.add(key);
-    return r.ok ? this.lastCommand(m, proxyId, command) : last;
+    return r.ok ? r.row : last;
   }
 
   // A cancel goes to both roles (A17): the target with the choice for copied
@@ -941,7 +934,7 @@ export class Moves {
   }
 
   private commandCount(m: Move, proxyId: string, command: WireCommand): number {
-    return (this.d.db.prepare(`SELECT COUNT(*) AS n FROM commands WHERE proxy_id = ? AND command = ? AND json_extract(args, '$.moveId') = ?`).get(proxyId, command, m.id) as { n: number }).n;
+    return this.d.commands.countForMove(proxyId, command, m.id);
   }
 
   // Another try is due: the last one ended BASE · 2^(attempts-1) ago (capped at an hour).

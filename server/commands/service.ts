@@ -240,6 +240,16 @@ export class Commands {
     return { ...view(raw), rawArgs: raw.rawArgs };
   }
 
+  // The newest command of this name for a move on this proxy (the move job's steps; the move and its proxies
+  // belong to one account, so no account check), and how many there were.
+  latestForMove(proxyId: string, command: WireCommand, moveId: string): CommandRow | null {
+    const r = this.q(`SELECT * FROM commands WHERE proxy_id = ? AND command = ? AND json_extract(args, '$.moveId') = ? ORDER BY rowid DESC LIMIT 1`).get(proxyId, command, moveId) as DbRow | undefined;
+    return r ? view(toRaw(r)) : null;
+  }
+  countForMove(proxyId: string, command: WireCommand, moveId: string): number {
+    return (this.q(`SELECT COUNT(*) AS n FROM commands WHERE proxy_id = ? AND command = ? AND json_extract(args, '$.moveId') = ?`).get(proxyId, command, moveId) as { n: number }).n;
+  }
+
   // Has a real write already been made from this dry run?
   usedPreview(previewId: string): boolean {
     return !!this.q('SELECT 1 FROM commands WHERE preview_of = ?').get(previewId);
