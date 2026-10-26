@@ -91,7 +91,7 @@ function run(d: BeginDeps, actor: string, input: BeginInput): BeginResult {
   // A4, A7: the source, the camera on it (the registry id or the cams id in the source's account), the source able to take move.begin.
   const src = d.registry.proxyById(input.sourceProxyId);
   if (!src) return refuse({ status: 404, error: 'not_found', field: 'sourceProxyId' });
-  const cam = d.registry.listCameras(src.accountId).find((c) => c.id === input.cameraId || c.camsId === input.cameraId);
+  const cam = d.registry.findCamera(src.accountId, input.cameraId);
   if (!cam) return refuse({ status: 404, error: 'not_found', field: 'cameraId' });
   const held = pending(d, src.id, cam.id, cam.proxyCameraId);
   if (held) return refuse({ status: 409, error: 'move_pending', detail: held === 'open' ? `a move of ${cam.camsId} is open` : `a move of ${cam.camsId} was just requested` });

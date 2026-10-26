@@ -1,7 +1,8 @@
-import type { Db } from '../db/open';
+import { stmt, type Db } from '../db/open';
 import type { MoveBounds, MoveCheck } from './types';
 import type { Move, ChunkState, ChunkStateName } from './store';
 import type { SpaceCheck } from './space';
+import { isCount } from '../validate';
 
 // What the API shows of a move. Never the token, its hash, the target's
 // public key, the leaf fingerprint or the target's address: fields are named
@@ -22,9 +23,9 @@ export type ChunkCounts = Record<ChunkStateName, number>;
 
 // archivePending comes from the move service (it knows the chunks); a caller without it shows false.
 export function moveView(db: Db, m: Move, archivePending = false): MoveView {
-  const ret = db.prepare('SELECT id FROM moves WHERE return_of = ? ORDER BY created_at DESC LIMIT 1').get(m.id) as { id: string } | undefined;
-  const cam = db.prepare('SELECT cams_id, name FROM cameras WHERE id = ?').get(m.cameraId) as { cams_id: string; name: string } | undefined;
-  const px = db.prepare('SELECT name, display_name FROM proxies WHERE id = ?');
+  const ret = stmt(db, 'SELECT id FROM moves WHERE return_of = ? ORDER BY created_at DESC LIMIT 1').get(m.id) as { id: string } | undefined;
+  const cam = stmt(db, 'SELECT cams_id, name FROM cameras WHERE id = ?').get(m.cameraId) as { cams_id: string; name: string } | undefined;
+  const px = stmt(db, 'SELECT name, display_name FROM proxies WHERE id = ?');
   const name = (id: string) => {
     const r = px.get(id) as { name: string; display_name: string } | undefined;
     return r?.display_name || r?.name || id;
@@ -53,7 +54,7 @@ export interface ContentKind { kind: string; included: boolean | null; files: nu
 export interface Content { basis: 'plan' | 'bounds' | null; kinds: ContentKind[] }
 // The order the Moves page shows them in (as cams-admin's Start move bounds list them).
 const KIND_ORDER = ['clips', 'stills', 'events', 'checks', 'archive'] as const;
-const count = (x: unknown): number | null => (Number.isSafeInteger(x) && (x as number) >= 0 ? (x as number) : null);
+const count = (x: unknown): number | null => (isCount(x) ? x : null);
 export function moveContent(m: Pick<Move, 'plan' | 'bounds' | 'summary'>, chunks: ChunkState[], perKind: Record<string, unknown> = {}): Content {
   const plan = m.plan && typeof m.plan === 'object' && Array.isArray((m.plan as { kinds?: unknown }).kinds) ? (m.plan as { transfer?: unknown; kinds: unknown[] }) : null;
   const pick = plan ? { transfer: plan.transfer !== false, kinds: plan.kinds } : m.bounds ? { transfer: m.bounds.transfer, kinds: m.bounds.kinds as unknown[] } : null;

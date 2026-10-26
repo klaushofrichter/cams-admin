@@ -380,6 +380,14 @@ export class Registry {
     return toCamera(r, s ? toSim(s) : null);
   }
 
+  // A camera of the account by its registry id or its cams id (the two never collide: a registry id has a `_`), or null.
+  findCamera(accountId: string, idOrCamsId: string): Camera | null {
+    const r = this.db.prepare('SELECT * FROM cameras WHERE account_id = ? AND (id = ? OR cams_id = ?) ORDER BY cams_id LIMIT 1').get(accountId, idOrCamsId, idOrCamsId) as Row | undefined;
+    if (!r) return null;
+    const s = this.db.prepare('SELECT * FROM sims WHERE camera_id = ?').get(r.id as string) as Row | undefined;
+    return toCamera(r, s ? toSim(s) : null);
+  }
+
   listCameras(accountId?: string): Camera[] {
     const rows = (accountId === undefined
       ? this.db.prepare('SELECT * FROM cameras ORDER BY cams_id').all()

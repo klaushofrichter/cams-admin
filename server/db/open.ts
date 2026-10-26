@@ -1,4 +1,4 @@
-import { DatabaseSync } from 'node:sqlite';
+import { DatabaseSync, type StatementSync } from 'node:sqlite';
 import { mkdirSync } from 'fs';
 import { dirname } from 'path';
 import { MIGRATIONS } from './migrations';
@@ -52,6 +52,23 @@ export function tx<T>(db: Db, fn: () => T): T {
   } finally {
     depth--;
   }
+}
+
+// A prepared statement, prepared once per connection and SQL text: the tick and heartbeat paths run every second
+// (each prepare holds native memory until a GC). For fixed SQL (or a small bounded set of texts) only.
+const stmts = new WeakMap<Db, Map<string, StatementSync>>();
+export function stmt(db: Db, sql: string): StatementSync {
+  let m = stmts.get(db);
+  if (!m) {
+    m = new Map();
+    stmts.set(db, m);
+  }
+  let st = m.get(sql);
+  if (!st) {
+    st = db.prepare(sql);
+    m.set(sql, st);
+  }
+  return st;
 }
 
 export const readEpoch = (db: Db): number => (db.prepare('SELECT write_epoch FROM meta WHERE id = 1').get() as { write_epoch: number }).write_epoch;

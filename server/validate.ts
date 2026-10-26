@@ -93,6 +93,9 @@ const url = (b: Obj, key: string) => {
   return typeof s === 'string' ? checkUrl(s, key) : s;
 };
 
+// A non-negative safe integer (a count, a size, a timestamp).
+export const isCount = (x: unknown): x is number => Number.isSafeInteger(x) && (x as number) >= 0;
+
 // --- entities ----------------------------------------------------------------
 
 export const ACCOUNT_NAME_RE = /^[a-z0-9][a-z0-9-]{1,31}$/;

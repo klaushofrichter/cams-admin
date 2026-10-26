@@ -6,6 +6,7 @@ import { MIGRATIONS } from '../server/db/migrations';
 import { MoveStore, MoveBusy } from '../server/moves/store';
 import { fakeClock } from './helpers/clock';
 import { tmpDir } from './helpers/tmp';
+import { markCamera } from './helpers/moves';
 
 function setup() {
   const dir = tmpDir();
@@ -158,14 +159,14 @@ describe('MoveStore', () => {
     clock.advance(1000);
     const done = store.setPhase(a.id, 'done');
     expect(done).toMatchObject({ phase: 'done', endedAt: clock.now(), updatedAt: clock.now(), version: 2 });
-    store.markCamera(a.id);
+    markCamera(db, store, a.id);
     expect(db.prepare(`SELECT move_id FROM cameras WHERE id='cam_1'`).get()).toEqual({ move_id: a.id });
     expect(store.active()).toEqual([]);
     expect(store.byProxy('prx_1')).toBeNull();
     const b = store.create(nm({ requestId: 'req-2' }));
-    store.markCamera(b.id);
+    markCamera(db, store, b.id);
     expect(db.prepare(`SELECT move_id FROM cameras WHERE id='cam_1'`).get()).toEqual({ move_id: b.id });
-    expect(() => store.markCamera('mv_NOPE')).toThrow(/not_found/);
+    expect(() => markCamera(db, store, 'mv_NOPE')).toThrow(/not_found/);
     expect(store.list().length).toBe(2);
   });
 

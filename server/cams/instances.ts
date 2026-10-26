@@ -1,7 +1,7 @@
 import type { Clock } from '../clock';
 import type { Audit, AuditAction } from '../audit';
 import type { Config } from '../config';
-import { tx, type Db } from '../db/open';
+import { stmt, tx, type Db } from '../db/open';
 import { codeHash, newCamsEnrollmentCode, newId } from '../ids';
 import { ApiError, type Registry } from '../registry';
 import { cameraOverrideInput, checkUrl, FieldError } from '../validate';
@@ -96,7 +96,7 @@ export class CamsInstances {
   constructor(private d: CamsInstancesDeps) {}
 
   private q(sql: string) {
-    return this.d.db.prepare(sql);
+    return stmt(this.d.db, sql);
   }
   private log(actor: string, action: AuditAction, i: { id: string; name: string }, detail?: Record<string, unknown>): void {
     this.d.audit.write({ actorType: 'sysadmin', actor, action, targetType: 'cams-instance', targetId: i.id, targetLabel: i.name, outcome: 'ok', detail });

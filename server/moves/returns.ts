@@ -8,6 +8,8 @@ import { MOVE_KINDS } from '../../contract/build';
 import type { ChunkState, Move, MoveStore } from './store';
 import { moveToken, targetAddress, type Resolve } from './token';
 import type { MoveCheck, MovePhaseEvent } from './types';
+import { backoffDue, FINAL_STATES, sourceRef, unanswered, verifiedDone, type Who } from './common';
+import { isCount } from '../validate';
 
 // The return move (step 4, spec §1; plan Task 15): the copy back after a cancel
 // after the switch-over. Its own move row (return_of = the cancelled move,
@@ -39,11 +41,6 @@ export const OLD_PROXY_CODES = ['not_allowed', 'invalid_args', 'unsupported_vers
 // The reason the return shows while one side needs the update (the return's role: source = new proxy, target = original).
 export const updateReason = (role: 'source' | 'target') => `paused:proxy_update:${role}`;
 export const isOldProxyRefusal = (r: CommandRow) => (r.state === 'refused' || r.state === 'failed') && OLD_PROXY_CODES.includes(r.outcomeCode ?? '');
-const RETRY_CAP_MS = 3600_000;
-const FINAL_STATES = new Set(['done', 'refused', 'failed', 'expired', 'unknown']);
-const DONE_MAX = 512;
-const isCount = (x: unknown): x is number => Number.isSafeInteger(x) && (x as number) >= 0;
-const unanswered = (r: CommandRow) => r.state === 'expired' || r.state === 'unknown';
 
 // The host of a url when it is an address already (no lookup: usable inside a transaction); null otherwise.
 export function literalAddress(url: string | null): string | null {
@@ -56,11 +53,10 @@ export function literalAddress(url: string | null): string | null {
   }
 }
 
-type Who = { actorType: 'proxy' | 'system' | 'sysadmin'; actor: string };
 // What the return needs of Moves (its command, audit and progress helpers).
 export interface ReturnHost {
   db: Db; clock: Clock; log: Logger; registry: Registry; commands: Commands; store: MoveStore; resolve?: Resolve;
-  send(m: Move, proxyId: string, command: WireCommand, args: Record<string, unknown>): { ok: true; id: string } | { ok: false; code: string };
+  send(m: Move, proxyId: string, command: WireCommand, args: Record<string, unknown>): { ok: true; row: CommandRow } | { ok: false; code: string };
   audit(m: Move, action: 'move-return' | 'move-check', outcome: 'ok' | 'refused' | 'failed', extra: Record<string, unknown>, who?: Who): void;
   online(proxyId: string): boolean;
   retryDue(m: Move, proxyId: string, command: WireCommand, base: number, last: CommandRow): boolean;
@@ -108,7 +104,7 @@ export class Returns {
     if (this.finishing(m)) return this.finishStep(m);
     const key = this.keys.get(m.id) ?? this.rekey(m);
     if (!key) return;
-    const sendOpen = () => this.queue(m, m.sourceProxyId, 'move.return.open', { v: 1, moveId: m.id, returnOf: m.returnOf, tokenHash: m.tokenHash, targetIp: m.targetIp }, (id) => {
+    const sendOpen = () => void this.queue(m, m.sourceProxyId, 'move.return.open', { v: 1, moveId: m.id, returnOf: m.returnOf, tokenHash: m.tokenHash, targetIp: m.targetIp }, (id) => {
       key.openId = id;
       key.startId = null;
     });
@@ -150,10 +146,8 @@ export class Returns {
       if (this.due(`${m.id}:registry`)) this.h.log.warn({ moveId: m.id }, 'move_return_source_registry_incomplete');
       return;
     }
-    const done = this.h.chunkStates(m.id).filter((c) => c.state === 'verified').map((c) => c.id).slice(-DONE_MAX);
     this.queue(m, m.targetProxyId, 'move.return.start', {
-      v: 1, moveId: m.id, returnOf: m.returnOf, token: key.token,
-      source: { proxyId: src.id, name: src.name, url: src.url, caFingerprints: src.caFingerprints.slice(0, 2), tlsServername: src.tlsServername }, done,
+      v: 1, moveId: m.id, returnOf: m.returnOf, token: key.token, source: sourceRef(src), done: verifiedDone(this.h.chunkStates(m.id)),
     }, (id) => { key.startId = id; });
   }
 
@@ -247,8 +241,7 @@ export class Returns {
     const proxyId = role === 'target' ? m.targetProxyId : m.sourceProxyId;
     const last = this.last(m, proxyId, 'move.finish');
     if (last && !(unanswered(last) && this.h.online(proxyId))) return last;
-    this.queue(m, proxyId, 'move.finish', { v: 1, moveId: m.id, role, abandoned: false, return: true });
-    return this.last(m, proxyId, 'move.finish');
+    return this.queue(m, proxyId, 'move.finish', { v: 1, moveId: m.id, role, abandoned: false, return: true }) ?? last;
   }
 
   // A new token after a restart (the plaintext is gone): its hash on the row; move.return.open goes out again with it.
@@ -270,21 +263,22 @@ export class Returns {
 
   // A side's reported failure is due for another try: retryMs doubling with the tries of that command so far, capped.
   private failureDue(m: Move, proxyId: string, command: WireCommand, at: number): boolean {
-    const n = this.count(m, proxyId, command);
-    return this.h.clock.now() - at >= Math.min(this.retryMs * 2 ** Math.max(0, n - 1), RETRY_CAP_MS);
+    return backoffDue(this.retryMs, this.count(m, proxyId, command), at, this.h.clock.now());
   }
 
-  private queue(m: Move, proxyId: string, command: WireCommand, args: Record<string, unknown>, sent?: (id: string) => void): void {
+  // The new command's row; null when it was not queued (now, or within RETURN_QUEUE_RETRY_MS of the last refusal).
+  private queue(m: Move, proxyId: string, command: WireCommand, args: Record<string, unknown>, sent?: (id: string) => void): CommandRow | null {
     const k = `${m.id}:${proxyId}:${command}`;
     const at = this.blocked.get(k);
-    if (at !== undefined && this.h.clock.now() - at < RETURN_QUEUE_RETRY_MS) return;
+    if (at !== undefined && this.h.clock.now() - at < RETURN_QUEUE_RETRY_MS) return null;
     const r = this.h.send(m, proxyId, command, args);
     if (!r.ok) {
       this.blocked.set(k, this.h.clock.now());
-      return;
+      return null;
     }
     this.blocked.delete(k);
-    sent?.(r.id);
+    sent?.(r.row.id);
+    return r.row;
   }
 
   // The original's address when its url names a host (looked up once, outside a transaction).
@@ -324,12 +318,10 @@ export class Returns {
   }
 
   private last(m: Move, proxyId: string, command: WireCommand): CommandRow | null {
-    const r = this.h.db.prepare(`SELECT id FROM commands WHERE proxy_id = ? AND command = ? AND json_extract(args, '$.moveId') = ? ORDER BY rowid DESC LIMIT 1`)
-      .get(proxyId, command, m.id) as { id: string } | undefined;
-    return r ? this.cmd(m, proxyId, r.id) : null;
+    return this.h.commands.latestForMove(proxyId, command, m.id);
   }
 
   private count(m: Move, proxyId: string, command: WireCommand): number {
-    return (this.h.db.prepare(`SELECT COUNT(*) AS n FROM commands WHERE proxy_id = ? AND command = ? AND json_extract(args, '$.moveId') = ?`).get(proxyId, command, m.id) as { n: number }).n;
+    return this.h.commands.countForMove(proxyId, command, m.id);
   }
 }
