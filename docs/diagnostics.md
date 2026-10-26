@@ -243,6 +243,25 @@ proxy; one click) that sends this same `POST /moves` with the default bounds
 until the answer is in, so a double click sends one request. A 409 or 422
 answer is shown as the failed precheck rules (or the `move_pending` detail).
 
+Once a camera and a target are chosen, the form shows what the camera holds
+on the source now, above the firewall lines: `GET
+/api/v1/accounts/:accountId/cameras/:cameraId/move-summary?target=<proxy id>`
+(session only, and it needs the `X-Cams-Admin: 1` header like a write: it
+sends the read-only command `move.summary` to the camera's proxy and waits up
+to 15 s). The answer is `{cameraId, proxyId, at, summary, target: {proxyId,
+name, profile} | null, space}`: `summary` per kind `{files, bytes, rows,
+oldest, newest}` (the shape `move.request` carries) and `space` the same
+figures as a move keeps at request time (`null` when the target reports no
+profile or budget). The summary is kept 30 s, so choosing targets one after
+another sends one command. Refusals: 409 `source_offline`,
+`camera_not_on_proxy`, `not_allowed_on_proxy` (no `move.send`),
+`unknown_camera`, `paused_on_proxy`; 424 `proxy_update_needed` (the source
+answered `not_allowed`: it needs cam-proxy 2026.10.26 or later); 504
+`timeout`; 502 `proxy_failed` or `bad_result`. The command shows in the
+proxy's command history with its `command-create` and `command-result`
+audit records, as `config.get`; there is no move audit record. The form says
+why in a muted line when the content is not available and still works.
+
 ## Refused moves
 
 A refused move is `rejected` in `/diag/moves` and on the Moves page, with
