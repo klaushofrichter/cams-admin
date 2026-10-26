@@ -2,12 +2,13 @@ import type { Db } from '../db/open';
 import type { Proxy, Registry } from '../registry';
 import type { StatusStore } from '../status/store';
 import type { MoveStore } from './store';
-import { passivePorts, type Profile } from '../status/profile';
+import { passivePorts, v4InCidr, type Profile } from '../status/profile';
+import { ipLiteral } from '../../contract/firewall';
 
 // cams-admin's own checks before a move is offered (S §4, §6; plan R7, X21).
 // The proxies re-check everything they can see themselves.
 
-export type PrecheckReason = 'other_account' | 'target_offline' | 'moves_not_allowed' | 'camera_limit' | 'busy' | 'no_site_ca' | 'not_routed' | 'host_overridden' | 'id_taken';
+export type PrecheckReason = 'other_account' | 'target_offline' | 'moves_not_allowed' | 'camera_limit' | 'busy' | 'no_site_ca' | 'ca_does_not_cover_camera' | 'not_routed' | 'host_overridden' | 'id_taken';
 export interface PrecheckDeps { db: Db; registry: Registry; status: StatusStore; store: MoveStore }
 export interface Candidate { accountId: string; sourceProxyId: string; targetProxyId: string; cameraId?: string | null }
 export interface EligibleTarget { proxyId: string; name: string; site: string }
@@ -72,6 +73,26 @@ export function profileRules(targetName: string, p: Profile | null | undefined):
       : { rule: 'ftp_ports', ok: have >= need, reason: 'camera_limit', detail: `${targetName}'s FTP passive range ${p.ftp.passive.from}-${p.ftp.passive.to} has ${have} ports; ${p.held + 1} camera${p.held === 0 ? '' : 's'} need${p.held === 0 ? 's' : ''} ${need}` };
   return [capacity, ftp];
 }
+// The camera's registry host as an IPv4 literal (a ":port" dropped), else null (a name, IPv6, from-proxy, none).
+function ipv4Of(host: string | null | undefined): string | null {
+  const h = (host ?? '').trim();
+  const i = h.indexOf(':');
+  const bare = i >= 0 && h.indexOf(':', i + 1) < 0 ? h.slice(0, i) : h;
+  return ipLiteral(bare) === 4 ? bare : null;
+}
+
+// ca_covers_camera: the target's site CA issues camera certificates for its camera subnet only, so a camera
+// outside it could not be verified after the move. Passes (skipped) when the target reports no subnet (a
+// cam-proxy before profile.tls) or the camera's registry address is no IPv4 literal.
+export function caCoversRule(targetName: string, p: Profile | null | undefined, cameraHost: string | null | undefined): PrecheckRule {
+  const rule = (ok: boolean, detail: string): PrecheckRule => ({ rule: 'ca_covers_camera', ok, reason: 'ca_does_not_cover_camera', detail });
+  const subnet = p?.tls?.cameraSubnet ?? null;
+  if (!subnet) return rule(true, `${targetName} reports no camera subnet for its site CA`);
+  const ip = ipv4Of(cameraHost);
+  if (!ip) return rule(true, "the camera's registry address is not an IPv4 address");
+  return v4InCidr(ip, subnet) ? rule(true, `${targetName}'s site CA covers ${subnet}, ${ip} included`) : rule(false, `${targetName}'s site CA covers ${subnet}, not ${ip}`);
+}
+
 const profileFits = (d: PrecheckDeps, p: Proxy) => profileRules(p.name, d.status.row(p.id)?.reported?.profile).every((r) => r.ok);
 
 // Every rule in the order precheck applies them, with a detail where one helps
@@ -100,6 +121,10 @@ export function precheckReport(d: PrecheckDeps, m: Candidate): PrecheckReport {
   add('not_busy', !busy, 'busy', busy ? `a move is open on the ${busy}` : undefined);
   const siteDetail = (p: Proxy) => `${p.id}: registry ${p.tlsSite ?? 'none'}, reported ${d.status.row(p.id)?.reported?.site ?? 'none'}`;
   add('site_ca', !!siteOf(d, src) && !!siteOf(d, t), 'no_site_ca', [siteOf(d, src) ? null : siteDetail(src), siteOf(d, t) ? null : siteDetail(t)].filter(Boolean).join('; ') || undefined);
+  if (m.cameraId) {
+    const host = (d.db.prepare('SELECT host FROM cameras WHERE id = ?').get(m.cameraId) as { host: string | null } | undefined)?.host;
+    rules.push(caCoversRule(t.name, d.status.row(t.id)?.reported?.profile, host));
+  }
   const missed = unseen(d, src.id, t.id);
   add('routed', missed.length === 0, 'not_routed', missed.length ? `cams instances that see the source but not the target: ${missed.map((i) => instanceName(d, i)).join(', ')}` : undefined);
   if (m.cameraId) add('no_host_override', !hostOverridden(d, m.cameraId), 'host_overridden');

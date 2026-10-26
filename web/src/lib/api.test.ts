@@ -13,6 +13,14 @@ describe('api', () => {
     expect(init.headers).toMatchObject({ 'Content-Type': 'application/json', 'X-Cams-Admin': '1' });
     expect(init.body).toBe('{"name":"x"}');
   });
+  it('a read carries the X-Cams-Admin header too (a read that sends a proxy command checks it), no body', async () => {
+    const f = vi.fn(async () => new Response(JSON.stringify({ items: [] }), { status: 200 }));
+    vi.stubGlobal('fetch', f);
+    await api('GET', '/moves');
+    const [, init] = f.mock.calls[0] as unknown as [string, RequestInit];
+    expect(init.headers).toEqual({ 'X-Cams-Admin': '1' });
+    expect(init.body).toBeUndefined();
+  });
   it('maps errors to ApiFailure with the field', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: 'duplicate_email', field: 'email' }), { status: 409 })));
     await expect(api('POST', '/x', {})).rejects.toMatchObject({ status: 409, code: 'duplicate_email', field: 'email' });

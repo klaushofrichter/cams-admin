@@ -164,7 +164,11 @@ export function buildSchemas(mode: Mode): Record<string, S> {
     hardware: obj({ pi: nullable(str()), cpuCores: int(1, { maximum: 1024 }), cpuModel: nullable(str(100)), memoryBytes: int(), load5: { type: 'number', minimum: 0 }, cpuTempC: nullable(num) }, []),
     warnings: arr(en([...PROFILE_WARNINGS]), PROFILE_WARNINGS.length, { uniqueItems: true }),
     firewall: obj({ tool: en([...FIREWALL_TOOLS]), lines: arr(str(), 64) }, []),
-  }, [])) : { type: ['object', 'null'] };
+    // The proxy's site CA (optional: older proxies send none): its site name and the camera subnet it issues
+    // camera certificates for (IPv4 or IPv6 CIDR), each null when there is none. cams-admin's move precheck
+    // ca_covers_camera refuses a camera whose IPv4 address is outside the target's subnet.
+    tls: obj({ site: nullable({ type: 'string', pattern: SITE_PATTERN }), cameraSubnet: nullable({ type: 'string', maxLength: 49, pattern: CIDR_PATTERN }) }, []),
+  }, [], ['tls'])) : { type: ['object', 'null'] };
   const heartbeatBody: S = {
     ...obj({ summary: { type: 'object' }, proxy: proxyInfo, truncated: bool, profile }, ['summary'], ['profile']),
     // The summary's own checks run separately at run time (an unreadable
@@ -285,6 +289,8 @@ export function buildSchemas(mode: Mode): Record<string, S> {
   const moveArgs: Record<(typeof MOVE_COMMANDS)[number], S> = {
     // cams-admin starts a move on the source; no password, token or key travels (the camera's password stays on the source).
     'move.begin': all({ v: { const: 1 }, camera: camId, target: prxId, bounds: nullable(moveBounds) }),
+    // Read only (cams-admin -> source, entry move.send): the camera's content as move.request would report it, before any move.
+    'move.summary': all({ v: { const: 1 }, camera: camId }),
     'move.targets': all({ v: { const: 1 }, requestId, targets: arr(all({ proxyId: prxId, name: nameS, site: nullable(site) }), 64) }),
     'move.open': all({ ...mv, requestId, camera: camId, tokenHash: hash, targetIp: str(45, { pattern: '^[0-9A-Fa-f:.]{2,45}$' }) }),
     // The plaintext token goes to the target in the first offer only (it is not stored once the command is final).
@@ -318,6 +324,7 @@ export function buildSchemas(mode: Mode): Record<string, S> {
   };
   const moveResults: Record<(typeof MOVE_COMMANDS)[number], S> = {
     'move.begin': all({ requestId }),
+    'move.summary': all({ summary: moveSummary }),
     'move.targets': empty, 'move.open': empty, 'move.answer': empty, 'move.go': empty, 'move.release': empty, 'move.cancel': empty, 'move.return.start': empty,
     'move.return.open': all({ chunks: int(), bytes: int() }),
     'move.offer': { anyOf: [all({ accept: { const: true }, space: moveSpace, probeBps: int() }), obj({ accept: { const: false }, reason: offerReason, detail: refusalDetail }, ['accept', 'reason'], ['detail'])] },
@@ -419,10 +426,10 @@ export const MESSAGE_TYPES = ['challenge', 'hello', 'welcome', 'heartbeat', 'ack
 export const RESERVED_TYPES = ['key.rotate'] as const;
 
 // --- camera moves -------------------------------------------------------------
-// The twelve commands (role -> allow entry: targets, open, answer, go, release and finish need `move.send`; offer and start `move.receive`;
+// The thirteen commands (role -> allow entry: begin, summary, targets, open, answer, go, release and finish need `move.send`; offer and start `move.receive`;
 // finish and cancel by `args.role`: source `move.send`, target `move.receive`; a return swaps them: move.return.open `move.receive`,
 // move.return.start `move.send`, and move.finish with `return: true` source `move.receive`, target `move.send`).
-export const MOVE_COMMANDS = ['move.begin', 'move.targets', 'move.open', 'move.offer', 'move.answer', 'move.start', 'move.go', 'move.release', 'move.finish', 'move.cancel', 'move.return.open', 'move.return.start'] as const;
+export const MOVE_COMMANDS = ['move.begin', 'move.summary', 'move.targets', 'move.open', 'move.offer', 'move.answer', 'move.start', 'move.go', 'move.release', 'move.finish', 'move.cancel', 'move.return.open', 'move.return.start'] as const;
 export const MOVE_EVENT_KINDS = ['move.targets', 'move.request', 'move.approve', 'move.cancel', 'move.phase', 'move.progress'] as const;
 export const MOVE_KINDS = ['stills', 'clips', 'events', 'checks', 'archive'] as const;
 export const MOVE_OFFER_REASONS = ['moves_not_allowed', 'camera_unreachable', 'camera_limit', 'id_taken', 'busy', 'incompatible', 'no_site_ca', 'ca_does_not_cover_camera', 'external_cert'] as const;
@@ -435,6 +442,10 @@ export const MOVE_SPACE_CHOICES = ['all', 'omit', 'fit', 'retention'] as const;
 export const MOVE_BEGIN_REFUSALS = ['no_site_ca', 'external_cert', 'moves_not_allowed', 'busy', 'unknown_camera'] as const;
 // A TLS site name, as cam-proxy's tls.site (also the cams-v1 snapshot's proxies[].site).
 export const SITE_PATTERN = '^[a-z0-9][a-z0-9-]{0,30}$';
+// A CIDR (the profile's tls.cameraSubnet): an IPv4 address and a prefix of 0 to 32, or an IPv6 address (hex groups, colons,
+// at least one colon, an optional IPv4 tail) and a prefix of 0 to 128. The server parses it fully; the pattern only bounds the characters.
+const V4_OCTET = '(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])';
+export const CIDR_PATTERN = `^(${V4_OCTET}(\\.${V4_OCTET}){3}/(3[0-2]|[12]?[0-9])|[0-9A-Fa-f.]{0,44}:[0-9A-Fa-f:.]{1,44}/(12[0-8]|1[01][0-9]|[1-9]?[0-9]))$`;
 
 // The command names on the wire (strict enum). P2 implements tokens.apply.
 export const WIRE_COMMANDS = ['tokens.apply', 'config.get', 'config.set', 'config.unset', 'config.rollback', 'camera.action', 'camera.name.set', 'proxy.restart', ...MOVE_COMMANDS] as const;

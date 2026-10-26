@@ -113,9 +113,15 @@ an unreadable profile, never the heartbeat (`drift-heartbeat-profile-cameras-0`)
 | `hardware` | `{pi: string or null, cpuCores 1..1024, cpuModel: string ≤ 100 or null, memoryBytes ≥ 0, load5 ≥ 0, cpuTempC: number or null}`, as seen by cam-proxy |
 | `warnings` | unique items of `profile_ftp_ports`, `profile_cameras_exceeded` (`PROFILE_WARNINGS`) |
 | `firewall` | `{tool: ufw or nft (FIREWALL_TOOLS), lines: at most 64 strings of ≤ 200 characters}` |
+| `tls` | **optional** (added later; a proxy before it sends none): the proxy's site CA, `{site: string (the site pattern) or null, cameraSubnet: CIDR or null}`, closed in strict, both keys required there. `cameraSubnet` is the camera subnet the site CA issues camera certificates for: an IPv4 CIDR (`a.b.c.d/0..32`) or an IPv6 one (`/0..128`), at most 49 characters (`CIDR_PATTERN`) |
 
 Fixtures: `valid-heartbeat-profile` (set, FTP on, firewall lines),
-`valid-heartbeat-profile-unset` (the defaults, FTP off), `valid-heartbeat-profile-null`. The firewall lines
+`valid-heartbeat-profile-unset` (the defaults, FTP off), `valid-heartbeat-profile-null`,
+`valid-heartbeat-profile-tls` (a site CA covering `192.0.2.0/28`), `valid-heartbeat-profile-tls-none`
+(both null), `drift-heartbeat-profile-tls-bad-subnet` (run time reads the subnet as null; strict refuses).
+cams-admin's move precheck `ca_covers_camera` (after `site_ca`) refuses a camera whose registry host is an
+IPv4 literal outside the target's `tls.cameraSubnet` (reason `ca_does_not_cover_camera`); it passes when
+the target reports no subnet or the host is no IPv4 literal. The firewall lines
 hold camera LAN addresses: never logged on either side. cams-admin never sets
 the profile (it holds the storage budget).
 
@@ -223,8 +229,8 @@ differs, is reported `pending` (not a failure) by
 match (nothing pending).
 ## Camera moves
 
-Additive: the envelope stays v1, signatures and JCS unchanged. Twelve commands
-(`move.begin`, `move.targets`, `move.open`, `move.offer`, `move.answer`, `move.start`,
+Additive: the envelope stays v1, signatures and JCS unchanged. Thirteen commands
+(`move.begin`, `move.summary`, `move.targets`, `move.open`, `move.offer`, `move.answer`, `move.start`,
 `move.go`, `move.release`, `move.finish`, `move.cancel`, `move.return.open`,
 `move.return.start`; all `v:1`, in the strict
 `command` enum, each with `commands/<name>.args` and `.result` schemas) and six
@@ -235,7 +241,7 @@ Additive: the envelope stays v1, signatures and JCS unchanged. Twelve commands
 `docs/superpowers/specs/2026-10-21-camera-move-design.md`.
 
 **Allow entries** (new in the strict heartbeat enum, both local, off by default):
-`move.send` (the source side: `move.begin`, `move.targets`, `move.open`, `move.answer`,
+`move.send` (the source side: `move.begin`, `move.summary`, `move.targets`, `move.open`, `move.answer`,
 `move.go`, `move.release`, `move.return.start`, and `move.finish` / `move.cancel` with
 `args.role` = `source`) and `move.receive` (the target side: `move.offer`, `move.start`, `move.return.open`, and
 `move.finish` / `move.cancel` with `args.role` = `target`).
@@ -296,6 +302,16 @@ Rulings of the camera-move plan that the schemas carry:
   is `{requestId}`; the source then emits the usual `move.request` event. A refusal
   is the command's `failed` status with one of `no_site_ca`, `external_cert`,
   `moves_not_allowed`, `busy`, `unknown_camera` (`MOVE_BEGIN_REFUSALS`).
+- `move.summary` (cams-admin → source, entry `move.send`, read only: it changes nothing on
+  the proxy) asks for a camera's content before any move (the Start move form): args
+  `{v: 1, camera: <proxy camera id>}`, closed. The result is `{summary}`, the same
+  `summary` shape `move.request` carries (all five kinds, each `{files, bytes, rows,
+  oldest, newest}`, times nullable). An unknown camera is the command's `failed` status
+  with `unknown_camera`. A proxy that does not implement it answers `not_allowed` (step 8):
+  cams-admin then says the proxy needs the cam-proxy update. Fixtures
+  `valid-command-move-summary`, `refused-move-summary-not-allowed`, `valid-result-move-summary`;
+  `scripts/contract/cam-proxy-commands.ts` reports them `pending` until cam-proxy's
+  `IMPLEMENTED` has `move.summary`.
 - `move.request` carries `bounds` (`MoveBounds | null`), optional in both schemas:
   a proxy that does not send it is valid and means null.
 - `move.request` also carries `actor` `{origin: local | managed, label}`; the

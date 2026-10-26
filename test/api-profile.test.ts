@@ -35,7 +35,7 @@ describe('GET /proxies/:proxyId/profile', () => {
     expect(r.status).toBe(200);
     expect(r.body).toEqual({
       proxyId: een, accountId: acc, name: 'een', displayName: 'een', state: 'online', version: 'v2026.10.06.1', reportedAt: expect.any(Number),
-      profile: { ...makeProfile(), firewall: { ...makeProfile().firewall, dropped: 0 } }, unreadable: false, homeUrl: 'https://192.0.2.5:8443',
+      profile: { ...makeProfile(), firewall: { ...makeProfile().firewall, dropped: 0 }, tls: null }, unreadable: false, homeUrl: 'https://192.0.2.5:8443',
     });
     expect((await a.api('get', `/proxies/${pi}/profile`)).body).toMatchObject({ profile: { set: false }, homeUrl: 'http://192.0.2.6:8480/' });
   });

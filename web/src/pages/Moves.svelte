@@ -3,7 +3,7 @@
   import { onMount } from 'svelte';
   import { api, errorText, ApiFailure } from '../lib/api';
   import { coalesced, live } from '../lib/live';
-  import { cancelable, etaText, phaseClass, phaseReason, phaseText, progressText, refusalLine, refusalText, startBody, cameraLabel } from '../lib/moves';
+  import { cancelable, etaText, phaseClass, phaseReason, phaseText, presummaryErrorText, presummaryLines, presummarySpaceText, progressText, refusalLine, refusalText, startBody, cameraLabel } from '../lib/moves';
   import MoveDetail from '../components/MoveDetail.svelte';
   import FirewallLines from '../components/FirewallLines.svelte';
   import { moveFirewall } from '../lib/profile';
@@ -65,6 +65,19 @@
     api('GET', `/proxies/${id}/profile`).then((r) => { if (targetId === id) targetProfile = { id, profile: r.profile }; }).catch(() => { if (targetId === id) targetProfile = { id, profile: null }; });
   });
   const targetName = $derived(proxies.find((p) => p.id === targetId)?.displayName ?? '');
+  // The camera's content before the move (move.summary to the source, through cams-admin) and the target's free
+  // budget against it. Unavailable (an older proxy, offline, no answer in time): a muted line, the form still works.
+  let presummary = $state<{ key: string; loading: boolean; answer?: any; error?: string } | null>(null);
+  $effect(() => {
+    const acc = accountId, cam = cameraId, tgt = targetId;
+    presummary = null;
+    if (!acc || !cam || !tgt) return;
+    const key = `${cam}|${tgt}`;
+    presummary = { key, loading: true };
+    api('GET', `/accounts/${acc}/cameras/${cam}/move-summary?target=${encodeURIComponent(tgt)}`)
+      .then((answer) => { if (presummary?.key === key) presummary = { key, loading: false, answer }; })
+      .catch((e) => { if (presummary?.key === key) presummary = { key, loading: false, error: e instanceof ApiFailure ? presummaryErrorText(e.body) : errorText(e) }; });
+  });
   const firewall = $derived(targetProfile && cameraId && targetProfile.id === targetId ? moveFirewall(targetName, targetProfile.profile, cameras.find((c) => c.id === cameraId)?.host) : null);
   async function start(e: Event) {
     e.preventDefault();
@@ -117,6 +130,23 @@
     </label>
     <button class="btn primary" data-testid="start-move-submit" disabled={sending || !sourceId || !cameraId || !targetId} aria-busy={sending}>{sending ? 'Starting…' : 'Start move'}</button>
   </form>
+  {#if presummary}
+    <div class="grid presummary" data-testid="start-move-summary">
+      {#if presummary.loading}
+        <p class="muted small" data-testid="start-move-summary-loading">Asking the source proxy what the camera holds…</p>
+      {:else if presummary.answer}
+        <p class="small">What the camera holds on the source now:</p>
+        <ul>
+          {#each presummaryLines(presummary.answer.summary ?? {}) as l (l.kind)}<li data-testid="start-move-summary-{l.kind}">{l.text}</li>{/each}
+        </ul>
+        {#if presummary.answer.target}
+          <p class="small" class:warn={presummary.answer.space && !presummary.answer.space.fits} data-testid="start-move-space">{presummarySpaceText({ name: targetName || presummary.answer.target.name, profile: presummary.answer.target.profile }, presummary.answer.space)}</p>
+        {/if}
+      {:else}
+        <p class="muted small" data-testid="start-move-summary-none">Content not available: {presummary.error}. The move can start anyway.</p>
+      {/if}
+    </div>
+  {/if}
   {#if firewall}
     <div class="grid" data-testid="start-move-firewall">
       {#if 'lines' in firewall}
@@ -166,6 +196,9 @@
   h2 { margin: 0; }
   form { align-items: end; }
   .small { font-size: 12px; }
+  .presummary p { margin: 0; }
+  .presummary ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; font-size: 13px; }
+  .warn { color: var(--warning); }
   .detail td { border-top: 0; padding-top: 0; }
   .link { background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; font: inherit; text-decoration: underline; }
 </style>

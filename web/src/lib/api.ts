@@ -5,8 +5,10 @@ export class ApiFailure extends Error {
   }
 }
 
-// Every write: JSON plus the header a cross-site form can't send.
+// Every write: JSON plus the header a cross-site form can't send. Reads carry the header too: a read that sends
+// a proxy command (the Start move form's move-summary) refuses a request without it.
 export const WRITE_HEADERS = { 'Content-Type': 'application/json', 'X-Cams-Admin': '1' } as const;
+const READ_HEADERS = { 'X-Cams-Admin': '1' } as const;
 
 let onUnauthorized: () => void = () => undefined;
 export const setUnauthorized = (fn: () => void) => (onUnauthorized = fn);
@@ -15,7 +17,7 @@ export async function api<T = any>(method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'D
   const write = method !== 'GET';
   const r = await fetch(`/api/v1${path}`, {
     method,
-    headers: write ? WRITE_HEADERS : {},
+    headers: write ? WRITE_HEADERS : READ_HEADERS,
     body: write ? JSON.stringify(body ?? {}) : undefined,
     credentials: 'same-origin',
   });

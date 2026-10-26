@@ -117,6 +117,8 @@ export function makeProfile(o: Partial<{
   set: boolean; name: string | null; cameras: number; storageGB: number | null; held: number; tool: 'ufw' | 'nft'; ftp: boolean; port: number;
   passive: { from: number; to: number } | null; cameraHosts: string[]; warnings: string[]; budgetBytes: number | null; usedBytes: number | null;
   diskBytes: number | null; freeBytes: number | null; pi: string | null; cpuTempC: number | null;
+  // The site CA (optional in the contract): left out unless given.
+  tls: { site: string | null; cameraSubnet: string | null };
 }> = {}) {
   const port = o.port ?? 2121;
   const passive = o.passive === undefined ? { from: 30000, to: 30029 } : o.passive;
@@ -133,6 +135,7 @@ export function makeProfile(o: Partial<{
     hardware: { pi: o.pi ?? null, cpuCores: 4, cpuModel: 'Intel N100', memoryBytes: 16_000_000_000, load5: 0.7, cpuTempC: o.cpuTempC === undefined ? 48.5 : o.cpuTempC },
     warnings: o.warnings ?? [],
     firewall: { tool, lines },
+    ...(o.tls ? { tls: o.tls } : {}),
   };
 }
 

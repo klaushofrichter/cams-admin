@@ -20,6 +20,7 @@ import type { ProxyConfig } from '../config/service';
 import type { RemoteActions } from '../actions/service';
 import type { Moves } from '../moves/service';
 import { chunkCounts, moveView } from '../moves/view';
+import { SummaryRefused } from '../moves/summary';
 import { SESSION_COOKIE, type Session, type Sessions } from '../auth/session';
 import { bearerOf, requireAuth, sessionBeforeBody } from '../auth/middleware';
 import { reconcile } from '../status/derive';
@@ -328,6 +329,22 @@ export function apiRouter(d: ApiDeps): express.Router {
   r.delete(camBase, h((req, res) => { d.registry.deleteCamera(actor(res), p(req, 'accountId'), p(req, 'cameraId')); reg('camera', p(req, 'cameraId')); }));
   r.put(`${camBase}/sim`, h((req, res) => { const s = d.registry.setSim(actor(res), p(req, 'accountId'), p(req, 'cameraId'), req.body); reg('camera', p(req, 'cameraId')); return s; }));
   r.delete(`${camBase}/sim`, h((req, res) => { d.registry.deleteSim(actor(res), p(req, 'accountId'), p(req, 'cameraId')); reg('camera', p(req, 'cameraId')); }));
+  // The camera's content before a move (the Start move form): move.summary to its proxy (read only: not a write
+  // route, no move audit; the command keeps its own command-create and command-result records, as config.get), the
+  // answer within a short wait; with ?target=<proxy id> the space figures against that proxy's profile. Session
+  // only (an operations token is refused on every GET). It sends a signed command, so a session request must carry
+  // the X-Cams-Admin header as a write does (a cross-site link or image can't set it).
+  r.get(`${camBase}/move-summary`, h(async (req, res) => {
+    if (res.locals.session && req.headers['x-cams-admin'] !== '1') throw new ApiError(403, 'csrf');
+    const target = req.query.target;
+    try {
+      return await d.moves.summaries.get(actor(res), p(req, 'accountId'), p(req, 'cameraId'), target === undefined ? {} : { targetProxyId: typeof target === 'string' ? target : 0 });
+    } catch (e) {
+      if (!(e instanceof SummaryRefused)) throw e;
+      res.locals.status = e.status;
+      return e.body;
+    }
+  }));
 
   // --- P4: cams instances (migration spec §9.1, §9.6) -------------------------------------
   const cmsBase = '/cams-instances/:instanceId';

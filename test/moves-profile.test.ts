@@ -73,7 +73,7 @@ describe('camera moves and the proxy profile', () => {
     const cam = camera(src);
     const r = report(src, tgt, cam.id);
     expect(r).toMatchObject({ ok: false, reason: 'camera_limit' });
-    expect(r.rules.map((x) => x.rule)).toEqual(['different_proxies', 'same_account', 'target_online', 'target_receives', 'capacity', 'ftp_ports', 'not_busy', 'site_ca', 'routed', 'no_host_override']);
+    expect(r.rules.map((x) => x.rule)).toEqual(['different_proxies', 'same_account', 'target_online', 'target_receives', 'capacity', 'ftp_ports', 'not_busy', 'site_ca', 'ca_covers_camera', 'routed', 'no_host_override']);
     expect(r.rules.find((x) => x.rule === 'capacity')).toEqual({ rule: 'capacity', ok: false, reason: 'camera_limit', detail: `${tgt.name} holds 3 of 3 cameras` });
     expect(s.built.moves.eligibleTargets(src.accountId, src.proxyId).map((t) => t.proxyId)).not.toContain(tgt.proxyId);
     const requestId = request(src, tgt.proxyId);
@@ -82,6 +82,24 @@ describe('camera moves and the proxy profile', () => {
     const m = s.built.moves.store.list().find((x) => x.requestId === requestId)!;
     expect(moveView(s.built.db, m)).toMatchObject({ phase: 'rejected', refusedBy: 'cams-admin', reason: 'camera_limit' });
     expect(tgt.client.receivedCommands.some((c) => c.body.command === 'move.offer')).toBe(false);
+  });
+
+  it("the target's site CA does not cover the camera's address: refused ca_does_not_cover_camera before any offer, with the detail", async () => {
+    const src = await proxy();
+    const tgt = await proxy(() => makeProfile({ tls: { site: 'home', cameraSubnet: '192.0.2.80/28' } }));
+    const cam = camera(src); // 192.0.2.10
+    const r = report(src, tgt, cam.id);
+    expect(r).toMatchObject({ ok: false, reason: 'ca_does_not_cover_camera' });
+    expect(r.rules.find((x) => !x.ok)).toEqual({ rule: 'ca_covers_camera', ok: false, reason: 'ca_does_not_cover_camera', detail: `${tgt.name}'s site CA covers 192.0.2.80/28, not 192.0.2.10` });
+    const requestId = request(src, tgt.proxyId);
+    const a = await answerOf(src, requestId);
+    expect(a).toMatchObject({ accept: false, reason: 'ca_does_not_cover_camera', detail: `${tgt.name}'s site CA covers 192.0.2.80/28, not 192.0.2.10` });
+    expect(tgt.client.receivedCommands.some((c) => c.body.command === 'move.offer')).toBe(false);
+    // Covered, or not reported: the rule passes.
+    const ok = await proxy(() => makeProfile({ tls: { site: 'home', cameraSubnet: '192.0.2.0/28' } }));
+    expect(report(src, ok, cam.id).rules.find((x) => x.rule === 'ca_covers_camera')).toMatchObject({ ok: true });
+    const none = await proxy(() => makeProfile());
+    expect(report(src, none, cam.id).rules.find((x) => x.rule === 'ca_covers_camera')).toMatchObject({ ok: true, detail: `${none.name} reports no camera subnet for its site CA` });
   });
 
   it('too few FTP passive ports on the target: refused by ftp_ports', async () => {
