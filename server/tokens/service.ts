@@ -1,7 +1,7 @@
 import type { StatementSync } from 'node:sqlite';
 import { createHash, randomBytes } from 'crypto';
 import type { Clock } from '../clock';
-import { tx, type Db } from '../db/open';
+import { stmt, tx, type Db } from '../db/open';
 import type { Audit } from '../audit';
 import { ApiError, type Registry } from '../registry';
 import type { LiveHub } from '../live';
@@ -66,16 +66,9 @@ export const fieldOf = (detail: string): string => {
 };
 
 export class Tokens {
-  // Prepared once: the tick and heartbeat paths run every second (each
-  // prepare holds native memory until a GC).
-  private stmts = new Map<string, StatementSync>();
+  // Prepared once per SQL text (db/open.ts stmt).
   private q(sql: string): StatementSync {
-    let st = this.stmts.get(sql);
-    if (!st) {
-      st = this.d.db.prepare(sql);
-      this.stmts.set(sql, st);
-    }
-    return st;
+    return stmt(this.d.db, sql);
   }
   // A proxy whose token revision is ahead of ours (cams-admin restored from
   // an older backup): token changes wait for an admin's confirmation.

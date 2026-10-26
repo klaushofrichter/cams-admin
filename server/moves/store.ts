@@ -1,7 +1,7 @@
 import type { SQLInputValue } from 'node:sqlite';
 import type { Clock } from '../clock';
 import type { Db } from '../db/open';
-import { tx } from '../db/open';
+import { stmt, tx } from '../db/open';
 import { newId } from '../ids';
 import { ApiError } from '../registry';
 import type { MoveBounds, MoveCheck } from './types';
@@ -123,7 +123,7 @@ export class MoveStore {
       const id = newId('mv');
       const now = this.clock.now();
       try {
-        this.db.prepare(
+        stmt(this.db,
           `INSERT INTO moves (id, account_id, camera_id, source_proxy_id, target_proxy_id, request_id, phase, reason, detail, plan, summary, settings, token_hash, target_ip, created_at, updated_at, ended_at, actor, bounds, return_of, space, version)
            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)`,
         ).run(id, m.accountId, m.cameraId, m.sourceProxyId, m.targetProxyId, m.requestId, phase, m.reason ?? null, detailOf(m.detail), enc('plan', m.plan), enc('summary', m.summary),
@@ -141,7 +141,7 @@ export class MoveStore {
   // Deletes a rejected move (a refusal is final; its row holds no content) with its chunk rows (ON DELETE CASCADE).
   // False when there is no such move or it is not rejected.
   deleteRejected(id: string): boolean {
-    const n = tx(this.db, () => Number(this.db.prepare(`DELETE FROM moves WHERE id = ? AND phase = 'rejected'`).run(id).changes));
+    const n = tx(this.db, () => Number(stmt(this.db, `DELETE FROM moves WHERE id = ? AND phase = 'rejected'`).run(id).changes));
     if (n) this.onChange(id);
     return n > 0;
   }
@@ -153,34 +153,34 @@ export class MoveStore {
     tx(this.db, () => {
       const m = this.get(moveId);
       if (!m) throw new ApiError(404, 'not_found');
-      this.db.prepare('UPDATE cameras SET move_id = ? WHERE id = ?').run(moveId, m.cameraId);
+      stmt(this.db, 'UPDATE cameras SET move_id = ? WHERE id = ?').run(moveId, m.cameraId);
     });
   }
 
   get(id: string): Move | null {
-    const r = this.db.prepare('SELECT * FROM moves WHERE id = ?').get(id) as Row | undefined;
+    const r = stmt(this.db, 'SELECT * FROM moves WHERE id = ?').get(id) as Row | undefined;
     return r ? toMove(r) : null;
   }
 
   active(): Move[] {
-    return (this.db.prepare('SELECT * FROM moves WHERE ended_at IS NULL ORDER BY created_at, id').all() as Row[]).map(toMove);
+    return (stmt(this.db, 'SELECT * FROM moves WHERE ended_at IS NULL ORDER BY created_at, id').all() as Row[]).map(toMove);
   }
 
   // The non-ended move this proxy takes part in, as source or target.
   byProxy(proxyId: string): Move | null {
-    const r = this.db.prepare('SELECT * FROM moves WHERE ended_at IS NULL AND (source_proxy_id = ? OR target_proxy_id = ?)').get(proxyId, proxyId) as Row | undefined;
+    const r = stmt(this.db, 'SELECT * FROM moves WHERE ended_at IS NULL AND (source_proxy_id = ? OR target_proxy_id = ?)').get(proxyId, proxyId) as Row | undefined;
     return r ? toMove(r) : null;
   }
 
   // The move made for a source's request, ended or not (repeated request events).
   byRequest(sourceProxyId: string, requestId: string): Move | null {
-    const r = this.db.prepare('SELECT * FROM moves WHERE source_proxy_id = ? AND request_id = ? ORDER BY created_at LIMIT 1').get(sourceProxyId, requestId) as Row | undefined;
+    const r = stmt(this.db, 'SELECT * FROM moves WHERE source_proxy_id = ? AND request_id = ? ORDER BY created_at LIMIT 1').get(sourceProxyId, requestId) as Row | undefined;
     return r ? toMove(r) : null;
   }
 
   // The return (copy back) of a cancelled move, ended or not; the latest if there were several.
   returnFor(moveId: string): Move | null {
-    const r = this.db.prepare('SELECT * FROM moves WHERE return_of = ? ORDER BY created_at DESC, id DESC LIMIT 1').get(moveId) as Row | undefined;
+    const r = stmt(this.db, 'SELECT * FROM moves WHERE return_of = ? ORDER BY created_at DESC, id DESC LIMIT 1').get(moveId) as Row | undefined;
     return r ? toMove(r) : null;
   }
 
@@ -202,7 +202,7 @@ export class MoveStore {
 
   // A read: the ids prune(now, defaultDays) would delete.
   prunable(now: number, defaultDays: number): string[] {
-    return (this.db.prepare(`SELECT id ${MoveStore.PRUNABLE}`).all(defaultDays, now) as Row[]).map((r) => r.id as string);
+    return (stmt(this.db, `SELECT id ${MoveStore.PRUNABLE}`).all(defaultDays, now) as Row[]).map((r) => r.id as string);
   }
 
   // Deletes the prunable ended moves. Chunk states go with the row (ON DELETE
@@ -210,7 +210,7 @@ export class MoveStore {
   // there are none. cameras.move_id may keep naming a pruned move (it has no FK).
   prune(now: number, defaultDays: number): string[] {
     if (!this.prunable(now, defaultDays).length) return [];
-    const ids = tx(this.db, () => (this.db.prepare(`DELETE ${MoveStore.PRUNABLE} RETURNING id`).all(defaultDays, now) as Row[]).map((r) => r.id as string));
+    const ids = tx(this.db, () => (stmt(this.db, `DELETE ${MoveStore.PRUNABLE} RETURNING id`).all(defaultDays, now) as Row[]).map((r) => r.id as string));
     for (const id of ids) this.onChange(id);
     return ids;
   }
@@ -242,7 +242,7 @@ export class MoveStore {
   saveChunks(id: string, chunks: ChunkState[]): void {
     if (!chunks.length) return;
     tx(this.db, () => {
-      const st = this.db.prepare(
+      const st = stmt(this.db,
         `INSERT INTO move_chunks (move_id, chunk_id, state) VALUES (?,?,?) ON CONFLICT (move_id, chunk_id) DO UPDATE SET state = excluded.state`,
       );
       for (const c of chunks) st.run(id, c.id, c.state);
@@ -250,13 +250,13 @@ export class MoveStore {
   }
 
   chunks(id: string): ChunkState[] {
-    return (this.db.prepare('SELECT chunk_id, state FROM move_chunks WHERE move_id = ? ORDER BY chunk_id').all(id) as Row[]).map((r) => ({ id: r.chunk_id as string, state: r.state as ChunkStateName }));
+    return (stmt(this.db, 'SELECT chunk_id, state FROM move_chunks WHERE move_id = ? ORDER BY chunk_id').all(id) as Row[]).map((r) => ({ id: r.chunk_id as string, state: r.state as ChunkStateName }));
   }
 
   list(accountId?: string, limit = 100): Move[] {
     const rows = accountId
-      ? this.db.prepare('SELECT * FROM moves WHERE account_id = ? ORDER BY created_at DESC, id DESC LIMIT ?').all(accountId, limit)
-      : this.db.prepare('SELECT * FROM moves ORDER BY created_at DESC, id DESC LIMIT ?').all(limit);
+      ? stmt(this.db, 'SELECT * FROM moves WHERE account_id = ? ORDER BY created_at DESC, id DESC LIMIT ?').all(accountId, limit)
+      : stmt(this.db, 'SELECT * FROM moves ORDER BY created_at DESC, id DESC LIMIT ?').all(limit);
     return (rows as Row[]).map(toMove);
   }
 }
