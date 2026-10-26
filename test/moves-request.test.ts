@@ -141,6 +141,16 @@ describe('move request, pre-approval bounds', () => {
 });
 
 describe('move request', () => {
+  it('a plain-http source without a TLS name (the Pi) gets an offer naming its url host', async () => {
+    const src = await proxy({ site: null });
+    const tgt = await proxy();
+    camera(src);
+    request(src, tgt.proxyId);
+    await until(() => moves().length === 1 && got(src.client, 'move.open').length === 1, 5000, 'move row + open');
+    await until(() => got(tgt.client, 'move.offer').length === 1, 5000, 'offer');
+    expect(got(tgt.client, 'move.offer')[0].body.args.source).toMatchObject({ url: `http://${src.ip}:8480`, tlsServername: src.ip });
+    expect(auditFor('move-request').at(-1)!.outcome).toBe('ok');
+  });
   it('request creates a move and sends move.open then move.offer', async () => {
     const src = await proxy();
     const tgt = await proxy();
