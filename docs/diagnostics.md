@@ -97,6 +97,16 @@ when the target reports none:
 A target that fails either is not in the source's "Move to…" list, and
 `POST /moves` answers 409 `precheck` (not one of the three fixable rules).
 
+With a camera (`camera=` given, and every real request), `ca_covers_camera`
+follows `site_ca`: when the target reports `profile.tls.cameraSubnet` (the
+subnet its site CA issues camera certificates for) and the camera's registry
+host is an IPv4 literal (a `:port` is dropped), the camera must be inside it,
+else `ca_does_not_cover_camera` ("een's site CA covers 192.0.2.80/29, not
+192.0.2.90"). It passes (`ok`, with a detail saying why) when the target
+reports no subnet (a cam-proxy before `profile.tls`) or the host is a name,
+an IPv6 address or `from-proxy`. Not fixable: change the camera's address or
+the target's site CA. The Start move form shows the refusal.
+
 On the source's request cams-admin also compares the request's content size
 with the target's budget left (`budgetBytes - usedBytes`) and its per-kind
 caps from its last settings view (`stills.maxGB`, `ftp.maxGB` for clips). A

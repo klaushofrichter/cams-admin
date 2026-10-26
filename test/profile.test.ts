@@ -9,7 +9,7 @@ import { StatusStore } from '../server/status/store';
 import { parseProfile, type Profile } from '../server/status/profile';
 import { LiveHub } from '../server/live';
 import { makeProfile, makeProxyInfo, makeSummary } from '../test-client/summaries';
-import { profileRules } from '../server/moves/precheck';
+import { caCoversRule, profileRules } from '../server/moves/precheck';
 import { spaceCheck } from '../server/moves/space';
 
 function setup(dir: string, file?: string) {
@@ -28,12 +28,12 @@ function proxy(s: ReturnType<typeof setup>) {
   return { acc, prx, hb };
 }
 
-// makeProfile as the server keeps it (no dropped lines).
-const P = (o: Parameters<typeof makeProfile>[0] = {}): Profile => ({ ...makeProfile(o), firewall: { ...makeProfile(o).firewall, dropped: 0 } });
+// makeProfile as the server keeps it (no dropped lines; tls null when the proxy sends none).
+const P = (o: Parameters<typeof makeProfile>[0] = {}): Profile => ({ tls: null, ...makeProfile(o), firewall: { ...makeProfile(o).firewall, dropped: 0 } });
 
 describe('parseProfile', () => {
   it('reads the contract shape as it is (and counts no dropped lines)', () => {
-    const withDropped = (p: ReturnType<typeof makeProfile>) => ({ ...p, firewall: { ...p.firewall, dropped: 0 } });
+    const withDropped = (p: ReturnType<typeof makeProfile>) => ({ tls: null, ...p, firewall: { ...p.firewall, dropped: 0 } });
     expect(parseProfile(makeProfile())).toEqual(withDropped(makeProfile()));
     const unset = makeProfile({ set: false, name: null, storageGB: null, ftp: false, passive: null, budgetBytes: null, cpuTempC: null });
     expect(parseProfile(unset)).toEqual(withDropped(unset));
@@ -69,6 +69,49 @@ describe('parseProfile', () => {
   });
 });
 
+describe('parseProfile: the site CA (tls)', () => {
+  it('reads {site, cameraSubnet}; null when the proxy sends none', () => {
+    expect(parseProfile(makeProfile())!.tls).toBeNull();
+    expect(parseProfile(makeProfile({ tls: { site: 'garage', cameraSubnet: '192.0.2.0/28' } }))!.tls).toEqual({ site: 'garage', cameraSubnet: '192.0.2.0/28' });
+    expect(parseProfile(makeProfile({ tls: { site: null, cameraSubnet: null } }))!.tls).toEqual({ site: null, cameraSubnet: null });
+    expect(parseProfile(makeProfile({ tls: { site: 'garage', cameraSubnet: '2001:db8::/48' } }))!.tls).toEqual({ site: 'garage', cameraSubnet: '2001:db8::/48' });
+  });
+  it('an unreadable site or subnet is null (the profile stays)', () => {
+    for (const bad of ['192.0.2.0', '192.0.2.0/33', '192.0.256.0/24', 'lan/24', '192.0.2.0/24 ', 7, '2001:db8::/129', 'x'.repeat(60)]) {
+      expect(parseProfile({ ...makeProfile(), tls: { site: 'garage', cameraSubnet: bad } })!.tls, String(bad)).toEqual({ site: 'garage', cameraSubnet: null });
+    }
+    expect(parseProfile({ ...makeProfile(), tls: { site: 'Garage!', cameraSubnet: '192.0.2.0/24' } })!.tls).toEqual({ site: null, cameraSubnet: '192.0.2.0/24' });
+    expect(parseProfile({ ...makeProfile(), tls: 'garage' })!.tls).toBeNull();
+    // A subnet with host bits is kept as written; it covers its network ("192.0.2.9/28": 192.0.2.0-15).
+    expect(parseProfile({ ...makeProfile(), tls: { site: 'garage', cameraSubnet: '192.0.2.9/28' } })!.tls).toEqual({ site: 'garage', cameraSubnet: '192.0.2.9/28' });
+  });
+});
+
+describe('precheck: ca_covers_camera (the target site CA covers the camera address)', () => {
+  const tls = (cameraSubnet: string | null) => P({ tls: { site: 'home', cameraSubnet } });
+  it('refuses an IPv4 camera outside the subnet, with the detail', () => {
+    // 192.0.2.80/29 is .80 to .87.
+    expect(caCoversRule('een', tls('192.0.2.80/29'), '192.0.2.90')).toEqual({ rule: 'ca_covers_camera', ok: false, reason: 'ca_does_not_cover_camera', detail: "een's site CA covers 192.0.2.80/29, not 192.0.2.90" });
+    expect(caCoversRule('een', tls('192.0.2.80/29'), '192.0.2.88')).toMatchObject({ ok: false });
+    expect(caCoversRule('een', tls('192.0.2.0/28'), '192.0.2.16:443')).toMatchObject({ ok: false, detail: "een's site CA covers 192.0.2.0/28, not 192.0.2.16" });
+  });
+  it('passes an IPv4 camera inside the subnet (a host and port too, the edges, /32 and /0)', () => {
+    for (const [subnet, host] of [['192.0.2.80/28', '192.0.2.90'], ['192.0.2.80/29', '192.0.2.87'], ['192.0.2.0/28', '192.0.2.15:443'], ['192.0.2.0/28', '192.0.2.0'], ['192.0.2.10/32', '192.0.2.10'], ['0.0.0.0/0', '198.51.100.7'], ['192.0.2.9/28', '192.0.2.1']]) {
+      expect(caCoversRule('een', tls(subnet), host), `${subnet} ${host}`).toEqual({ rule: 'ca_covers_camera', ok: true, reason: 'ca_does_not_cover_camera', detail: `een's site CA covers ${subnet}, ${host.split(':')[0]} included` });
+    }
+  });
+  it('skipped (ok) without a reported subnet, or when the camera address is no IPv4 literal', () => {
+    expect(caCoversRule('een', null, '192.0.2.10')).toEqual({ rule: 'ca_covers_camera', ok: true, reason: 'ca_does_not_cover_camera', detail: 'een reports no camera subnet for its site CA' });
+    expect(caCoversRule('een', P(), '192.0.2.10')).toMatchObject({ ok: true, detail: 'een reports no camera subnet for its site CA' });
+    expect(caCoversRule('een', tls(null), '192.0.2.10')).toMatchObject({ ok: true, detail: 'een reports no camera subnet for its site CA' });
+    for (const host of ['from-proxy', 'cam1.example.net', '[2001:db8::1]:443', '2001:db8::1', '', null]) {
+      expect(caCoversRule('een', tls('192.0.2.0/24'), host), String(host)).toEqual({ rule: 'ca_covers_camera', ok: true, reason: 'ca_does_not_cover_camera', detail: "the camera's registry address is not an IPv4 address" });
+    }
+    // An IPv6 subnet never covers an IPv4 camera: refused.
+    expect(caCoversRule('een', tls('2001:db8::/32'), '192.0.2.10')).toMatchObject({ ok: false, detail: "een's site CA covers 2001:db8::/32, not 192.0.2.10" });
+  });
+});
+
 describe('parseProfile: the firewall lines', () => {
   it('keeps only lines of the ufw/nft templates and counts the dropped ones', () => {
     const good = makeProfile().firewall.lines;
@@ -84,7 +127,7 @@ describe('the status store keeps the profile', () => {
     const { prx, hb } = proxy(s);
     s.store.hello(prx.id, 'v1', s.clock.now());
     hb(makeProfile());
-    expect(s.store.row(prx.id)?.reported?.profile).toEqual({ ...makeProfile(), firewall: { ...makeProfile().firewall, dropped: 0 } });
+    expect(s.store.row(prx.id)?.reported?.profile).toEqual({ ...makeProfile(), firewall: { ...makeProfile().firewall, dropped: 0 }, tls: null });
     hb(makeProfile({ held: 2 }));
     expect(s.store.row(prx.id)?.reported?.profile?.held).toBe(2);
     hb();
