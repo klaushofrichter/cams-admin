@@ -13,6 +13,7 @@ import { newId } from '../ids';
 import { detailOf, GIVE_UP_CLOSED, GIVE_UP_CLOSED_OPEN_CODES, MoveBusy, MoveStore, type ChunkState, type ChunkStateName, type Move } from './store';
 import { eligibleTargets, precheck, type Candidate, type EligibleTarget, type PrecheckDeps } from './precheck';
 import { begin, type BeginResult } from './begin';
+import { MoveSummaries } from './summary';
 import { capsOf, spaceCheck } from './space';
 import type { CamsInstances } from '../cams/instances';
 import { moveToken, targetAddress, type Resolve } from './token';
@@ -157,7 +158,7 @@ function answerSpace(x: unknown): Record<string, unknown> | null {
 }
 
 // camsInstances: a getter (built after the moves; only begin() uses it, for the route and override fixes).
-export interface MovesDeps { db: Db; clock: Clock; audit: Audit; registry: Registry; status: StatusStore; commands: Commands; log: Logger; camsInstances: () => CamsInstances; resolve?: Resolve; live?: LiveHub }
+export interface MovesDeps { db: Db; clock: Clock; audit: Audit; registry: Registry; status: StatusStore; commands: Commands; log: Logger; camsInstances: () => CamsInstances; resolve?: Resolve; live?: LiveHub; summaryWaitMs?: number }
 
 // The target's latest progress (R8): memory, saved by `flushIn`.
 interface Progress { chunks: Map<string, ChunkStateName>; dirty: Set<string>; bytesDone: number; bytesTotal: number; rateBps: number; etaS: number; savedAt: number; changed: boolean }
@@ -185,6 +186,8 @@ export class Moves {
   // A return's token (plaintext, memory only; a restart re-keys) and the commands sent with it, by return id.
   readonly returnTokens = new Map<string, ReturnKey>();
   private returns: Returns;
+  // The content summary before a move (move.summary, the Start move form).
+  readonly summaries: MoveSummaries;
 
   constructor(private d: MovesDeps) {
     // Every row change (create, phase, prune, delete) publishes the live 'move' event (the Moves page reloads on it).
@@ -203,6 +206,7 @@ export class Moves {
       flushIn: (id) => this.flushIn(id),
     }, this.returnTokens, CANCEL_RETRY_MS);
     d.commands.onFinal((r) => this.onFinal(r));
+    this.summaries = new MoveSummaries({ clock: d.clock, registry: d.registry, status: d.status, commands: d.commands, waitMs: d.summaryWaitMs, spaceFor: (t, s) => this.spaceFor(t, s) });
   }
 
   private get pd(): PrecheckDeps {
@@ -498,7 +502,7 @@ export class Moves {
   }
 
   // The request's space figures against the target's reported profile and its per-kind caps (its last settings view).
-  private spaceFor(targetProxyId: string, summary: unknown) {
+  spaceFor(targetProxyId: string, summary: unknown) {
     const view = this.d.db.prepare('SELECT view FROM proxy_config WHERE proxy_id = ?').get(targetProxyId) as { view: string } | undefined;
     let parsed: unknown = null;
     try { parsed = view ? JSON.parse(view.view) : null; } catch { parsed = null; } // an unreadable view: no caps

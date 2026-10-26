@@ -148,6 +148,8 @@ export class Commands {
   private dropped = new WeakMap<Connection, number>();
   private budget: Buckets;
   private finals: ((r: CommandRow) => void)[] = [];
+  // Callers waiting for one command's final row (waitFinal), by cmdId (memory).
+  private waiters = new Map<string, Set<(r: CommandRow) => void>>();
 
   constructor(private d: CommandsDeps) {
     this.budget = new Buckets({ capacity: d.perProxyPerMin ?? 60, windowMs: 60_000 });
@@ -155,6 +157,29 @@ export class Commands {
 
   onFinal(fn: (r: CommandRow) => void): void {
     this.finals.push(fn);
+  }
+
+  // The command's final row once it has one, or null after `ms` (the command stays open: a later answer is still
+  // stored and journaled). For a short read a person waits for (move.summary); never for a write.
+  waitFinal(cmdId: string, ms: number): Promise<CommandRow | null> {
+    const now = this.q('SELECT * FROM commands WHERE id = ?').get(cmdId) as DbRow | undefined;
+    if (!now) return Promise.resolve(null);
+    const row = toRaw(now);
+    if (FINAL.includes(row.state) || row.state === 'unknown') return Promise.resolve(view(row));
+    return new Promise((resolve) => {
+      const set = this.waiters.get(cmdId) ?? new Set<(r: CommandRow) => void>();
+      this.waiters.set(cmdId, set);
+      const done = (r: CommandRow | null) => {
+        clearTimeout(timer);
+        set.delete(fn);
+        if (!set.size) this.waiters.delete(cmdId);
+        resolve(r);
+      };
+      const fn = (r: CommandRow) => done(r);
+      const timer = setTimeout(() => done(null), ms);
+      timer.unref?.();
+      set.add(fn);
+    });
   }
 
   // Pre-checks are UX (R2-15): the proxy re-checks everything.
@@ -300,7 +325,7 @@ export class Commands {
 
   private finished(id: string, proxyId: string | null): void {
     const fin = view(this.byId(id));
-    for (const f of this.finals) {
+    for (const f of [...this.finals, ...(this.waiters.get(id) ?? [])]) {
       try {
         f(fin);
       } catch (e) {
