@@ -1,6 +1,6 @@
 <script lang="ts">
   // One move: who refused it and why (a rejected move, with Delete), the content checklist, chunk counts, the check, the cleanup note, the copy back;
-  // Cancel move…, End transfer… (after Archive when it is still copying) and Give up behind typed confirms. Delete has no confirm: a rejected record holds no content.
+  // Cancel move…, End transfer… (after Archive when it is still copying) and Give up behind typed confirms. Delete (a rejected record, it holds no content) behind a plain Delete / Keep confirm.
   import { api, errorText } from '../lib/api';
   import { boundsText, canDelete, canGiveUp, cancelable, checkText, contentBasisText, contentLine, endLabel, phaseReason, phaseText, refusalReason, refusedByText, type ContentKind } from '../lib/moves';
   import Confirm from './Confirm.svelte';
@@ -10,7 +10,7 @@
   let chunks = $state<Record<string, number> | null>(null);
   let content = $state<{ basis: string | null; kinds: ContentKind[] } | null>(null);
   let error = $state('');
-  let dialog = $state<null | 'cancel' | 'end' | 'giveup'>(null);
+  let dialog = $state<null | 'cancel' | 'end' | 'giveup' | 'delete'>(null);
   let copied = $state<'delete' | 'age-out'>('delete');
 
   $effect(() => {
@@ -21,6 +21,7 @@
   let deleting = $state(false);
   async function remove() {
     error = '';
+    dialog = null;
     deleting = true;
     try { await api('DELETE', `/moves/${move.id}`); onchange(); } catch (e) { error = errorText(e); }
     deleting = false;
@@ -85,7 +86,7 @@
   {/if}
   {#if canDelete(move.phase)}
     <div class="row">
-      <button class="btn danger" data-testid="move-delete" disabled={deleting} onclick={remove}>Delete</button>
+      <button class="btn danger" data-testid="move-delete" disabled={deleting} onclick={() => (dialog = 'delete')}>Delete…</button>
     </div>
   {/if}
   {#if canGiveUp(move.phase)}
@@ -112,6 +113,9 @@
     body={move.archivePending ? 'Archive is still being copied. The transfer ends when it is done; then the rest of the old content stays behind and is deleted with the camera on the old proxy.' : 'The rest of the old content stays behind and is deleted with the camera on the old proxy.'}
     typed="end transfer" ok={move.archivePending ? 'End after Archive' : 'End transfer'}
     onconfirm={() => run('end-transfer', { confirm: 'end transfer' })} oncancel={() => (dialog = null)} />
+{:else if dialog === 'delete'}
+  <Confirm title="Delete refused move" body="Delete the refused move of {move.cameraName || move.camsId} ({move.source.name} → {move.target.name})? Only this record goes; its audit entries stay."
+    ok="Delete" cancel="Keep" onconfirm={remove} oncancel={() => (dialog = null)} />
 {:else if dialog === 'giveup'}
   <Confirm title="Give up copy back" body="The copy back stops. Nothing is deleted on either proxy: the content stays where it is and ages out there."
     typed="give up" ok="Give up" onconfirm={() => run('give-up', { confirm: 'give up' })} oncancel={() => (dialog = null)} />

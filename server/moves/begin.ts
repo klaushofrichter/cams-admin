@@ -7,9 +7,11 @@ import { validateCommandArgs } from '../contract';
 import { SITE_PATTERN } from '../../contract/build';
 import { online, precheckReport, siteOf, unseen, type PrecheckDeps, type PrecheckReason, type PrecheckReport } from './precheck';
 import type { MoveBounds } from './types';
+import type { Clock } from '../clock';
 
 // A move started from cams-admin (move.begin plan Task 3, rulings R3, A4–A10):
-// the checks on the request and the source first, then the precheck. Only
+// a second start for a camera whose move is on its way refused first (409
+// move_pending, a double click), then the checks on the request and the source, then the precheck. Only
 // three failing rules are fixed here: `routed` (a visible route, url null, on
 // each cams instance that sees the source but not the target), `site_ca` (the
 // registry's empty tls_site from the proxy's own reported site; never the CA
@@ -25,14 +27,16 @@ export interface BeginInput { sourceProxyId: string; targetProxyId: string; came
 export type Fix = { rule: 'routed'; instanceId: string; proxyId: string } | { rule: 'site_ca'; proxyId: string; site: string } | { rule: 'no_host_override'; instanceId: string; cameraId: string };
 export type BeginResult =
   | { ok: true; commandId: string; fixed: Fix[]; report: PrecheckReport }
-  | { ok: false; status: 404 | 409; error: string; field?: string; reason?: PrecheckReason | null; report?: PrecheckReport; fixed?: Fix[] };
-export interface BeginDeps extends PrecheckDeps { audit: Audit; commands: Commands; camsInstances: CamsInstances }
+  | { ok: false; status: 404 | 409; error: string; field?: string; detail?: string; reason?: PrecheckReason | null; report?: PrecheckReport; fixed?: Fix[] };
+export interface BeginDeps extends PrecheckDeps { audit: Audit; commands: Commands; camsInstances: CamsInstances; clock: Clock }
 
 const FIXABLE = new Set(['site_ca', 'routed', 'no_host_override']);
 const SITE_RE = new RegExp(SITE_PATTERN);
 const ID_MAX = 64;
 // Any valid proxy id: the bounds are checked with the strict move.begin args schema on their own.
 const ANY_PROXY = 'prx_0123456789ABCDEFGHJK';
+// How long a move.begin the source answered holds the camera while its move.request has not made the move yet.
+export const ANSWERED_HOLD_MS = 60_000;
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 export function beginInput(body: unknown): BeginInput {
@@ -45,6 +49,22 @@ export function beginInput(body: unknown): BeginInput {
   const out = { sourceProxyId: id('sourceProxyId'), targetProxyId: id('targetProxyId'), cameraId: id('cameraId') };
   if (!('bounds' in b) || !validateCommandArgs('move.begin', { v: 1, camera: 'cam1', target: ANY_PROXY, bounds: b.bounds }).ok) throw new ApiError(400, 'invalid', 'bounds');
   return { ...out, bounds: b.bounds as MoveBounds | null };
+}
+
+// A second start for the same camera (a double click): a move.begin for it not final yet, one the source answered
+// within ANSWERED_HOLD_MS whose move has not arrived, or an open move of the camera.
+function pending(d: BeginDeps, sourceProxyId: string, cameraId: string, proxyCameraId: string | null): 'requested' | 'open' | null {
+  if (d.db.prepare('SELECT 1 FROM moves WHERE camera_id = ? AND ended_at IS NULL').get(cameraId)) return 'open';
+  if (!proxyCameraId) return null;
+  const rows = d.db.prepare(`SELECT state, args, result FROM commands WHERE proxy_id = ? AND command = 'move.begin' AND (state IN ('queued','sent','received') OR (state = 'done' AND finished_at >= ?))`)
+    .all(sourceProxyId, d.clock.now() - ANSWERED_HOLD_MS) as { state: string; args: string; result: string | null }[];
+  for (const r of rows) {
+    if ((JSON.parse(r.args) as { camera?: unknown }).camera !== proxyCameraId) continue;
+    if (r.state !== 'done') return 'requested';
+    const requestId = (JSON.parse(r.result ?? 'null') as { body?: { result?: { requestId?: unknown } } } | null)?.body?.result?.requestId;
+    if (typeof requestId !== 'string' || !d.db.prepare('SELECT 1 FROM moves WHERE request_id = ?').get(requestId)) return 'requested';
+  }
+  return null;
 }
 
 // A refusal before any write: thrown out of the transaction (which rolls back, not even the write epoch moves).
@@ -73,6 +93,8 @@ function run(d: BeginDeps, actor: string, input: BeginInput): BeginResult {
   if (!src) return refuse({ status: 404, error: 'not_found', field: 'sourceProxyId' });
   const cam = d.registry.listCameras(src.accountId).find((c) => c.id === input.cameraId || c.camsId === input.cameraId);
   if (!cam) return refuse({ status: 404, error: 'not_found', field: 'cameraId' });
+  const held = pending(d, src.id, cam.id, cam.proxyCameraId);
+  if (held) return refuse({ status: 409, error: 'move_pending', detail: held === 'open' ? `a move of ${cam.camsId} is open` : `a move of ${cam.camsId} was just requested` });
   if (cam.proxyId !== src.id || !cam.proxyCameraId) return refuse({ status: 409, error: 'camera_not_on_source' });
   if (!online(d, src)) return refuse({ status: 409, error: 'source_offline' });
   const sv = d.status.viewOf(src);

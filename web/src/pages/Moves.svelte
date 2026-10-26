@@ -68,6 +68,8 @@
   const firewall = $derived(targetProfile && cameraId && targetProfile.id === targetId ? moveFirewall(targetName, targetProfile.profile, cameras.find((c) => c.id === cameraId)?.host) : null);
   async function start(e: Event) {
     e.preventDefault();
+    // A double click (or Enter twice) sends one request: the button stays disabled until it settles.
+    if (sending) return;
     sending = true; startError = ''; startOk = '';
     try {
       const out = await api('POST', '/moves', startBody(sourceId, targetId, cameraId));
@@ -75,7 +77,7 @@
       startOk = `Move requested.${fixed}`;
       await load();
     } catch (err) { startError = err instanceof ApiFailure && err.body ? refusalText(err.body) : errorText(err); }
-    sending = false;
+    finally { sending = false; }
   }
   // The link between a cancelled move and its copy back: open the other one's detail and scroll to it.
   function show(id: string) {
@@ -113,7 +115,7 @@
         {#each targets as p (p.id)}<option value={p.id}>{p.displayName}</option>{/each}
       </select>
     </label>
-    <button class="btn primary" data-testid="start-move-submit" disabled={sending || !sourceId || !cameraId || !targetId}>Start move</button>
+    <button class="btn primary" data-testid="start-move-submit" disabled={sending || !sourceId || !cameraId || !targetId} aria-busy={sending}>{sending ? 'Starting…' : 'Start move'}</button>
   </form>
   {#if firewall}
     <div class="grid" data-testid="start-move-firewall">

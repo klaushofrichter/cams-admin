@@ -179,9 +179,20 @@ test('a move cams-admin refuses appears without a reload, says who refused and w
   await expect(d.getByTestId('move-refused-by')).toHaveText('cams-admin refused');
   await expect(d.getByTestId('move-refusal-detail')).toHaveText('Detail: registry host 192.0.2.10, source reports 192.0.2.11');
   await expect(d.getByTestId('move-cancel')).toHaveCount(0);
-  // Delete: no confirm; the row goes.
+  // Delete: a confirm that names the camera and the move and says the audit stays; Keep keeps it.
   await d.getByTestId('move-delete').click();
-  await expect(page.getByTestId('confirm')).toHaveCount(0);
+  const dlg = page.getByTestId('confirm');
+  await expect(dlg).toContainText('Yard');
+  await expect(dlg).toContainText('Old proxy → New proxy');
+  await expect(dlg).toContainText('audit entries stay');
+  await expect(page.getByTestId('confirm-input')).toHaveCount(0);
+  await expect(page.getByTestId('confirm-cancel')).toHaveText('Keep');
+  await page.getByTestId('confirm-cancel').click();
+  await expect(dlg).toHaveCount(0);
+  await expect(page.getByTestId(`move-row-${id}`)).toBeVisible();
+  await d.getByTestId('move-delete').click();
+  await expect(page.getByTestId('confirm-ok')).toHaveText('Delete');
+  await page.getByTestId('confirm-ok').click();
   await expect(page.getByTestId(`move-row-${id}`)).toHaveCount(0);
 });
 
@@ -257,6 +268,29 @@ test('start a move from the Moves page', async ({ page }, info) => {
     bounds: { transfer: true, kinds: ['clips', 'stills', 'events', 'checks', 'archive'], space: 'fit', maxBudgetS: 86400 },
   });
   await expect.poll(() => reloads).toBeGreaterThan(0);
+});
+
+test('a double click on Start move sends one request, the button busy until it settles', async ({ page }, info) => {
+  let posts = 0;
+  let release: () => void = () => {};
+  const held = new Promise<void>((r) => (release = r));
+  await page.route('**/api/v1/moves', async (route) => {
+    if (route.request().method() !== 'POST') return route.fallback();
+    posts++;
+    await held;
+    await route.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ commandId: 'cmd_x', fixed: [], report: { ok: true, reason: null, rules: [] } }) });
+  });
+  const { b } = await startForm(page, info, 'md');
+  await page.getByTestId('start-move-target').selectOption(b.id);
+  const btn = page.getByTestId('start-move-submit');
+  await btn.dblclick();
+  await expect(btn).toBeDisabled();
+  await expect(btn).toHaveText('Starting…');
+  await expect(btn).toHaveAttribute('aria-busy', 'true');
+  release();
+  await expect(page.getByTestId('start-move-ok')).toContainText('Move requested');
+  await expect(btn).toHaveText('Start move');
+  expect(posts).toBe(1);
 });
 
 test('start a move that is refused shows the reasons', async ({ page }, info) => {

@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { ago, keyState, stateClass, stateLabel, when } from './format';
+import { ago, bytes, keyState, stateClass, stateLabel, when } from './format';
 
 describe('format', () => {
+  it('bytes up to GiB', () => {
+    expect(bytes(500)).toBe('500 B');
+    expect(bytes(3072)).toBe('3.0 KiB');
+    expect(bytes(290655300)).toBe('277.2 MiB');
+    expect(bytes(48350227367)).toBe('45.0 GiB');
+    expect(bytes(null)).toBe('—');
+  });
   it('ages', () => {
     expect(ago(null, 0)).toBe('never');
     expect(ago(1000, 1000)).toBe('0 s ago');

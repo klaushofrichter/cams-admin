@@ -113,13 +113,20 @@ export function refusalLine(m: { phase: string; refusedBy?: string | null; reaso
 export const canDelete = (phase: string): boolean => phase === 'rejected';
 
 // The content checklist of the move detail (GET /moves/:id content).
-export interface ContentKind { kind: string; included: boolean | null; files: number | null; bytes: number | null; chunks: { total: number; done: number; failed: number; abandoned: number } }
+export interface ContentKind { kind: string; included: boolean | null; files: number | null; bytes: number | null; rows?: number | null; chunks: { total: number; done: number; failed: number; abandoned: number } }
 const KIND_LABEL: Record<string, string> = { clips: 'Clips', stills: 'Stills', events: 'Events', checks: 'Checks', archive: 'Archive' };
-// "Clips: included, 12 files, 3.0 KiB; 1 of 3 days copied, 1 with failures".
+// Events and checks are database rows, not files: counted by rows ("654 events"), with a size only when one is known.
+const ROW_KINDS: Record<string, [string, string]> = { events: ['event', 'events'], checks: ['check', 'checks'] };
+function rowSize(k: ContentKind, [one, many]: [string, string]): string[] {
+  const rows = k.rows ?? null;
+  if (rows === 0) return ['nothing to copy'];
+  return [rows !== null ? `${rows} ${rows === 1 ? one : many}` : '', k.bytes ? bytes(k.bytes) : ''].filter(Boolean);
+}
+// "Clips: included, 12 files, 3.0 KiB; 1 of 3 days copied, 1 with failures"; "Events: included, 654 events".
 export function contentLine(k: ContentKind): string {
   const name = KIND_LABEL[k.kind] ?? k.kind;
   if (k.included === null && !k.chunks.total) return `${name}: not decided yet`;
-  const size = k.files === 0 ? ['nothing to copy'] : [k.files !== null ? `${k.files} ${k.files === 1 ? 'file' : 'files'}` : '', k.bytes !== null ? bytes(k.bytes) : ''].filter(Boolean);
+  const size = ROW_KINDS[k.kind] ? rowSize(k, ROW_KINDS[k.kind]) : k.files === 0 ? ['nothing to copy'] : [k.files !== null ? `${k.files} ${k.files === 1 ? 'file' : 'files'}` : '', k.bytes !== null ? bytes(k.bytes) : ''].filter(Boolean);
   const head = [k.included === null ? 'not decided yet' : k.included ? 'included' : 'left out', ...size].join(', ');
   if (!k.chunks.total) return `${name}: ${head}`;
   const c = k.chunks;
@@ -175,6 +182,7 @@ const REFUSALS: Record<string, string> = {
   source_offline: 'the source is offline',
   target_registry_incomplete: "the target's registry entry has no address",
   invalid: 'the request is not valid',
+  move_pending: 'a move of this camera was just requested or is under way',
 };
 // Why a Start move request was refused: the failed precheck rules (their detail, else the reason in words), else the error code in words.
 export function refusalText(answer: unknown): string {
@@ -182,6 +190,9 @@ export function refusalText(answer: unknown): string {
   const failed = (a.report?.rules ?? []).filter((r) => r.ok === false).map((r) => r.detail || reasonText(r.reason) || r.rule || '');
   if (failed.filter(Boolean).length) return failed.filter(Boolean).join('; ');
   const code = typeof a.error === 'string' ? a.error : '';
+  // move_pending names the camera in its detail ("a move of cam3 was just requested").
+  const detail = (a as { detail?: unknown }).detail;
+  if (code === 'move_pending' && typeof detail === 'string' && detail) return detail;
   return code ? (REFUSALS[code] ?? reasonText(code)) : 'the move was refused';
 }
 
