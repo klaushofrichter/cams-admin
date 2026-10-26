@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildSnapshot, encodeSnapshot, snapshotRevision, type SnapshotDeps, SNAPSHOT_FORMAT } from '../server/cams/snapshot';
 import { camsResponseText, publicFromB64, verify, verifyEnvelope } from '../server/crypto/ed25519';
 import { tmpDir } from './helpers/tmp';
+import { markCamera } from './helpers/moves';
 import { startServer, type Running } from './helpers/server';
 import { enrollCamsKey, signedFetch, type CamsKeyT } from './helpers/cams';
 import { strictCamsValidator, strictCamsErrors } from './helpers/contract';
@@ -171,7 +172,7 @@ describe('the cams snapshot (GET /cams/v1/config)', () => {
     const store = new MoveStore(db, s.built.clock);
     const cam1 = (db.prepare("SELECT id FROM cameras WHERE cams_id = 'cam1' AND account_id = ?").get(home.id) as { id: string }).id;
     const m = store.create({ accountId: home.id, cameraId: cam1, sourceProxyId: piProxy.id, targetProxyId: clusterProxy.id, requestId: 'req-1' });
-    store.markCamera(m.id);
+    markCamera(db, store, m.id);
     db.prepare('UPDATE moves SET ended_at = ?, phase = ? WHERE id = ?').run(s.built.clock.now(), 'done', m.id); // moveId stays (A16)
     const snap = buildSnapshot(d, cluster.id);
     const cams = snap.accounts.find((a) => a.name === 'home')!.cameras;
@@ -188,7 +189,7 @@ describe('the cams snapshot (GET /cams/v1/config)', () => {
       const cam1 = (db.prepare("SELECT id FROM cameras WHERE cams_id = 'cam1' AND account_id = ?").get(home.id) as { id: string }).id;
       const store = new MoveStore(db, s.built.clock);
       const m = store.create({ accountId: home.id, cameraId: cam1, sourceProxyId: piProxy.id, targetProxyId: clusterProxy.id, requestId: 'req-att-' + phase + Math.random() });
-      store.markCamera(m.id);
+      markCamera(db, store, m.id);
       db.prepare('UPDATE moves SET phase = ?, switched_at = ? WHERE id = ?').run(phase, opts.switchedAt === undefined ? T : opts.switchedAt, m.id);
       db.prepare('UPDATE cameras SET proxy_id = ? WHERE id = ?').run(opts.onTarget === false ? piProxy.id : clusterProxy.id, cam1);
       const cleanup = () => {
@@ -244,7 +245,7 @@ describe('the cams snapshot (GET /cams/v1/config)', () => {
     db.prepare('UPDATE moves SET target_public_key = ?, leaf_fingerprint = ? WHERE id = ?').run(MV + 'key', MV + 'leaf', m.id);
     db.prepare(`INSERT INTO commands (id, account_id, proxy_id, actor, command, args, state, created_at) VALUES ('cmd_00000000000000000001', ?, ?, 'a@example.com', 'move.offer', ?, 'queued', 1)`)
       .run(home.id, piProxy.id, JSON.stringify({ moveId: m.id, token: 'tok-' + MV }));
-    store.markCamera(m.id);
+    markCamera(db, store, m.id);
     for (const i of [cluster, pi, unserved]) expect(JSON.stringify(buildSnapshot(d, i.id))).not.toContain(MV);
     db.prepare('UPDATE moves SET ended_at = ?, phase = ? WHERE id = ?').run(s.built.clock.now(), 'cancelled', m.id);
     db.prepare("DELETE FROM commands WHERE id = 'cmd_00000000000000000001'").run();
