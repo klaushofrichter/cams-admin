@@ -4,6 +4,7 @@ import type { Db } from '../db/open';
 import { jcs } from '../crypto/jcs';
 import { sha256hex, signEnvelope } from '../crypto/ed25519';
 import { ApiError } from '../registry';
+import { SITE_PATTERN } from '../../contract/build';
 
 // The signed per-instance configuration snapshot (contract cams-v1, M §9.3,
 // rulings R4-1, R4-3). Every field is mapped one by one from an explicit
@@ -26,7 +27,7 @@ export interface SnapshotDeps { db: Db; clock: Clock; signingKey: KeyObject; sig
 
 export const MAX_SNAPSHOT_BYTES = 1024 * 1024;
 // The contract's proxies[].site pattern; a registry tls_site that does not match is emitted as null.
-const SITE_RE = /^[a-z0-9][a-z0-9-]{0,30}$/;
+const SITE_RE = new RegExp(SITE_PATTERN);
 const REVOKED_KEEP_MS = 7 * 86400_000;
 type Row = Record<string, unknown>;
 

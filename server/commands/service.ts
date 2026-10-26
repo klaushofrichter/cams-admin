@@ -1,7 +1,7 @@
 import type { StatementSync } from 'node:sqlite';
 import type { Clock } from '../clock';
 import type { Db } from '../db/open';
-import { tx } from '../db/open';
+import { stmt, tx } from '../db/open';
 import type { Audit } from '../audit';
 import { ApiError, type Registry } from '../registry';
 import type { StatusStore } from '../status/store';
@@ -132,16 +132,9 @@ const view = (r: Raw): CommandRow => {
 };
 
 export class Commands {
-  // Prepared once: the tick and heartbeat paths run every second (each
-  // prepare holds native memory until a GC).
-  private stmts = new Map<string, StatementSync>();
+  // Prepared once per SQL text (db/open.ts stmt).
   private q(sql: string): StatementSync {
-    let st = this.stmts.get(sql);
-    if (!st) {
-      st = this.d.db.prepare(sql);
-      this.stmts.set(sql, st);
-    }
-    return st;
+    return stmt(this.d.db, sql);
   }
   // cmdId → the connection it was last sent on (memory: a restart re-sends a `received` command once).
   private inflightConn = new Map<string, string>();
@@ -245,6 +238,16 @@ export class Commands {
     if (!r) throw new ApiError(404, 'not_found');
     const raw = toRaw(r);
     return { ...view(raw), rawArgs: raw.rawArgs };
+  }
+
+  // The newest command of this name for a move on this proxy (the move job's steps; the move and its proxies
+  // belong to one account, so no account check), and how many there were.
+  latestForMove(proxyId: string, command: WireCommand, moveId: string): CommandRow | null {
+    const r = this.q(`SELECT * FROM commands WHERE proxy_id = ? AND command = ? AND json_extract(args, '$.moveId') = ? ORDER BY rowid DESC LIMIT 1`).get(proxyId, command, moveId) as DbRow | undefined;
+    return r ? view(toRaw(r)) : null;
+  }
+  countForMove(proxyId: string, command: WireCommand, moveId: string): number {
+    return (this.q(`SELECT COUNT(*) AS n FROM commands WHERE proxy_id = ? AND command = ? AND json_extract(args, '$.moveId') = ?`).get(proxyId, command, moveId) as { n: number }).n;
   }
 
   // Has a real write already been made from this dry run?

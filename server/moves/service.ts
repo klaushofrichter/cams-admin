@@ -1,7 +1,7 @@
 import { createHash } from 'crypto';
 import type { Clock } from '../clock';
-import { tx, type Db } from '../db/open';
-import type { Audit } from '../audit';
+import { stmt, tx, type Db } from '../db/open';
+import type { Audit, AuditAction } from '../audit';
 import { ApiError, type Registry } from '../registry';
 import type { StatusStore } from '../status/store';
 import type { Logger } from '../log';
@@ -10,7 +10,7 @@ import type { CommandRow, Commands, WireCommand } from '../commands/service';
 import { validateResultPayload } from '../contract';
 import { MOVE_ANSWER_REASONS, MOVE_KINDS } from '../../contract/build';
 import { newId } from '../ids';
-import { detailOf, GIVE_UP_CLOSED, GIVE_UP_CLOSED_OPEN_CODES, MoveBusy, MoveStore, type ChunkState, type ChunkStateName, type Move } from './store';
+import { cancelOwed, detailOf, GIVE_UP_CLOSED, GIVE_UP_CLOSED_OPEN_CODES, MoveBusy, targetCancelDone, MoveStore, type ChunkState, type ChunkStateName, type Move } from './store';
 import { eligibleTargets, precheck, type Candidate, type EligibleTarget, type PrecheckDeps } from './precheck';
 import { begin, type BeginResult } from './begin';
 import { MoveSummaries } from './summary';
@@ -19,6 +19,8 @@ import type { CamsInstances } from '../cams/instances';
 import { moveToken, targetAddress, type Resolve } from './token';
 import { Returns, type ReturnKey } from './returns';
 import { moveContent } from './view';
+import { answered, backoffDue, FINAL_STATES, sourceRef, unanswered, verifiedDone, type Who } from './common';
+import { isCount } from '../validate';
 import type { MoveCheck, MoveApproveEvent, MoveCameraConn, MoveCancelEvent, MoveEvent, MovePhaseEvent, MoveProgressEvent, MoveRequestEvent, MoveTargetsEvent } from './types';
 
 // The move job, its start (plan Task 4; S §4, §6, §7, §8.1): a source's
@@ -75,6 +77,8 @@ export const PROGRESS_SAVE_MS = 60_000;
 // return still derives its cancel: onLive).
 export const ENDED_RETRY_MS = 24 * 3600_000;
 const GIVEN_UP = 'given_up';
+// The suffix of a given-up return's own automatic commands in gaveUp (apart from the return's normal finish).
+const GIVE_UP_KEY = ':give-up';
 // A cancelling move whose source took the cancel on without reporting `cancelled`: asked again this often (cam-proxy re-emits the terminal phase).
 export const CANCEL_RECHECK_MS = 15 * 60_000;
 // Backoff for a release (before the source's finish) or a cancel the proxy answered failed: base, doubling per attempt, capped.
@@ -83,7 +87,6 @@ export const CANCEL_RETRY_MS = 60_000;
 // Ended moves age out at most hourly, after the proxy's keepDays (30 days when it reported none).
 export const PRUNE_EVERY_MS = 3_600_000;
 export const DEFAULT_KEEP_DAYS = 30;
-const RETRY_CAP_MS = 3600_000;
 // Chunk states that end a chunk (cam-proxy's `failed` is "copied with failures"); the others are abandoned at an end transfer.
 const FINAL_CHUNK = new Set<ChunkStateName>(['verified', 'skipped', 'failed', 'abandoned']);
 // The reason of a cleaning move ended early by a sysadmin (any other reason there is the failure that ended it).
@@ -91,8 +94,6 @@ const END_TRANSFER = 'end_transfer';
 // The target's phases from the switch-over on: one of them while cams-admin is
 // still `switching` means the `switched` event was missed (the target re-emits its current phase only).
 const TARGET_SWITCHED = new Set(['switched', 'copying', 'copied']);
-const FINAL_STATES = new Set(['done', 'refused', 'failed', 'expired', 'unknown']);
-const DONE_MAX = 512;
 const SEEN_MAX = 2000;
 
 const ANSWER_REASONS = new Set<string>(MOVE_ANSWER_REASONS);
@@ -115,7 +116,8 @@ function planForAudit(plan: unknown): Record<string, unknown> {
 const samePlan = (a: unknown, b: unknown) => a !== null && a !== undefined && canonical(a) === canonical(b);
 // The fingerprint of the target's X25519 public key (as cam-proxy audits it): never the key itself in an audit record.
 const keyFingerprint = (spkiB64: string) => `SHA256:${createHash('sha256').update(Buffer.from(spkiB64, 'base64')).digest('hex').toUpperCase()}`;
-const isCount = (x: unknown): x is number => Number.isSafeInteger(x) && (x as number) >= 0;
+// The camera's TLS name on a proxy of this site.
+const cameraTlsName = (proxyCameraId: string, site: string) => `${proxyCameraId}.${site}.internal`;
 // Who asked, as the move row keeps it.
 const actorOf = (ev: MoveRequestEvent) => `${ev.actor.origin}:${ev.actor.label}`.slice(0, 100);
 
@@ -162,7 +164,6 @@ export interface MovesDeps { db: Db; clock: Clock; audit: Audit; registry: Regis
 
 // The target's latest progress (R8): memory, saved by `flushIn`.
 interface Progress { chunks: Map<string, ChunkStateName>; dirty: Set<string>; bytesDone: number; bytesTotal: number; rateBps: number; etaS: number; savedAt: number; changed: boolean }
-type Who = { actorType: 'proxy' | 'system' | 'sysadmin'; actor: string };
 const SYSTEM: Who = { actorType: 'system', actor: 'system' };
 
 // What move.offer needs that the row doesn't keep: the token's plaintext (never
@@ -194,11 +195,7 @@ export class Moves {
     this.store = new MoveStore(d.db, d.clock, (id) => this.publish(id));
     this.returns = new Returns({
       db: d.db, clock: d.clock, log: d.log, registry: d.registry, commands: d.commands, store: this.store, resolve: d.resolve,
-      send: (m, proxyId, command, args) => {
-        const r = this.send(m.accountId, proxyId, command, args);
-        const last = r.ok ? this.lastCommand(m, proxyId, command) : null;
-        return r.ok && last ? { ok: true, id: last.id } : { ok: false, code: r.ok ? 'not_found' : r.code };
-      },
+      send: (m, proxyId, command, args) => this.send(m.accountId, proxyId, command, args),
       audit: (m, action, outcome, extra, who) => this.audit(m, action, outcome, extra, who),
       online: (proxyId) => this.online(proxyId),
       retryDue: (m, proxyId, command, base, last) => this.retryDue(m, proxyId, command, base, last),
@@ -251,11 +248,24 @@ export class Moves {
     const active = this.store.active();
     // Recently ended moves whose automatic cancel went out (copied_choice set, or switched over: a cancel after the
     // switch-over stores no choice): a cancel that could not be queued is derived again.
-    const ended = (this.d.db.prepare(`SELECT id FROM moves WHERE ended_at >= ? AND phase IN ('failed', 'cancelled') AND (copied_choice IS NOT NULL OR switched_at IS NOT NULL)`)
-      .all(now - ENDED_RETRY_MS) as { id: string }[]).map((r) => r.id);
-    const ids = new Set([...active.map((m) => m.id), ...ended]);
+    const ended = (stmt(this.d.db, `SELECT id FROM moves WHERE ended_at >= ? AND ${cancelOwed('')}`).all(now - ENDED_RETRY_MS) as { id: string }[]).map((r) => r.id);
+    const activeIds = new Set(active.map((m) => m.id));
+    const ids = new Set([...activeIds, ...ended]);
     for (const id of this.resumedAt.keys()) if (!ids.has(id)) this.resumedAt.delete(id);
-    for (const id of this.prog.keys()) if (!active.some((m) => m.id === id)) this.prog.delete(id);
+    for (const id of this.prog.keys()) if (!activeIds.has(id)) this.prog.delete(id);
+    // At most once per RESUME_GAP_MS per key (noted when due); a step's error is logged, the sweep goes on.
+    const due = (key: string) => {
+      if (now - (this.resumedAt.get(key) ?? 0) < RESUME_GAP_MS) return false;
+      this.resumedAt.set(key, now);
+      return true;
+    };
+    const guarded = (moveId: string, step: () => void) => {
+      try {
+        step();
+      } catch (e) {
+        this.d.log.error({ err: e, moveId }, 'move_tick_failed');
+      }
+    };
     for (const m of active) {
       try {
         if (UNAPPROVED.has(m.phase) && this.expired(m)) this.failMove(m, 'offer_expired');
@@ -272,38 +282,16 @@ export class Moves {
       }
     }
     // Done moves whose source cleanup has not landed (ruling b): worked on only while the source is online (nothing is queued to an absent one).
-    for (const r of this.d.db.prepare('SELECT id, source_proxy_id FROM moves WHERE cleanup_pending = 1').all() as { id: string; source_proxy_id: string }[]) {
-      if (!this.online(r.source_proxy_id) || now - (this.resumedAt.get(r.id) ?? 0) < RESUME_GAP_MS) continue;
-      this.resumedAt.set(r.id, now);
-      ids.add(r.id);
-      try {
-        const m = this.store.get(r.id);
-        if (m) this.cleanupStep(m);
-      } catch (e) {
-        this.d.log.error({ err: e, moveId: r.id }, 'move_tick_failed');
-      }
+    // (Each step reads its move again.)
+    for (const m of this.store.where('cleanup_pending = 1')) {
+      if (this.online(m.sourceProxyId) && due(m.id)) guarded(m.id, () => this.cleanupStep(m));
     }
     // Done moves whose target finish has not landed: likewise, only while the target is online.
-    for (const r of this.d.db.prepare('SELECT id, target_proxy_id FROM moves WHERE target_cleanup_pending = 1').all() as { id: string; target_proxy_id: string }[]) {
-      const key = `t:${r.id}`;
-      if (!this.online(r.target_proxy_id) || now - (this.resumedAt.get(key) ?? 0) < RESUME_GAP_MS) continue;
-      this.resumedAt.set(key, now);
-      ids.add(key);
-      try {
-        const m = this.store.get(r.id);
-        if (m) this.targetCleanupStep(m);
-      } catch (e) {
-        this.d.log.error({ err: e, moveId: r.id }, 'move_tick_failed');
-      }
+    for (const m of this.store.where('target_cleanup_pending = 1')) {
+      if (this.online(m.targetProxyId) && due(`t:${m.id}`)) guarded(m.id, () => this.targetCleanupStep(m));
     }
     // Given-up returns whose finishes were not queued or went unanswered: derived again.
-    for (const m of this.givenUp()) {
-      try {
-        this.giveUpFinishes(m);
-      } catch (e) {
-        this.d.log.error({ err: e, moveId: m.id }, 'move_tick_failed');
-      }
-    }
+    for (const m of this.givenUp()) guarded(m.id, () => this.giveUpFinishes(m));
     if (now - this.prunedAt >= PRUNE_EVERY_MS) {
       this.prunedAt = now;
       try {
@@ -313,25 +301,25 @@ export class Moves {
       }
     }
     for (const id of ended) {
-      if (now - (this.resumedAt.get(id) ?? 0) < RESUME_GAP_MS) continue;
-      this.resumedAt.set(id, now);
-      try {
-        // No outer transaction: tx() writes (the epoch) even when nothing changed; each command is its own.
+      if (!due(id)) continue;
+      // No outer transaction: tx() writes (the epoch) even when nothing changed; each command is its own.
+      // Read here, not with the ids: the sweeps above (prune) may have changed it.
+      guarded(id, () => {
         const m = this.store.get(id);
         if (m) this.ensureCancels(m);
-      } catch (e) {
-        this.d.log.error({ err: e, moveId: id }, 'move_tick_failed');
-      }
+      });
     }
   }
 
   // Deletes the ended moves past their keep time, with one audit row {count, ids}; writes nothing when none is due.
   pruneEnded(): number {
     const now = this.d.clock.now();
+    // Checked first: tx() writes (the epoch) even when nothing is deleted.
     if (!this.store.prunable(now, DEFAULT_KEEP_DAYS).length) return 0;
     return tx(this.d.db, () => {
-      const accounts = new Set(this.store.prunable(now, DEFAULT_KEEP_DAYS).map((id) => this.store.get(id)!.accountId));
-      const ids = this.store.prune(now, DEFAULT_KEEP_DAYS);
+      const rows = this.store.pruneRows(now, DEFAULT_KEEP_DAYS);
+      const accounts = new Set(rows.map((r) => r.accountId));
+      const ids = rows.map((r) => r.id);
       if (ids.length) {
         this.d.audit.write({ actorType: 'system', actor: 'system', action: 'moves-pruned', accountId: accounts.size === 1 ? [...accounts][0] : null, outcome: 'ok', detail: { count: ids.length, ids } });
       }
@@ -346,23 +334,12 @@ export class Moves {
     if (m) this.resume(m.id);
     for (const g of this.givenUp(proxyId)) this.giveUpFinishes(g);
     // A source back with a done move's cleanup still pending (ruling b).
-    for (const r of this.d.db.prepare('SELECT id FROM moves WHERE cleanup_pending = 1 AND source_proxy_id = ?').all(proxyId) as { id: string }[]) {
-      const mv = this.store.get(r.id);
-      if (mv) this.cleanupStep(mv);
-    }
+    for (const mv of this.store.where('cleanup_pending = 1 AND source_proxy_id = ?', proxyId)) this.cleanupStep(mv);
     // A target back with a done move's finish still pending.
-    for (const r of this.d.db.prepare('SELECT id FROM moves WHERE target_cleanup_pending = 1 AND target_proxy_id = ?').all(proxyId) as { id: string }[]) {
-      const mv = this.store.get(r.id);
-      if (mv) this.targetCleanupStep(mv);
-    }
+    for (const mv of this.store.where('target_cleanup_pending = 1 AND target_proxy_id = ?', proxyId)) this.targetCleanupStep(mv);
     // A target back with an ended move's cancel not taken on (also after the ended sweep's ENDED_RETRY_MS): the
     // target must let go of the camera, or it runs on both proxies.
-    const cancelsDue = this.d.db.prepare(`SELECT m.id FROM moves m WHERE m.target_proxy_id = ? AND m.phase IN ('failed', 'cancelled') AND (m.copied_choice IS NOT NULL OR m.switched_at IS NOT NULL)
-      AND NOT EXISTS (SELECT 1 FROM commands c WHERE c.proxy_id = m.target_proxy_id AND c.command = 'move.cancel' AND c.state = 'done' AND json_extract(c.args, '$.moveId') = m.id)`).all(proxyId) as { id: string }[];
-    for (const r of cancelsDue) {
-      const mv = this.store.get(r.id);
-      if (mv) this.ensureTargetCancel(mv);
-    }
+    for (const mv of this.store.where(`moves.target_proxy_id = ? AND ${cancelOwed('moves.')} AND NOT ${targetCancelDone('moves.')}`, proxyId)) this.ensureTargetCancel(mv);
   }
 
   // Re-derive the next command from the phase and the move's commands (a
@@ -397,7 +374,8 @@ export class Moves {
       case 'cleaning':
         return this.checkCleaning(m);
       case 'cancelling':
-        return this.cancellingStep(m);
+        // Reads only unless a command is missing (no outer transaction: tx() always writes).
+        return this.ensureCancels(m);
       case 'returning':
         return this.returns.step(m);
       default:
@@ -407,9 +385,7 @@ export class Moves {
 
   // The newest command of this name for this move on this proxy.
   private lastCommand(m: Move, proxyId: string, command: WireCommand): CommandRow | null {
-    const r = this.d.db.prepare(`SELECT id FROM commands WHERE proxy_id = ? AND command = ? AND json_extract(args, '$.moveId') = ? ORDER BY rowid DESC LIMIT 1`)
-      .get(proxyId, command, m.id) as { id: string } | undefined;
-    return r ? this.d.commands.get(m.accountId, proxyId, r.id) : null;
+    return this.d.commands.latestForMove(proxyId, command, m.id);
   }
 
   // A step's command; one that can never be queued fails the move (and cancels both), a passing refusal waits for the next resume.
@@ -433,11 +409,10 @@ export class Moves {
     return true;
   }
 
-  // A system command; {ok:false} (logged) when it can't be queued (the proxy paused, the entry gone, invalid args).
-  private send(accountId: string, proxyId: string, command: WireCommand, args: Record<string, unknown>): { ok: true } | { ok: false; code: string } {
+  // A system command, with its new row; {ok:false} (logged) when it can't be queued (the proxy paused, the entry gone, invalid args).
+  private send(accountId: string, proxyId: string, command: WireCommand, args: Record<string, unknown>): { ok: true; row: CommandRow } | { ok: false; code: string } {
     try {
-      this.d.commands.create('system', accountId, proxyId, command, args, { actorType: 'system' });
-      return { ok: true };
+      return { ok: true, row: this.d.commands.create('system', accountId, proxyId, command, args, { actorType: 'system' }) };
     } catch (e) {
       if (!(e instanceof ApiError)) throw e;
       this.d.log.warn({ proxyId, command, code: e.code }, 'move_command_not_queued');
@@ -454,8 +429,7 @@ export class Moves {
 
   private async onRequest(proxyId: string, accountId: string, ev: MoveRequestEvent): Promise<void> {
     if (this.store.byRequest(proxyId, ev.requestId) || !this.once(`r:${proxyId}:${ev.requestId}`)) return;
-    const cam = this.d.db.prepare('SELECT id, cams_id, host, protocol FROM cameras WHERE account_id = ? AND proxy_id = ? AND proxy_camera_id = ?')
-      .get(accountId, proxyId, ev.camera.proxyCameraId) as { id: string; cams_id: string; host: string | null; protocol: string | null } | undefined;
+    const cam = this.cameraOnProxy(accountId, proxyId, ev.camera.proxyCameraId);
     const ctx = { proxyId, accountId, ev, cameraId: cam?.id ?? null, camsId: cam?.cams_id ?? null };
     // Not in the registry: no move row can name it; the source is told so at once (not_registered), not left to wait.
     if (!cam) return this.refuse(ctx, 'not_registered');
@@ -548,24 +522,14 @@ export class Moves {
     // move.begin has no move yet (the source's move.request makes it): a refusal or failure is audited only (A10), the fixes stay.
     // Attributed like its ok row: the requester (the command's actor) and the camera.
     if (r.command === 'move.begin') {
-      if (r.state !== 'done') {
-        const cam = this.d.db.prepare('SELECT id, cams_id FROM cameras WHERE account_id = ? AND proxy_id = ? AND proxy_camera_id = ?')
-          .get(r.accountId, r.proxyId, String(r.args.camera)) as { id: string; cams_id: string } | undefined;
-        this.d.audit.write({
-          actorType: 'sysadmin', actor: r.actor, action: 'move-begin', accountId: r.accountId, targetType: 'camera', targetId: cam?.id ?? null, targetLabel: cam?.cams_id ?? null, outcome: 'failed',
-          detail: { cmdId: r.id, source: r.proxyId, code: r.outcomeCode ?? r.state },
-        });
-      }
+      const ok = r.state === 'done';
+      const cam = this.cameraOnProxy(r.accountId, r.proxyId, String(r.args.camera));
       // The link from the command to its move: the source answered {requestId}, the move.request carries the same id.
-      else {
-        const requestId = typeof r.result?.requestId === 'string' ? r.result.requestId : null;
-        const cam = this.d.db.prepare('SELECT id, cams_id FROM cameras WHERE account_id = ? AND proxy_id = ? AND proxy_camera_id = ?')
-          .get(r.accountId, r.proxyId, String(r.args.camera)) as { id: string; cams_id: string } | undefined;
-        this.d.audit.write({
-          actorType: 'sysadmin', actor: r.actor, action: 'move-begin', accountId: r.accountId, targetType: 'camera', targetId: cam?.id ?? null, targetLabel: cam?.cams_id ?? null, outcome: 'ok',
-          detail: { cmdId: r.id, source: r.proxyId, requestId },
-        });
-      }
+      const requestId = typeof r.result?.requestId === 'string' ? r.result.requestId : null;
+      this.d.audit.write({
+        actorType: 'sysadmin', actor: r.actor, action: 'move-begin', accountId: r.accountId, targetType: 'camera', targetId: cam?.id ?? null, targetLabel: cam?.cams_id ?? null, outcome: ok ? 'ok' : 'failed',
+        detail: { cmdId: r.id, source: r.proxyId, ...(ok ? { requestId } : { code: r.outcomeCode ?? r.state }) },
+      });
       return;
     }
     if (!['move.open', 'move.offer', 'move.start', 'move.go', 'move.release', 'move.finish', 'move.cancel', 'move.return.open', 'move.return.start'].includes(r.command)) return;
@@ -602,9 +566,10 @@ export class Moves {
         // with a backoff (ensureCancels); each failure audited (throttled).
         if ((r.state === 'failed' || r.state === 'refused') && (m.phase === 'cancelling' || (r.proxyId === m.targetProxyId && m.endedAt !== null))) {
           const role = r.proxyId === m.sourceProxyId ? 'source' : 'target';
+          const camsId = this.camsId(m);
           this.d.audit.throttled(`move-cancel-failed:${m.id}:${role}`, {
-            actorType: 'system', actor: 'system', action: 'move-cancel', accountId: m.accountId, targetType: 'camera', targetId: m.cameraId, targetLabel: this.camsId(m), outcome: 'failed',
-            detail: { moveId: m.id, camsId: this.camsId(m), source: m.sourceProxyId, target: m.targetProxyId, role, phase: m.phase, state: r.state, code: r.outcomeCode, attempts: this.commandCount(m, r.proxyId!, 'move.cancel') },
+            actorType: 'system', actor: 'system', action: 'move-cancel', accountId: m.accountId, targetType: 'camera', targetId: m.cameraId, targetLabel: camsId, outcome: 'failed',
+            detail: { moveId: m.id, camsId, source: m.sourceProxyId, target: m.targetProxyId, role, phase: m.phase, state: r.state, code: r.outcomeCode, attempts: this.commandCount(m, r.proxyId!, 'move.cancel') },
           });
         }
         return;
@@ -630,7 +595,7 @@ export class Moves {
     tx(this.d.db, () => {
       const offer = this.send(m.accountId, m.targetProxyId, 'move.offer', {
         v: 1, moveId: m.id, token: p.token,
-        source: { proxyId: src.id, name: src.name, url: src.url, caFingerprints: src.caFingerprints.slice(0, 2), tlsServername: src.tlsServername },
+        source: sourceRef(src),
         camera: { camsId: this.camsId(m), ...p.camera },
         summary: m.summary, settings: m.settings,
       });
@@ -680,22 +645,21 @@ export class Moves {
       // The plan as the source approved it, unchanged: move.go must carry exactly this one (plan_mismatch otherwise).
       const mv = this.store.setPhase(m.id, 'approved', { plan: ev.plan, approvedAt: this.d.clock.now() });
       this.audit(mv, 'move-approve', 'ok', { phase: 'approved', plan: planForAudit(ev.plan) }, { actorType: 'proxy', actor: proxyId });
-      const r = this.sendStart(mv);
-      if (!r.ok && PERMANENT.has(r.code)) this.failMoveIn(mv, `start:${r.code}`);
+      this.queueStep(mv, 'start', () => this.sendStart(mv));
     });
   }
 
   private approveRefused(proxyId: string, accountId: string, moveId: string, m: Move | null, reason: string): void {
+    const camsId = m ? this.camsId(m) : null;
     this.d.audit.throttled(`move-approve:${proxyId}:${moveId}:${reason}`, {
-      actorType: 'proxy', actor: proxyId, action: 'move-approve', accountId, targetType: 'camera', targetId: m?.cameraId ?? null, targetLabel: m ? this.camsId(m) : null, outcome: 'refused',
-      detail: { moveId, reason, ...(m ? { camsId: this.camsId(m), source: m.sourceProxyId, target: m.targetProxyId, phase: m.phase } : {}) },
+      actorType: 'proxy', actor: proxyId, action: 'move-approve', accountId, targetType: 'camera', targetId: m?.cameraId ?? null, targetLabel: camsId, outcome: 'refused',
+      detail: { moveId, reason, ...(m ? { camsId, source: m.sourceProxyId, target: m.targetProxyId, phase: m.phase } : {}) },
     });
   }
 
   private sendStart(m: Move) {
     // B34: the chunks cams-admin already knows as verified (none on a first start), newest last.
-    const done = this.store.chunks(m.id).filter((c) => c.state === 'verified').map((c) => c.id).slice(-DONE_MAX);
-    return this.send(m.accountId, m.targetProxyId, 'move.start', { v: 1, moveId: m.id, plan: m.plan, settings: m.settings ?? {}, done });
+    return this.send(m.accountId, m.targetProxyId, 'move.start', { v: 1, moveId: m.id, plan: m.plan, settings: m.settings ?? {}, done: verifiedDone(this.store.chunks(m.id)) });
   }
   private sendGo(m: Move) {
     return this.send(m.accountId, m.sourceProxyId, 'move.go', { v: 1, moveId: m.id, plan: m.plan, targetPublicKey: m.targetPublicKey, expectedLeaf: m.leafFingerprint });
@@ -714,8 +678,7 @@ export class Moves {
     tx(this.d.db, () => {
       const mv = this.store.setPhase(m.id, 'switching', { targetPublicKey: publicKey, leafFingerprint: leaf });
       this.audit(mv, 'move-phase', 'ok', { phase: 'switching', leafFingerprint: leaf, publicKeyFingerprint: keyFingerprint(publicKey) });
-      const go = this.sendGo(mv);
-      if (!go.ok && PERMANENT.has(go.code)) this.failMoveIn(mv, `go:${go.code}`);
+      this.queueStep(mv, 'go', () => this.sendGo(mv));
     });
   }
 
@@ -730,7 +693,7 @@ export class Moves {
     // After the switch-over the camera stays on the target: a failure the source answered ends the transfer (failMoveIn), never an automatic cancel.
     if (r.state === 'failed' || r.state === 'refused') return this.failMove(m, `release:${r.outcomeCode ?? r.state}`);
     // Expired or unanswered (the source away): the copy goes on; the release is sent again once the source is online (now, or resume: tick, its return).
-    if ((r.state === 'expired' || r.state === 'unknown') && this.online(m.sourceProxyId)) this.queueStep(m, 'release', () => this.sendRelease(m));
+    if (unanswered(r) && this.online(m.sourceProxyId)) this.queueStep(m, 'release', () => this.sendRelease(m));
   }
 
   // The camera holder's keepDays (how long the records of an ended move stay): `finished` from the target, `cancelled` from the source.
@@ -774,16 +737,15 @@ export class Moves {
   // the camera; the target copies right after `switched` (cam-proxy P12).
   private switchOver(m: Move): void {
     const tgt = this.d.registry.proxyById(m.targetProxyId);
-    const cam = this.d.db.prepare('SELECT proxy_camera_id FROM cameras WHERE id = ?').get(m.cameraId) as { proxy_camera_id: string | null } | undefined;
-    if (!tgt?.tlsSite || !cam?.proxy_camera_id) return this.failMove(m, 'switch:registry_incomplete');
-    const proxyCameraId = cam.proxy_camera_id;
+    const proxyCameraId = this.proxyCameraId(m);
+    if (!tgt?.tlsSite || !proxyCameraId) return this.failMove(m, 'switch:registry_incomplete');
+    const site = tgt.tlsSite;
     try {
       tx(this.d.db, () => {
-        this.d.registry.moveCamera('system', m.accountId, m.cameraId, { proxyId: tgt.id, proxyCameraId, tlsServername: `${proxyCameraId}.${tgt.tlsSite}.internal`, moveId: m.id });
+        this.d.registry.moveCamera('system', m.accountId, m.cameraId, { proxyId: tgt.id, proxyCameraId, tlsServername: cameraTlsName(proxyCameraId, site), moveId: m.id });
         const mv = this.store.setPhase(m.id, 'copying');
         this.audit(mv, 'move-phase', 'ok', { phase: 'copying', switched: true });
-        const r = this.sendRelease(mv);
-        if (!r.ok && PERMANENT.has(r.code)) this.failMoveIn(mv, `release:${r.code}`);
+        this.queueStep(mv, 'release', () => this.sendRelease(mv));
       });
     } catch (e) {
       if (!(e instanceof ApiError)) throw e;
@@ -828,8 +790,12 @@ export class Moves {
   // The move with the target's latest progress (memory) over the stored row.
   current(moveId: string): Move | null {
     const m = this.store.get(moveId);
-    const p = m ? this.prog.get(m.id) : undefined;
-    return m && p ? { ...m, bytesDone: p.bytesDone, bytesTotal: p.bytesTotal, rateBps: p.rateBps, etaS: p.etaS } : m;
+    return m && this.withProgress(m);
+  }
+  // A row the caller just read, with that progress over it.
+  withProgress(m: Move): Move {
+    const p = this.prog.get(m.id);
+    return p ? { ...m, bytesDone: p.bytesDone, bytesTotal: p.bytesTotal, rateBps: p.rateBps, etaS: p.etaS } : m;
   }
 
   // Every chunk's state: the stored ones with the memory's newer ones over them.
@@ -864,7 +830,8 @@ export class Moves {
         this.audit(mv, 'move-budget-exceeded', 'ok', { phase: mv.phase, budgetS, approvedAt: m.approvedAt, bytesDone: p.bytesDone, bytesTotal: p.bytesTotal, rateBps: p.rateBps, etaS: p.etaS });
       });
     } else if (now - p.savedAt >= PROGRESS_SAVE_MS) this.saveProgress(m);
-    this.maybeEndAfterArchive(m);
+    // Only an End transfer sets endRequested (never this path): without it there is nothing to end.
+    if (m.endRequested) this.maybeEndAfterArchive(m);
     // Progress lives in memory (written at most once a minute): published here, not by the store.
     this.publish(m.id);
   }
@@ -898,11 +865,17 @@ export class Moves {
   private ensure(m: Move, proxyId: string, command: WireCommand, args: Record<string, unknown>, again?: (last: CommandRow) => boolean): CommandRow | null {
     const last = this.lastCommand(m, proxyId, command);
     if (last && !(again && FINAL_STATES.has(last.state) && again(last))) return last;
-    const key = `${m.id}:${proxyId}:${command}`;
-    if (this.gaveUp.has(key)) return last;
+    return this.sendTracked(m, proxyId, command, args) ?? last;
+  }
+
+  // An automatic command, unless it could never be queued before (by moveId:proxyId:command plus `suffix`): a
+  // refusal that can never pass (PERMANENT) is remembered, so it is not tried again. The new row, or null.
+  private sendTracked(m: Move, proxyId: string, command: WireCommand, args: Record<string, unknown>, suffix = ''): CommandRow | null {
+    const key = `${m.id}:${proxyId}:${command}${suffix}`;
+    if (this.gaveUp.has(key)) return null;
     const r = this.send(m.accountId, proxyId, command, args);
     if (!r.ok && PERMANENT.has(r.code)) this.gaveUp.add(key);
-    return r.ok ? this.lastCommand(m, proxyId, command) : last;
+    return r.ok ? r.row : null;
   }
 
   // A cancel goes to both roles (A17): the target with the choice for copied
@@ -920,7 +893,7 @@ export class Moves {
     if (cancelling && !this.online(m.sourceProxyId)) return;
     const { unsent, failedAgain } = this.cancelRetry(m);
     const goSent = m.leafFingerprint !== null && this.lastCommand(m, m.sourceProxyId, 'move.go') !== null;
-    this.ensureTargetCancel(m);
+    this.targetCancel(m, { unsent, failedAgain });
     this.ensure(m, m.sourceProxyId, 'move.cancel', { v: 1, moveId: m.id, role: 'source', ...(goSent ? { expectedLeaf: m.leafFingerprint } : {}) }, (r) =>
       unsent(m.sourceProxyId)(r) || failedAgain(m.sourceProxyId)(r) || (cancelling && r.state === 'done' && this.d.clock.now() - (r.finishedAt ?? 0) >= CANCEL_RECHECK_MS && this.online(m.sourceProxyId)));
   }
@@ -929,7 +902,7 @@ export class Moves {
   // failed or refused while cancelling (and a target's after the move ended), with a backoff.
   private cancelRetry(m: Move) {
     const cancelling = m.phase === 'cancelling';
-    const unsent = (p: string) => (r: CommandRow) => (r.state === 'expired' || r.state === 'unknown') && this.online(p);
+    const unsent = (p: string) => (r: CommandRow) => unanswered(r) && this.online(p);
     const retrying = (p: string) => cancelling || (p === m.targetProxyId && m.endedAt !== null);
     const failedAgain = (p: string) => (r: CommandRow) => retrying(p) && (r.state === 'failed' || r.state === 'refused') && this.online(p) && this.retryDue(m, p, 'move.cancel', CANCEL_RETRY_MS, r);
     return { unsent, failedAgain };
@@ -940,19 +913,19 @@ export class Moves {
   // a proxy not yet know the return.
   private ensureTargetCancel(m: Move): void {
     if (m.phase === 'cancelling' && !this.online(m.sourceProxyId)) return;
-    const { unsent, failedAgain } = this.cancelRetry(m);
+    this.targetCancel(m, this.cancelRetry(m));
+  }
+  private targetCancel(m: Move, { unsent, failedAgain }: ReturnType<Moves['cancelRetry']>): void {
     this.ensure(m, m.targetProxyId, 'move.cancel', { v: 1, moveId: m.id, role: 'target', copied: m.copiedChoice === 'delete' ? 'delete' : 'age-out' }, (r) => unsent(m.targetProxyId)(r) || failedAgain(m.targetProxyId)(r));
   }
 
   private commandCount(m: Move, proxyId: string, command: WireCommand): number {
-    return (this.d.db.prepare(`SELECT COUNT(*) AS n FROM commands WHERE proxy_id = ? AND command = ? AND json_extract(args, '$.moveId') = ?`).get(proxyId, command, m.id) as { n: number }).n;
+    return this.d.commands.countForMove(proxyId, command, m.id);
   }
 
   // Another try is due: the last one ended BASE · 2^(attempts-1) ago (capped at an hour).
   private retryDue(m: Move, proxyId: string, command: WireCommand, base: number, last: CommandRow): boolean {
-    const n = this.commandCount(m, proxyId, command);
-    const wait = Math.min(base * 2 ** Math.max(0, n - 1), RETRY_CAP_MS);
-    return this.d.clock.now() - (last.finishedAt ?? last.createdAt) >= wait;
+    return backoffDue(base, this.commandCount(m, proxyId, command), last.finishedAt ?? last.createdAt, this.d.clock.now());
   }
 
   // --- cancel (S §10.3, A17, A35) ---------------------------------------------------------------
@@ -995,24 +968,18 @@ export class Moves {
     return mv;
   }
 
-  // Reads only unless a command is missing (no outer transaction: tx() always writes).
-  private cancellingStep(m: Move): void {
-    this.ensureCancels(m);
-  }
-
   // The source has the camera back (its `cancelled`): the registry names the
   // source again under its own site's TLS name (move_id stays, A16); the move is
   // cancelled and its return (the copy back) created in the same transaction: a
   // cancelled switched-over move is never without its return (prune keeps it).
   private cancelledBack(m: Move): void {
     const src = this.d.registry.proxyById(m.sourceProxyId);
-    const cam = this.d.db.prepare('SELECT proxy_camera_id FROM cameras WHERE id = ?').get(m.cameraId) as { proxy_camera_id: string | null } | undefined;
-    if (!src || !cam?.proxy_camera_id) return void this.d.log.error({ moveId: m.id }, 'move_cancel_registry_incomplete');
-    const proxyCameraId = cam.proxy_camera_id;
+    const proxyCameraId = this.proxyCameraId(m);
+    if (!src || !proxyCameraId) return void this.d.log.error({ moveId: m.id }, 'move_cancel_registry_incomplete');
     let ret: Move | null;
     try {
       ret = tx(this.d.db, () => {
-        this.d.registry.moveCamera('system', m.accountId, m.cameraId, { proxyId: src.id, proxyCameraId, tlsServername: src.tlsSite ? `${proxyCameraId}.${src.tlsSite}.internal` : null, moveId: m.id });
+        this.d.registry.moveCamera('system', m.accountId, m.cameraId, { proxyId: src.id, proxyCameraId, tlsServername: src.tlsSite ? cameraTlsName(proxyCameraId, src.tlsSite) : null, moveId: m.id });
         const mv = this.store.setPhase(m.id, 'cancelled');
         this.audit(mv, 'move-phase', 'ok', { phase: 'cancelled', from: 'cancelling', switchedBack: true }, { actorType: 'proxy', actor: m.sourceProxyId });
         return this.returns.createReturn(mv);
@@ -1043,10 +1010,11 @@ export class Moves {
   }
 
   // The content checklist of the detail; the per-kind sizes of the target's accepted offer when there is one.
-  content(m: Move) {
+  // chunks: chunkStates(m.id) when the caller has them already.
+  content(m: Move, chunks = this.chunkStates(m.id)) {
     const offer = this.lastCommand(m, m.targetProxyId, 'move.offer');
     const space = offer?.state === 'done' && offer.result?.accept === true ? answerSpace(offer.result.space) : null;
-    return moveContent(m, this.chunkStates(m.id), (space?.perKind ?? {}) as Record<string, unknown>);
+    return moveContent(m, chunks, (space?.perKind ?? {}) as Record<string, unknown>);
   }
 
   // --- finish, end transfer, done (S §10.4, §11, A5, A9) ----------------------------------------
@@ -1108,12 +1076,9 @@ export class Moves {
       if (proxyId === m.sourceProxyId && this.giveUpOpened(m) !== 'opened') continue;
       const last = this.lastCommand(m, proxyId, 'move.finish');
       const abandoned = last?.args.abandoned === true;
-      if (last && abandoned && !(last.state === 'expired' || last.state === 'unknown')) continue;
+      if (last && abandoned && !unanswered(last)) continue;
       if (!this.online(proxyId)) continue;
-      const key = `${m.id}:${proxyId}:move.finish:give-up`;
-      if (this.gaveUp.has(key)) continue;
-      const r = this.send(m.accountId, proxyId, 'move.finish', { v: 1, moveId: m.id, role, abandoned: true, return: true });
-      if (!r.ok && PERMANENT.has(r.code)) this.gaveUp.add(key);
+      this.sendTracked(m, proxyId, 'move.finish', { v: 1, moveId: m.id, role, abandoned: true, return: true }, GIVE_UP_KEY);
     }
   }
 
@@ -1136,39 +1101,35 @@ export class Moves {
     }
     if (last) {
       if (!FINAL_STATES.has(last.state)) return 'waiting';
-      const unanswered = last.state === 'expired' || last.state === 'unknown';
-      if (!unanswered && !this.retryDue(m, proxyId, 'move.return.open', CANCEL_RETRY_MS, last)) return 'waiting';
+      if (!unanswered(last) && !this.retryDue(m, proxyId, 'move.return.open', CANCEL_RETRY_MS, last)) return 'waiting';
     }
-    const key = `${m.id}:${proxyId}:move.return.open:give-up`;
-    if (this.gaveUp.has(key)) return 'waiting';
+    // Checked before the new token is written: nothing is written for an open that can never be queued.
+    if (this.gaveUp.has(`${m.id}:${proxyId}:move.return.open${GIVE_UP_KEY}`)) return 'waiting';
     const { tokenHash } = moveToken();
     const mv = tx(this.d.db, () => this.store.setPhase(m.id, 'returned', { tokenHash }));
-    const r = this.send(m.accountId, proxyId, 'move.return.open', { v: 1, moveId: m.id, returnOf: m.returnOf, tokenHash: mv.tokenHash, targetIp: m.targetIp });
-    if (!r.ok && PERMANENT.has(r.code)) this.gaveUp.add(key);
+    this.sendTracked(m, proxyId, 'move.return.open', { v: 1, moveId: m.id, returnOf: m.returnOf, tokenHash: mv.tokenHash, targetIp: m.targetIp }, GIVE_UP_KEY);
     return 'waiting';
   }
 
   // Given-up returns where a side is not closed yet (no answered abandoned finish, nor a refused open that closes it), however long ago.
   private givenUp(proxyId?: string): Move[] {
-    const rows = this.d.db.prepare(`SELECT id FROM moves WHERE phase = 'returned' AND reason = ?${proxyId ? ' AND (source_proxy_id = ? OR target_proxy_id = ?)' : ''}
-      AND NOT (${GIVE_UP_CLOSED})`)
-      .all(...(proxyId ? [GIVEN_UP, proxyId, proxyId] : [GIVEN_UP])) as { id: string }[];
-    return rows.map((r) => this.store.get(r.id)).filter((x): x is Move => x !== null);
+    return this.store.where(`phase = 'returned' AND reason = ?${proxyId ? ' AND (source_proxy_id = ? OR target_proxy_id = ?)' : ''}
+      AND NOT (${GIVE_UP_CLOSED})`, ...(proxyId ? [GIVEN_UP, proxyId, proxyId] : [GIVEN_UP]));
   }
 
-  private archiveChunks(moveId: string): ChunkState[] {
-    return this.chunkStates(moveId).filter((c) => c.id.startsWith('archive:'));
+  private archiveChunks(moveId: string, chunks = this.chunkStates(moveId)): ChunkState[] {
+    return chunks.filter((c) => c.id.startsWith('archive:'));
   }
 
   // Archive still to be copied: the plan copies it, the source's summary has Archive files, and an Archive chunk is
-  // not final yet (or none is known yet: the target lists them as it goes).
-  archivePending(m: Move): boolean {
+  // not final yet (or none is known yet: the target lists them as it goes). chunks: chunkStates(m.id) when known.
+  archivePending(m: Move, chunks?: ChunkState[]): boolean {
     const kinds = (m.plan as { kinds?: unknown } | null)?.kinds;
     if (!Array.isArray(kinds) || !kinds.includes('archive')) return false;
     const files = (m.summary as { archive?: { files?: unknown } } | null)?.archive?.files;
     if (!isCount(files) || files === 0) return false;
-    const chunks = this.archiveChunks(m.id);
-    return chunks.length === 0 || chunks.some((c) => !FINAL_CHUNK.has(c.state));
+    const archive = this.archiveChunks(m.id, chunks);
+    return archive.length === 0 || archive.some((c) => !FINAL_CHUNK.has(c.state));
   }
 
   // A stored End transfer whose Archive is now final: the transfer ends, by the one who asked (from onProgress and tick).
@@ -1199,7 +1160,7 @@ export class Moves {
   // move.finish to both roles (A5), each until queued; one that went
   // unanswered (expired, unknown) is sent again once its proxy is online.
   private ensureFinishes(m: Move): { source: CommandRow | null; target: CommandRow | null } {
-    const unsent = (p: string) => (r: CommandRow) => (r.state === 'expired' || r.state === 'unknown') && this.online(p);
+    const unsent = (p: string) => (r: CommandRow) => unanswered(r) && this.online(p);
     const target = this.ensure(m, m.targetProxyId, 'move.finish', { v: 1, moveId: m.id, role: 'target', abandoned: m.reason !== null }, unsent(m.targetProxyId));
     return { source: this.sourceFinish(m), target };
   }
@@ -1213,7 +1174,7 @@ export class Moves {
   private sourceFinish(m: Move): CommandRow | null {
     const src = m.sourceProxyId;
     const last = this.lastCommand(m, src, 'move.finish');
-    if (last && !((last.state === 'expired' || last.state === 'unknown') && this.online(src))) return last;
+    if (last && !(unanswered(last) && this.online(src))) return last;
     if (!this.online(src)) return last;
     if (!this.targetFinishFinal(m)) return last;
     const rel = this.lastCommand(m, src, 'move.release');
@@ -1247,16 +1208,16 @@ export class Moves {
     if (!m || m.phase !== 'cleaning') return;
     const { source, target } = this.ensureFinishes(m);
     // A finish counts only once answered: one that expired or went unanswered is sent again (now, or once its proxy is back).
-    const unanswered = (r: CommandRow | null) => r !== null && (r.state === 'expired' || r.state === 'unknown');
-    const answered = (r: CommandRow | null) => r !== null && FINAL_STATES.has(r.state) && !unanswered(r);
+    const isUnanswered = (r: CommandRow | null) => r !== null && unanswered(r);
+    const isAnswered = (r: CommandRow | null) => r !== null && answered(r);
     // A finish that can never be queued (the allow entry gone) does not hold the move open.
     const never = (proxyId: string) => this.gaveUp.has(`${m.id}:${proxyId}:move.finish`);
     // A move ended early does not wait for an absent target: done with the target cleanup pending (onLive and tick derive its finish).
-    const targetDone = answered(target) || never(m.targetProxyId);
-    const targetPending = !targetDone && m.reason !== null && unanswered(target);
+    const targetDone = isAnswered(target) || never(m.targetProxyId);
+    const targetPending = !targetDone && m.reason !== null && isUnanswered(target);
     if (!targetDone && !targetPending) return;
-    const sourceDone = answered(source) || never(m.sourceProxyId);
-    const pending = !sourceDone && m.reason !== null && (!this.online(m.sourceProxyId) || this.releaseFailing(m) || unanswered(source));
+    const sourceDone = isAnswered(source) || never(m.sourceProxyId);
+    const pending = !sourceDone && m.reason !== null && (!this.online(m.sourceProxyId) || this.releaseFailing(m) || isUnanswered(source));
     if (!sourceDone && !pending) return;
     tx(this.d.db, () => {
       if (this.store.get(m.id)?.phase === 'cleaning') this.done(m, pending ? null : source, pending, targetPending);
@@ -1294,7 +1255,7 @@ export class Moves {
     const m = this.store.get(m0.id);
     if (!m || !m.cleanupPending || !this.online(m.sourceProxyId)) return;
     const fin = this.sourceFinish(m);
-    if (!fin || !FINAL_STATES.has(fin.state) || fin.state === 'expired' || fin.state === 'unknown') return;
+    if (!fin || !answered(fin)) return;
     tx(this.d.db, () => {
       if (!this.store.get(m.id)?.cleanupPending) return;
       const mv = this.store.setPhase(m.id, 'done', { cleanupPending: false });
@@ -1307,8 +1268,8 @@ export class Moves {
   private targetCleanupStep(m0: Move): void {
     const m = this.store.get(m0.id);
     if (!m || !m.targetCleanupPending || !this.online(m.targetProxyId)) return;
-    const fin = this.ensure(m, m.targetProxyId, 'move.finish', { v: 1, moveId: m.id, role: 'target', abandoned: m.reason !== null }, (r) => r.state === 'expired' || r.state === 'unknown');
-    if (!fin || !FINAL_STATES.has(fin.state) || fin.state === 'expired' || fin.state === 'unknown') return;
+    const fin = this.ensure(m, m.targetProxyId, 'move.finish', { v: 1, moveId: m.id, role: 'target', abandoned: m.reason !== null }, unanswered);
+    if (!fin || !answered(fin)) return;
     tx(this.d.db, () => {
       if (!this.store.get(m.id)?.targetCleanupPending) return;
       const mv = this.store.setPhase(m.id, 'done', { targetCleanupPending: false });
@@ -1349,11 +1310,22 @@ export class Moves {
   }
 
   private camsId(m: Move): string {
-    return (this.d.db.prepare('SELECT cams_id FROM cameras WHERE id = ?').get(m.cameraId) as { cams_id: string } | undefined)?.cams_id ?? '';
+    return (stmt(this.d.db, 'SELECT cams_id FROM cameras WHERE id = ?').get(m.cameraId) as { cams_id: string } | undefined)?.cams_id ?? '';
+  }
+
+  // The move's camera's id on the proxy that holds it (null: not known).
+  private proxyCameraId(m: Move): string | null {
+    return (stmt(this.d.db, 'SELECT proxy_camera_id FROM cameras WHERE id = ?').get(m.cameraId) as { proxy_camera_id: string | null } | undefined)?.proxy_camera_id ?? null;
+  }
+
+  // The camera a proxy names by its own camera id, in that proxy's account.
+  private cameraOnProxy(accountId: string, proxyId: string | null, proxyCameraId: string) {
+    return stmt(this.d.db, 'SELECT id, cams_id, host, protocol FROM cameras WHERE account_id = ? AND proxy_id = ? AND proxy_camera_id = ?')
+      .get(accountId, proxyId, proxyCameraId) as { id: string; cams_id: string; host: string | null; protocol: string | null } | undefined;
   }
 
   // Detail: moveId, camsId, source, target, reason (never a token or its hash).
-  private audit(m: Move, action: 'move-request' | 'move-offer' | 'move-phase' | 'move-approve' | 'move-budget-exceeded' | 'move-cancel' | 'move-end-transfer' | 'move-done' | 'move-check' | 'move-return' | 'move-give-up' | 'move-end-after-archive' | 'moves-pruned', outcome: 'ok' | 'refused' | 'failed', extra: Record<string, unknown>, who?: Who): void {
+  private audit(m: Move, action: Extract<AuditAction, `move-${string}`>, outcome: 'ok' | 'refused' | 'failed', extra: Record<string, unknown>, who?: Who): void {
     const camsId = this.camsId(m);
     this.d.audit.write({
       actorType: who?.actorType ?? 'system', actor: who?.actor ?? 'system', action, accountId: m.accountId, targetType: 'camera', targetId: m.cameraId, targetLabel: camsId, outcome,

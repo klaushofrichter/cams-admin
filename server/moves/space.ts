@@ -1,5 +1,6 @@
 import { MOVE_KINDS } from '../../contract/build';
 import type { Profile } from '../status/profile';
+import { isCount } from '../validate';
 
 // The space a move needs against what the target reports (proxy profile design §3, "space"): not a precheck
 // rule. cams-admin first knows the content size when the source's move.request arrives with its summary; then it
@@ -13,7 +14,7 @@ export interface SpaceCheck {
 }
 export type KindCaps = Partial<Record<(typeof MOVE_KINDS)[number], number>>;
 
-const count = (x: unknown): number => (Number.isSafeInteger(x) && (x as number) >= 0 ? (x as number) : 0);
+const count = (x: unknown): number => (isCount(x) ? x : 0);
 
 export function spaceCheck(summary: unknown, p: Profile | null | undefined, caps: KindCaps, now: number): SpaceCheck | null {
   if (!p || p.storage.budgetBytes === null || p.storage.usedBytes === null) return null;

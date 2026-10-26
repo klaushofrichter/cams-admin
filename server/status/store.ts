@@ -5,6 +5,7 @@ import type { Proxy, Registry } from '../registry';
 import type { LiveHub } from '../live';
 import { validateSummary } from '../contract';
 import { parseProfile } from './profile';
+import { isCount } from '../validate';
 import { cameraStates, deriveCommands, deriveProxyState, type CommandsPolicy, heartbeatFresh, pinState, SKEW_PROBLEM_MS, type CommandsInfo, type PinState, type ProxyState, type Reported, type StatusRow, type TokensInfo } from './derive';
 
 // The latest state of each proxy and its transitions, fed by the channel
@@ -34,7 +35,7 @@ const toStatus = (r: Row): StatusRow => ({
 });
 
 const isRecord = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x);
-const safeInt = (x: unknown): number | null => (Number.isSafeInteger(x) && (x as number) >= 0 ? (x as number) : null);
+const safeInt = (x: unknown): number | null => (isCount(x) ? x : null);
 const strList = (v: unknown, max: number, len: number): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string').slice(0, max).map((x) => x.slice(0, len)) : []);
 
 // P2 heartbeat fields, clamped whatever a proxy sends (they live in memory
