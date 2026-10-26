@@ -97,6 +97,41 @@ describe('move.begin from cams-admin', () => {
     expect(auditFor('move-begin')[1]).toMatchObject({ outcome: 'ok', detail: { cmdId: r.ok && r.commandId, source: src.proxyId, requestId: m.requestId } });
   });
 
+  it('a second start for the same camera while one is pending is refused with move_pending (409), and writes nothing', async () => {
+    const src = await proxy();
+    const tgt = await proxy();
+    const cam = camera(src);
+    instance(src.accountId, [src.proxyId, tgt.proxyId]);
+    // Two quick POSTs (a double click): one move.begin queued, the other 409.
+    const body = { sourceProxyId: src.proxyId, targetProxyId: tgt.proxyId, cameraId: cam.id, bounds: BOUNDS };
+    const out = await Promise.allSettled([s.api('POST', '/moves', body), s.api('POST', '/moves', body)]);
+    expect(out.filter((x) => x.status === 'fulfilled')).toHaveLength(1);
+    const no = out.find((x) => x.status === 'rejected') as PromiseRejectedResult;
+    expect(no.reason.status).toBe(409);
+    expect(no.reason.body).toEqual({ error: 'move_pending', detail: `a move of ${cam.camsId} was just requested` });
+    expect(commandsOf('move.begin')).toHaveLength(1);
+    expect(auditFor('move-begin').filter((r) => r.outcome === 'refused')).toHaveLength(0);
+    // Once the source made the move: refused while it is open.
+    await until(() => s.built.moves.store.list().length === 1, 5000, 'move row');
+    expect(begin(src, tgt, { camera: cam.id })).toEqual({ ok: false, status: 409, error: 'move_pending', detail: `a move of ${cam.camsId} is open` });
+    expect(commandsOf('move.begin')).toHaveLength(1);
+  });
+
+  it('move_pending: a move.begin the source answered whose move has not arrived yet counts for a minute', async () => {
+    const src = await proxy();
+    const tgt = await proxy();
+    const cam = camera(src);
+    instance(src.accountId, [src.proxyId, tgt.proxyId]);
+    expect(begin(src, tgt, { camera: cam.id })).toMatchObject({ ok: true });
+    expect(begin(src, tgt, { camera: cam.id })).toMatchObject({ ok: false, status: 409, error: 'move_pending', detail: `a move of ${cam.camsId} was just requested` });
+    await until(() => s.built.moves.store.list().length === 1 && (s.built.db.prepare("SELECT state FROM commands WHERE command = 'move.begin'").get() as { state: string }).state === 'done', 5000, 'done and move row');
+    // As if the move.request had not arrived yet: the answered command alone still holds the camera.
+    s.built.db.exec('DELETE FROM move_chunks; DELETE FROM moves');
+    expect(begin(src, tgt, { camera: cam.id })).toMatchObject({ ok: false, status: 409, error: 'move_pending', detail: `a move of ${cam.camsId} was just requested` });
+    clock.advance(61_000);
+    expect(begin(src, tgt, { camera: cam.id })).toMatchObject({ ok: true });
+  });
+
   it('not_routed is fixed with a visible route, url null', async () => {
     const src = await proxy();
     const tgt = await proxy();

@@ -93,6 +93,10 @@ describe('startBody and refusalText', () => {
     expect(refusalText({ error: 'zzz_unknown' })).toBe('zzz_unknown');
     expect(refusalText(null)).toBeTruthy();
   });
+  it('a second start of the same camera: the server\'s detail, else the code in words', () => {
+    expect(refusalText({ error: 'move_pending', detail: 'a move of cam3 was just requested' })).toBe('a move of cam3 was just requested');
+    expect(refusalText({ error: 'move_pending' })).toBe('a move of this camera was just requested or is under way');
+  });
 });
 
 describe('cameraLabel (Start move camera list)', () => {
@@ -200,7 +204,16 @@ describe('rejections and the content checklist', () => {
     expect(contentLine({ kind: 'stills', included: false, files: 5, bytes: 500, chunks: chunks(0, 0) })).toBe('Stills: left out, 5 files, 500 B');
     expect(contentLine({ kind: 'archive', included: true, files: 1, bytes: null, chunks: chunks(2, 2) })).toBe('Archive: included, 1 file; 2 of 2 days copied');
     expect(contentLine({ kind: 'checks', included: null, files: null, bytes: null, chunks: chunks(0, 0) })).toBe('Checks: not decided yet');
-    expect(contentLine({ kind: 'events', included: true, files: 0, bytes: 0, chunks: chunks(4, 1, 0, 3) })).toBe('Events: included, nothing to copy; 1 of 4 days copied, 3 left behind');
+    expect(contentLine({ kind: 'events', included: true, files: 0, bytes: 0, rows: 0, chunks: chunks(4, 1, 0, 3) })).toBe('Events: included, nothing to copy; 1 of 4 days copied, 3 left behind');
+  });
+  it('events and checks are counted by rows, stills, clips and Archive by files and bytes', () => {
+    const none = { total: 0, done: 0, failed: 0, abandoned: 0 };
+    expect(contentLine({ kind: 'events', included: true, files: 0, bytes: 0, rows: 654, chunks: none })).toBe('Events: included, 654 events');
+    expect(contentLine({ kind: 'checks', included: false, files: 0, bytes: 0, rows: 1, chunks: none })).toBe('Checks: left out, 1 check');
+    expect(contentLine({ kind: 'checks', included: true, files: null, bytes: null, rows: null, chunks: none })).toBe('Checks: included');
+    expect(contentLine({ kind: 'stills', included: true, files: 54556, bytes: 48350227367, rows: 0, chunks: none })).toBe('Stills: included, 54556 files, 45.0 GiB');
+    expect(contentLine({ kind: 'clips', included: true, files: 236, bytes: 290655300, rows: 142, chunks: none })).toBe('Clips: included, 236 files, 277.2 MiB');
+    expect(contentLine({ kind: 'archive', included: true, files: 0, bytes: 0, rows: 0, chunks: none })).toBe('Archive: included, nothing to copy');
   });
   it('the basis of the checklist', () => {
     expect(contentBasisText('plan')).toBe('As approved');
