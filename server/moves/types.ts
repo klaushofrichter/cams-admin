@@ -1,6 +1,9 @@
 // The proxy-originated camera-move events (contract/v1 event.schema.json, the
 // move.* kinds: no cmdId). Validated strictly before they reach a handler.
 
+// The first cam-proxy release with move.summary and profile.tls (the web UI's PROFILE_SINCE).
+export const PROXY_UPDATE_SINCE = '2026.10.26';
+
 export type MoveKind = 'stills' | 'clips' | 'events' | 'checks' | 'archive';
 export type MovePlanSpace = 'all' | 'omit' | 'fit' | 'retention';
 export type MoveRole = 'source' | 'target';

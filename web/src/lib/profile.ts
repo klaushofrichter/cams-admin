@@ -10,6 +10,8 @@ export interface Profile {
   hardware: { pi: string | null; cpuCores: number | null; cpuModel: string | null; memoryBytes: number | null; load5: number | null; cpuTempC: number | null };
   warnings: string[];
   firewall: { tool: 'ufw' | 'nft' | null; lines: string[]; dropped?: number };
+  // The site CA (cam-proxy with profile.tls): its site and the camera subnet it covers; null or absent from older ones.
+  tls?: { site: string | null; cameraSubnet: string | null } | null;
 }
 
 // The first cam-proxy release that reports a profile.
