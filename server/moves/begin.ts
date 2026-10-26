@@ -7,6 +7,7 @@ import { validateCommandArgs } from '../contract';
 import { SITE_PATTERN } from '../../contract/build';
 import { online, precheckReport, siteOf, unseen, type PrecheckDeps, type PrecheckReason, type PrecheckReport } from './precheck';
 import type { MoveBounds } from './types';
+import { sourceTlsName } from './common';
 import type { Clock } from '../clock';
 
 // A move started from cams-admin (move.begin plan Task 3, rulings R3, A4–A10):
@@ -99,7 +100,7 @@ function run(d: BeginDeps, actor: string, input: BeginInput): BeginResult {
   if (!online(d, src)) return refuse({ status: 409, error: 'source_offline' });
   const sv = d.status.viewOf(src);
   if (sv.commands !== 'allowed' || !sv.allow.includes('move.send')) return refuse({ status: 409, error: 'moves_not_allowed' });
-  if (!src.url || !src.tlsServername) return refuse({ status: 409, error: 'source_registry_incomplete' });
+  if (!src.url || !sourceTlsName(src)) return refuse({ status: 409, error: 'source_registry_incomplete' });
 
   const cand = { accountId: src.accountId, sourceProxyId: src.id, targetProxyId: input.targetProxyId, cameraId: cam.id };
   const r1 = precheckReport(d, cand);

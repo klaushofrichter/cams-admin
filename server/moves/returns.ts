@@ -8,7 +8,7 @@ import { MOVE_KINDS } from '../../contract/build';
 import type { ChunkState, Move, MoveStore } from './store';
 import { moveToken, targetAddress, type Resolve } from './token';
 import type { MoveCheck, MovePhaseEvent } from './types';
-import { backoffDue, FINAL_STATES, sourceRef, unanswered, verifiedDone, type Who } from './common';
+import { backoffDue, FINAL_STATES, sourceRef, sourceTlsName, unanswered, verifiedDone, type Who } from './common';
 import { isCount } from '../validate';
 
 // The return move (step 4, spec §1; plan Task 15): the copy back after a cancel
@@ -142,7 +142,7 @@ export class Returns {
       delete failed.target;
     } else if (start && (!FINAL_STATES.has(start.state) || start.state === 'done' || !this.again(m, m.targetProxyId, 'move.return.start', start))) return;
     const src = this.h.registry.proxyById(m.sourceProxyId);
-    if (!src?.url || !src.tlsServername) {
+    if (!src?.url || !sourceTlsName(src)) {
       if (this.due(`${m.id}:registry`)) this.h.log.warn({ moveId: m.id }, 'move_return_source_registry_incomplete');
       return;
     }

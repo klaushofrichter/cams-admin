@@ -19,7 +19,7 @@ import type { CamsInstances } from '../cams/instances';
 import { moveToken, targetAddress, type Resolve } from './token';
 import { Returns, type ReturnKey } from './returns';
 import { moveContent } from './view';
-import { answered, backoffDue, FINAL_STATES, sourceRef, unanswered, verifiedDone, type Who } from './common';
+import { answered, backoffDue, FINAL_STATES, sourceRef, sourceTlsName, unanswered, verifiedDone, type Who } from './common';
 import { isCount } from '../validate';
 import type { MoveCheck, MoveApproveEvent, MoveCameraConn, MoveCancelEvent, MoveEvent, MovePhaseEvent, MoveProgressEvent, MoveRequestEvent, MoveTargetsEvent } from './types';
 
@@ -448,7 +448,7 @@ export class Moves {
     const src = this.d.registry.proxyById(proxyId)!;
     const tgt = this.d.registry.proxyById(ev.target)!;
     // The offer names the source's url and TLS name; the token is bound to the target's LAN address (R4).
-    if (!src.url || !src.tlsServername) {
+    if (!src.url || !sourceTlsName(src)) {
       return this.refuse(ctx, 'not_routed', { rule: 'source_registry_incomplete', text: `the source's registry entry has no ${!src.url ? 'url' : 'TLS name'}` });
     }
     const targetIp = await targetAddress(tgt.url, this.d.resolve);
@@ -591,7 +591,7 @@ export class Moves {
     }
     if (!p) return this.fail(m, 'token_lost', 'target_failed');
     const src = this.d.registry.proxyById(m.sourceProxyId);
-    if (!src?.url || !src.tlsServername) return this.fail(m, 'source_registry_incomplete', 'not_routed');
+    if (!src?.url || !sourceTlsName(src)) return this.fail(m, 'source_registry_incomplete', 'not_routed');
     tx(this.d.db, () => {
       const offer = this.send(m.accountId, m.targetProxyId, 'move.offer', {
         v: 1, moveId: m.id, token: p.token,
