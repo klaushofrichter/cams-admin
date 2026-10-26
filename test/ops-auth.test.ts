@@ -10,6 +10,7 @@ import { once } from 'events';
 import { tmpDir } from './helpers/tmp';
 import { testApp } from './helpers/app';
 import { apiRouter } from '../server/api/router';
+import { diagCameras, diagProxies } from '../server/diag/views';
 import { OPS_ROUTES, opsScopeFor } from '../server/ops/scopes';
 import { OPS_SCOPES, type OpsScope } from '../server/ops/tokens';
 import { makeProxyInfo, makeSummary } from '../test-client/summaries';
@@ -71,6 +72,9 @@ describe('the scope table', () => {
     expect(opsScopeFor('POST', '/moves/mv_1/cancel/x')).toBeNull();
     expect(opsScopeFor('POST', '/x/moves/mv_1/cancel')).toBeNull();
     expect(opsScopeFor('POST', '/accounts/acc_1/proxies/prx_1/tokens')).toBeNull();
+    expect(opsScopeFor('PATCH', '/accounts/acc_1/proxies/prx_1')).toBe('registry');
+    expect(opsScopeFor('PATCH', '/accounts/acc_1/cameras/cam_1')).toBe('registry');
+    expect(opsScopeFor('DELETE', '/accounts/acc_1/proxies/prx_1')).toBeNull();
   });
 
   it('coverage: every route of the router is in the table or refuses a token with every scope', async () => {
@@ -123,6 +127,31 @@ describe('scoped writes', () => {
     expect((await bearer('delete', path, r.token)).status).toBe(204);
     expect(a.camsInstances.routes(inst)).toHaveLength(0);
     expect(auditOf('route-update').slice(-2).map((x) => x.actor)).toEqual([`ops-token:${r.prefix}`, `ops-token:${r.prefix}`]);
+  });
+
+  // The registry edits Klaus otherwise makes by hand: a proxy's TLS site and CA
+  // pins, a camera's host and TLS name (cams viewers still hold on a changed endpoint).
+  it('a registry token edits a proxy and a camera; other scopes may not', async () => {
+    const cam = a.registry.createCamera('admin@example.com', acc, { camsId: 'simcam', name: 'Sim', kind: 'sim', proxyId: px, proxyCameraId: 'cam9', host: '192.0.2.30', protocol: 'https' }).id;
+    const pin = `SHA256:${'AB'.repeat(32)}`;
+    const other = issue(['tokens', 'routes', 'moves']);
+    expect((await bearer('patch', `/accounts/${acc}/proxies/${px}`, other.token, { tlsSite: 'cluster' })).status).toBe(403);
+    expect((await bearer('patch', `/accounts/${acc}/cameras/${cam}`, other.token, { tlsServername: 'cam9.cluster.internal' })).status).toBe(403);
+    const t = issue(['registry']);
+    // The row versions come from the diag views (an ops token never reads).
+    const pv = (diagProxies({ ...a, serverKeyFingerprints: [a.signing.fingerprint] }).items.find((x) => x.id === px)!).rowVersion;
+    const cv = (diagCameras({ ...a, serverKeyFingerprints: [a.signing.fingerprint] }).items.find((x) => x.id === cam)!).rowVersion;
+    expect(pv).toBe(a.registry.getProxy(acc, px).version);
+    const p = await bearer('patch', `/accounts/${acc}/proxies/${px}`, t.token, { version: pv, tlsSite: 'cluster', caFingerprints: [pin] });
+    expect(p.status, JSON.stringify(p.body)).toBe(200);
+    expect(p.body).toMatchObject({ tlsSite: 'cluster', caFingerprints: [pin] });
+    const c = await bearer('patch', `/accounts/${acc}/cameras/${cam}`, t.token, { version: cv, host: '10.43.61.52', tlsServername: 'cam9.cluster.internal', webUiUrl: null });
+    expect(c.status, JSON.stringify(c.body)).toBe(200);
+    expect(c.body).toMatchObject({ host: '10.43.61.52', tlsServername: 'cam9.cluster.internal', webUiUrl: null });
+    expect(auditOf('proxy-update').at(-1)!.actor).toBe(`ops-token:${t.prefix}`);
+    expect(auditOf('camera-update').at(-1)!.actor).toBe(`ops-token:${t.prefix}`);
+    // Creating or deleting stays with a sign-in.
+    expect((await bearer('delete', `/accounts/${acc}/cameras/${cam}`, t.token)).status).toBe(403);
   });
 
   it('a moves token cancels a move', async () => {
@@ -351,7 +380,7 @@ describe('managing ops tokens', () => {
     expect(list.status).toBe(200);
     expect(JSON.stringify(list.body)).not.toContain(token);
     expect(list.body.items.find((x: { id: string }) => x.id === item.id)).toMatchObject({ name: 'mac', state: 'active' });
-    expect((await a.api('post', '/ops-tokens', { name: 'bad', scopes: ['registry'] })).body).toEqual({ error: 'invalid', field: 'scopes' });
+    expect((await a.api('post', '/ops-tokens', { name: 'bad', scopes: ['nope'] })).body).toEqual({ error: 'invalid', field: 'scopes' });
     // The token can't manage tokens, not even itself.
     expect((await bearer('get', '/ops-tokens', token)).status).toBe(403);
     expect((await bearer('post', '/ops-tokens', token, { name: 'x', scopes: ['moves'] })).status).toBe(403);

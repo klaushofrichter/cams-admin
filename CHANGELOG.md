@@ -5,6 +5,10 @@ then empties it on `main`.
 
 ## [Unreleased]
 
+### Added
+
+- Operations tokens: a `registry` scope edits a proxy or a camera (`PATCH`, e.g. TLS site, CA pins, host, TLS name), so scripts can make the registry changes that needed a sign-in. `/diag/proxies` and `/diag/cameras` show each row's `rowVersion` for that PATCH.
+
 ### Changed
 
 - Contract: cam-proxy's new `ftp.sourceSubnet` is on the remote-settable deny list (it widens who may log in over FTP).

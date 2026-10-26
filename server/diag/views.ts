@@ -33,7 +33,8 @@ export function diagProxies(d: ApiDeps) {
       const rep = row?.reported ?? null;
       const accCams = cams.filter((c) => c.accountId === px.accountId);
       return {
-        id: px.id, accountId: px.accountId, name: px.name, displayName: px.displayName, runsOn: px.runsOn, registryState: px.state,
+        // rowVersion: the registry row's version, which an ops token's PATCH passes back (version is the app's).
+        id: px.id, accountId: px.accountId, name: px.name, displayName: px.displayName, runsOn: px.runsOn, registryState: px.state, rowVersion: px.version,
         url: px.url, adminUiUrl: px.adminUiUrl, dnsName: px.dnsName, tlsSite: px.tlsSite, tlsServername: px.tlsServername, caFingerprints: px.caFingerprints,
         state: v.state, connected: v.connected, lastHeartbeatAt: v.lastHeartbeatAt, closedReason: v.closedReason, version: v.version,
         pin: v.pin, skewMs: v.skewMs, ok: v.ok, problemCount: v.problemCount, unreadable: v.unreadable, problems: problems(s), summaryAt: row?.summaryAt ?? null,
@@ -81,7 +82,7 @@ export function diagCameras(d: ApiDeps) {
   const moveIds = new Map((d.db.prepare('SELECT id, move_id FROM cameras WHERE move_id IS NOT NULL').all() as { id: string; move_id: string }[]).map((r) => [r.id, r.move_id]));
   return {
     items: d.registry.listCameras().map((c) => ({
-      id: c.id, accountId: c.accountId, camsId: c.camsId, name: c.name, kind: c.kind, model: c.model, proxyId: c.proxyId, proxyCameraId: c.proxyCameraId,
+      id: c.id, accountId: c.accountId, camsId: c.camsId, name: c.name, kind: c.kind, model: c.model, proxyId: c.proxyId, proxyCameraId: c.proxyCameraId, rowVersion: c.version,
       host: c.host, protocol: c.protocol, tlsServername: c.tlsServername,
       moveId: moveIds.get(c.id) ?? null,
       online: c.proxyId ? (view.get(c.proxyId)?.cameras.find((x) => x.ref === c.proxyCameraId)?.online ?? null) : null,
