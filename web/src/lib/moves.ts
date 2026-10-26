@@ -46,7 +46,7 @@ const REASONS: Record<string, string> = {
   id_taken: 'the target already has a camera with that id',
   busy: 'a proxy is busy with another move',
   incompatible: "its configuration can't take this camera",
-  no_site_ca: 'a proxy has no site certificate authority',
+  no_site_ca: 'the target proxy has no site certificate authority',
   ca_does_not_cover_camera: "the site CA does not cover the camera's address",
   external_cert: 'a proxy uses an external certificate',
   other_account: 'the target is in another account',

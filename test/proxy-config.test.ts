@@ -209,6 +209,8 @@ describe('ProxyConfig', () => {
     }
     expect(() => C().preview(ACTOR, p.acc, p.prx, { unset: ['retention.clipsDays'] })).toThrow(/widening_local_only/); // the reference proxy holds it above the default
     expect(() => C().preview(ACTOR, p.acc, p.prx, { set: { 'ftp.publicHost': 'x.example.net' } })).toThrow(/not_remote_settable/);
+    // It widens who may log in over FTP (cam-proxy ftp.sourceSubnet): never from cams-admin.
+    expect(() => C().preview(ACTOR, p.acc, p.prx, { set: { 'ftp.sourceSubnet': '10.0.0.0/16' } })).toThrow(/not_remote_settable/);
     for (const bad of [null, {}, { set: {} }, { set: { 'sse.pingS': null } }, { set: { 'sse.pingS': { a: 1 } } }, { unset: [] }, { unset: ['sse.pingS', 'sse.pingS'] }, { set: { 'sse.pingS': 1 }, unset: ['sse.pingS'] }, { set: { 'sse.pingS': 'x'.repeat(513) } }])
       expect(() => C().preview(ACTOR, p.acc, p.prx, bad), JSON.stringify(bad)).toThrow(/invalid/);
     expect(countCommands()).toBe(before);

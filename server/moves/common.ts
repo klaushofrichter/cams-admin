@@ -14,7 +14,11 @@ export const answered = (r: CommandRow) => FINAL_STATES.has(r.state) && !unanswe
 export const DONE_MAX = 512;
 export const verifiedDone = (chunks: ChunkState[]) => chunks.filter((c) => c.state === 'verified').map((c) => c.id).slice(-DONE_MAX);
 // The source as move.offer and move.return.start name it.
-export const sourceRef = (p: Proxy) => ({ proxyId: p.id, name: p.name, url: p.url, caFingerprints: p.caFingerprints.slice(0, 2), tlsServername: p.tlsServername });
+// The source's TLS name in an offer. A plain-http source without one (the Pi, no site CA) names its url's
+// host: the contract needs a name, and the target pins and checks it only for an https source.
+export const sourceTlsName = (p: Proxy): string | null =>
+  p.tlsServername ?? (p.url?.startsWith('http://') ? new URL(p.url).hostname : null);
+export const sourceRef = (p: Proxy) => ({ proxyId: p.id, name: p.name, url: p.url, caFingerprints: p.caFingerprints.slice(0, 2), tlsServername: sourceTlsName(p) });
 // Another try is due: `since` lies BASE · 2^(attempts-1) back (capped at an hour).
 export const RETRY_CAP_MS = 3600_000;
 export const backoffDue = (base: number, attempts: number, since: number, now: number) => now - since >= Math.min(base * 2 ** Math.max(0, attempts - 1), RETRY_CAP_MS);

@@ -19,6 +19,10 @@ export const OPS_ROUTES: readonly OpsRoute[] = [
   { method: 'POST', path: '/moves/:moveId/cancel', scope: 'moves' },
   { method: 'POST', path: '/moves/:moveId/end-transfer', scope: 'moves' },
   { method: 'DELETE', path: '/moves/:moveId', scope: 'moves' },
+  // Editing (never creating or deleting) a proxy or a camera: TLS site, CA
+  // pins, host, TLS name. A cams viewer still holds a changed endpoint until confirmed.
+  { method: 'PATCH', path: '/accounts/:accountId/proxies/:proxyId', scope: 'registry' },
+  { method: 'PATCH', path: '/accounts/:accountId/cameras/:cameraId', scope: 'registry' },
 ];
 
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

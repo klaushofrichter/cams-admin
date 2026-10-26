@@ -161,6 +161,37 @@ describe('move.begin from cams-admin', () => {
     expect(auditFor('move-fix')).toMatchObject([{ target_type: 'proxy', target_id: tgt.proxyId, detail: { rule: 'site_ca', proxyId: tgt.proxyId, site: 'beta-2' } }]);
   });
 
+  it('a source without a site CA does not block the move or become a fix', async () => {
+    const src = await proxy({ site: null, registrySite: null });
+    const tgt = await proxy();
+    camera(src);
+    const r = begin(src, tgt);
+    expect(r).toMatchObject({ ok: true, fixed: [], report: { ok: true } });
+    expect(s.built.registry.proxyById(src.proxyId)!.tlsSite).toBeNull();
+    expect(auditFor('move-fix')).toHaveLength(0);
+    expect(commandsOf('move.begin')).toHaveLength(1);
+  });
+
+  it('a source without a site CA and a target fixable by its reported site: only the target is fixed', async () => {
+    const src = await proxy({ site: null, registrySite: null });
+    const tgt = await proxy({ site: 'beta-2', registrySite: null });
+    camera(src);
+    const r = begin(src, tgt);
+    expect(r).toMatchObject({ ok: true, fixed: [{ rule: 'site_ca', proxyId: tgt.proxyId, site: 'beta-2' }] });
+    expect(s.built.registry.proxyById(src.proxyId)!.tlsSite).toBeNull();
+  });
+
+  it('a target without a site CA is still refused no_site_ca, naming only the target', async () => {
+    const src = await proxy({ site: null, registrySite: null });
+    const tgt = await proxy({ site: null, registrySite: null });
+    camera(src);
+    const r = begin(src, tgt);
+    expect(r).toMatchObject({ ok: false, status: 409, error: 'precheck', reason: 'no_site_ca', fixed: [] });
+    const rep = (r as any).report.rules.find((x: any) => x.rule === 'site_ca');
+    expect(rep.detail).toContain(tgt.proxyId);
+    expect(rep.detail).not.toContain(src.proxyId);
+  });
+
   it('a registry site that differs is not overwritten', async () => {
     const src = await proxy();
     const tgt = await proxy({ site: 'beta-2', registrySite: 'old' });
@@ -266,6 +297,16 @@ describe('move.begin from cams-admin', () => {
     expect(auditFor('move-fix')).toHaveLength(0);
     expect(auditFor('move-begin')).toHaveLength(0);
     expect(commandsOf('move.begin')).toHaveLength(0);
+  });
+
+  it('a plain-http source without a TLS name (the Pi) is not registry-incomplete', async () => {
+    const src = await proxy({ site: null, registrySite: null });
+    const tgt = await proxy();
+    const cur = s.built.registry.getProxy(src.accountId, src.proxyId);
+    s.built.registry.updateProxy(ACTOR, src.accountId, src.proxyId, { tlsServername: null, caFingerprints: [], version: cur.version });
+    camera(src);
+    expect(begin(src, tgt)).toMatchObject({ ok: true });
+    expect(commandsOf('move.begin')).toHaveLength(1);
   });
 
   it('a target without a registry url is refused before any fix', async () => {

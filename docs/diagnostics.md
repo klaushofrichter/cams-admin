@@ -97,6 +97,11 @@ when the target reports none:
 A target that fails either is not in the source's "Move to…" list, and
 `POST /moves` answers 409 `precheck` (not one of the three fixable rules).
 
+The `site_ca` rule passes when the target has a site CA (registry site set
+and equal to the reported one). The source may have none (note 2026-10-26:
+before that, both ends needed one); on failure the detail names only the
+target.
+
 With a camera (`camera=` given, and every real request), `ca_covers_camera`
 follows `site_ca`: when the target reports `profile.tls.cameraSubnet` (the
 subnet its site CA issues camera certificates for) and the camera's registry
@@ -149,6 +154,8 @@ actor `ops-token:<8 hex>`. The list is also at `/diag/ops-tokens`.
 | `moves` | `POST /moves/:moveId/cancel` |
 | `moves` | `POST /moves/:moveId/end-transfer` |
 | `moves` | `DELETE /moves/:moveId` |
+| `registry` | `PATCH /accounts/:accountId/proxies/:proxyId` |
+| `registry` | `PATCH /accounts/:accountId/cameras/:cameraId` |
 
 Paths must be exactly as listed (the fixed words in lower case, ids as issued, no trailing slash). Anything else,
 and every route not in the table, gets 403 `scope`. No token can issue proxy
@@ -165,6 +172,19 @@ curl -fsS -X POST -H "Authorization: Bearer $(cat ~/.config/cams-admin/ops-token
 
 (`acc_…`, `prx_…` and `tok_…` are placeholders; take the real ids from
 `/diag/proxies` and `/diag/tokens`.)
+
+A `registry` token edits a proxy or a camera with the same body as the
+Accounts page (any of the fields, plus `version`), never creates or deletes
+one. `version` is the row's, `rowVersion` in `/diag/proxies` and
+`/diag/cameras` (409 on a stale one). A changed camera host, TLS name or proxy
+pin still holds that endpoint in each cams viewer until someone confirms its
+banner.
+
+```sh
+curl -fsS -X PATCH -H "Authorization: Bearer $(cat ~/.config/cams-admin/ops-token)" -H 'Content-Type: application/json' \
+  -d '{"version":3,"tlsSite":"cluster","caFingerprints":["SHA256:…"]}' \
+  "https://cams-admin.example.net/api/v1/accounts/acc_…/proxies/prx_…"
+```
 
 ## Start a move
 
@@ -196,9 +216,11 @@ What it does, in this order:
    - `routed`: adds a visible cams route (url empty) to the target on every
      cams instance that sees the source. A route that is hidden on purpose is
      not unhidden; that instance keeps failing and the answer is 409.
-   - `site_ca`: writes the registry's site for a proxy from the site the
-     proxy itself reports, only where the registry has none. A registry site
-     that differs from the reported one is not overwritten.
+   - `site_ca`: writes the registry's site for the target from the site the
+     target itself reports, only where the registry has none. A registry site
+     that differs from the reported one is not overwritten. Only the target
+     needs a site CA; a source without one (the Raspberry Pi proxy has no
+     `tls.site`) neither fails the rule nor gets a fix (2026-10-26).
    - `no_host_override`: clears the camera's per-instance host (a set camera
      user stays).
 4. It re-checks and queues the command `move.begin` on the source, which then
