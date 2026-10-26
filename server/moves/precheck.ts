@@ -121,7 +121,8 @@ export function precheckReport(d: PrecheckDeps, m: Candidate): PrecheckReport {
   const busy = [d.store.byProxy(src.id) && 'source', d.store.byProxy(t.id) && 'target'].filter(Boolean).join(', ');
   add('not_busy', !busy, 'busy', busy ? `a move is open on the ${busy}` : undefined);
   const siteDetail = (p: Proxy) => `${p.id}: registry ${p.tlsSite ?? 'none'}, reported ${d.status.row(p.id)?.reported?.site ?? 'none'}`;
-  add('site_ca', !!siteOf(d, src) && !!siteOf(d, t), 'no_site_ca', [siteOf(d, src) ? null : siteDetail(src), siteOf(d, t) ? null : siteDetail(t)].filter(Boolean).join('; ') || undefined);
+  // Only the target needs a site CA (2026-10-26): the source may have none (the Pi proxy has no tls.site).
+  add('site_ca', !!siteOf(d, t), 'no_site_ca', siteOf(d, t) ? undefined : siteDetail(t));
   if (m.cameraId) {
     const host = (d.db.prepare('SELECT host FROM cameras WHERE id = ?').get(m.cameraId) as { host: string | null } | undefined)?.host;
     rules.push(caCoversRule(t.name, d.status.row(t.id)?.reported?.profile, host));

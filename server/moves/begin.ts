@@ -118,13 +118,12 @@ function run(d: BeginDeps, actor: string, input: BeginInput): BeginResult {
   // Every fix decided before the first is made.
   const fixes: Fix[] = [];
   if (failing.has('site_ca')) {
-    for (const p of [src, tgt]) {
-      if (siteOf(d, p)) continue;
-      const reported = d.status.row(p.id)?.reported?.site ?? null;
-      // A registry site that is set (and differs) is never overwritten; an unusable reported site is no fix.
-      if (p.tlsSite !== null || typeof reported !== 'string' || !SITE_RE.test(reported)) return notFixed();
-      fixes.push({ rule: 'site_ca', proxyId: p.id, site: reported });
-    }
+    // Only the target needs a site CA; a source without one is not a fix and not a failure.
+    const p = tgt;
+    const reported = d.status.row(p.id)?.reported?.site ?? null;
+    // A registry site that is set (and differs) is never overwritten; an unusable reported site is no fix.
+    if (p.tlsSite !== null || typeof reported !== 'string' || !SITE_RE.test(reported)) return notFixed();
+    fixes.push({ rule: 'site_ca', proxyId: p.id, site: reported });
   }
   if (failing.has('routed')) {
     for (const instanceId of unseen(d, src.id, tgt.id)) {
