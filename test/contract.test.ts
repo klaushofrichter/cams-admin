@@ -95,7 +95,7 @@ describe('the v1 contract', () => {
   it('every proxy-receiver fixture has a $context and a runtime code from the nack list', () => {
     const NACKS = ['bad_signature', 'wrong_target', 'expired', 'replayed', 'not_allowed', 'paused', 'rate_limited', 'invalid_args', 'unsupported_version', 'busy'];
     const proxyFixtures = allFixtures().filter((x) => x.$expect?.receiver === 'proxy');
-    expect(proxyFixtures.length).toBe(35);
+    expect(proxyFixtures.length).toBe(36);
     for (const f of proxyFixtures) {
       expect(f.$context, f.name).toMatchObject({ now: expect.any(Number), proxyId: expect.stringMatching(/^prx_/), connId: expect.stringMatching(/^con_/), serverKeys: [vectors.keys.server.publicKey] });
       expect(NACKS, f.name).toContain(f.$expect.runtime);
@@ -161,6 +161,32 @@ describe('the v1 contract', () => {
     expect(hb(nul), JSON.stringify(ajv.errors)).toBe(true);
     expect(runtimeVerdict('heartbeat', nul)).toBe('accepted');
     expect(fixture('valid-heartbeat-profile-null').message.body.profile).toBeNull();
+  });
+  it('the profile tls (site CA): optional, {site, cameraSubnet} each nullable, closed in strict; lenient tolerant', () => {
+    const hb = strictValidator('heartbeat');
+    const tls = fixture('valid-heartbeat-profile-tls').message;
+    expect(tls.body.profile.tls).toEqual({ site: 'garage', cameraSubnet: '192.0.2.0/28' });
+    expect(hb(tls), JSON.stringify(ajv.errors)).toBe(true);
+    expect(hb(fixture('valid-heartbeat-profile-tls-none').message), JSON.stringify(ajv.errors)).toBe(true);
+    expect('tls' in fixture('valid-heartbeat-profile').message.body.profile).toBe(false); // optional: a proxy before it sends none
+    const withTls = (t: unknown) => {
+      const m = structuredClone(tls);
+      m.body.profile.tls = t;
+      return m;
+    };
+    for (const ok of ['192.0.2.0/24', '192.0.2.10/32', '0.0.0.0/0', '2001:db8::/32', '2001:db8::1/128']) expect(hb(withTls({ site: 'garage', cameraSubnet: ok })), ok).toBe(true);
+    for (const [why, t] of [
+      ['no prefix', { site: 'garage', cameraSubnet: '192.0.2.0' }],
+      ['prefix 33', { site: 'garage', cameraSubnet: '192.0.2.0/33' }],
+      ['octet 256', { site: 'garage', cameraSubnet: '192.0.256.0/24' }],
+      ['a name', { site: 'garage', cameraSubnet: 'lan/24' }],
+      ['a bad site', { site: 'Garage!', cameraSubnet: null }],
+      ['missing cameraSubnet', { site: 'garage' }],
+      ['an extra field', { site: 'garage', cameraSubnet: null, extra: 1 }],
+      ['null', null],
+    ] as [string, unknown][]) expect(hb(withTls(t)), why).toBe(false);
+    expect(fixture('drift-heartbeat-profile-tls-bad-subnet').$expect).toEqual({ runtime: 'accepted', strict: 'invalid' });
+    expect(runtimeVerdict('heartbeat', withTls({ site: 7, cameraSubnet: 'x', extra: 1 }))).toBe('accepted');
   });
   it('a P1 heartbeat stays valid in strict (the new proxy fields are optional)', () => {
     expect(strictValidator('heartbeat')(fixture('valid-heartbeat-1cam-pi').message)).toBe(true);

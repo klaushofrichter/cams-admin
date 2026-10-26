@@ -20,7 +20,7 @@ const resign = (m: Record<string, any>) => { const { sig: _s, ...rest } = m; ret
 
 describe('the reference proxy check agrees with every proxy fixture', () => {
   const cases = all.filter((x) => x.$expect?.receiver === 'proxy' || (x.schema === 'command' && x.name.startsWith('valid-')));
-  it('covers 60 fixtures (P2 17, P3 24, moves 19)', () => expect(cases).toHaveLength(60));
+  it('covers 62 fixtures (P2 17, P3 24, moves 21)', () => expect(cases).toHaveLength(62));
   for (const f of cases) {
     it(f.name, () => {
       const c = f.$context;
@@ -101,7 +101,7 @@ describe('the reference proxy check agrees with every proxy fixture', () => {
 });
 
 // --- camera move (contract amendments A4, A5, A33, X4, X13, X20) -----------------------------
-const MOVE = ['move.begin', 'move.targets', 'move.open', 'move.offer', 'move.answer', 'move.start', 'move.go', 'move.release', 'move.finish', 'move.cancel', 'move.return.open', 'move.return.start'];
+const MOVE = ['move.begin', 'move.summary', 'move.targets', 'move.open', 'move.offer', 'move.answer', 'move.start', 'move.go', 'move.release', 'move.finish', 'move.cancel', 'move.return.open', 'move.return.start'];
 const MV = 'mv_0123456789ABCDEFGHJK';
 const RQ = 'rq_0123456789ABCDEFGHJK';
 const MV2 = 'mv_1123456789ABCDEFGHJK';
@@ -117,6 +117,7 @@ const SRC = { proxyId: 'prx_0123456789ABCDEFGHJK', name: 'Garage', url: 'https:/
 const bounds = { transfer: true, kinds: ['clips'], space: 'fit', maxBudgetS: 3600 };
 const args = (c: string): Record<string, unknown> => ({
   'move.begin': { v: 1, camera: 'cam1', target: 'prx_1123456789ABCDEFGHJK', bounds },
+  'move.summary': { v: 1, camera: 'cam1' },
   'move.targets': { v: 1, requestId: RQ, targets: [{ proxyId: 'prx_0123456789ABCDEFGHJK', name: 'Garage', site: 'garage' }, { proxyId: 'prx_1123456789ABCDEFGHJK', name: 'Pi', site: null }] },
   'move.open': { v: 1, moveId: MV, requestId: RQ, camera: 'cam1', tokenHash: 'sha256:' + 'a'.repeat(64), targetIp: '192.0.2.20' },
   'move.offer': {
@@ -147,7 +148,7 @@ describe('move commands', () => {
     expect(WIRE_COMMANDS as readonly string[]).toContain(c);
     expect(argsOk(c, { ...args(c), v: 2 })).toBe(false);
     expect(argsOk(c, { ...args(c), extra: 1 })).toBe(false);
-    if (c !== 'move.targets' && c !== 'move.begin') expect(argsOk(c, { ...args(c), moveId: 'mv_0123456789ABCDEFGHJI' })).toBe(false);
+    if (c !== 'move.targets' && c !== 'move.begin' && c !== 'move.summary') expect(argsOk(c, { ...args(c), moveId: 'mv_0123456789ABCDEFGHJI' })).toBe(false);
   });
   it('move.begin args: bounds null or the closed bounds object', () => {
     const ok = args('move.begin') as { bounds: Record<string, unknown> };
@@ -163,6 +164,26 @@ describe('move commands', () => {
     expect(argsOk('move.begin', { ...ok, password: 'x' })).toBe(false);
     expect(argsOk('move.begin', { ...ok, bounds: undefined })).toBe(false);
     expect(argsOk('move.begin', { ...ok, target: 'proxy-b' })).toBe(false);
+  });
+  it('move.summary: args {v, camera} closed; the result is {summary}, the summary shape of move.request', () => {
+    expect(argsOk('move.summary', { v: 1, camera: 'cam1' })).toBe(true);
+    expect(argsOk('move.summary', { v: 1 })).toBe(false);
+    expect(argsOk('move.summary', { v: 1, camera: 'Cam 1' })).toBe(false);
+    expect(argsOk('move.summary', { v: 1, camera: 'cam1', target: 'prx_1123456789ABCDEFGHJK' })).toBe(false);
+    expect(resultOk('move.summary', { summary: summary() })).toBe(true);
+    expect(resultOk('move.summary', {})).toBe(false);
+    expect(resultOk('move.summary', { summary: summary(), extra: 1 })).toBe(false);
+    const { archive: _a, ...four } = summary();
+    expect(resultOk('move.summary', { summary: four })).toBe(false);
+    expect(resultOk('move.summary', { summary: { ...summary(), clips: { files: 1, bytes: 1, rows: 1, oldest: null, newest: null } } })).toBe(true);
+    expect(resultOk('move.summary', { summary: { ...summary(), clips: { files: -1, bytes: 1, rows: 1, oldest: null, newest: null } } })).toBe(false);
+    // The same shape as move.request's summary.
+    const strictSchema = (n: string) => JSON.parse(readFileSync(join(__dirname, '../contract/v1/strict', n), 'utf8'));
+    const ev = strictSchema('event.schema.json').properties.body.anyOf.find((b: any) => b.properties?.kind?.const === 'move.request');
+    expect(strictSchema('commands/move.summary.result.schema.json').properties.summary).toEqual(ev.properties.summary);
+    const r = all.find((x) => x.name === 'valid-result-move-summary')!;
+    expect(r.$command).toBe('move.summary');
+    expect(resultOk('move.summary', r.message.body.result)).toBe(true);
   });
   it('move.begin result is {requestId}; the refusal codes are exported', () => {
     expect(resultOk('move.begin', { requestId: RQ })).toBe(true);
@@ -305,6 +326,10 @@ describe('move commands', () => {
     expect(names.filter((n) => n.startsWith('valid-command-move-') && n !== 'valid-command-move-begin-no-bounds' && n !== 'valid-command-move-finish-return' && n !== 'valid-command-move-answer-refused-detail').sort()).toEqual(MOVE.map((c) => `valid-command-${c.replaceAll('.', '-')}`).sort());
     for (const f of all.filter((x) => /^valid-command-move-/.test(x.name))) expect(argsOk(f.message.body.command, f.message.body.args), f.name).toBe(true);
     expect(names.filter((n) => n.startsWith('valid-command-move-begin')).sort()).toEqual(['valid-command-move-begin', 'valid-command-move-begin-no-bounds']);
+    const ns = all.find((x) => x.name === 'refused-move-summary-not-allowed')!;
+    expect(ns.$expect).toEqual({ runtime: 'not_allowed', strict: 'valid', receiver: 'proxy' });
+    expect(ns.$context.allow).not.toContain('move.send');
+    expect(argsOk('move.summary', ns.message.body.args)).toBe(true);
     expect(all.find((x) => x.name === 'valid-command-move-begin-no-bounds')!.message.body.args.bounds).toBeNull();
     const nb = all.find((x) => x.name === 'refused-move-begin-not-allowed')!;
     expect(nb.$expect).toEqual({ runtime: 'not_allowed', strict: 'valid', receiver: 'proxy' });
@@ -318,7 +343,7 @@ describe('move commands', () => {
     expect(argsOk('move.cancel', tc.message.body.args)).toBe(false);
   });
   it('the reference check gates each move command by role: source commands need move.send, target commands move.receive', () => {
-    const send = ['move.begin', 'move.targets', 'move.open', 'move.answer', 'move.go', 'move.release', 'move.finish'];
+    const send = ['move.begin', 'move.summary', 'move.targets', 'move.open', 'move.answer', 'move.go', 'move.release', 'move.finish'];
     const recv = ['move.offer', 'move.start'];
     for (const c of [...send, ...recv]) {
       const f = all.find((x) => x.name === `valid-command-${c.replaceAll('.', '-')}`)!;

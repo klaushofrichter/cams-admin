@@ -1,6 +1,6 @@
 import { EventEmitter } from 'events';
 import { generateKeyPair, privateFromB64, publicFromB64, sign, signEnvelope, signedText, verify } from '../server/crypto/ed25519';
-import { moveRequestFromBegin, refCheck, type JournalEntry } from './commands';
+import { moveRequestFromBegin, moveSummaryOf, refCheck, type JournalEntry } from './commands';
 import type { RefProxyConfig } from './config';
 import { normaliseCode, ulid } from '../server/ids';
 import { makeProxyInfo } from './summaries';
@@ -352,6 +352,7 @@ export class ProxyClient extends EventEmitter {
         setImmediate(() => this.emitEvent(moveRequestFromBegin(b.args, requestId)));
         return { status: 'ok', result: { requestId } };
       }
+      case 'move.summary': return { status: 'ok', result: { summary: moveSummaryOf() } };
       case 'move.offer': return { status: 'ok', result: { accept: true, space: { needed: 1000, available: 5000, fits: true, perKind: {}, retentionProposal: null }, probeBps: 50_000_000 } };
       case 'move.start': return { status: 'ok', result: { publicKey: 'MCowBQYDK2VuAyEA' + 'A'.repeat(43) + '=', leafFingerprint: 'SHA256:' + 'AB'.repeat(32) } };
       case 'move.finish': return { status: 'ok', result: {} };
