@@ -18,6 +18,11 @@
 # the pod's ConfigMap) together with the app's LITESTREAM_SYNC_INTERVAL_S,
 # e.g. 30s for a tighter window.
 addr: ":9090"
+# L0 retention check once an hour (default every 15 s). Each check LISTs the
+# S3 replica (L1, then L0 files): every 15 s that was ~9k extra S3 Tier-1
+# requests a day, most of the S3 bill for a 17 MB replica. L0 files are
+# only kept 5 minutes past compaction anyway (kube-setup, Klaus OK, 2026-10-26).
+l0-retention-check-interval: 1h
 # "Backup now" (the app POSTs /sync here): an emptyDir shared by both containers.
 socket:
   enabled: true

@@ -520,7 +520,7 @@ export const REMOTE_SETTABLE: { v: 1; remote: string[]; narrow: Record<string, '
     'stills.maxGB': 'more', 'previews.maxGB': 'more', 'ftp.maxGB': 'more',
   },
   denied: [
-    'server', 'go2rtc', 'storage', 'ftp.port', 'ftp.passive', 'ftp.tls', 'ftp.publicHost', 'ftp.certFile', 'ftp.keyFile', 'tls', 'composition.font', 'ntp.server',
+    'server', 'go2rtc', 'storage', 'ftp.port', 'ftp.passive', 'ftp.tls', 'ftp.publicHost', 'ftp.sourceSubnet', 'ftp.certFile', 'ftp.keyFile', 'tls', 'composition.font', 'ntp.server',
     'poeSwitch', 'camsAdmin', 'cameras.*.id', 'cameras.*.host', 'cameras.*.protocol', 'cameras.*.tlsName', 'cameras.*.user', 'cameras.*.onvifPort', 'cameras.*.rtspPort',
     'cameras.*.baichuanPort', 'cameras.*.poeSwitch', 'cameras.*.ftp.user', 'cameras.*.webUiUrl', 'cameras.*.storage',
     // Local only in P3 (coordinator ruling, security review I4): capture and listener switches, health thresholds.
