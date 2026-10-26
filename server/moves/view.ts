@@ -2,6 +2,7 @@ import type { Db } from '../db/open';
 import type { MoveBounds, MoveCheck } from './types';
 import type { Move, ChunkState, ChunkStateName } from './store';
 import type { SpaceCheck } from './space';
+import { isCount } from '../validate';
 
 // What the API shows of a move. Never the token, its hash, the target's
 // public key, the leaf fingerprint or the target's address: fields are named
@@ -53,7 +54,7 @@ export interface ContentKind { kind: string; included: boolean | null; files: nu
 export interface Content { basis: 'plan' | 'bounds' | null; kinds: ContentKind[] }
 // The order the Moves page shows them in (as cams-admin's Start move bounds list them).
 const KIND_ORDER = ['clips', 'stills', 'events', 'checks', 'archive'] as const;
-const count = (x: unknown): number | null => (Number.isSafeInteger(x) && (x as number) >= 0 ? (x as number) : null);
+const count = (x: unknown): number | null => (isCount(x) ? x : null);
 export function moveContent(m: Pick<Move, 'plan' | 'bounds' | 'summary'>, chunks: ChunkState[], perKind: Record<string, unknown> = {}): Content {
   const plan = m.plan && typeof m.plan === 'object' && Array.isArray((m.plan as { kinds?: unknown }).kinds) ? (m.plan as { transfer?: unknown; kinds: unknown[] }) : null;
   const pick = plan ? { transfer: plan.transfer !== false, kinds: plan.kinds } : m.bounds ? { transfer: m.bounds.transfer, kinds: m.bounds.kinds as unknown[] } : null;

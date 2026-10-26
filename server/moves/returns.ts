@@ -8,6 +8,8 @@ import { MOVE_KINDS } from '../../contract/build';
 import type { ChunkState, Move, MoveStore } from './store';
 import { moveToken, targetAddress, type Resolve } from './token';
 import type { MoveCheck, MovePhaseEvent } from './types';
+import { backoffDue, FINAL_STATES, sourceRef, unanswered, verifiedDone, type Who } from './common';
+import { isCount } from '../validate';
 
 // The return move (step 4, spec §1; plan Task 15): the copy back after a cancel
 // after the switch-over. Its own move row (return_of = the cancelled move,
@@ -39,11 +41,6 @@ export const OLD_PROXY_CODES = ['not_allowed', 'invalid_args', 'unsupported_vers
 // The reason the return shows while one side needs the update (the return's role: source = new proxy, target = original).
 export const updateReason = (role: 'source' | 'target') => `paused:proxy_update:${role}`;
 export const isOldProxyRefusal = (r: CommandRow) => (r.state === 'refused' || r.state === 'failed') && OLD_PROXY_CODES.includes(r.outcomeCode ?? '');
-const RETRY_CAP_MS = 3600_000;
-const FINAL_STATES = new Set(['done', 'refused', 'failed', 'expired', 'unknown']);
-const DONE_MAX = 512;
-const isCount = (x: unknown): x is number => Number.isSafeInteger(x) && (x as number) >= 0;
-const unanswered = (r: CommandRow) => r.state === 'expired' || r.state === 'unknown';
 
 // The host of a url when it is an address already (no lookup: usable inside a transaction); null otherwise.
 export function literalAddress(url: string | null): string | null {
@@ -56,7 +53,6 @@ export function literalAddress(url: string | null): string | null {
   }
 }
 
-type Who = { actorType: 'proxy' | 'system' | 'sysadmin'; actor: string };
 // What the return needs of Moves (its command, audit and progress helpers).
 export interface ReturnHost {
   db: Db; clock: Clock; log: Logger; registry: Registry; commands: Commands; store: MoveStore; resolve?: Resolve;
@@ -150,10 +146,8 @@ export class Returns {
       if (this.due(`${m.id}:registry`)) this.h.log.warn({ moveId: m.id }, 'move_return_source_registry_incomplete');
       return;
     }
-    const done = this.h.chunkStates(m.id).filter((c) => c.state === 'verified').map((c) => c.id).slice(-DONE_MAX);
     this.queue(m, m.targetProxyId, 'move.return.start', {
-      v: 1, moveId: m.id, returnOf: m.returnOf, token: key.token,
-      source: { proxyId: src.id, name: src.name, url: src.url, caFingerprints: src.caFingerprints.slice(0, 2), tlsServername: src.tlsServername }, done,
+      v: 1, moveId: m.id, returnOf: m.returnOf, token: key.token, source: sourceRef(src), done: verifiedDone(this.h.chunkStates(m.id)),
     }, (id) => { key.startId = id; });
   }
 
@@ -270,8 +264,7 @@ export class Returns {
 
   // A side's reported failure is due for another try: retryMs doubling with the tries of that command so far, capped.
   private failureDue(m: Move, proxyId: string, command: WireCommand, at: number): boolean {
-    const n = this.count(m, proxyId, command);
-    return this.h.clock.now() - at >= Math.min(this.retryMs * 2 ** Math.max(0, n - 1), RETRY_CAP_MS);
+    return backoffDue(this.retryMs, this.count(m, proxyId, command), at, this.h.clock.now());
   }
 
   private queue(m: Move, proxyId: string, command: WireCommand, args: Record<string, unknown>, sent?: (id: string) => void): void {
