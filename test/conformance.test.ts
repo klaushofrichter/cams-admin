@@ -39,11 +39,13 @@ async function live(p: { key: { proxyId: string; keyId: string; privateKey: stri
 }
 
 describe('the contract fixtures over the wire', () => {
+  // A number in each proxy name: two fixture names may share their first 24 characters.
+  let fx = 0;
   // What a proxy sends; commands (and their proxy-side fixtures) are the proxy's to judge.
   for (const f of fixtures.filter((x) => ['heartbeat', 'envelope', 'bye', 'error', 'command'].includes(x.schema) && x.$expect?.receiver !== 'proxy' && !x.$context)) {
     const want: string = f.$expect?.runtime ?? 'accepted';
     it(`${f.file}: ${want}`, async () => {
-      const p = await enrolled(s, `fx-${f.file.replace(/[^a-z0-9]/g, '').slice(0, 24)}`);
+      const p = await enrolled(s, `fx${fx++}-${f.file.replace(/[^a-z0-9]/g, '').slice(0, 24)}`);
       const c = await live(p);
       // Re-sequence the fixture for this connection.
       const n = c.nextSeq();
