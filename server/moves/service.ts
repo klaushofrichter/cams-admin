@@ -219,7 +219,7 @@ export class Moves {
 
   // A move started from cams-admin (move.begin plan Task 3): the fixable precheck failures fixed, move.begin queued to the source.
   begin(actor: string, body: unknown): BeginResult {
-    return begin({ ...this.pd, audit: this.d.audit, commands: this.d.commands, camsInstances: this.d.camsInstances() }, actor, body);
+    return begin({ ...this.pd, audit: this.d.audit, commands: this.d.commands, camsInstances: this.d.camsInstances(), clock: this.d.clock }, actor, body);
   }
 
   onEvent(proxyId: string, accountId: string, ev: MoveEvent): void {

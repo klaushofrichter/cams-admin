@@ -215,6 +215,13 @@ Answers:
   `reason`, such as `target_offline`), or one of `camera_not_on_source`,
   `source_offline`, `moves_not_allowed`, `source_registry_incomplete`,
   `target_registry_incomplete`.
+- 409 `{error: "move_pending", detail}`: a move of this camera is already on
+  its way, checked before anything else on the source and writing nothing:
+  a `move.begin` for the camera that is not final yet, one the source answered
+  less than a minute ago whose move has not arrived yet (`detail`: "a move of
+  cam3 was just requested"), or an open move of the camera ("a move of cam3 is
+  open"). A double click on Start move gets this answer instead of a second
+  move.
 
 `autoApprove` on a move only means that the request carried bounds. The source
 proxy decides: it approves its own offer when the target's answer fits the
@@ -222,8 +229,9 @@ bounds, and otherwise it waits for a person to approve, as for any move.
 
 The Moves page has a Start move form (account, source proxy, camera, target
 proxy; one click) that sends this same `POST /moves` with the default bounds
-(everything, space `fit`, 24 h). A 409 or 422 answer is shown as the failed
-precheck rules.
+(everything, space `fit`, 24 h). The button shows Starting… and stays disabled
+until the answer is in, so a double click sends one request. A 409 or 422
+answer is shown as the failed precheck rules (or the `move_pending` detail).
 
 ## Refused moves
 
@@ -244,8 +252,9 @@ registry and the target is another proxy of the same account
 
 A refusal is final. `DELETE /api/v1/moves/:moveId` removes a rejected move's
 row and its chunk rows (204); any other phase gets 409 `not_rejected`, an
-unknown id 404. It needs no confirm (a rejected move never copied anything),
-the move's audit rows stay, and it writes one `move-delete` row. A session
+unknown id 404. The API needs no typed confirm (a rejected move never copied
+anything); the Moves page asks first (Delete / Keep, naming the camera and the
+move). The move's audit rows stay, and it writes one `move-delete` row. A session
 works (with `X-Cams-Admin`), and so does an operations token with scope
 `moves`:
 
@@ -258,8 +267,12 @@ curl -fsS -X DELETE -H "Authorization: Bearer $(cat ~/.config/cams-admin/ops-tok
 (clips, stills, events, checks, archive) whether the move copies it
 (`included`: by the approved plan, else by the request's bounds, else `null`),
 its `files` and `bytes` (the target's per-kind space need from its accepted
-offer, else the source's summary), and its chunk progress (`total`, `done`,
-`failed`, `abandoned`; a chunk is one kind's day).
+offer, else the source's summary), its `rows` (the source's summary), and its
+chunk progress (`total`, `done`,
+`failed`, `abandoned`; a chunk is one kind's day). Events and checks are
+database rows, not files (`files: 0, bytes: 0, rows: 654`): the Moves page
+counts them by rows ("654 events"), stills, clips and Archive by files and
+bytes.
 
 Every change of a move row (created, a phase change, pruned, deleted)
 publishes the live `move` event, so an open Moves page follows without a

@@ -25,7 +25,7 @@ export function camClass(online: boolean | null): string {
   return online === true ? 'ok' : online === false ? 'bad' : '';
 }
 
-export const bytes = (n: number | null | undefined): string => (n == null ? '—' : n < 1024 ? `${n} B` : n < 1024 ** 2 ? `${(n / 1024).toFixed(1)} KiB` : `${(n / 1024 ** 2).toFixed(1)} MiB`);
+export const bytes = (n: number | null | undefined): string => (n == null ? '—' : n < 1024 ? `${n} B` : n < 1024 ** 2 ? `${(n / 1024).toFixed(1)} KiB` : n < 1024 ** 3 ? `${(n / 1024 ** 2).toFixed(1)} MiB` : `${(n / 1024 ** 3).toFixed(1)} GiB`);
 
 // A proxy key: active, revoked, or pending (redeemed, no hello yet).
 export function keyState(k: { revokedAt: number | null; revokedReason: string | null; pending?: 'waiting' | 'expired' | null }): string {

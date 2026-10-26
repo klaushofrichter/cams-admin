@@ -47,8 +47,9 @@ export function chunkCounts(chunks: ChunkState[]): ChunkCounts {
 
 // The content checklist of the move detail: each kind included or left out (by the approved plan, else by the
 // pre-approval bounds; null when neither decided yet), its size (the target's per-kind space need when its offer
-// named one, else the source's summary) and its copy progress from the chunk states (a chunk is one kind's day).
-export interface ContentKind { kind: string; included: boolean | null; files: number | null; bytes: number | null; chunks: { total: number; done: number; failed: number; abandoned: number } }
+// named one, else the source's summary), its database rows (events and checks are rows, not files; the summary's
+// `rows`) and its copy progress from the chunk states (a chunk is one kind's day).
+export interface ContentKind { kind: string; included: boolean | null; files: number | null; bytes: number | null; rows: number | null; chunks: { total: number; done: number; failed: number; abandoned: number } }
 export interface Content { basis: 'plan' | 'bounds' | null; kinds: ContentKind[] }
 // The order the Moves page shows them in (as cams-admin's Start move bounds list them).
 const KIND_ORDER = ['clips', 'stills', 'events', 'checks', 'archive'] as const;
@@ -56,14 +57,14 @@ const count = (x: unknown): number | null => (Number.isSafeInteger(x) && (x as n
 export function moveContent(m: Pick<Move, 'plan' | 'bounds' | 'summary'>, chunks: ChunkState[], perKind: Record<string, unknown> = {}): Content {
   const plan = m.plan && typeof m.plan === 'object' && Array.isArray((m.plan as { kinds?: unknown }).kinds) ? (m.plan as { transfer?: unknown; kinds: unknown[] }) : null;
   const pick = plan ? { transfer: plan.transfer !== false, kinds: plan.kinds } : m.bounds ? { transfer: m.bounds.transfer, kinds: m.bounds.kinds as unknown[] } : null;
-  const summary = (m.summary && typeof m.summary === 'object' ? m.summary : {}) as Record<string, { files?: unknown; bytes?: unknown } | undefined>;
+  const summary = (m.summary && typeof m.summary === 'object' ? m.summary : {}) as Record<string, { files?: unknown; bytes?: unknown; rows?: unknown } | undefined>;
   return {
     basis: plan ? 'plan' : m.bounds ? 'bounds' : null,
     kinds: KIND_ORDER.map((k) => {
       const own = chunks.filter((c) => c.id.startsWith(`${k}:`));
       return {
         kind: k, included: pick ? pick.transfer && pick.kinds.includes(k) : null,
-        files: count(summary[k]?.files), bytes: count(perKind[k]) ?? count(summary[k]?.bytes),
+        files: count(summary[k]?.files), bytes: count(perKind[k]) ?? count(summary[k]?.bytes), rows: count(summary[k]?.rows),
         chunks: { total: own.length, done: own.filter((c) => c.state === 'verified' || c.state === 'skipped').length, failed: own.filter((c) => c.state === 'failed').length, abandoned: own.filter((c) => c.state === 'abandoned').length },
       };
     }),

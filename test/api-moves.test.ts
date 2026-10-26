@@ -69,9 +69,10 @@ describe('moves API', () => {
     expect(r.body.content.basis).toBe('plan');
     const k = Object.fromEntries(r.body.content.kinds.map((x: { kind: string }) => [x.kind, x]));
     expect(r.body.content.kinds.map((x: { kind: string }) => x.kind)).toEqual(['clips', 'stills', 'events', 'checks', 'archive']);
-    expect(k.clips).toEqual({ kind: 'clips', included: true, files: 12, bytes: 3000, chunks: { total: 3, done: 1, failed: 1, abandoned: 0 } });
-    expect(k.stills).toEqual({ kind: 'stills', included: false, files: 5, bytes: 500, chunks: { total: 0, done: 0, failed: 0, abandoned: 0 } });
-    expect(k.checks).toMatchObject({ included: false, files: null, bytes: null });
+    expect(k.clips).toEqual({ kind: 'clips', included: true, files: 12, bytes: 3000, rows: 12, chunks: { total: 3, done: 1, failed: 1, abandoned: 0 } });
+    expect(k.stills).toEqual({ kind: 'stills', included: false, files: 5, bytes: 500, rows: 5, chunks: { total: 0, done: 0, failed: 0, abandoned: 0 } });
+    expect(k.checks).toMatchObject({ included: false, files: null, bytes: null, rows: null });
+    expect(k.events).toMatchObject({ files: 0, bytes: 0, rows: 4 });
   });
 
   it('moveContent: the bounds decide before a plan exists, the offer\'s per-kind space over the summary; nothing decided is null', () => {
@@ -85,6 +86,17 @@ describe('moves API', () => {
     expect(none.kinds.every((k) => k.included === null)).toBe(true);
     const noTransfer = moveContent({ plan: { transfer: false, kinds: ['clips'] }, bounds: null, summary }, []);
     expect(noTransfer.kinds.every((k) => k.included === false)).toBe(true);
+  });
+
+  it('moveContent: events and checks are database rows, not files: the rows count comes through', () => {
+    const summary = { stills: { files: 54556, bytes: 48350227367, rows: 0 }, clips: { files: 236, bytes: 290655300, rows: 142 }, events: { files: 0, bytes: 0, rows: 654 }, checks: { files: 0, bytes: 0, rows: 3 } };
+    const c = moveContent({ plan: { transfer: true, kinds: ['clips', 'stills', 'events', 'checks'] }, bounds: null, summary }, []);
+    const k = Object.fromEntries(c.kinds.map((x) => [x.kind, x]));
+    expect(k.events).toMatchObject({ included: true, files: 0, bytes: 0, rows: 654 });
+    expect(k.checks).toMatchObject({ included: true, rows: 3 });
+    expect(k.stills).toMatchObject({ files: 54556, bytes: 48350227367, rows: 0 });
+    expect(k.clips).toMatchObject({ files: 236, bytes: 290655300, rows: 142 });
+    expect(k.archive).toMatchObject({ files: null, bytes: null, rows: null });
   });
 
   it('delete: only a rejected move (409 otherwise); its chunk rows go, the audit stays; a move-delete record; a live event', async () => {
