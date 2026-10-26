@@ -2,6 +2,7 @@ import type { Db } from '../db/open';
 import type { Proxy, Registry } from '../registry';
 import type { StatusStore } from '../status/store';
 import type { MoveStore } from './store';
+import { SITE_PATTERN } from '../../contract/build';
 import { passivePorts, v4InCidr, type Profile } from '../status/profile';
 import { ipLiteral } from '../../contract/firewall';
 
@@ -14,7 +15,7 @@ export interface Candidate { accountId: string; sourceProxyId: string; targetPro
 export interface EligibleTarget { proxyId: string; name: string; site: string }
 
 // The contract's site pattern (cams-v1 proxies[].site, move.targets).
-const SITE_RE = /^[a-z0-9][a-z0-9-]{0,30}$/;
+const SITE_RE = new RegExp(SITE_PATTERN);
 
 // X21: a site CA the move can rely on: the registry's tls_site is set and is
 // the tls.site the proxy itself reports (cams verifies the camera against it).
