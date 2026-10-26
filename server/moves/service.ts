@@ -10,7 +10,7 @@ import type { CommandRow, Commands, WireCommand } from '../commands/service';
 import { validateResultPayload } from '../contract';
 import { MOVE_ANSWER_REASONS, MOVE_KINDS } from '../../contract/build';
 import { newId } from '../ids';
-import { detailOf, GIVE_UP_CLOSED, GIVE_UP_CLOSED_OPEN_CODES, MoveBusy, MoveStore, type ChunkState, type ChunkStateName, type Move } from './store';
+import { cancelOwed, detailOf, GIVE_UP_CLOSED, GIVE_UP_CLOSED_OPEN_CODES, MoveBusy, targetCancelDone, MoveStore, type ChunkState, type ChunkStateName, type Move } from './store';
 import { eligibleTargets, precheck, type Candidate, type EligibleTarget, type PrecheckDeps } from './precheck';
 import { begin, type BeginResult } from './begin';
 import { MoveSummaries } from './summary';
@@ -248,11 +248,24 @@ export class Moves {
     const active = this.store.active();
     // Recently ended moves whose automatic cancel went out (copied_choice set, or switched over: a cancel after the
     // switch-over stores no choice): a cancel that could not be queued is derived again.
-    const ended = (this.d.db.prepare(`SELECT id FROM moves WHERE ended_at >= ? AND phase IN ('failed', 'cancelled') AND (copied_choice IS NOT NULL OR switched_at IS NOT NULL)`)
-      .all(now - ENDED_RETRY_MS) as { id: string }[]).map((r) => r.id);
-    const ids = new Set([...active.map((m) => m.id), ...ended]);
+    const ended = (stmt(this.d.db, `SELECT id FROM moves WHERE ended_at >= ? AND ${cancelOwed('')}`).all(now - ENDED_RETRY_MS) as { id: string }[]).map((r) => r.id);
+    const activeIds = new Set(active.map((m) => m.id));
+    const ids = new Set([...activeIds, ...ended]);
     for (const id of this.resumedAt.keys()) if (!ids.has(id)) this.resumedAt.delete(id);
-    for (const id of this.prog.keys()) if (!active.some((m) => m.id === id)) this.prog.delete(id);
+    for (const id of this.prog.keys()) if (!activeIds.has(id)) this.prog.delete(id);
+    // At most once per RESUME_GAP_MS per key (noted when due); a step's error is logged, the sweep goes on.
+    const due = (key: string) => {
+      if (now - (this.resumedAt.get(key) ?? 0) < RESUME_GAP_MS) return false;
+      this.resumedAt.set(key, now);
+      return true;
+    };
+    const guarded = (moveId: string, step: () => void) => {
+      try {
+        step();
+      } catch (e) {
+        this.d.log.error({ err: e, moveId }, 'move_tick_failed');
+      }
+    };
     for (const m of active) {
       try {
         if (UNAPPROVED.has(m.phase) && this.expired(m)) this.failMove(m, 'offer_expired');
@@ -269,38 +282,16 @@ export class Moves {
       }
     }
     // Done moves whose source cleanup has not landed (ruling b): worked on only while the source is online (nothing is queued to an absent one).
-    for (const r of this.d.db.prepare('SELECT id, source_proxy_id FROM moves WHERE cleanup_pending = 1').all() as { id: string; source_proxy_id: string }[]) {
-      if (!this.online(r.source_proxy_id) || now - (this.resumedAt.get(r.id) ?? 0) < RESUME_GAP_MS) continue;
-      this.resumedAt.set(r.id, now);
-      ids.add(r.id);
-      try {
-        const m = this.store.get(r.id);
-        if (m) this.cleanupStep(m);
-      } catch (e) {
-        this.d.log.error({ err: e, moveId: r.id }, 'move_tick_failed');
-      }
+    // (Each step reads its move again.)
+    for (const m of this.store.where('cleanup_pending = 1')) {
+      if (this.online(m.sourceProxyId) && due(m.id)) guarded(m.id, () => this.cleanupStep(m));
     }
     // Done moves whose target finish has not landed: likewise, only while the target is online.
-    for (const r of this.d.db.prepare('SELECT id, target_proxy_id FROM moves WHERE target_cleanup_pending = 1').all() as { id: string; target_proxy_id: string }[]) {
-      const key = `t:${r.id}`;
-      if (!this.online(r.target_proxy_id) || now - (this.resumedAt.get(key) ?? 0) < RESUME_GAP_MS) continue;
-      this.resumedAt.set(key, now);
-      ids.add(key);
-      try {
-        const m = this.store.get(r.id);
-        if (m) this.targetCleanupStep(m);
-      } catch (e) {
-        this.d.log.error({ err: e, moveId: r.id }, 'move_tick_failed');
-      }
+    for (const m of this.store.where('target_cleanup_pending = 1')) {
+      if (this.online(m.targetProxyId) && due(`t:${m.id}`)) guarded(m.id, () => this.targetCleanupStep(m));
     }
     // Given-up returns whose finishes were not queued or went unanswered: derived again.
-    for (const m of this.givenUp()) {
-      try {
-        this.giveUpFinishes(m);
-      } catch (e) {
-        this.d.log.error({ err: e, moveId: m.id }, 'move_tick_failed');
-      }
-    }
+    for (const m of this.givenUp()) guarded(m.id, () => this.giveUpFinishes(m));
     if (now - this.prunedAt >= PRUNE_EVERY_MS) {
       this.prunedAt = now;
       try {
@@ -310,25 +301,25 @@ export class Moves {
       }
     }
     for (const id of ended) {
-      if (now - (this.resumedAt.get(id) ?? 0) < RESUME_GAP_MS) continue;
-      this.resumedAt.set(id, now);
-      try {
-        // No outer transaction: tx() writes (the epoch) even when nothing changed; each command is its own.
+      if (!due(id)) continue;
+      // No outer transaction: tx() writes (the epoch) even when nothing changed; each command is its own.
+      // Read here, not with the ids: the sweeps above (prune) may have changed it.
+      guarded(id, () => {
         const m = this.store.get(id);
         if (m) this.ensureCancels(m);
-      } catch (e) {
-        this.d.log.error({ err: e, moveId: id }, 'move_tick_failed');
-      }
+      });
     }
   }
 
   // Deletes the ended moves past their keep time, with one audit row {count, ids}; writes nothing when none is due.
   pruneEnded(): number {
     const now = this.d.clock.now();
+    // Checked first: tx() writes (the epoch) even when nothing is deleted.
     if (!this.store.prunable(now, DEFAULT_KEEP_DAYS).length) return 0;
     return tx(this.d.db, () => {
-      const accounts = new Set(this.store.prunable(now, DEFAULT_KEEP_DAYS).map((id) => this.store.get(id)!.accountId));
-      const ids = this.store.prune(now, DEFAULT_KEEP_DAYS);
+      const rows = this.store.pruneRows(now, DEFAULT_KEEP_DAYS);
+      const accounts = new Set(rows.map((r) => r.accountId));
+      const ids = rows.map((r) => r.id);
       if (ids.length) {
         this.d.audit.write({ actorType: 'system', actor: 'system', action: 'moves-pruned', accountId: accounts.size === 1 ? [...accounts][0] : null, outcome: 'ok', detail: { count: ids.length, ids } });
       }
@@ -343,23 +334,12 @@ export class Moves {
     if (m) this.resume(m.id);
     for (const g of this.givenUp(proxyId)) this.giveUpFinishes(g);
     // A source back with a done move's cleanup still pending (ruling b).
-    for (const r of this.d.db.prepare('SELECT id FROM moves WHERE cleanup_pending = 1 AND source_proxy_id = ?').all(proxyId) as { id: string }[]) {
-      const mv = this.store.get(r.id);
-      if (mv) this.cleanupStep(mv);
-    }
+    for (const mv of this.store.where('cleanup_pending = 1 AND source_proxy_id = ?', proxyId)) this.cleanupStep(mv);
     // A target back with a done move's finish still pending.
-    for (const r of this.d.db.prepare('SELECT id FROM moves WHERE target_cleanup_pending = 1 AND target_proxy_id = ?').all(proxyId) as { id: string }[]) {
-      const mv = this.store.get(r.id);
-      if (mv) this.targetCleanupStep(mv);
-    }
+    for (const mv of this.store.where('target_cleanup_pending = 1 AND target_proxy_id = ?', proxyId)) this.targetCleanupStep(mv);
     // A target back with an ended move's cancel not taken on (also after the ended sweep's ENDED_RETRY_MS): the
     // target must let go of the camera, or it runs on both proxies.
-    const cancelsDue = this.d.db.prepare(`SELECT m.id FROM moves m WHERE m.target_proxy_id = ? AND m.phase IN ('failed', 'cancelled') AND (m.copied_choice IS NOT NULL OR m.switched_at IS NOT NULL)
-      AND NOT EXISTS (SELECT 1 FROM commands c WHERE c.proxy_id = m.target_proxy_id AND c.command = 'move.cancel' AND c.state = 'done' AND json_extract(c.args, '$.moveId') = m.id)`).all(proxyId) as { id: string }[];
-    for (const r of cancelsDue) {
-      const mv = this.store.get(r.id);
-      if (mv) this.ensureTargetCancel(mv);
-    }
+    for (const mv of this.store.where(`moves.target_proxy_id = ? AND ${cancelOwed('moves.')} AND NOT ${targetCancelDone('moves.')}`, proxyId)) this.ensureTargetCancel(mv);
   }
 
   // Re-derive the next command from the phase and the move's commands (a
@@ -1128,10 +1108,8 @@ export class Moves {
 
   // Given-up returns where a side is not closed yet (no answered abandoned finish, nor a refused open that closes it), however long ago.
   private givenUp(proxyId?: string): Move[] {
-    const rows = this.d.db.prepare(`SELECT id FROM moves WHERE phase = 'returned' AND reason = ?${proxyId ? ' AND (source_proxy_id = ? OR target_proxy_id = ?)' : ''}
-      AND NOT (${GIVE_UP_CLOSED})`)
-      .all(...(proxyId ? [GIVEN_UP, proxyId, proxyId] : [GIVEN_UP])) as { id: string }[];
-    return rows.map((r) => this.store.get(r.id)).filter((x): x is Move => x !== null);
+    return this.store.where(`phase = 'returned' AND reason = ?${proxyId ? ' AND (source_proxy_id = ? OR target_proxy_id = ?)' : ''}
+      AND NOT (${GIVE_UP_CLOSED})`, ...(proxyId ? [GIVEN_UP, proxyId, proxyId] : [GIVEN_UP]));
   }
 
   private archiveChunks(moveId: string): ChunkState[] {

@@ -100,6 +100,12 @@ const openClosed = `COALESCE((SELECT c.state IN ('refused', 'failed') AND c.outc
     ORDER BY c.rowid DESC LIMIT 1), 0) = 1`;
 export const GIVE_UP_CLOSED = `(${abandonedAnswered('moves.source_proxy_id')} OR ${openClosed}) AND ${abandonedAnswered('moves.target_proxy_id')}`;
 
+// A failed or cancelled move whose target owes a cancel: its automatic cancel went out (copied_choice set) or it was
+// switched over (a cancel after the switch-over stores no choice). `t`: the moves table's prefix in the query ('', 'm.').
+export const cancelOwed = (t: string) => `${t}phase IN ('failed', 'cancelled') AND (${t}copied_choice IS NOT NULL OR ${t}switched_at IS NOT NULL)`;
+// The target took that cancel on (its move.cancel answered done).
+export const targetCancelDone = (t: string) => `EXISTS (SELECT 1 FROM commands c WHERE c.proxy_id = ${t}target_proxy_id AND c.command = 'move.cancel' AND c.state = 'done' AND json_extract(c.args, '$.moveId') = ${t}id)`;
+
 // A refusal's detail as the column takes it: 1–300 characters, or null.
 // Cut by code points (as JSON Schema maxLength and SQLite length() count), never inside a surrogate pair.
 export const detailOf = (x: unknown): string | null => (typeof x === 'string' && x.trim() ? Array.from(x.trim()).slice(0, 300).join('') : null);
@@ -146,20 +152,14 @@ export class MoveStore {
     return n > 0;
   }
 
-  // Names the move on the camera (cameras.move_id; never cleared, the next move
-  // overwrites it). Production does this in Registry.moveCamera, which also sets
-  // switched_at; this one is used by tests only and does not stamp switched_at.
-  markCamera(moveId: string): void {
-    tx(this.db, () => {
-      const m = this.get(moveId);
-      if (!m) throw new ApiError(404, 'not_found');
-      stmt(this.db, 'UPDATE cameras SET move_id = ? WHERE id = ?').run(moveId, m.cameraId);
-    });
-  }
-
   get(id: string): Move | null {
     const r = stmt(this.db, 'SELECT * FROM moves WHERE id = ?').get(id) as Row | undefined;
     return r ? toMove(r) : null;
+  }
+
+  // The moves matching a fixed WHERE clause (no user input in `where`).
+  where(where: string, ...args: SQLInputValue[]): Move[] {
+    return (stmt(this.db, `SELECT * FROM moves WHERE ${where}`).all(...args) as Row[]).map(toMove);
   }
 
   active(): Move[] {
@@ -197,8 +197,7 @@ export class MoveStore {
          AND ended_at + COALESCE(keep_days, ?) * 86400000 + (CASE WHEN phase = 'cancelled' AND switched_at IS NOT NULL AND return_of IS NULL THEN ${RETURN_GRACE_MS} ELSE 0 END) < ?
          AND NOT EXISTS (SELECT 1 FROM moves r WHERE r.return_of = moves.id)
          AND NOT (COALESCE(reason, '') = 'given_up' AND NOT (${GIVE_UP_CLOSED}))
-         AND NOT (phase IN ('failed', 'cancelled') AND (copied_choice IS NOT NULL OR switched_at IS NOT NULL)
-           AND NOT EXISTS (SELECT 1 FROM commands c WHERE c.proxy_id = moves.target_proxy_id AND c.command = 'move.cancel' AND c.state = 'done' AND json_extract(c.args, '$.moveId') = moves.id))`;
+         AND NOT (${cancelOwed('moves.')} AND NOT ${targetCancelDone('moves.')})`;
 
   // A read: the ids prune(now, defaultDays) would delete.
   prunable(now: number, defaultDays: number): string[] {
@@ -210,9 +209,21 @@ export class MoveStore {
   // there are none. cameras.move_id may keep naming a pruned move (it has no FK).
   prune(now: number, defaultDays: number): string[] {
     if (!this.prunable(now, defaultDays).length) return [];
-    const ids = tx(this.db, () => (stmt(this.db, `DELETE ${MoveStore.PRUNABLE} RETURNING id`).all(defaultDays, now) as Row[]).map((r) => r.id as string));
+    const ids = tx(this.db, () => this.deleteDue(now, defaultDays)).map((r) => r.id);
     for (const id of ids) this.onChange(id);
     return ids;
+  }
+
+  // prune's delete without its check: inside the caller's transaction, once prunable() named some (the transaction
+  // writes even when nothing is deleted). The deleted moves' ids and accounts.
+  pruneRows(now: number, defaultDays: number): { id: string; accountId: string }[] {
+    const rows = this.deleteDue(now, defaultDays);
+    for (const r of rows) this.onChange(r.id);
+    return rows;
+  }
+
+  private deleteDue(now: number, defaultDays: number): { id: string; accountId: string }[] {
+    return (stmt(this.db, `DELETE ${MoveStore.PRUNABLE} RETURNING id, account_id`).all(defaultDays, now) as Row[]).map((r) => ({ id: r.id as string, accountId: r.account_id as string }));
   }
 
   setPhase(id: string, phase: MovePhase, patch: Partial<Move> = {}): Move {
