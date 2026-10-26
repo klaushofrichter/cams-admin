@@ -299,6 +299,16 @@ describe('move.begin from cams-admin', () => {
     expect(commandsOf('move.begin')).toHaveLength(0);
   });
 
+  it('a plain-http source without a TLS name (the Pi) is not registry-incomplete', async () => {
+    const src = await proxy({ site: null, registrySite: null });
+    const tgt = await proxy();
+    const cur = s.built.registry.getProxy(src.accountId, src.proxyId);
+    s.built.registry.updateProxy(ACTOR, src.accountId, src.proxyId, { tlsServername: null, caFingerprints: [], version: cur.version });
+    camera(src);
+    expect(begin(src, tgt)).toMatchObject({ ok: true });
+    expect(commandsOf('move.begin')).toHaveLength(1);
+  });
+
   it('a target without a registry url is refused before any fix', async () => {
     const src = await proxy();
     const tgt = await proxy({ url: false, site: 'beta-2', registrySite: null });
