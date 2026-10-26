@@ -370,11 +370,13 @@ describe('cancel', () => {
     expect(c).toMatchObject({ proxyId: a.src.proxyId, proxyCameraId: 'cam1', tlsServername: `cam1.${a.src.site}.internal` });
     expect(moveIdOf(a.cam.id)).toBe(a.m.id); // A16: never cleared
     expect(auditFor('move-switch')).toHaveLength(2);
-    // Again: nothing more.
-    const epoch = readEpoch(s.built.db);
+    // Again: nothing more. (Not the write epoch: the fake proxies' status writes
+    // land in the settle window on a slow runner, 46 -> 50 in CI on 2026-10-26.)
+    const before = { move: structuredClone(move(a.m.id)), camera: s.built.registry.getCamera(a.src.accountId, a.cam.id) };
     phase(a.src, a.m.id, 'source', 'cancelled');
     await settle();
-    expect(readEpoch(s.built.db)).toBe(epoch);
+    expect(move(a.m.id)).toEqual(before.move);
+    expect(s.built.registry.getCamera(a.src.accountId, a.cam.id)).toEqual(before.camera);
     expect(auditFor('move-switch')).toHaveLength(2);
   });
 
