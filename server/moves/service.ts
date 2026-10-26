@@ -790,8 +790,12 @@ export class Moves {
   // The move with the target's latest progress (memory) over the stored row.
   current(moveId: string): Move | null {
     const m = this.store.get(moveId);
-    const p = m ? this.prog.get(m.id) : undefined;
-    return m && p ? { ...m, bytesDone: p.bytesDone, bytesTotal: p.bytesTotal, rateBps: p.rateBps, etaS: p.etaS } : m;
+    return m && this.withProgress(m);
+  }
+  // A row the caller just read, with that progress over it.
+  withProgress(m: Move): Move {
+    const p = this.prog.get(m.id);
+    return p ? { ...m, bytesDone: p.bytesDone, bytesTotal: p.bytesTotal, rateBps: p.rateBps, etaS: p.etaS } : m;
   }
 
   // Every chunk's state: the stored ones with the memory's newer ones over them.
@@ -1006,10 +1010,11 @@ export class Moves {
   }
 
   // The content checklist of the detail; the per-kind sizes of the target's accepted offer when there is one.
-  content(m: Move) {
+  // chunks: chunkStates(m.id) when the caller has them already.
+  content(m: Move, chunks = this.chunkStates(m.id)) {
     const offer = this.lastCommand(m, m.targetProxyId, 'move.offer');
     const space = offer?.state === 'done' && offer.result?.accept === true ? answerSpace(offer.result.space) : null;
-    return moveContent(m, this.chunkStates(m.id), (space?.perKind ?? {}) as Record<string, unknown>);
+    return moveContent(m, chunks, (space?.perKind ?? {}) as Record<string, unknown>);
   }
 
   // --- finish, end transfer, done (S §10.4, §11, A5, A9) ----------------------------------------
@@ -1112,19 +1117,19 @@ export class Moves {
       AND NOT (${GIVE_UP_CLOSED})`, ...(proxyId ? [GIVEN_UP, proxyId, proxyId] : [GIVEN_UP]));
   }
 
-  private archiveChunks(moveId: string): ChunkState[] {
-    return this.chunkStates(moveId).filter((c) => c.id.startsWith('archive:'));
+  private archiveChunks(moveId: string, chunks = this.chunkStates(moveId)): ChunkState[] {
+    return chunks.filter((c) => c.id.startsWith('archive:'));
   }
 
   // Archive still to be copied: the plan copies it, the source's summary has Archive files, and an Archive chunk is
-  // not final yet (or none is known yet: the target lists them as it goes).
-  archivePending(m: Move): boolean {
+  // not final yet (or none is known yet: the target lists them as it goes). chunks: chunkStates(m.id) when known.
+  archivePending(m: Move, chunks?: ChunkState[]): boolean {
     const kinds = (m.plan as { kinds?: unknown } | null)?.kinds;
     if (!Array.isArray(kinds) || !kinds.includes('archive')) return false;
     const files = (m.summary as { archive?: { files?: unknown } } | null)?.archive?.files;
     if (!isCount(files) || files === 0) return false;
-    const chunks = this.archiveChunks(m.id);
-    return chunks.length === 0 || chunks.some((c) => !FINAL_CHUNK.has(c.state));
+    const archive = this.archiveChunks(m.id, chunks);
+    return archive.length === 0 || archive.some((c) => !FINAL_CHUNK.has(c.state));
   }
 
   // A stored End transfer whose Archive is now final: the transfer ends, by the one who asked (from onProgress and tick).

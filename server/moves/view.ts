@@ -1,4 +1,4 @@
-import type { Db } from '../db/open';
+import { stmt, type Db } from '../db/open';
 import type { MoveBounds, MoveCheck } from './types';
 import type { Move, ChunkState, ChunkStateName } from './store';
 import type { SpaceCheck } from './space';
@@ -23,9 +23,9 @@ export type ChunkCounts = Record<ChunkStateName, number>;
 
 // archivePending comes from the move service (it knows the chunks); a caller without it shows false.
 export function moveView(db: Db, m: Move, archivePending = false): MoveView {
-  const ret = db.prepare('SELECT id FROM moves WHERE return_of = ? ORDER BY created_at DESC LIMIT 1').get(m.id) as { id: string } | undefined;
-  const cam = db.prepare('SELECT cams_id, name FROM cameras WHERE id = ?').get(m.cameraId) as { cams_id: string; name: string } | undefined;
-  const px = db.prepare('SELECT name, display_name FROM proxies WHERE id = ?');
+  const ret = stmt(db, 'SELECT id FROM moves WHERE return_of = ? ORDER BY created_at DESC LIMIT 1').get(m.id) as { id: string } | undefined;
+  const cam = stmt(db, 'SELECT cams_id, name FROM cameras WHERE id = ?').get(m.cameraId) as { cams_id: string; name: string } | undefined;
+  const px = stmt(db, 'SELECT name, display_name FROM proxies WHERE id = ?');
   const name = (id: string) => {
     const r = px.get(id) as { name: string; display_name: string } | undefined;
     return r?.display_name || r?.name || id;
