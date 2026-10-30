@@ -223,6 +223,18 @@ describe('rejections and the content checklist', () => {
 });
 
 
+describe('PTZ positions', () => {
+  it('kindLine for ptz reads "PTZ positions: included"', () => {
+    const k = { kind: 'ptz', included: true, files: null, bytes: null, rows: null, chunks: { total: 0, done: 0, failed: 0, abandoned: 0 } };
+    expect(contentLine(k)).toBe('PTZ positions: included');
+    expect(contentLine({ ...k, included: false })).toBe('PTZ positions: left out');
+  });
+  it('the presummary keeps the five file kinds', () => {
+    const one = { files: 1, bytes: 1, rows: 1, oldest: null, newest: null };
+    expect(presummaryLines({ clips: one, ptz: one }).map((l) => l.kind)).toEqual(['clips']);
+  });
+});
+
 describe('the content before a move (Start move form, move.summary)', () => {
   const k = (files: number, bytes: number, rows: number) => ({ files, bytes, rows, oldest: null, newest: null });
   it('one line per kind in the checklist order, files and bytes for stills, clips and Archive, rows for events and checks', () => {

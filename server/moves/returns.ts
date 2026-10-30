@@ -4,7 +4,7 @@ import { tx, type Db } from '../db/open';
 import type { Logger } from '../log';
 import type { Registry } from '../registry';
 import type { CommandRow, Commands, WireCommand } from '../commands/service';
-import { MOVE_KINDS } from '../../contract/build';
+import { FILE_KINDS } from '../../contract/build';
 import type { ChunkState, Move, MoveStore } from './store';
 import { moveToken, targetAddress, type Resolve } from './token';
 import type { MoveCheck, MovePhaseEvent } from './types';
@@ -29,7 +29,7 @@ import { isCount } from '../validate';
 // move.return.open, then a new move.return.start; ruling 20).
 
 // Ruling 8: everything, all space; the budget only paces the copier (no move-budget-exceeded for a return).
-export const RETURN_PLAN = { transfer: true, kinds: [...MOVE_KINDS], space: 'all', targetSettings: null, budgetS: 3600, estimateS: 0 };
+export const RETURN_PLAN = { transfer: true, kinds: [...FILE_KINDS], space: 'all', targetSettings: null, budgetS: 3600, estimateS: 0 };
 // Ruling 9: the original reports `copying` with code no_space while the next chunk doesn't fit.
 export const NO_SPACE_REASON = 'paused:no_space';
 // A step whose command could not be queued (the proxy paused, the entry off) is tried again this often.

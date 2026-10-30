@@ -120,6 +120,7 @@ describe('the return is created', () => {
       phase: 'returning', sourceProxyId: a.tgt.proxyId, targetProxyId: a.src.proxyId, returnOf: a.m.id, requestId: a.m.id, cameraId: a.cam.id, targetIp: a.src.ip, plan: RETURN_PLAN, endedAt: null,
     });
     expect(RETURN_PLAN).toEqual({ transfer: true, kinds: ['stills', 'clips', 'events', 'checks', 'archive'], space: 'all', targetSettings: null, budgetS: 3600, estimateS: 0 });
+    expect(RETURN_PLAN.kinds).not.toContain('ptz'); // RETURN_PLAN keeps the five file kinds (the plans compare equal with cam-proxy's)
     // The cancel's copied choice is ignored after the switch-over (ruling 18): stored as null.
     expect(move(a.m.id).copiedChoice).toBeNull();
     await until(() => got(a.tgt.client, 'move.return.open', a.r.id).length === 1, 5000, 'return.open');

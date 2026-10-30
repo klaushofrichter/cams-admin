@@ -169,8 +169,15 @@ export function buildSchemas(mode: Mode): Record<string, S> {
     // ca_covers_camera refuses a camera whose IPv4 address is outside the target's subnet.
     tls: obj({ site: nullable({ type: 'string', pattern: SITE_PATTERN }), cameraSubnet: nullable({ type: 'string', maxLength: 49, pattern: CIDR_PATTERN }) }, []),
   }, [], ['tls'])) : { type: ['object', 'null'] };
+  // What a proxy could not clean up after a camera moved away (cam-proxy's move cleanup): optional in both
+  // modes, also when truncated; null = none. Lenient: anything (the server reads it with clamps and drops what
+  // it can't read, never the heartbeat). Strict: the closed list.
+  const moveLeftovers: S = strict ? nullable(arr(obj({
+    camera: { type: 'string', pattern: CAMERA_ID_PATTERN }, moveId: { type: 'string', pattern: MOVE_ID_PATTERN },
+    items: arr(str(MOVE_LEFTOVER_ITEM_LEN, { minLength: 1 }), MOVE_LEFTOVER_ITEMS_MAX, { minItems: 1 }),
+  }, ['camera', 'moveId', 'items']), MOVE_LEFTOVERS_MAX)) : {};
   const heartbeatBody: S = {
-    ...obj({ summary: { type: 'object' }, proxy: proxyInfo, truncated: bool, profile }, ['summary'], ['profile']),
+    ...obj({ summary: { type: 'object' }, proxy: proxyInfo, truncated: bool, profile, moveLeftovers }, ['summary'], ['profile', 'moveLeftovers']),
     // The summary's own checks run separately at run time (an unreadable
     // summary is stored as such, never a closed connection); strict picks
     // the full or the truncated shape.
@@ -184,7 +191,7 @@ export function buildSchemas(mode: Mode): Record<string, S> {
   // --- P3: remote configuration (migration spec §8; "The P3 contract") ---------
   const rev: S = { type: 'string', pattern: '^sha256:[0-9a-f]{64}$' };
   const path: S = { type: 'string', pattern: PATH_PATTERN };
-  const camId: S = { type: 'string', pattern: '^[a-z0-9][a-z0-9-]{0,31}$' };
+  const camId: S = { type: 'string', pattern: CAMERA_ID_PATTERN };
   const leafValue: S = { anyOf: [bool, { type: 'integer', minimum: -9007199254740991, maximum: 9007199254740991 }, { type: 'string', maxLength: 512 }] };
   const anyValue: S = { anyOf: [bool, num, { type: 'string', maxLength: 4096 }, { type: 'null' }] };
   const source = en(['default', 'file', 'override', 'env']);
@@ -247,8 +254,11 @@ export function buildSchemas(mode: Mode): Record<string, S> {
   const requestId = id('rq');
   const prxId = id('prx');
   const site: S = { type: 'string', pattern: SITE_PATTERN };
+  // All six move kinds (plans, bounds, chunk ids, check counts, kinds) or only the five file kinds (summary, space, deleted).
   const kindEn = en([...MOVE_KINDS]);
-  const kindMap = <T extends S>(of: T): Record<string, S> => Object.fromEntries(MOVE_KINDS.map((k) => [k, of]));
+  const kindMap = <T extends S>(of: T, kinds: readonly string[] = MOVE_KINDS): Record<string, S> => Object.fromEntries(kinds.map((k) => [k, of]));
+  // The kinds a target accepts (move.offer result, move.answer): absent = the five file kinds.
+  const acceptedKinds = arr(kindEn, MOVE_KINDS.length, { uniqueItems: true });
   const cameraName: S = { type: 'string', minLength: 1, maxLength: 64, pattern: CAMERA_NAME_PATTERN };
   const nameS = str(64, { minLength: 1 });
   const port = int(1, { maximum: 65535 });
@@ -256,7 +266,7 @@ export function buildSchemas(mode: Mode): Record<string, S> {
   // X25519 public key as SPKI DER (44 bytes), base64; the fixed prefix MCowBQYDK2VuAyEA refuses any other key type (an Ed25519 SPKI starts MCowBQYDK2Vw).
   const x25519: S = { type: 'string', pattern: '^MCowBQYDK2VuAyEA[A-Za-z0-9+/]{43}=$' };
   const pathMap: S = { type: 'object', propertyNames: { pattern: PATH_PATTERN }, additionalProperties: leafValue, maxProperties: 64 };
-  const moveSummary = all(kindMap(all({ files: int(), bytes: int(), rows: int(), oldest: nullable(int()), newest: nullable(int()) })));
+  const moveSummary = all(kindMap(all({ files: int(), bytes: int(), rows: int(), oldest: nullable(int()), newest: nullable(int()) }), FILE_KINDS));
   // The camera node of the cam-proxy config, as a move carries it: every leaf optional (cam-proxy leaves most unset), no nulls.
   const moveSettings = optionalOnly({
     name: cameraName, statusPollS: int(1),
@@ -274,7 +284,7 @@ export function buildSchemas(mode: Mode): Record<string, S> {
   const moveBounds = all({
     transfer: bool, kinds: arr(kindEn, MOVE_KINDS.length, { uniqueItems: true }), space: en(MOVE_SPACE_CHOICES as unknown as string[]), maxBudgetS: int(60, { maximum: 604800 }),
   });
-  const moveSpace = all({ needed: int(), available: int(), fits: bool, perKind: optionalOnly(kindMap(int())), retentionProposal: nullable(pathMap) });
+  const moveSpace = all({ needed: int(), available: int(), fits: bool, perKind: optionalOnly(kindMap(int(), FILE_KINDS)), retentionProposal: nullable(pathMap) });
   // What the camera is, as the target needs it to add it (never a password: those travel sealed, never in cams-admin's messages).
   const connectionFields: Record<string, S> = { name: cameraName, host: str(255, { minLength: 1 }), protocol: en(['https', 'http']), user: str(64), onvifPort: port, rtspPort: port, baichuanPort: port };
   const moveCameraEvent = all({ proxyCameraId: camId, ...connectionFields });
@@ -300,8 +310,8 @@ export function buildSchemas(mode: Mode): Record<string, S> {
       camera: moveCameraOffer, summary: moveSummary, settings: moveSettings,
     }),
     'move.answer': obj({
-      ...mv, requestId, target: all({ proxyId: prxId, name: nameS }), accept: bool, reason: answerReason, detail: refusalDetail, space: moveSpace, estimateS: int(),
-    }, ['v', 'moveId', 'requestId', 'target', 'accept'], ['reason', 'detail', 'space', 'estimateS']),
+      ...mv, requestId, target: all({ proxyId: prxId, name: nameS }), accept: bool, reason: answerReason, detail: refusalDetail, space: moveSpace, estimateS: int(), kinds: acceptedKinds,
+    }, ['v', 'moveId', 'requestId', 'target', 'accept'], ['reason', 'detail', 'space', 'estimateS', 'kinds']),
     'move.start': all({ ...mv, plan: movePlan, settings: moveSettings, done: arr(chunkId, 512) }),
     'move.go': all({ ...mv, plan: movePlan, targetPublicKey: x25519, expectedLeaf: fp }),
     'move.release': all(mv),
@@ -327,10 +337,11 @@ export function buildSchemas(mode: Mode): Record<string, S> {
     'move.summary': all({ summary: moveSummary }),
     'move.targets': empty, 'move.open': empty, 'move.answer': empty, 'move.go': empty, 'move.release': empty, 'move.cancel': empty, 'move.return.start': empty,
     'move.return.open': all({ chunks: int(), bytes: int() }),
-    'move.offer': { anyOf: [all({ accept: { const: true }, space: moveSpace, probeBps: int() }), obj({ accept: { const: false }, reason: offerReason, detail: refusalDetail }, ['accept', 'reason'], ['detail'])] },
+    // kinds (optional): the move kinds the target accepts; a target before ptz sends none (= the five file kinds).
+    'move.offer': { anyOf: [obj({ accept: { const: true }, space: moveSpace, probeBps: int(), kinds: acceptedKinds }, ['accept', 'space', 'probeBps'], ['kinds']), obj({ accept: { const: false }, reason: offerReason, detail: refusalDetail }, ['accept', 'reason'], ['detail'])] },
     'move.start': all({ publicKey: x25519, leafFingerprint: fp }),
-    // Only the five kinds: the recordings cache is not content.
-    'move.finish': all({ deleted: optionalOnly(kindMap(all({ files: int(), bytes: int() }))) }),
+    // Only the five file kinds: the recordings cache is not content, and ptz positions are rows, not files.
+    'move.finish': all({ deleted: optionalOnly(kindMap(all({ files: int(), bytes: int() }), FILE_KINDS)) }),
   };
   const moveSchemas: Record<string, S> = {};
   for (const c of MOVE_COMMANDS) {
@@ -431,7 +442,17 @@ export const RESERVED_TYPES = ['key.rotate'] as const;
 // move.return.start `move.send`, and move.finish with `return: true` source `move.receive`, target `move.send`).
 export const MOVE_COMMANDS = ['move.begin', 'move.summary', 'move.targets', 'move.open', 'move.offer', 'move.answer', 'move.start', 'move.go', 'move.release', 'move.finish', 'move.cancel', 'move.return.open', 'move.return.start'] as const;
 export const MOVE_EVENT_KINDS = ['move.targets', 'move.request', 'move.approve', 'move.cancel', 'move.phase', 'move.progress'] as const;
-export const MOVE_KINDS = ['stills', 'clips', 'events', 'checks', 'archive'] as const;
+// The five file kinds (summary, space, deleted, the copy back) and all six move kinds (plans, bounds, chunk ids, check counts, kinds):
+// ptz is a camera's PTZ positions, rows that travel with it (cam-proxy plan D).
+export const FILE_KINDS = ['stills', 'clips', 'events', 'checks', 'archive'] as const;
+export const MOVE_KINDS = [...FILE_KINDS, 'ptz'] as const;
+// The heartbeat's moveLeftovers: at most 16 entries of 1..4 items of 1..80 characters.
+export const MOVE_LEFTOVERS_MAX = 16;
+export const MOVE_LEFTOVER_ITEMS_MAX = 4;
+export const MOVE_LEFTOVER_ITEM_LEN = 80;
+// A proxy camera id and a move id.
+export const CAMERA_ID_PATTERN = '^[a-z0-9][a-z0-9-]{0,31}$';
+export const MOVE_ID_PATTERN = '^mv_[0-9A-HJKMNP-TV-Z]{20}$';
 export const MOVE_OFFER_REASONS = ['moves_not_allowed', 'camera_unreachable', 'camera_limit', 'id_taken', 'busy', 'incompatible', 'no_site_ca', 'ca_does_not_cover_camera', 'external_cert'] as const;
 export const MOVE_ANSWER_REASONS = [...MOVE_OFFER_REASONS, 'other_account', 'target_offline', 'not_routed', 'host_overridden', 'target_failed', 'offer_expired', 'not_registered', 'internal'] as const;
 export const MOVE_PHASES = ['opened', 'switching', 'switched', 'released', 'copying', 'copied', 'finished', 'cancelled', 'failed'] as const;

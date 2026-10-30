@@ -29,6 +29,10 @@
   let opsScopes = $state<string[]>([]);
   let opsShown = $state<string | null>(null);
   let opsBusy = $state(false);
+  // What each proxy could not clean up after a camera moved away (the heartbeat's moveLeftovers, from /diag/proxies).
+  type Leftover = { camera: string; moveId: string; items: string[] };
+  let leftovers = $state<{ id: string; name: string; entries: Leftover[] }[]>([]);
+  let leftoversError = $state('');
 
   async function load() {
     try {
@@ -36,6 +40,11 @@
       opsItems = (await api('GET', '/ops-tokens')).items;
       error = '';
     } catch (e) { error = errorText(e); }
+    try {
+      const px = (await api('GET', '/diag/proxies')).items as { id: string; name: string; displayName: string | null; reported: { moveLeftovers?: Leftover[] } | null }[];
+      leftovers = px.filter((p) => p.reported?.moveLeftovers?.length).map((p) => ({ id: p.id, name: p.displayName ?? p.name, entries: p.reported!.moveLeftovers! }));
+      leftoversError = '';
+    } catch (e) { leftoversError = errorText(e); }
   }
   onMount(load);
 
@@ -145,6 +154,24 @@
   </div>
 </section>
 
+<section class="card grid" data-testid="move-leftovers">
+  <h2>Move leftovers</h2>
+  <p class="muted small">What a proxy could not clean up itself after a camera moved away: remove these on the proxy's host.</p>
+  {#if leftoversError}<p class="error" data-testid="move-leftovers-error">{leftoversError}</p>{/if}
+  {#each leftovers as p (p.id)}
+    <div>
+      <strong>{p.name}</strong>
+      <ul>
+        {#each p.entries as e (e.camera + e.moveId)}
+          <li data-testid="move-leftover-{e.camera}">{e.camera} (move {e.moveId}): {e.items.join('; ')}</li>
+        {/each}
+      </ul>
+    </div>
+  {:else}
+    {#if !leftoversError}<p class="muted" data-testid="move-leftovers-empty">No leftovers from camera moves.</p>{/if}
+  {/each}
+</section>
+
 {#if shown}
   <ShownOnce token={shown} title="New diagnostics token" onclose={() => (shown = null)}>
     <p>
@@ -167,6 +194,7 @@
 
 <style>
   h2, p { margin: 0; }
+  ul { margin: 4px 0 0; padding-left: 20px; }
   .small { font-size: 12px; }
   pre { margin: 0; white-space: pre-wrap; word-break: break-all; background: var(--chrome); padding: 8px; border-radius: 6px; }
   input[type='number'] { width: 6em; }
