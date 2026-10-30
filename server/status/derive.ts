@@ -5,6 +5,7 @@ export type ProxyState = 'pending' | 'never-connected' | 'online' | 'offline' | 
 export type PinState = 'match' | 'mismatch' | 'hint' | 'none';
 
 import type { Profile } from './profile';
+import type { MoveLeftover } from './leftovers';
 
 export interface ReportedCamera { ref: string; online: boolean; name?: string; model?: string | null }
 export interface CommandsInfo { enabled: boolean; paused: boolean; pauseReason: string | null; allow: string[]; seenWindow: number }
@@ -15,6 +16,8 @@ export interface Reported {
   capabilities?: string[]; commands?: CommandsInfo | null; tokens?: TokensInfo | null; configRevision?: string | null;
   // The heartbeat's proxy profile (proxy profile design §2); null when it sent none (an older proxy) or an unreadable one (marked).
   profile?: Profile | null; profileUnreadable?: boolean;
+  // What the proxy could not clean up after a camera moved away (heartbeat moveLeftovers, read with clamps; [] when none).
+  moveLeftovers?: MoveLeftover[];
 }
 
 export interface StatusRow {

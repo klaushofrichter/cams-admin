@@ -45,6 +45,8 @@ export function diagProxies(d: ApiDeps) {
           commands: rep.commands ? { enabled: rep.commands.enabled, paused: rep.commands.paused, pauseReason: rep.commands.pauseReason } : null,
           // The proxy profile (proxy profile design §3), parsed field by field on arrival (server/status/profile.ts).
           profile: rep.profile ?? null, profileUnreadable: rep.profileUnreadable === true,
+          // What the proxy could not clean up after a camera moved away (server/status/leftovers.ts).
+          moveLeftovers: rep.moveLeftovers ?? [],
         },
         reconcile: reconcile(px, accCams.filter((c) => c.proxyId === px.id), new Set(accCams.map((c) => c.camsId)), row),
       };
