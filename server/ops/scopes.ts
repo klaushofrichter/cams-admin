@@ -23,6 +23,9 @@ export const OPS_ROUTES: readonly OpsRoute[] = [
   // pins, host, TLS name. A cams viewer still holds a changed endpoint until confirmed.
   { method: 'PATCH', path: '/accounts/:accountId/proxies/:proxyId', scope: 'registry' },
   { method: 'PATCH', path: '/accounts/:accountId/cameras/:cameraId', scope: 'registry' },
+  // Onboarding: adopting a camera the proxy reports and the registry lacks (host from-proxy, model from the
+  // report). A plain POST /accounts/:accountId/cameras stays session-only, as does deleting a camera.
+  { method: 'POST', path: '/accounts/:accountId/proxies/:proxyId/adopt', scope: 'onboard' },
 ];
 
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
