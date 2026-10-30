@@ -7,7 +7,7 @@ import { tmpDir } from './helpers/tmp';
 import { fakeClock, type FakeClock } from './helpers/clock';
 import { enrolled, makeClient, resetAccounts, startServer, until, type Running } from './helpers/server';
 import { RefProxyConfig } from '../test-client/config';
-import type { ProxyClient } from '../test-client/client';
+import type { ClientOptions, ProxyClient } from '../test-client/client';
 import { DISRUPTIVE_ACTIONS, REMOTE_ACTIONS } from '../contract/build';
 
 const ACTOR = 'admin@example.com';
@@ -28,10 +28,10 @@ afterEach(async () => {
   await s.stop();
 });
 
-async function proxy(allow: string[], account?: string) {
+async function proxy(allow: string[], account?: string, o: Partial<ClientOptions> = {}) {
   const p = await enrolled(s, `act${n++}`, account);
   const ref = new RefProxyConfig({ cameras: ['cam1', 'cam2'] });
-  const client = makeClient(p.key, { commands: { allow, config: ref } });
+  const client = makeClient(p.key, { commands: { allow, config: ref }, ...o });
   clients.push(client);
   client.start();
   await until(() => !!s.built.status.row(p.proxyId)?.reported?.commands && !!s.built.status.row(p.proxyId)?.reported?.cameras.length, 5000, 'commands report');
@@ -162,6 +162,87 @@ describe('RemoteActions', () => {
     for (const a of av.actions) expect(a.disruptive, a.action).toBe((DISRUPTIVE_ACTIONS as readonly string[]).includes(a.action));
     expect(av.actions.filter((a) => a.allowed).map((a) => a.action)).toEqual(['camera-test', 'camera-reboot']);
     expect(av).toMatchObject({ rename: true, restart: false, cameras: ['cam1', 'cam2'] });
+  });
+
+  describe('onboarding', () => {
+    const onboarding = () => ({ cam1: { ready: true, missing: ['ftp'] }, cam2: { ready: false, missing: ['login'] } });
+
+    it('onboarding refresh sends camera.onboarding.get {v:1, camera}', async () => {
+      const p = await proxy(['camera.onboarding.get'], undefined, { onboarding });
+      const r = A().onboardingRefresh(ACTOR, p.acc, p.prx, 'cam1');
+      const row = await final(p.acc, p.prx, r.commandId);
+      expect(row).toMatchObject({ state: 'done', command: 'camera.onboarding.get', args: { v: 1, camera: 'cam1' } });
+      const st = (row.result as any).cameras.cam1;
+      expect(st).toMatchObject({ camera: 'cam1', ready: true, steps: { login: { ok: true }, ftp: { ok: false } } });
+      expect(Object.keys((row.result as any).cameras)).toEqual(['cam1']);
+      expect(code(() => A().onboardingRefresh(ACTOR, p.acc, p.prx, 'Cam 1'))).toEqual([400, 'invalid', 'camera']);
+      const q = await proxy(['camera.action:camera-test']);
+      expect(code(() => A().onboardingRefresh(ACTOR, q.acc, q.prx, 'cam1'))).toEqual([409, 'not_allowed_on_proxy', undefined]);
+    });
+
+    it('camera-time-set without the typed confirm is 400 confirm_required, nothing queued', async () => {
+      const p = await proxy(['camera.action:camera-time-set']);
+      const before = countCommands();
+      expect(code(() => A().cameraAction(ACTOR, p.acc, p.prx, { camera: 'cam1', action: 'camera-time-set' }))).toEqual([400, 'confirm_required', 'confirm']);
+      expect(code(() => A().cameraAction(ACTOR, p.acc, p.prx, { camera: 'cam1', action: 'camera-time-set', confirm: 'camera-ftp-setup' }))).toEqual([400, 'confirm_required', 'confirm']);
+      expect(countCommands()).toBe(before);
+      const r = A().cameraAction(ACTOR, p.acc, p.prx, { camera: 'cam1', action: 'camera-time-set', confirm: 'camera-time-set' });
+      expect(await final(p.acc, p.prx, r.commandId)).toMatchObject({ state: 'done', result: { action: 'camera-time-set', verified: true } });
+    });
+
+    it('camera-time-set is refused with 409 not_allowed_on_proxy until the proxy allows camera.action:camera-time-set', async () => {
+      const p = await proxy(['camera.action:camera-test', 'camera.onboarding.get']);
+      expect(code(() => A().cameraAction(ACTOR, p.acc, p.prx, { camera: 'cam1', action: 'camera-time-set', confirm: 'camera-time-set' }))).toEqual([409, 'not_allowed_on_proxy', undefined]);
+      p.client.commands!.allow = ['camera.action:camera-test', 'camera.onboarding.get', 'camera.action:camera-time-set'];
+      p.client.heartbeatNow();
+      await until(() => !!s.built.status.row(p.prx)?.reported?.commands?.allow.includes('camera.action:camera-time-set'), 5000, 'allow');
+      expect(A().cameraAction(ACTOR, p.acc, p.prx, { camera: 'cam1', action: 'camera-time-set', confirm: 'camera-time-set' }).commandId).toMatch(/^cmd_/);
+    });
+
+    it('camera-time-set counts against the fleet gate', async () => {
+      const p = await proxy(['camera.action:camera-time-set', 'camera.action:camera-ftp-setup']);
+      const q = await proxy(['camera.action:camera-time-set', 'camera.action:camera-ftp-setup'], 'other');
+      q.client.dropCommands = 1; // q's FTP setup stays open
+      A().cameraAction(ACTOR, q.acc, q.prx, { camera: 'cam1', action: 'camera-ftp-setup', confirm: 'camera-ftp-setup' });
+      expect(code(() => A().cameraAction(ACTOR, p.acc, p.prx, { camera: 'cam1', action: 'camera-time-set', confirm: 'camera-time-set' }))).toEqual([409, 'fleet_busy', undefined]);
+      // The same proxy may go on, up to three in ten minutes fleet-wide.
+      expect(A().cameraAction(ACTOR, q.acc, q.prx, { camera: 'cam2', action: 'camera-time-set', confirm: 'camera-time-set' }).commandId).toMatch(/^cmd_/);
+      expect(A().cameraAction(ACTOR, q.acc, q.prx, { camera: 'cam1', action: 'camera-time-set', confirm: 'camera-time-set' }).commandId).toMatch(/^cmd_/);
+      expect(code(() => A().cameraAction(ACTOR, q.acc, q.prx, { camera: 'cam2', action: 'camera-ftp-setup', confirm: 'camera-ftp-setup' }))).toEqual([429, 'fleet_limit', 'try again in 10 min']);
+    });
+
+    it('a double click within 10 s is busy', async () => {
+      const p = await proxy(['camera.onboarding.get'], undefined, { onboarding });
+      p.client.dropCommands = 1;
+      A().onboardingRefresh(ACTOR, p.acc, p.prx, 'cam1');
+      expect(code(() => A().onboardingRefresh(ACTOR, p.acc, p.prx, 'cam1'))).toEqual([409, 'busy', undefined]);
+      // Another camera is not held.
+      expect(A().onboardingRefresh(ACTOR, p.acc, p.prx, 'cam2').commandId).toMatch(/^cmd_/);
+      clock.advance(10_001);
+      expect(A().onboardingRefresh(ACTOR, p.acc, p.prx, 'cam1').commandId).toMatch(/^cmd_/);
+    });
+
+    it('available() reports the onboarding entries', async () => {
+      const p = await proxy(['camera.onboarding.get', 'camera.action:camera-ftp-setup']);
+      expect(A().available(p.acc, p.prx).onboarding).toEqual({ get: true, ftpSetup: true, timeSet: false });
+      const q = await proxy(['camera.action:camera-time-set']);
+      expect(A().available(q.acc, q.prx).onboarding).toEqual({ get: false, ftpSetup: false, timeSet: true });
+    });
+
+    it('latest() returns the newest row for that camera only', async () => {
+      const p = await proxy(['camera.onboarding.get'], undefined, { onboarding });
+      expect(cmds().latest(p.prx, 'camera.onboarding.get', 'cam1')).toBeNull();
+      const a1 = A().onboardingRefresh(ACTOR, p.acc, p.prx, 'cam1');
+      await final(p.acc, p.prx, a1.commandId);
+      const b1 = A().onboardingRefresh(ACTOR, p.acc, p.prx, 'cam2');
+      await final(p.acc, p.prx, b1.commandId);
+      clock.advance(10_001);
+      const a2 = A().onboardingRefresh(ACTOR, p.acc, p.prx, 'cam1');
+      await final(p.acc, p.prx, a2.commandId);
+      expect(cmds().latest(p.prx, 'camera.onboarding.get', 'cam1')).toMatchObject({ id: a2.commandId, state: 'done' });
+      expect(cmds().latest(p.prx, 'camera.onboarding.get', 'cam2')).toMatchObject({ id: b1.commandId });
+      expect(cmds().latest(p.prx, 'camera.onboarding.get', 'cam3')).toBeNull();
+    });
   });
 
   it('another account\'s proxy → 404 on every call', async () => {

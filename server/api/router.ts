@@ -18,6 +18,8 @@ import { exportForInstance } from '../import/export';
 import { snapshotRevision } from '../cams/snapshot';
 import type { ProxyConfig } from '../config/service';
 import type { RemoteActions } from '../actions/service';
+import type { ReportedPins } from '../onboarding/pins';
+import { onboardingView } from '../onboarding/view';
 import type { Moves } from '../moves/service';
 import { chunkCounts, moveView } from '../moves/view';
 import { SummaryRefused } from '../moves/summary';
@@ -52,7 +54,7 @@ export interface BackupService { state(): BackupState; backupNow(actor: string):
 
 export interface ApiDeps {
   db: Db; clock: Clock; cfg: Config; audit: Audit; registry: Registry; enrollment: Enrollment; hub: Hub; status: StatusStore; live: LiveHub; sessions: Sessions; backup: BackupService;
-  commands: Commands; tokens: Tokens; camsInstances: CamsInstances; serverKeyFingerprints: string[]; importer: Importer; config: ProxyConfig; actions: RemoteActions; moves: Moves; diag: DiagTokens; ops: OpsTokens;
+  commands: Commands; tokens: Tokens; camsInstances: CamsInstances; serverKeyFingerprints: string[]; importer: Importer; config: ProxyConfig; actions: RemoteActions; moves: Moves; diag: DiagTokens; ops: OpsTokens; pins: ReportedPins;
 }
 
 type H = (req: Request, res: Response) => unknown;
@@ -196,6 +198,8 @@ export function apiRouter(d: ApiDeps): express.Router {
     reg('proxy', p(req, 'proxyId'));
     return keyView(k);
   }));
+  // The proxy's reported site-CA pins into the registry (a change is held in each cams viewer until confirmed).
+  r.post(`${proxyBase}/pins/from-report`, h((req, res) => d.pins.take(actor(res), p(req, 'accountId'), p(req, 'proxyId'))));
   r.post(`${proxyBase}/block`, h((req, res) => {
     const px = d.registry.blockProxy(actor(res), p(req, 'accountId'), p(req, 'proxyId'));
     d.hub.closeProxy(px.id, 4403);
@@ -245,6 +249,10 @@ export function apiRouter(d: ApiDeps): express.Router {
   r.post(`${proxyBase}/actions`, h((req, res) => accepted(res, d.actions.cameraAction(actor(res), p(req, 'accountId'), p(req, 'proxyId'), req.body))));
   r.post(`${proxyBase}/cameras/:camera/name`, h((req, res) => accepted(res, d.actions.rename(actor(res), p(req, 'accountId'), p(req, 'proxyId'), p(req, 'camera'), req.body))));
   r.post(`${proxyBase}/restart`, h((req, res) => accepted(res, d.actions.restart(actor(res), p(req, 'accountId'), p(req, 'proxyId'), req.body))));
+  // One camera's onboarding view (works before the adopt: camera null). A GET never sends a command.
+  r.get(`${proxyBase}/cameras/:camera/onboarding`, h((req) => onboardingView(d, p(req, 'accountId'), p(req, 'proxyId'), p(req, 'camera'))));
+  // The full onboarding status of one camera (camera.onboarding.get); time set and FTP setup are camera actions above.
+  r.post(`${proxyBase}/cameras/:camera/onboarding/refresh`, h((req, res) => accepted(res, d.actions.onboardingRefresh(actor(res), p(req, 'accountId'), p(req, 'proxyId'), p(req, 'camera')))));
 
   // --- camera moves (plan 2026-10-21 Task 8) ---------------------------------------------------
   const mview = (m: Move, chunks?: ChunkState[]) => moveView(d.db, m, m.phase === 'copying' && d.moves.archivePending(m, chunks));
@@ -318,6 +326,8 @@ export function apiRouter(d: ApiDeps): express.Router {
       camsId: req.body?.camsId ?? rep.proposedCamsId, name: req.body?.name ?? reported?.name ?? ref, kind: req.body?.kind ?? 'camera',
       proxyId: px.id, proxyCameraId: ref, model: reported?.model ?? null, host: 'from-proxy',
     }, 'camera-adopt');
+    // A manual adopt lifts what auto-adopt was blocked from (a camera deleted or moved off this proxy).
+    d.registry.liftAdoptBlock(px.id, ref);
     reg('camera', cam.id);
     return cam;
   }));

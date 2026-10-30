@@ -90,6 +90,34 @@ describe('database write budget', () => {
     expect(store.view(ids[0]).commands).toMatch(/^(allowed|paused)$/);
   });
 
+  it('20 proxies heartbeating an unchanged onboarding for an hour stay within the budget', () => {
+    const r = makeRegistry(dir);
+    const live = new LiveHub({ clock: r.clock, maxPerSession: 5, keepaliveMs: 0 });
+    const store = new StatusStore({ db: r.db, clock: r.clock, registry: r.reg, live, offlineAfterMs: 90_000, snapshotMs: 600_000 });
+    const acc = r.reg.createAccount(ACTOR, { name: 'onbload', displayName: 'Onb' });
+    const ids: string[] = [];
+    for (let i = 0; i < 20; i++) {
+      const p = r.reg.createProxy(ACTOR, acc.id, { name: `o${i}`, displayName: `O${i}`, runsOn: 'cloud' });
+      r.db.prepare(`UPDATE proxies SET state='enrolled' WHERE id=?`).run(p.id);
+      r.db.prepare(`INSERT INTO proxy_keys (id, proxy_id, public_key, fingerprint, created_at, confirmed_at) VALUES (?, ?, ?, 'fp', 1, 1)`).run(`key_o${i}`, p.id, `pk${i}`);
+      ids.push(p.id);
+    }
+    const onboarding = { cam1: { ready: true, missing: [] }, cam2: { ready: false, missing: ['login'] }, cam3: { ready: true, missing: ['ftp', 'time'] }, cam4: { ready: true, missing: [] } };
+    for (const id of ids) {
+      store.hello(id, 'v2026.10.06.1', r.clock.now());
+      store.heartbeat(id, { summary: makeSummary({ cameras: 4, now: r.clock.now() }), proxy: makeProxyInfo({ now: r.clock.now() }), truncated: false, onboarding }, r.clock.now());
+    }
+    store.flush(true);
+    const start = readEpoch(r.db);
+    for (let t = 0; t < 3600; t += 10) {
+      r.clock.advance(10_000);
+      if (t % 30 === 0) for (const id of ids) store.heartbeat(id, { summary: makeSummary({ cameras: 4, now: r.clock.now() }), proxy: makeProxyInfo({ now: r.clock.now() }), truncated: false, onboarding }, r.clock.now());
+      store.tick();
+    }
+    expect(readEpoch(r.db) - start).toBeLessThanOrEqual(9);
+    expect(store.row(ids[0])!.reported?.onboarding).toEqual(onboarding);
+  });
+
   it('an idle database: exactly one backup heartbeat write per sync interval', () => {
     const r = makeRegistry(dir);
     const hb = new BackupHeartbeat(r.db, r.clock, 3600_000);

@@ -103,3 +103,32 @@ describe('registry', () => {
     expect(code(() => reg.getProxy(b.id, p.id))).toBe('404 not_found');
   });
 });
+
+describe('onboarding fields', () => {
+  const dir = tmpDir();
+  it('autoAdopt defaults to false and is set by PATCH (audit fields [\'autoAdopt\'])', () => {
+    const { reg, audit } = makeRegistry(dir);
+    const a = reg.createAccount(ACTOR, { name: 'auto', displayName: 'Auto' });
+    expect(a.autoAdopt).toBe(false);
+    const u = reg.updateAccount(ACTOR, a.id, { autoAdopt: true, version: a.version });
+    expect(u.autoAdopt).toBe(true);
+    expect(reg.getAccount(a.id).autoAdopt).toBe(true);
+    expect(audit.list({ action: 'account-update' }).items[0].detail).toEqual({ fields: ['autoAdopt'] });
+    expect(code(() => reg.updateAccount(ACTOR, a.id, { autoAdopt: 'yes', version: u.version }))).toBe('400 invalid autoAdopt');
+    expect(reg.listAccounts().find((x) => x.id === a.id)!.autoAdopt).toBe(true);
+  });
+  it('deleteCamera audit names proxyId and proxyCameraId', () => {
+    const { reg, audit, db } = makeRegistry(dir);
+    const a = reg.createAccount(ACTOR, { name: 'del', displayName: 'Del' });
+    const p = reg.createProxy(ACTOR, a.id, { name: 'pi', displayName: 'Pi', runsOn: 'local-host' });
+    const c = reg.createCamera(ACTOR, a.id, { camsId: 'porch', name: 'Porch', kind: 'camera', proxyId: p.id, proxyCameraId: 'cam1', host: 'from-proxy' });
+    reg.deleteCamera(ACTOR, a.id, c.id);
+    expect(audit.list({ action: 'camera-delete' }).items[0].detail).toEqual({ proxyId: p.id, proxyCameraId: 'cam1' });
+    expect(db.prepare('SELECT proxy_id, proxy_camera_id, reason FROM adopt_blocks').all()).toEqual([{ proxy_id: p.id, proxy_camera_id: 'cam1', reason: 'deleted' }]);
+    // A camera without a proxy: no block, the audit names nulls.
+    const n = reg.createCamera(ACTOR, a.id, { camsId: 'loose', name: 'Loose', kind: 'camera' });
+    reg.deleteCamera(ACTOR, a.id, n.id);
+    expect(audit.list({ action: 'camera-delete' }).items[0].detail).toEqual({ proxyId: null, proxyCameraId: null });
+    expect(db.prepare('SELECT count(*) n FROM adopt_blocks').get()).toEqual({ n: 1 });
+  });
+});

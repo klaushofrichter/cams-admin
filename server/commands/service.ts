@@ -74,6 +74,7 @@ export function summariseArgs(command: string, args: Record<string, unknown>): R
     case 'config.rollback': return pick(args, ['v', 'dryRun', 'cmdId']);
     case 'camera.action': return pick(args, ['v', 'camera', 'action', 'input']);
     case 'camera.name.set': return { v: args.v, camera: args.camera, name: clampValue(args.name) };
+    case 'camera.onboarding.get': return pick(args, ['v', 'camera']);
   }
   if (command.startsWith('move.')) return sanitize(Object.fromEntries(Object.entries(args).filter(([k]) => !MOVE_SECRET_ARGS.includes(k)))) as Record<string, unknown>;
   if (command !== 'tokens.apply') return { v: args.v };
@@ -245,6 +246,11 @@ export class Commands {
   // belong to one account, so no account check), and how many there were.
   latestForMove(proxyId: string, command: WireCommand, moveId: string): CommandRow | null {
     const r = this.q(`SELECT * FROM commands WHERE proxy_id = ? AND command = ? AND json_extract(args, '$.moveId') = ? ORDER BY rowid DESC LIMIT 1`).get(proxyId, command, moveId) as DbRow | undefined;
+    return r ? view(toRaw(r)) : null;
+  }
+  // The newest command of this name for one camera of this proxy (args.camera), any state; null when none.
+  latest(proxyId: string, command: WireCommand, camera: string): CommandRow | null {
+    const r = this.q(`SELECT * FROM commands WHERE proxy_id = ? AND command = ? AND json_extract(args, '$.camera') = ? ORDER BY rowid DESC LIMIT 1`).get(proxyId, command, camera) as DbRow | undefined;
     return r ? view(toRaw(r)) : null;
   }
   countForMove(proxyId: string, command: WireCommand, moveId: string): number {

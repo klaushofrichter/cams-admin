@@ -6,18 +6,24 @@ export type PinState = 'match' | 'mismatch' | 'hint' | 'none';
 
 import type { Profile } from './profile';
 import type { MoveLeftover } from './leftovers';
+import type { CameraOnboarding } from './onboarding';
 
 export interface ReportedCamera { ref: string; online: boolean; name?: string; model?: string | null }
 export interface CommandsInfo { enabled: boolean; paused: boolean; pauseReason: string | null; allow: string[]; seenWindow: number }
 export interface TokensInfo { revision: number; client: number; admin: number; blocked: string[] }
 export interface Reported {
-  cameras: ReportedCamera[]; caFingerprint: string[]; site?: string | null; publicUrl?: string | null; startedAt?: number | null; uptimeS?: number | null; configSchema?: number | null; pin?: PinState;
+  cameras: ReportedCamera[]; caFingerprint: string[];
+  // The proxy's tls.caFingerprint was not a list of at most 2 strings (caFingerprint keeps what could be read); its pins are never taken.
+  caFingerprintUnreadable?: boolean;
+  site?: string | null; publicUrl?: string | null; startedAt?: number | null; uptimeS?: number | null; configSchema?: number | null; pin?: PinState;
   // P2: the hello's capabilities and the heartbeat's command policy, token and config revisions.
   capabilities?: string[]; commands?: CommandsInfo | null; tokens?: TokensInfo | null; configRevision?: string | null;
   // The heartbeat's proxy profile (proxy profile design §2); null when it sent none (an older proxy) or an unreadable one (marked).
   profile?: Profile | null; profileUnreadable?: boolean;
   // What the proxy could not clean up after a camera moved away (heartbeat moveLeftovers, read with clamps; [] when none).
   moveLeftovers?: MoveLeftover[];
+  // Each camera's compact onboarding status (heartbeat onboarding, read with clamps); null when the proxy sends none.
+  onboarding?: Record<string, CameraOnboarding> | null;
 }
 
 export interface StatusRow {

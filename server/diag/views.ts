@@ -48,6 +48,8 @@ export function diagProxies(d: ApiDeps) {
           profile: rep.profile ?? null, profileUnreadable: rep.profileUnreadable === true,
           // What the proxy could not clean up after a camera moved away (server/status/leftovers.ts).
           moveLeftovers: rep.moveLeftovers ?? [],
+          // Each camera's compact onboarding status (server/status/onboarding.ts); null when the proxy sends none.
+          onboarding: rep.onboarding ?? null,
         },
         reconcile: reconcile(px, accCams.filter((c) => c.proxyId === px.id), new Set(accCams.map((c) => c.camsId)), row),
       };

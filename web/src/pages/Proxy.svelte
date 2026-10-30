@@ -13,6 +13,7 @@
   import ProxySettings from '../components/ProxySettings.svelte';
   import ProxyCameraActions from '../components/ProxyCameraActions.svelte';
   import ProxyProfile from '../components/ProxyProfile.svelte';
+  import CameraOnboarding from '../components/CameraOnboarding.svelte';
 
   let { accountId, proxyId, camera = undefined }: { accountId: string; proxyId: string; camera?: string } = $props();
 
@@ -92,6 +93,11 @@
   async function adopt(ref: string, camsId: string) {
     try { await api('POST', `/accounts/${accountId}/proxies/${proxyId}/adopt`, { proxyCameraId: ref, camsId, kind: 'camera' }); await load(); } catch (e) { error = errorText(e); }
   }
+  // The proxy's reported site-CA pins into the registry (a change is held in each cams viewer until confirmed there).
+  async function usePins() {
+    error = '';
+    try { await api('POST', `/accounts/${accountId}/proxies/${proxyId}/pins/from-report`, {}); await load(); } catch (e) { error = errorText(e); }
+  }
   const copy = (t: string) => navigator.clipboard?.writeText(t);
 
   const s = $derived(d?.summary ?? null);
@@ -138,7 +144,8 @@
       </table>
       {#each s.cameras ?? [] as c (c.camera.id)}
         <div class="cam" data-testid="summary-camera-{c.camera.id}">
-          <div class="row"><span class="chip {camClass(d.view.state === 'online' ? c.camera.online : null)}">{c.camera.name}</span><span class="mono muted">{c.camera.id} · {c.camera.address}{c.camera.model ? ` · ${c.camera.model}` : ''}</span></div>
+          <div class="row"><span class="chip {camClass(d.view.state === 'online' ? c.camera.online : null)}">{c.camera.name}</span><span class="mono muted">{c.camera.id} · {c.camera.address}{c.camera.model ? ` · ${c.camera.model}` : ''}</span>
+            {#if d.reported?.onboarding?.[c.camera.id]}{@const o = d.reported.onboarding[c.camera.id]}<a class="chip {o.ready ? 'ok' : 'bad'}" href="#/accounts/{accountId}/proxies/{proxyId}?camera={encodeURIComponent(c.camera.id)}" data-testid="onboarding-chip-{c.camera.id}" title={o.missing.length ? `missing: ${o.missing.join(', ')}` : 'every step done'}>{o.ready ? 'onboarded' : 'onboarding'}</a>{/if}</div>
           <div class="row items">{#each c.items as it}<span class="badge" class:bad={it.problem}>{it.label}: {it.text}</span>{/each}</div>
         </div>
       {/each}
@@ -152,6 +159,7 @@
   </section>
 
   <ProxyProfile profile={d.reported?.profile ?? null} unreadable={d.reported?.profileUnreadable === true} runsOn={d.proxy.runsOn} />
+  {#if camera}<CameraOnboarding {accountId} {proxyId} {camera} {refresh} />{/if}
   <ProxyCameraActions {accountId} {proxyId} {refresh} {camera} />
   <ProxySettings {accountId} {proxyId} policy={d.view.commands} {refresh} />
   <ProxyCommands {accountId} {proxyId} policy={d.view.commands} allow={d.view.allow} {refresh} />
@@ -162,6 +170,9 @@
     <div class="row">
       Pin: <span class="badge" class:bad={d.view.pin === 'mismatch'} data-testid="pin-status">{d.view.pin === 'match' ? 'matches' : d.view.pin === 'mismatch' ? 'MISMATCH: cams will refuse this proxy' : d.view.pin === 'hint' ? 'the proxy has a site CA but no pin is registered' : 'no site CA reported'}</span>
       {#if d.reported?.caFingerprint?.length}<span class="mono muted">reported {d.reported.caFingerprint.join(', ')}</span>{/if}
+      {#if (d.view.pin === 'mismatch' || d.view.pin === 'hint') && d.reported?.caFingerprint?.length}
+        <button class="btn" data-testid="pins-from-report" onclick={usePins}>Use the reported pins</button>
+      {/if}
     </div>
     {#each d.reconcile.reportedNotRegistered as r}
       <div class="row" data-testid="reconcile-reported-{r.ref}">
@@ -226,7 +237,7 @@
       <label>DNS name<input bind:value={f.dnsName} /></label>
       <label>TLS site<input bind:value={f.tlsSite} /></label>
       <label>TLS server name<input bind:value={f.tlsServername} /></label>
-      <label class="wide">Site CA fingerprints (cams's pins; 0–2, from the proxy's Certificates card)<textarea rows="2" class="mono" bind:value={f.fps} data-testid="proxy-fingerprints"></textarea></label>
+      <label class="wide">Site CA fingerprints (cams's pins; 0–2; taken from the proxy's report on its first heartbeat, a change with "Use the reported pins" above)<textarea rows="2" class="mono" bind:value={f.fps} data-testid="proxy-fingerprints"></textarea></label>
       <label class="wide">Notes<textarea rows="2" bind:value={f.notes}></textarea></label>
     </div>
     <div><button class="btn primary" data-testid="proxy-save" onclick={save}>Save</button></div>

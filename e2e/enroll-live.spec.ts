@@ -70,10 +70,11 @@ test('reconciliation: adopt a reported camera; a pin mismatch shows red; every s
   await page.getByTestId('all-fields-toggle').click();
   const leaves = summaryLeaves(summary).filter((l) => l.path !== 'generatedAt');
   for (const l of leaves) await expect(page.getByTestId(`sum-${l.path}`), l.path).toHaveText(l.text);
-  // Fix the pin in the registry: green.
-  await page.getByTestId('proxy-fingerprints').fill('SHA256:' + 'CD'.repeat(32));
-  await page.getByTestId('proxy-save').click();
+  // Take the reported pin into the registry: green, and the registry field shows it.
+  await page.getByTestId('pins-from-report').click();
   await expect(page.getByTestId('pin-status')).toContainText('matches', { timeout: 5000 });
+  await expect(page.getByTestId('pins-from-report')).toHaveCount(0);
+  await expect(page.getByTestId('proxy-fingerprints')).toHaveValue('SHA256:' + 'CD'.repeat(32));
   await c.stop();
 });
 
