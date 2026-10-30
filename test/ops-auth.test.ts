@@ -156,6 +156,24 @@ describe('scoped writes', () => {
     expect((await bearer('delete', `/accounts/${acc}/cameras/${cam}`, t.token)).status).toBe(403);
   });
 
+  it('a registry token takes the reported pins; an onboard token may not', async () => {
+    const fp = `SHA256:${'BC'.repeat(32)}`;
+    const p = a.registry.createProxy('admin@example.com', acc, { name: 'pinsby', displayName: 'Pins', runsOn: 'local-host', caFingerprints: [`SHA256:${'AA'.repeat(32)}`] }).id;
+    a.db.prepare(`UPDATE proxies SET state = 'enrolled' WHERE id = ?`).run(p);
+    a.status.heartbeat(p, { summary: makeSummary({ cameras: 1, now: Date.now() }), proxy: makeProxyInfo({ now: Date.now(), site: 'home', caFingerprint: [fp] }), truncated: false }, Date.now());
+    const path = `/accounts/${acc}/proxies/${p}/pins/from-report`;
+    const o = issue(['onboard', 'actions', 'offboard']);
+    const no = await bearer('post', path, o.token);
+    expect(no.status).toBe(403);
+    expect(no.body).toEqual({ error: 'scope' });
+    expect(a.registry.getProxy(acc, p).caFingerprints).toEqual([`SHA256:${'AA'.repeat(32)}`]);
+    const t = issue(['registry']);
+    const r = await bearer('post', path, t.token);
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.body).toMatchObject({ changed: true, proxy: { caFingerprints: [fp] } });
+    expect(auditOf('proxy-update').at(-1)!.actor).toBe(`ops-token:${t.prefix}`);
+  });
+
   // Onboarding by script: adopting a camera the proxy reports (host from-proxy, model from the report).
   it('an onboard token adopts a reported camera; other scopes and a plain create may not', async () => {
     const acct = a.registry.createAccount('admin@example.com', { name: 'onboardacc', displayName: 'O' }).id;

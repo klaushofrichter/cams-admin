@@ -3,7 +3,7 @@ import type { Audit, AuditAction } from './audit';
 import { tx, type Db } from './db/open';
 import { newId } from './ids';
 import {
-  accountInput, cameraInput, checkCameraHost, checkCameraProxy, FieldError, normaliseEmail, proxyInput, simInput, userInput,
+  accountInput, cameraInput, checkCameraHost, checkCameraProxy, FieldError, normaliseEmail, normaliseFingerprint, proxyInput, simInput, userInput,
   type CameraFields, type ProxyFields, type SimFields,
 } from './validate';
 
@@ -274,6 +274,19 @@ export class Registry {
       const p = this.getProxy(accountId, id);
       this.log(actor, 'proxy-update', accountId, 'proxy', id, p.name, { fields: keys });
       return p;
+    }));
+  }
+
+  // The proxy's site-CA pins from its own report (server/onboarding/pins.ts): version-free (the report is newer than
+  // any form), each checked as a hand edit is, 1..2 entries. One audit proxy-update naming where they came from.
+  setProxyPins(actor: string, actorType: 'sysadmin' | 'system', accountId: string, proxyId: string, fps: string[], auto: boolean): Proxy {
+    return guard(() => tx(this.db, () => {
+      const p = this.getProxy(accountId, proxyId);
+      if (!Array.isArray(fps) || fps.length < 1 || fps.length > 2) throw new ApiError(400, 'invalid', 'caFingerprints');
+      const pins = fps.map((f) => normaliseFingerprint(f, 'caFingerprints'));
+      this.db.prepare('UPDATE proxies SET ca_fingerprints = ?, updated_at = ?, version = version + 1 WHERE id = ? AND account_id = ?').run(JSON.stringify(pins), this.clock.now(), proxyId, accountId);
+      this.audit.write({ actorType, actor, action: 'proxy-update', accountId, targetType: 'proxy', targetId: proxyId, targetLabel: p.name, outcome: 'ok', detail: { fields: ['caFingerprints'], from: 'proxy-report', auto } });
+      return this.getProxy(accountId, proxyId);
     }));
   }
 

@@ -92,6 +92,11 @@
   async function adopt(ref: string, camsId: string) {
     try { await api('POST', `/accounts/${accountId}/proxies/${proxyId}/adopt`, { proxyCameraId: ref, camsId, kind: 'camera' }); await load(); } catch (e) { error = errorText(e); }
   }
+  // The proxy's reported site-CA pins into the registry (a change is held in each cams viewer until confirmed there).
+  async function usePins() {
+    error = '';
+    try { await api('POST', `/accounts/${accountId}/proxies/${proxyId}/pins/from-report`, {}); await load(); } catch (e) { error = errorText(e); }
+  }
   const copy = (t: string) => navigator.clipboard?.writeText(t);
 
   const s = $derived(d?.summary ?? null);
@@ -162,6 +167,9 @@
     <div class="row">
       Pin: <span class="badge" class:bad={d.view.pin === 'mismatch'} data-testid="pin-status">{d.view.pin === 'match' ? 'matches' : d.view.pin === 'mismatch' ? 'MISMATCH: cams will refuse this proxy' : d.view.pin === 'hint' ? 'the proxy has a site CA but no pin is registered' : 'no site CA reported'}</span>
       {#if d.reported?.caFingerprint?.length}<span class="mono muted">reported {d.reported.caFingerprint.join(', ')}</span>{/if}
+      {#if (d.view.pin === 'mismatch' || d.view.pin === 'hint') && d.reported?.caFingerprint?.length}
+        <button class="btn" data-testid="pins-from-report" onclick={usePins}>Use the reported pins</button>
+      {/if}
     </div>
     {#each d.reconcile.reportedNotRegistered as r}
       <div class="row" data-testid="reconcile-reported-{r.ref}">
@@ -226,7 +234,7 @@
       <label>DNS name<input bind:value={f.dnsName} /></label>
       <label>TLS site<input bind:value={f.tlsSite} /></label>
       <label>TLS server name<input bind:value={f.tlsServername} /></label>
-      <label class="wide">Site CA fingerprints (cams's pins; 0–2, from the proxy's Certificates card)<textarea rows="2" class="mono" bind:value={f.fps} data-testid="proxy-fingerprints"></textarea></label>
+      <label class="wide">Site CA fingerprints (cams's pins; 0–2; taken from the proxy's report on its first heartbeat, a change with "Use the reported pins" above)<textarea rows="2" class="mono" bind:value={f.fps} data-testid="proxy-fingerprints"></textarea></label>
       <label class="wide">Notes<textarea rows="2" bind:value={f.notes}></textarea></label>
     </div>
     <div><button class="btn primary" data-testid="proxy-save" onclick={save}>Save</button></div>

@@ -167,6 +167,8 @@ export class StatusStore {
       const info = (body.proxy && typeof body.proxy === 'object' ? body.proxy : {}) as Record<string, unknown>;
       const tls = (info.tls && typeof info.tls === 'object' ? info.tls : null) as Record<string, unknown> | null;
       const reportedFps = asStrArray(tls?.caFingerprint);
+      const rawFps = tls?.caFingerprint;
+      const fpsUnreadable = rawFps !== undefined && rawFps !== null && (!Array.isArray(rawFps) || rawFps.length > 2 || rawFps.some((x) => typeof x !== 'string'));
       const pin = pinState(proxy.caFingerprints, reportedFps);
       let summary: unknown, ok: boolean, problemCount: number, version: string | null = null, summaryAt: number | null = null, cams: Reported['cameras'] = [];
       if (v.ok) {
@@ -184,7 +186,7 @@ export class StatusStore {
       }
       const profile = parseProfile(body.profile);
       const reported: Reported = {
-        cameras: cams, caFingerprint: reportedFps, site: typeof tls?.site === 'string' ? tls.site : null,
+        cameras: cams, caFingerprint: reportedFps, caFingerprintUnreadable: fpsUnreadable, site: typeof tls?.site === 'string' ? tls.site : null,
         publicUrl: typeof info.publicUrl === 'string' ? info.publicUrl : null, startedAt: typeof info.startedAt === 'number' ? info.startedAt : null,
         uptimeS: typeof info.uptimeS === 'number' ? info.uptimeS : null, configSchema: typeof info.configSchema === 'number' ? info.configSchema : null, pin,
         capabilities: this.caps.get(proxyId) ?? old.reported?.capabilities ?? [],

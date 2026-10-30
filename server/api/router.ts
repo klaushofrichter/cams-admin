@@ -18,6 +18,7 @@ import { exportForInstance } from '../import/export';
 import { snapshotRevision } from '../cams/snapshot';
 import type { ProxyConfig } from '../config/service';
 import type { RemoteActions } from '../actions/service';
+import type { ReportedPins } from '../onboarding/pins';
 import type { Moves } from '../moves/service';
 import { chunkCounts, moveView } from '../moves/view';
 import { SummaryRefused } from '../moves/summary';
@@ -52,7 +53,7 @@ export interface BackupService { state(): BackupState; backupNow(actor: string):
 
 export interface ApiDeps {
   db: Db; clock: Clock; cfg: Config; audit: Audit; registry: Registry; enrollment: Enrollment; hub: Hub; status: StatusStore; live: LiveHub; sessions: Sessions; backup: BackupService;
-  commands: Commands; tokens: Tokens; camsInstances: CamsInstances; serverKeyFingerprints: string[]; importer: Importer; config: ProxyConfig; actions: RemoteActions; moves: Moves; diag: DiagTokens; ops: OpsTokens;
+  commands: Commands; tokens: Tokens; camsInstances: CamsInstances; serverKeyFingerprints: string[]; importer: Importer; config: ProxyConfig; actions: RemoteActions; moves: Moves; diag: DiagTokens; ops: OpsTokens; pins: ReportedPins;
 }
 
 type H = (req: Request, res: Response) => unknown;
@@ -196,6 +197,8 @@ export function apiRouter(d: ApiDeps): express.Router {
     reg('proxy', p(req, 'proxyId'));
     return keyView(k);
   }));
+  // The proxy's reported site-CA pins into the registry (a change is held in each cams viewer until confirmed).
+  r.post(`${proxyBase}/pins/from-report`, h((req, res) => d.pins.take(actor(res), p(req, 'accountId'), p(req, 'proxyId'))));
   r.post(`${proxyBase}/block`, h((req, res) => {
     const px = d.registry.blockProxy(actor(res), p(req, 'accountId'), p(req, 'proxyId'));
     d.hub.closeProxy(px.id, 4403);

@@ -65,6 +65,7 @@ describe('audit completeness', () => {
     ['put', '/accounts/:accountId/cameras/:cameraId/sim', () => `/accounts/${ids.acc}/cameras/${ids.cam}/sim`, () => ({ runsOn: 'mac' }), 'sim-update'],
     ['delete', '/accounts/:accountId/cameras/:cameraId/sim', () => `/accounts/${ids.acc}/cameras/${ids.cam}/sim`, () => ({}), 'sim-delete'],
     ['delete', '/accounts/:accountId/cameras/:cameraId', () => `/accounts/${ids.acc}/cameras/${ids.cam}`, () => ({}), 'camera-delete'],
+    ['post', '/accounts/:accountId/proxies/:proxyId/pins/from-report', () => `/accounts/${ids.acc}/proxies/${ids.prx}/pins/from-report`, () => ({}), 'proxy-update'],
     ['post', '/accounts/:accountId/proxies/:proxyId/block', () => `/accounts/${ids.acc}/proxies/${ids.prx}/block`, () => ({}), 'proxy-block'],
     ['delete', '/accounts/:accountId/proxies/:proxyId', () => `/accounts/${ids.acc}/proxies/${ids.prx}`, () => ({}), 'proxy-delete'],
     ['delete', '/accounts/:accountId/users/:userId', () => `/accounts/${ids.acc}/users/${ids.usr}`, () => ({}), 'user-delete'],
@@ -117,8 +118,10 @@ describe('audit completeness', () => {
       // A P2 proxy that allows tokens.apply (for the token rows).
       // A stored settings view first, so the heartbeat below queues no read of its own.
       a.config.storeView(ids.prx, 'cmd_0123456789ABCDEFGHJK', { revision: REV, cameras: ['cam1'], omittedCameras: [], paths: { 'sse.pingS': { v: 30, s: 'default' } }, settable: { 'sse.pingS': { type: 'integer' } } });
+      // A pin that differs from the reported one (set without an audit), for the pins/from-report row.
+      a.db.prepare(`UPDATE proxies SET ca_fingerprints = ? WHERE id = ?`).run(JSON.stringify([`SHA256:${'AA'.repeat(32)}`]), ids.prx);
       a.status.hello(ids.prx, 'v2', Date.now(), ['status', 'commands']);
-      a.status.heartbeat(ids.prx, { summary: makeSummary({ cameras: 2, now: Date.now() }), proxy: { ...makeProxyInfo({ now: Date.now() }), commands: { enabled: true, paused: false, pauseReason: null, allow: ['tokens.apply', ...P3_ALLOW, 'camera.onboarding.get'], seenWindow: 1000 } }, truncated: false }, Date.now());
+      a.status.heartbeat(ids.prx, { summary: makeSummary({ cameras: 2, now: Date.now() }), proxy: { ...makeProxyInfo({ now: Date.now(), site: 'home' }), commands: { enabled: true, paused: false, pauseReason: null, allow: ['tokens.apply', ...P3_ALLOW, 'camera.onboarding.get'], seenWindow: 1000 } }, truncated: false }, Date.now());
     }
     // The proxy isn't connected: finish the P3 commands by hand, as the proxy would.
     const finish = (id: string, result: object) => a.db.prepare(`UPDATE commands SET state = 'done', finished_at = ?, result = ? WHERE id = ?`).run(Date.now(), JSON.stringify({ body: { phase: 'done', status: 'ok', result } }), id);
@@ -152,7 +155,8 @@ describe('audit completeness', () => {
       // Two online proxies that take moves, and a camera on the first, for the POST /moves row.
       const live = (tag: string) => {
         const id = `prx_${tag.padEnd(20, '0')}`;
-        a.db.prepare(`INSERT INTO proxies (id, account_id, name, display_name, runs_on, state, url, tls_site, tls_servername, created_at, updated_at) VALUES (?, ?, ?, ?, 'cluster', 'enrolled', 'http://192.0.2.9:8480', 'site-bg', ?, 1, 1)`).run(id, ids.acc, tag, tag, `${tag}.internal`);
+        // Pinned as they report (else the heartbeat takes the reported pins, audited by the system).
+        a.db.prepare(`INSERT INTO proxies (id, account_id, name, display_name, runs_on, state, url, tls_site, tls_servername, ca_fingerprints, created_at, updated_at) VALUES (?, ?, ?, ?, 'cluster', 'enrolled', 'http://192.0.2.9:8480', 'site-bg', ?, ?, 1, 1)`).run(id, ids.acc, tag, tag, `${tag}.internal`, JSON.stringify([`SHA256:${'CD'.repeat(32)}`]));
         a.db.prepare(`INSERT INTO proxy_keys (id, proxy_id, public_key, fingerprint, created_at, confirmed_at) VALUES (?, ?, ?, ?, 1, 1)`).run(`key_${tag.padEnd(20, '0')}`, id, `pk${tag}`, `fp${tag}`);
         a.status.hello(id, 'v2', Date.now(), ['status', 'commands']);
         a.status.heartbeat(id, { summary: makeSummary({ cameras: 1, now: Date.now() }), proxy: { ...makeProxyInfo({ now: Date.now(), site: 'site-bg' }), commands: { enabled: true, paused: false, pauseReason: null, allow: ['move.send', 'move.receive'], seenWindow: 1000 } }, truncated: false }, Date.now());

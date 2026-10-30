@@ -24,6 +24,8 @@ export const OPS_ROUTES: readonly OpsRoute[] = [
   // pins, host, TLS name. A cams viewer still holds a changed endpoint until confirmed.
   { method: 'PATCH', path: '/accounts/:accountId/proxies/:proxyId', scope: 'registry' },
   { method: 'PATCH', path: '/accounts/:accountId/cameras/:cameraId', scope: 'registry' },
+  // The proxy's reported site-CA pins into its row (a change of existing pins; a proxy without pins takes them itself).
+  { method: 'POST', path: `${proxyBase}/pins/from-report`, scope: 'registry' },
   // Onboarding: adopting a camera the proxy reports and the registry lacks (host from-proxy, model from the
   // report). A plain POST /accounts/:accountId/cameras stays session-only.
   { method: 'POST', path: `${proxyBase}/adopt`, scope: 'onboard' },
