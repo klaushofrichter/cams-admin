@@ -39,6 +39,7 @@ A signed-in sysadmin's browser session works on the same routes.
 |---|---|
 | `/diag` | version, server time, the route list |
 | `/diag/proxies` | registry fields (url, TLS site and server name, CA fingerprints), state, version, pin, clock skew, the problem items of the last summary, reported site / CA fingerprints / commands policy / allow list / token counts / profile (`reported.profile`, `reported.profileUnreadable`), last heartbeat, reconcile |
+| `/diag/proxies/:proxyId/unregistered` | the cameras the proxy reports and the registry lacks: `{proxyId, accountId, reported, items: [{ref, name, model, online, proposedCamsId}]}` (`reported` false until a summary arrived); what the adopt route takes ([onboarding-a-camera.md](onboarding-a-camera.md)) |
 | `/diag/proxies/:proxyId/profile` | the proxy's latest reported profile, as `GET /api/v1/proxies/:proxyId/profile` answers it (see "Proxy profile" below) |
 | `/diag/cams-instances` | state, accounts, routes, the last report: mode, applied vs current revision, held changes and held proxies, kept-old, shadow, token counts, problems (code, account, detail) |
 | `/diag/cameras` | registry fields (cams id, model, proxy, proxy camera id, host, protocol, TLS name), move id, online |
@@ -124,7 +125,7 @@ reported no profile then.
 
 A diagnostics token only reads. An operations token (`cao_…`) lets a script
 make a few writes without a Google sign-in: revoke a proxy token, set a cams
-route, cancel a move. Each token carries the scopes ticked when it was issued.
+route, cancel a move, adopt a camera. Each token carries the scopes ticked when it was issued.
 
 Diagnostics page → Operations tokens → name, days, scopes → Issue token. As
 with the diagnostics token it is shown once, and it is stored only as a hash
@@ -156,6 +157,7 @@ actor `ops-token:<8 hex>`. The list is also at `/diag/ops-tokens`.
 | `moves` | `DELETE /moves/:moveId` |
 | `registry` | `PATCH /accounts/:accountId/proxies/:proxyId` |
 | `registry` | `PATCH /accounts/:accountId/cameras/:cameraId` |
+| `onboard` | `POST /accounts/:accountId/proxies/:proxyId/adopt` |
 
 Paths must be exactly as listed (the fixed words in lower case, ids as issued, no trailing slash). Anything else,
 and every route not in the table, gets 403 `scope`. No token can issue proxy
@@ -184,6 +186,21 @@ banner.
 curl -fsS -X PATCH -H "Authorization: Bearer $(cat ~/.config/cams-admin/ops-token)" -H 'Content-Type: application/json' \
   -d '{"version":3,"tlsSite":"cluster","caFingerprints":["SHA256:…"]}' \
   "https://cams-admin.example.net/api/v1/accounts/acc_…/proxies/prx_…"
+```
+
+An `onboard` token adopts a camera the proxy reports and the registry lacks
+(`/diag/proxies/:proxyId/unregistered`), as the proxy page's "Add to account"
+button does: body `{"proxyCameraId":"cam2"}`, optionally `camsId`, `name`,
+`kind` (default `camera`); 201 with the new camera, host `from-proxy`, model
+from the report; 400 `not_reported` for a camera the proxy doesn't report.
+Audited as `camera-adopt`. Creating a camera any other way
+(`POST /accounts/:accountId/cameras`) stays with a sign-in. The whole runbook:
+[onboarding-a-camera.md](onboarding-a-camera.md).
+
+```sh
+curl -fsS -X POST -H "Authorization: Bearer $(cat ~/.config/cams-admin/ops-token)" -H 'Content-Type: application/json' \
+  -d '{"proxyCameraId":"cam2","camsId":"garden","name":"Garden"}' \
+  "https://cams-admin.example.net/api/v1/accounts/acc_…/proxies/prx_…/adopt"
 ```
 
 ## Start a move

@@ -75,6 +75,8 @@ describe('the scope table', () => {
     expect(opsScopeFor('PATCH', '/accounts/acc_1/proxies/prx_1')).toBe('registry');
     expect(opsScopeFor('PATCH', '/accounts/acc_1/cameras/cam_1')).toBe('registry');
     expect(opsScopeFor('DELETE', '/accounts/acc_1/proxies/prx_1')).toBeNull();
+    expect(opsScopeFor('POST', '/accounts/acc_1/proxies/prx_1/adopt')).toBe('onboard');
+    expect(opsScopeFor('POST', '/accounts/acc_1/cameras')).toBeNull();
   });
 
   it('coverage: every route of the router is in the table or refuses a token with every scope', async () => {
@@ -152,6 +154,33 @@ describe('scoped writes', () => {
     expect(auditOf('camera-update').at(-1)!.actor).toBe(`ops-token:${t.prefix}`);
     // Creating or deleting stays with a sign-in.
     expect((await bearer('delete', `/accounts/${acc}/cameras/${cam}`, t.token)).status).toBe(403);
+  });
+
+  // Onboarding by script: adopting a camera the proxy reports (host from-proxy, model from the report).
+  it('an onboard token adopts a reported camera; other scopes and a plain create may not', async () => {
+    const acct = a.registry.createAccount('admin@example.com', { name: 'onboardacc', displayName: 'O' }).id;
+    const p = a.registry.createProxy('admin@example.com', acct, { name: 'onb', displayName: 'Onb', runsOn: 'local-host' }).id;
+    a.db.prepare(`UPDATE proxies SET state = 'enrolled' WHERE id = ?`).run(p);
+    a.status.heartbeat(p, { summary: makeSummary({ cameras: 2, now: Date.now() }), proxy: makeProxyInfo({ now: Date.now() }), truncated: false }, Date.now());
+    const path = `/accounts/${acct}/proxies/${p}/adopt`;
+    const other = issue(['tokens', 'routes', 'moves', 'registry']);
+    const no = await bearer('post', path, other.token, { proxyCameraId: 'cam1' });
+    expect(no.status).toBe(403);
+    expect(no.body).toEqual({ error: 'scope' });
+    expect(a.registry.listCameras(acct)).toHaveLength(0);
+    const t = issue(['onboard']);
+    const r = await bearer('post', path, t.token, { proxyCameraId: 'cam1', camsId: 'frontdoor', name: 'Front door' });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    expect(r.body).toMatchObject({ camsId: 'frontdoor', name: 'Front door', proxyId: p, proxyCameraId: 'cam1', host: 'from-proxy', model: 'RLC-1224A' });
+    expect(auditOf('camera-adopt').at(-1)!.actor).toBe(`ops-token:${t.prefix}`);
+    // A camera the proxy doesn't report is refused by the handler, as for a session.
+    expect((await bearer('post', path, t.token, { proxyCameraId: 'cam9' })).body).toMatchObject({ error: 'not_reported' });
+    // A plain create stays session-only, whatever the scopes.
+    const all = issue([...OPS_SCOPES]);
+    const c = await bearer('post', `/accounts/${acct}/cameras`, all.token, { camsId: 'x', name: 'X', kind: 'camera', proxyId: p, proxyCameraId: 'cam2' });
+    expect(c.status).toBe(403);
+    expect(c.body).toEqual({ error: 'scope' });
+    expect(a.registry.listCameras(acct)).toHaveLength(1);
   });
 
   it('a moves token cancels a move', async () => {

@@ -21,6 +21,7 @@
     { id: 'routes', text: 'Cams routes and camera overrides' },
     { id: 'moves', text: 'Camera moves: cancel, end transfer' },
     { id: 'registry', text: 'Edit proxies and cameras (TLS site, CA pins, host, TLS name)' },
+    { id: 'onboard', text: 'Adopt a camera a proxy reports (onboarding)' },
   ];
   const OPS_SAVE = 'mkdir -p ~/.config/cams-admin && (umask 077; pbpaste > ~/.config/cams-admin/ops-token)';
   let opsItems = $state<any[]>([]);
