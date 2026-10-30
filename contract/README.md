@@ -142,6 +142,80 @@ can't read, never the heartbeat. The item forms cam-proxy sends:
 Fixtures: `valid-heartbeat-move-leftovers`, `valid-heartbeat-move-leftovers-null`,
 `drift-heartbeat-move-leftovers-long` (five items: run time keeps four; strict refuses).
 
+## Onboarding (heartbeat `onboarding`, camera commands)
+
+From the camera onboarding design (cam-proxy
+`docs/superpowers/specs/2026-10-30-camera-onboarding-design.md`, §4.5–§4.7) and
+cam-proxy's onboarding plan A (Prerequisites 1). Additive: an older proxy sends
+no `onboarding`, knows no `camera.onboarding.get` and no `camera-time-set`, and
+keeps working.
+
+**Steps** (`ONBOARDING_STEPS`, in this order): `reachable`, `login`, `trust`,
+`capabilities`, `stream`, `events`, `ftp`, `time`, `name`, `poe`, `profile`.
+**Required** for `ready` (`ONBOARDING_REQUIRED`): `reachable`, `login`, `trust`,
+`capabilities`, `stream`, `events`. A camera is `ready` when every required step
+is ok (`ok === true`); the optional ones (`ftp` … `profile`) never stop it.
+
+**Heartbeat `onboarding`** (optional, also when truncated; `null` = none): the
+compact status per camera, `{<camera id>: {ready, missing: [step…]}}`.
+`missing` lists, in step order, every step that is not ok (`ok: false`), and the
+required steps not known yet (`ok: null`). **Strict:** at most 64 cameras
+(`ONBOARDING_CAMERAS_MAX`), keys proxy camera ids, each value closed
+`{ready: boolean, missing}` with `missing` unique known steps, and `ready: true`
+never with a required step in `missing`. **Lenient:** anything; cams-admin reads
+it with clamps (64 cameras, step names of at most 32 characters,
+`ONBOARDING_STEP_LEN`; an unknown step of a newer proxy is kept), reads
+`ready: true` with a required step missing as not ready, and never refuses the
+heartbeat for it.
+
+**`camera.onboarding.get`** (a command; allow entry `camera.onboarding.get`, on
+by default on cam-proxy, a proxy may switch it off locally). Args
+`{v: 1, camera}` (closed; `camera` a proxy camera id, or `null` for every
+camera). Result `{cameras: {<camera id>: status}, clamped?}`: at most 64
+cameras; `clamped: true` (and `cameras: {}`) when the answer was over 16 KiB.
+A status is
+
+- `camera`, `ready` (boolean), `checkedAt` (ms);
+- `steps`: an object with every one of the eleven steps, each
+  `{ok: true | false | null, detail, action?}` (`null`: not known yet; `detail`
+  at most 200 characters, `''` when there is nothing to say; `action`, at most
+  32 characters, names the fix, e.g. `camera-trust-pin`, `camera-ftp-setup`,
+  `camera-time-set`, `password`);
+- `trust`: `{mode: site-ca | pinned | public | none, fingerprint, served}`
+  (`SHA256:` pins or `null`: the pinned and the served certificate);
+- `time`: `{clockOffsetMs, zone, cameraStdOffsetMinutes, cameraDst}` (each
+  `null` when not known; `zone` an IANA name of at most 64 characters).
+
+Strict closes every object and requires every field except `action` and
+`clamped`. The command is a read and not in the journal budget; never a password
+in its args or answer.
+
+**FTP setup and time set are camera actions**, not commands of their own:
+
+- FTP setup is the existing `camera.action` action `camera-ftp-setup` (no change).
+- **`camera-time-set`** (new `camera.action` action, allow entry
+  `camera.action:camera-time-set`, camera required): writes the camera's time
+  zone and DST rule from the proxy's `time.zone` (or the host's zone), a
+  whole-object Set, re-read and compared (the `camera.action` result, `verified`
+  and `mismatch`). Disruptive (`DISRUPTIVE_ACTIONS`): off by default per proxy,
+  typed confirm in cams-admin, counted by the journal budget.
+- Failure codes cam-proxy uses for it (status `failed`): `no_zone` (neither
+  `time.zone` nor the host's zone is known), `camera_offline`.
+- `time.zone` is a proxy setting, local only: in `remote-settable.json`'s
+  `denied`.
+
+Not commands (spec §4.6, §10.2): adding a camera, its host or password,
+discovery, probe, and certificate trust; they stay local to the proxy.
+
+Fixtures (the command fixtures carry `$context.feature: 'onboarding'`: the
+cross-check treats them as pending until cam-proxy implements
+`camera.onboarding.get`): `valid-heartbeat-onboarding`,
+`valid-heartbeat-onboarding-null`, `drift-heartbeat-onboarding-unknown-step`,
+`drift-heartbeat-onboarding-ready-missing-login`, `valid-command-onboarding-get`,
+`valid-result-onboarding-get`, `valid-command-camera-time-set`,
+`refused-camera-action-time-set-not-allowed`,
+`valid-result-camera-time-set-verified`.
+
 ## Remote configuration (P3)
 
 Additive: the envelope stays v1, the subprotocol `cams-admin.v1`, signatures

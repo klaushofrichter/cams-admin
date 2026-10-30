@@ -115,7 +115,7 @@ describe('config (Settings UI)', () => {
     expect(await waitCommand(async () => ({ state: 'sent' }), 5, 1)).toBeNull();
   });
   it('every disruptive action and proxy.restart has an effect sentence', () => {
-    for (const a of ['restart', 'camera-reboot', 'camera-powercycle', 'camera-ftp-setup', 'camera-ntp-set', 'camera-cert-push', 'proxy.restart']) expect(EFFECT[a], a).toMatch(/\.$/);
+    for (const a of ['restart', 'camera-reboot', 'camera-powercycle', 'camera-ftp-setup', 'camera-ntp-set', 'camera-cert-push', 'camera-time-set', 'proxy.restart']) expect(EFFECT[a], a).toMatch(/\.$/);
     expect(EFFECT['camera-ftp-off']).toBeUndefined(); // never remote (cam-proxy #196)
   });
 });

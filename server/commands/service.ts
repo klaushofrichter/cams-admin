@@ -34,7 +34,8 @@ const FINAL = ['done', 'refused', 'failed', 'expired'];
 export type CommandState = 'queued' | 'sent' | 'received' | 'done' | 'refused' | 'failed' | 'expired' | 'unknown';
 export type WireCommand = 'tokens.apply' | 'config.get' | 'config.set' | 'config.unset' | 'config.rollback' | 'camera.action' | 'camera.name.set' | 'proxy.restart'
   | 'move.begin' | 'move.summary' | 'move.targets' | 'move.open' | 'move.offer' | 'move.answer' | 'move.start' | 'move.go' | 'move.release' | 'move.finish' | 'move.cancel'
-  | 'move.return.open' | 'move.return.start';
+  | 'move.return.open' | 'move.return.start'
+  | 'camera.onboarding.get';
 export interface CommandRow {
   id: string; accountId: string; proxyId: string | null; actor: string; command: string; args: Record<string, unknown>; state: CommandState;
   outcomeCode: string | null; result: Record<string, unknown> | null; createdAt: number; sentAt: number | null; finishedAt: number | null; attempts: number;
