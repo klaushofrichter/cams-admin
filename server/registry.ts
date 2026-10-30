@@ -419,6 +419,7 @@ export class Registry {
       if (f.host && f.host !== old.host) checkCameraHost(f.host);
       const keys = this.updateRow('cameras', { id, accountId }, f, versionOf(patch as Row));
       const c = this.getCamera(accountId, id);
+      this.relocated(old, c);
       this.log(actor, 'camera-update', accountId, 'camera', id, c.camsId, { fields: keys });
       return c;
     }));
@@ -457,8 +458,7 @@ export class Registry {
       this.getProxy(accountId, to.proxyId); // 404 for another account's proxy
       this.db.prepare('UPDATE cameras SET proxy_id = ?, proxy_camera_id = ?, tls_servername = ?, move_id = ?, updated_at = ?, version = version + 1 WHERE id = ? AND account_id = ?')
         .run(f.proxyId!, f.proxyCameraId!, f.tlsServername ?? null, to.moveId, this.clock.now(), cameraId, accountId);
-      // The camera left its old proxy: auto-adopt never brings it back there.
-      if (old.proxyId && old.proxyCameraId && (old.proxyId !== f.proxyId || old.proxyCameraId !== f.proxyCameraId)) this.blockAdopt(old.proxyId, old.proxyCameraId, 'moved');
+      this.relocated(old, { proxyId: f.proxyId ?? null, proxyCameraId: f.proxyCameraId ?? null });
       // The forward switch (onto the move's target) stamps the move for the cams attestation; the way back at a cancel does not.
       this.db.prepare('UPDATE moves SET switched_at = ? WHERE id = ? AND target_proxy_id = ?').run(this.clock.now(), to.moveId, f.proxyId!);
       this.audit.write({
@@ -485,6 +485,13 @@ export class Registry {
   }
 
   // --- adopt blocks: what auto-adopt must not bring back (deleted, or moved off that proxy) ---------------------
+  // A camera that left a (proxy, proxy camera id) is never auto-adopted there again; one that arrives
+  // (a cancelled move's way back, a PATCH back) lifts that place's block.
+  private relocated(old: { proxyId: string | null; proxyCameraId: string | null }, now: { proxyId: string | null; proxyCameraId: string | null }): void {
+    if (old.proxyId === now.proxyId && old.proxyCameraId === now.proxyCameraId) return;
+    if (old.proxyId && old.proxyCameraId) this.blockAdopt(old.proxyId, old.proxyCameraId, 'moved');
+    if (now.proxyId && now.proxyCameraId) this.liftAdoptBlock(now.proxyId, now.proxyCameraId);
+  }
   private blockAdopt(proxyId: string, proxyCameraId: string, reason: 'deleted' | 'moved'): void {
     this.db.prepare('INSERT INTO adopt_blocks (proxy_id, proxy_camera_id, reason, blocked_at) VALUES (?, ?, ?, ?) ON CONFLICT (proxy_id, proxy_camera_id) DO UPDATE SET reason = excluded.reason, blocked_at = excluded.blocked_at')
       .run(proxyId, proxyCameraId, reason, this.clock.now());

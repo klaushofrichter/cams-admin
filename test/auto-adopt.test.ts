@@ -133,10 +133,62 @@ describe('auto-adopt', () => {
     const n = epoch();
     s.hb(s.px, { cam1: ready }, 1);
     expect(epoch()).toBe(n);
-    // Not ready, then ready again: a second attempt (and a second refusal).
+    // Not ready, then ready again: the same refusal is not audited again.
     s.hb(s.px, { cam1: { ready: false, missing: ['stream'] } }, 1);
     s.hb(s.px, { cam1: ready }, 1);
-    expect(s.adoptAudits().slice(before).filter((x) => x.outcome === 'refused')).toHaveLength(2);
+    expect(s.adoptAudits().slice(before).filter((x) => x.outcome === 'refused')).toHaveLength(1);
+    // Its state changes (the taken cams id is freed): tried again, adopted.
+    s.reg.deleteCamera(ACTOR, s.acc, s.cams().find((c) => c.camsId === 'pi-cam1')!.id);
+    s.hb(s.px, { cam1: ready }, 1);
+    expect(s.cams().filter((c) => c.proxyId === s.px)).toHaveLength(1);
+  });
+
+  it('refusals of a deleted proxy or a camera no longer reported are forgotten', () => {
+    const s = setup({ autoAdopt: true });
+    const other = s.mkProxy('pc');
+    s.reg.createCamera(ACTOR, s.acc, { camsId: 'cam1', name: 'Other', kind: 'camera', proxyId: other, proxyCameraId: 'cam7', host: 'from-proxy' });
+    s.reg.createCamera(ACTOR, s.acc, { camsId: 'pi-cam1', name: 'Other 2', kind: 'camera', proxyId: null, proxyCameraId: null });
+    s.hb(s.px, { cam1: ready }, 1);
+    const refused = (s.auto as unknown as { refused: Map<string, Map<string, string>> }).refused;
+    expect(refused.get(s.px)?.size).toBe(1);
+    // The camera stops being reported: forgotten.
+    s.hb(s.px, {}, 1);
+    expect(refused.get(s.px)?.size ?? 0).toBe(0);
+    s.hb(s.px, { cam1: ready }, 1);
+    expect(refused.get(s.px)?.size).toBe(1);
+    // The proxy is deleted: forgotten at the next heartbeat of any proxy.
+    s.reg.deleteProxy(ACTOR, s.acc, s.px);
+    s.hb(other, {}, 1);
+    expect(refused.has(s.px)).toBe(false);
+  });
+
+  it('a camera reassigned by PATCH is blocked on its old proxy', () => {
+    const s = setup({ autoAdopt: true });
+    const other = s.mkProxy('pc');
+    s.hb(s.px, { cam1: ready }, 1);
+    const cam = s.cams()[0];
+    // Off any proxy ("— none —"), then onto another.
+    s.reg.updateCamera(ACTOR, s.acc, cam.id, { proxyId: null, proxyCameraId: null, version: cam.version });
+    expect(s.reg.isAdoptBlocked(s.px, 'cam1')).toBe(true);
+    s.hb(s.px, { cam1: ready }, 1);
+    expect(s.cams()).toHaveLength(1);
+    s.reg.updateCamera(ACTOR, s.acc, cam.id, { proxyId: other, proxyCameraId: 'cam1', version: s.reg.getCamera(s.acc, cam.id).version });
+    s.hb(s.px, { cam1: ready }, 1);
+    expect(s.cams()).toHaveLength(1);
+    // An edit that keeps the proxy writes no block.
+    s.reg.updateCamera(ACTOR, s.acc, cam.id, { name: 'Renamed', version: s.reg.getCamera(s.acc, cam.id).version });
+    expect(s.reg.isAdoptBlocked(other, 'cam1')).toBe(false);
+  });
+
+  it('a camera returned to its source by a cancelled move lifts the source block', () => {
+    const s = setup({ autoAdopt: true });
+    const target = s.mkProxy('pc');
+    const cam = s.reg.createCamera(ACTOR, s.acc, { camsId: 'porch', name: 'Porch', kind: 'camera', proxyId: s.px, proxyCameraId: 'cam1', host: 'from-proxy' });
+    s.reg.moveCamera('system', s.acc, cam.id, { proxyId: target, proxyCameraId: 'cam4', tlsServername: null, moveId: 'mv_0123456789ABCDEFGHJK' });
+    expect(s.reg.isAdoptBlocked(s.px, 'cam1')).toBe(true);
+    s.reg.moveCamera('system', s.acc, cam.id, { proxyId: s.px, proxyCameraId: 'cam1', tlsServername: null, moveId: 'mv_0123456789ABCDEFGHJK' });
+    expect(s.reg.isAdoptBlocked(s.px, 'cam1')).toBe(false);
+    expect(s.reg.isAdoptBlocked(target, 'cam4')).toBe(true);
   });
 
   it('a pending proxy adopts nothing', () => {
