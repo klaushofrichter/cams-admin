@@ -5,6 +5,7 @@ import type { Proxy, Registry } from '../registry';
 import type { LiveHub } from '../live';
 import { validateSummary } from '../contract';
 import { parseProfile } from './profile';
+import { parseMoveLeftovers } from './leftovers';
 import { isCount } from '../validate';
 import { cameraStates, deriveCommands, deriveProxyState, type CommandsPolicy, heartbeatFresh, pinState, SKEW_PROBLEM_MS, type CommandsInfo, type PinState, type ProxyState, type Reported, type StatusRow, type TokensInfo } from './derive';
 
@@ -17,7 +18,7 @@ import { cameraStates, deriveCommands, deriveProxyState, type CommandsPolicy, he
 // `snapshotMs` (10 min), so a restart shows the last known state, marked
 // stale until the proxies reconnect.
 
-export interface HeartbeatBody { summary: unknown; proxy?: Record<string, unknown> | null; truncated?: boolean; profile?: unknown }
+export interface HeartbeatBody { summary: unknown; proxy?: Record<string, unknown> | null; truncated?: boolean; profile?: unknown; moveLeftovers?: unknown }
 
 export interface ProxyView {
   proxyId: string; accountId: string; state: ProxyState; connected: boolean; connectedSince: number | null; lastHelloAt: number | null; lastHeartbeatAt: number | null;
@@ -187,6 +188,7 @@ export class StatusStore {
         capabilities: this.caps.get(proxyId) ?? old.reported?.capabilities ?? [],
         commands: parseCommandsInfo(info.commands), tokens: parseTokensInfo(info.tokens), configRevision: parseConfigRevision(info.configRevision),
         profile, profileUnreadable: body.profile !== undefined && body.profile !== null && profile === null,
+        moveLeftovers: parseMoveLeftovers(body.moveLeftovers),
       };
       Object.assign(r, { lastHeartbeatAt: now, summary, summaryAt, ok, problemCount, reported, clockSkewMs: proxyTs - now, proxyVersion: version ?? r.proxyVersion, online: true, stopped: false });
 

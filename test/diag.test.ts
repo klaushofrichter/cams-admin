@@ -174,6 +174,16 @@ describe('diagnostics answers', () => {
     expect((await bearer(`/diag/moves/precheck?source=${px}&target=${foreign}`, token)).body).toMatchObject({ ok: false, reason: 'other_account', rules: [{ rule: 'different_proxies', ok: true }, { rule: 'same_account', ok: false, detail: 'other account: target' }] });
   });
 
+  it('diag proxies show moveLeftovers', async () => {
+    const { token } = await issue('leftovers', 1);
+    const entry = { camera: 'cam4', moveId: 'mv_0123456789ABCDEFGHJK', items: ['config.json entry', 'env CAMPROXY_CAMERA_PASSWORD_CAM4_FILE'] };
+    a.status.heartbeat(px2, { summary: makeSummary({ cameras: 1, now: Date.now() }), proxy: makeProxyInfo({ now: Date.now() }), truncated: false, moveLeftovers: [entry] }, Date.now());
+    const p = (await bearer('/diag/proxies', token)).body.items.find((x: { id: string }) => x.id === px2);
+    expect(p.reported.moveLeftovers).toEqual([entry]);
+    a.status.heartbeat(px2, { summary: makeSummary({ cameras: 1, now: Date.now() }), proxy: makeProxyInfo({ now: Date.now() }), truncated: false }, Date.now());
+    expect((await bearer('/diag/proxies', token)).body.items.find((x: { id: string }) => x.id === px2).reported.moveLeftovers).toEqual([]);
+  });
+
   it('the secret guard: markers in hashes, codes, keys, e-mails and notes never appear in any answer', async () => {
     const MARK = 'f00dfeed';
     const { token } = await issue('guard', 1);

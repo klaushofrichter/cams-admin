@@ -88,6 +88,23 @@ describe('moves API', () => {
     expect(noTransfer.kinds.every((k) => k.included === false)).toBe(true);
   });
 
+  it('the content lists PTZ positions when the plan names ptz, also without transfer', () => {
+    const summary = { clips: { files: 2, bytes: 20, rows: 2 } };
+    const chunks = [{ id: 'ptz:2026-10-30', state: 'verified' }, { id: 'clips:2026-10-30', state: 'pending' }] as any;
+    const c = moveContent({ plan: { transfer: true, kinds: ['clips', 'ptz'] }, bounds: null, summary }, chunks);
+    expect(c.kinds.map((x) => x.kind)).toEqual(['clips', 'stills', 'events', 'checks', 'archive', 'ptz']);
+    expect(c.kinds.at(-1)).toEqual({ kind: 'ptz', included: true, files: null, bytes: null, rows: null, chunks: { total: 1, done: 1, failed: 0, abandoned: 0 } });
+    const only = moveContent({ plan: { transfer: false, kinds: ['ptz'] }, bounds: null, summary }, []);
+    expect(only.kinds.find((x) => x.kind === 'ptz')!.included).toBe(true);
+    expect(only.kinds.filter((x) => x.kind !== 'ptz').every((x) => x.included === false)).toBe(true);
+  });
+  it('no ptz row otherwise', () => {
+    const summary = { clips: { files: 2, bytes: 20, rows: 2 }, ptz: { files: 1, bytes: 1, rows: 1 } };
+    for (const m of [{ plan: { transfer: true, kinds: ['clips'] }, bounds: null, summary }, { plan: null, bounds: { transfer: true, kinds: ['clips', 'ptz'], space: 'all', maxBudgetS: 3600 } as any, summary }, { plan: null, bounds: null, summary }]) {
+      expect(moveContent(m, []).kinds.map((x) => x.kind)).toEqual(['clips', 'stills', 'events', 'checks', 'archive']);
+    }
+  });
+
   it('moveContent: events and checks are database rows, not files: the rows count comes through', () => {
     const summary = { stills: { files: 54556, bytes: 48350227367, rows: 0 }, clips: { files: 236, bytes: 290655300, rows: 142 }, events: { files: 0, bytes: 0, rows: 654 }, checks: { files: 0, bytes: 0, rows: 3 } };
     const c = moveContent({ plan: { transfer: true, kinds: ['clips', 'stills', 'events', 'checks'] }, bounds: null, summary }, []);

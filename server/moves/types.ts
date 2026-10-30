@@ -4,7 +4,9 @@
 // The first cam-proxy release with move.summary and profile.tls (the web UI's PROFILE_SINCE).
 export const PROXY_UPDATE_SINCE = '2026.10.26';
 
-export type MoveKind = 'stills' | 'clips' | 'events' | 'checks' | 'archive';
+// The five file kinds (summary, space, deleted) and the move kinds (plans, bounds, chunks, checks): ptz is a camera's PTZ positions.
+export type FileKind = 'stills' | 'clips' | 'events' | 'checks' | 'archive';
+export type MoveKind = FileKind | 'ptz';
 export type MovePlanSpace = 'all' | 'omit' | 'fit' | 'retention';
 export type MoveRole = 'source' | 'target';
 export type MoveEventPhase = 'opened' | 'switching' | 'switched' | 'released' | 'copying' | 'copied' | 'finished' | 'cancelled' | 'failed';
@@ -16,7 +18,7 @@ export interface MovePlan {
 export interface MoveCameraConn {
   proxyCameraId: string; name: string; host: string; protocol: 'https' | 'http'; user: string; onvifPort: number; rtspPort: number; baichuanPort: number;
 }
-export type MoveKindSummary = Record<MoveKind, { files: number; bytes: number; rows: number; oldest: number | null; newest: number | null }>;
+export type MoveKindSummary = Record<FileKind, { files: number; bytes: number; rows: number; oldest: number | null; newest: number | null }>;
 
 export interface MoveTargetsEvent extends Head { kind: 'move.targets'; requestId: string; camera: string }
 export interface MoveBounds { transfer: boolean; kinds: MoveKind[]; space: MovePlanSpace; maxBudgetS: number }

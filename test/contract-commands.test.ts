@@ -4,6 +4,7 @@
 // cam-proxy's real check is the third (scripts/contract/cam-proxy-commands.ts).
 import { describe, expect, it } from 'vitest';
 import { readdirSync, readFileSync } from 'fs';
+import Ajv2020 from 'ajv/dist/2020';
 import { join } from 'path';
 import { refCheck } from '../test-client/commands';
 import { keyFromSeed, privateFromB64, signEnvelope } from '../server/crypto/ed25519';
@@ -20,7 +21,7 @@ const resign = (m: Record<string, any>) => { const { sig: _s, ...rest } = m; ret
 
 describe('the reference proxy check agrees with every proxy fixture', () => {
   const cases = all.filter((x) => x.$expect?.receiver === 'proxy' || (x.schema === 'command' && x.name.startsWith('valid-')));
-  it('covers 62 fixtures (P2 17, P3 24, moves 21)', () => expect(cases).toHaveLength(62));
+  it('covers 63 fixtures (P2 17, P3 24, moves 22)', () => expect(cases).toHaveLength(63));
   for (const f of cases) {
     it(f.name, () => {
       const c = f.$context;
@@ -316,6 +317,39 @@ describe('move commands', () => {
     expect(argsOk('move.answer', { ...ans, detail: '' })).toBe(false);
     expect(argsOk('move.answer', { ...ans, detail: 'x'.repeat(301) })).toBe(false);
   });
+  it('move.answer with kinds: lenient and strict valid; kinds [ptz, ptz] or [video] refused', () => {
+    const f = all.find((x) => x.name === 'valid-command-move-answer-kinds')!;
+    const a = f.message.body.args;
+    expect(f.$context.feature).toBe('move-ptz');
+    expect(a.kinds).toEqual(['stills', 'clips', 'events', 'checks', 'archive', 'ptz']);
+    expect(argsOk('move.answer', a), strictErrors()).toBe(true);
+    const lenient = new Ajv2020({ strict: true, strictTypes: false }).compile(JSON.parse(readFileSync(join(__dirname, '../contract/v1/commands/move.answer.args.schema.json'), 'utf8')));
+    expect(lenient(a)).toBe(true);
+    expect(argsOk('move.answer', { ...a, kinds: ['ptz'] })).toBe(true);
+    expect(argsOk('move.answer', { ...a, kinds: ['ptz', 'ptz'] })).toBe(false);
+    expect(argsOk('move.answer', { ...a, kinds: ['video'] })).toBe(false);
+    expect(argsOk('move.answer', { ...a, kinds: [...a.kinds, 'clips'] })).toBe(false);
+    expect(argsOk('move.answer', args('move.answer'))).toBe(true); // without kinds
+  });
+  it('the move.offer result with kinds validates; without kinds still does', () => {
+    const r = all.find((x) => x.name === 'valid-result-move-offer-kinds')!;
+    expect(r.$command).toBe('move.offer');
+    const res = r.message.body.result;
+    expect(res).toMatchObject({ accept: true, kinds: ['stills', 'clips', 'events', 'checks', 'archive', 'ptz'] });
+    expect(resultOk('move.offer', res), strictErrors()).toBe(true);
+    expect(resultOk('move.offer', { accept: true, space: spaceOk, probeBps: 1 })).toBe(true);
+    expect(resultOk('move.offer', { accept: true, space: spaceOk, probeBps: 1, kinds: ['ptz', 'ptz'] })).toBe(false);
+    expect(resultOk('move.offer', { accept: true, space: spaceOk, probeBps: 1, kinds: ['video'] })).toBe(false);
+    expect(resultOk('move.offer', { accept: false, reason: 'busy', kinds: ['ptz'] })).toBe(false);
+  });
+  it('plan and bounds take ptz; space.perKind does not', () => {
+    expect(argsOk('move.start', { ...(args('move.start') as object), plan: { ...plan(), kinds: ['clips', 'ptz'] } })).toBe(true);
+    expect(argsOk('move.start', { ...(args('move.start') as object), plan: { ...plan(), transfer: false, kinds: ['ptz'] } })).toBe(true);
+    expect(argsOk('move.start', { ...(args('move.start') as object), done: ['ptz:2026-10-30'] })).toBe(true);
+    expect(argsOk('move.begin', { ...(args('move.begin') as object), bounds: { ...bounds, kinds: ['ptz'] } })).toBe(true);
+    expect(argsOk('move.answer', { ...(args('move.answer') as object), space: { ...spaceOk, perKind: { ptz: 1 } } })).toBe(false);
+    expect(argsOk('move.offer', { ...(args('move.offer') as object), summary: { ...summary(), ptz: { files: 1, bytes: 1, rows: 1, oldest: null, newest: null } } })).toBe(false);
+  });
   it('A33: the token is a plain string in move.offer only; move.open carries its hash', () => {
     expect(argsOk('move.offer', { ...(args('move.offer') as object), token: undefined })).toBe(false);
     expect(argsOk('move.open', { ...(args('move.open') as object), tokenHash: 'sha256:ABC' })).toBe(false);
@@ -323,7 +357,7 @@ describe('move commands', () => {
   });
   it('move fixtures: the valid ones pass their args schema; the refused ones fail it or the allow check', () => {
     const names = readdirSync(DIR).map((f) => f.replace(/\.json$/, '')).filter((n) => /-move-/.test(n));
-    expect(names.filter((n) => n.startsWith('valid-command-move-') && n !== 'valid-command-move-begin-no-bounds' && n !== 'valid-command-move-finish-return' && n !== 'valid-command-move-answer-refused-detail').sort()).toEqual(MOVE.map((c) => `valid-command-${c.replaceAll('.', '-')}`).sort());
+    expect(names.filter((n) => n.startsWith('valid-command-move-') && n !== 'valid-command-move-begin-no-bounds' && n !== 'valid-command-move-finish-return' && n !== 'valid-command-move-answer-refused-detail' && n !== 'valid-command-move-answer-kinds').sort()).toEqual(MOVE.map((c) => `valid-command-${c.replaceAll('.', '-')}`).sort());
     for (const f of all.filter((x) => /^valid-command-move-/.test(x.name))) expect(argsOk(f.message.body.command, f.message.body.args), f.name).toBe(true);
     expect(names.filter((n) => n.startsWith('valid-command-move-begin')).sort()).toEqual(['valid-command-move-begin', 'valid-command-move-begin-no-bounds']);
     const ns = all.find((x) => x.name === 'refused-move-summary-not-allowed')!;
