@@ -13,6 +13,7 @@
   import ProxySettings from '../components/ProxySettings.svelte';
   import ProxyCameraActions from '../components/ProxyCameraActions.svelte';
   import ProxyProfile from '../components/ProxyProfile.svelte';
+  import CameraOnboarding from '../components/CameraOnboarding.svelte';
 
   let { accountId, proxyId, camera = undefined }: { accountId: string; proxyId: string; camera?: string } = $props();
 
@@ -143,7 +144,8 @@
       </table>
       {#each s.cameras ?? [] as c (c.camera.id)}
         <div class="cam" data-testid="summary-camera-{c.camera.id}">
-          <div class="row"><span class="chip {camClass(d.view.state === 'online' ? c.camera.online : null)}">{c.camera.name}</span><span class="mono muted">{c.camera.id} · {c.camera.address}{c.camera.model ? ` · ${c.camera.model}` : ''}</span></div>
+          <div class="row"><span class="chip {camClass(d.view.state === 'online' ? c.camera.online : null)}">{c.camera.name}</span><span class="mono muted">{c.camera.id} · {c.camera.address}{c.camera.model ? ` · ${c.camera.model}` : ''}</span>
+            {#if d.reported?.onboarding?.[c.camera.id]}{@const o = d.reported.onboarding[c.camera.id]}<a class="chip {o.ready ? 'ok' : 'bad'}" href="#/accounts/{accountId}/proxies/{proxyId}?camera={encodeURIComponent(c.camera.id)}" data-testid="onboarding-chip-{c.camera.id}" title={o.missing.length ? `missing: ${o.missing.join(', ')}` : 'every step done'}>{o.ready ? 'onboarded' : 'onboarding'}</a>{/if}</div>
           <div class="row items">{#each c.items as it}<span class="badge" class:bad={it.problem}>{it.label}: {it.text}</span>{/each}</div>
         </div>
       {/each}
@@ -157,6 +159,7 @@
   </section>
 
   <ProxyProfile profile={d.reported?.profile ?? null} unreadable={d.reported?.profileUnreadable === true} runsOn={d.proxy.runsOn} />
+  {#if camera}<CameraOnboarding {accountId} {proxyId} {camera} {refresh} />{/if}
   <ProxyCameraActions {accountId} {proxyId} {refresh} {camera} />
   <ProxySettings {accountId} {proxyId} policy={d.view.commands} {refresh} />
   <ProxyCommands {accountId} {proxyId} policy={d.view.commands} allow={d.view.allow} {refresh} />
