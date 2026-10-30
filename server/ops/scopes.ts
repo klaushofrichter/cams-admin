@@ -7,7 +7,8 @@ import type { OpsScope } from './tokens';
 
 export interface OpsRoute { method: 'POST' | 'PUT' | 'PATCH' | 'DELETE'; path: string; scope: OpsScope }
 
-const tokenBase = '/accounts/:accountId/proxies/:proxyId/tokens';
+const proxyBase = '/accounts/:accountId/proxies/:proxyId';
+const tokenBase = `${proxyBase}/tokens`;
 export const OPS_ROUTES: readonly OpsRoute[] = [
   { method: 'POST', path: `${tokenBase}/:tokenId/revoke`, scope: 'tokens' },
   { method: 'POST', path: `${tokenBase}/:tokenId/retire`, scope: 'tokens' },
@@ -24,8 +25,21 @@ export const OPS_ROUTES: readonly OpsRoute[] = [
   { method: 'PATCH', path: '/accounts/:accountId/proxies/:proxyId', scope: 'registry' },
   { method: 'PATCH', path: '/accounts/:accountId/cameras/:cameraId', scope: 'registry' },
   // Onboarding: adopting a camera the proxy reports and the registry lacks (host from-proxy, model from the
-  // report). A plain POST /accounts/:accountId/cameras stays session-only, as does deleting a camera.
-  { method: 'POST', path: '/accounts/:accountId/proxies/:proxyId/adopt', scope: 'onboard' },
+  // report). A plain POST /accounts/:accountId/cameras stays session-only.
+  { method: 'POST', path: `${proxyBase}/adopt`, scope: 'onboard' },
+  // Camera actions, renames and proxy restarts (cam-proxy onboarding design §5); each still stops at the proxy's
+  // own allow-list, and the disruptive ones still need the typed confirm and pass the fleet gate.
+  { method: 'POST', path: `${proxyBase}/actions`, scope: 'actions' },
+  { method: 'POST', path: `${proxyBase}/cameras/:camera/name`, scope: 'actions' },
+  { method: 'POST', path: `${proxyBase}/restart`, scope: 'actions' },
+  // Proxy settings: preview, then apply by preview id (the remote-settable ones only).
+  { method: 'POST', path: `${proxyBase}/config/refresh`, scope: 'config' },
+  { method: 'POST', path: `${proxyBase}/config/preview`, scope: 'config' },
+  { method: 'POST', path: `${proxyBase}/config/apply`, scope: 'config' },
+  { method: 'POST', path: `${proxyBase}/config/rollback/preview`, scope: 'config' },
+  { method: 'POST', path: `${proxyBase}/config/rollback/apply`, scope: 'config' },
+  // Removing a camera from its account (offboarding). Enrolling a proxy stays with a sign-in (§10.4).
+  { method: 'DELETE', path: '/accounts/:accountId/cameras/:cameraId', scope: 'offboard' },
 ];
 
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

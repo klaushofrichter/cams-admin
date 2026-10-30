@@ -22,6 +22,9 @@
     { id: 'moves', text: 'Camera moves: cancel, end transfer' },
     { id: 'registry', text: 'Edit proxies and cameras (TLS site, CA pins, host, TLS name)' },
     { id: 'onboard', text: 'Adopt a camera a proxy reports (onboarding)' },
+    { id: 'actions', text: 'Run camera actions, rename cameras, restart proxies (as each proxy allows)' },
+    { id: 'config', text: 'Preview and apply proxy settings (the allowed ones)' },
+    { id: 'offboard', text: 'Remove a camera from its account' },
   ];
   const OPS_SAVE = 'mkdir -p ~/.config/cams-admin && (umask 077; pbpaste > ~/.config/cams-admin/ops-token)';
   let opsItems = $state<any[]>([]);
@@ -118,7 +121,8 @@
   <h2>Operations tokens</h2>
   <p class="muted">
     An operations token lets a script make a few writes without a sign-in: revoke, retire or apply proxy tokens, set or delete cams routes and
-    camera overrides, cancel a move or end its transfer, edit a proxy or a camera, each only if its scope was ticked at issue. It never reads (reads use the diagnostics
+    camera overrides, cancel a move or end its transfer, edit a proxy or a camera, adopt or remove a camera, run camera actions, preview and apply proxy
+    settings, each only if its scope was ticked at issue. It never reads (reads use the diagnostics
     token), and it never issues tokens, codes or passwords. At most 5 are live; 60 writes a minute each.
   </p>
   <form class="grid" onsubmit={(e) => { e.preventDefault(); issueOps(); }}>

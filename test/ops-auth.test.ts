@@ -152,7 +152,7 @@ describe('scoped writes', () => {
     expect(c.body).toMatchObject({ host: '10.43.61.52', tlsServername: 'cam9.cluster.internal', webUiUrl: null });
     expect(auditOf('proxy-update').at(-1)!.actor).toBe(`ops-token:${t.prefix}`);
     expect(auditOf('camera-update').at(-1)!.actor).toBe(`ops-token:${t.prefix}`);
-    // Creating or deleting stays with a sign-in.
+    // Creating stays with a sign-in; deleting needs the offboard scope.
     expect((await bearer('delete', `/accounts/${acc}/cameras/${cam}`, t.token)).status).toBe(403);
   });
 
@@ -181,6 +181,87 @@ describe('scoped writes', () => {
     expect(c.status).toBe(403);
     expect(c.body).toEqual({ error: 'scope' });
     expect(a.registry.listCameras(acct)).toHaveLength(1);
+  });
+
+  // An enrolled proxy that takes commands, with the allow-list given (the commands service checks it).
+  const commandProxy = (name: string, allow: string[]) => {
+    const acct = a.registry.createAccount('admin@example.com', { name: `${name}acc`, displayName: name }).id;
+    const p = a.registry.createProxy('admin@example.com', acct, { name, displayName: name, runsOn: 'local-host' }).id;
+    a.db.prepare(`UPDATE proxies SET state = 'enrolled' WHERE id = ?`).run(p);
+    a.status.hello(p, 'v2', Date.now(), ['status', 'commands']);
+    a.status.heartbeat(p, { summary: makeSummary({ cameras: 1, now: Date.now() }), proxy: { ...makeProxyInfo({ now: Date.now() }), commands: { enabled: true, paused: false, pauseReason: null, allow, seenWindow: 1000 } }, truncated: false }, Date.now());
+    return { acct, p, base: `/accounts/${acct}/proxies/${p}` };
+  };
+  const commandCount = (proxyId: string) => (a.db.prepare('SELECT count(*) n FROM commands WHERE proxy_id = ?').get(proxyId) as { n: number }).n;
+
+  it('an actions token runs a camera action, renames and restarts; a config token may not', async () => {
+    const { p, base } = commandProxy('act', ['camera.action:camera-test', 'camera.name.set', 'proxy.restart']);
+    const cases: [string, unknown][] = [
+      [`${base}/actions`, { camera: 'cam1', action: 'camera-test' }],
+      [`${base}/cameras/cam1/name`, { name: 'Front door' }],
+      [`${base}/restart`, { confirm: 'proxy.restart' }],
+    ];
+    const c = issue(['config']);
+    for (const [path, body] of cases) {
+      const no = await bearer('post', path, c.token, body);
+      expect(no.status, path).toBe(403);
+      expect(no.body, path).toEqual({ error: 'scope' });
+    }
+    expect(commandCount(p)).toBe(0);
+    const t = issue(['actions']);
+    for (const [path, body] of cases) {
+      const r = await bearer('post', path, t.token, body);
+      expect(r.status, `${path} ${JSON.stringify(r.body)}`).toBe(202);
+      expect(r.body).toEqual({ commandId: expect.any(String) });
+    }
+    expect(commandCount(p)).toBe(3);
+    const rows = auditOf('command-create').filter((x) => x.target_id === p);
+    expect(rows.map((x) => x.actor)).toEqual(Array(3).fill(`ops-token:${t.prefix}`));
+  });
+
+  it('a config token previews and applies; an actions token may not', async () => {
+    const { acct, p, base } = commandProxy('cfg', ['config.get', 'config.set', 'config.unset', 'config.rollback']);
+    const view = { revision: 'sha256:' + 'c'.repeat(64), schema: 1, cameras: ['cam1'], omittedCameras: [], settable: { 'sse.pingS': { type: 'integer', min: 5, max: 300 } }, paths: { 'sse.pingS': { v: 30, s: 'default' } } };
+    a.config.storeView(p, 'cmd_seed', view);
+    // The heartbeat queued its own config.get (ProxyConfig.onHeartbeat); it expired.
+    a.db.prepare(`UPDATE commands SET state = 'expired' WHERE proxy_id = ?`).run(p);
+    const before = commandCount(p);
+    const t = issue(['actions']);
+    for (const [path, body] of [[`${base}/config/refresh`, {}], [`${base}/config/preview`, { set: { 'sse.pingS': 7 } }], [`${base}/config/apply`, { previewId: 'cmd_x' }],
+      [`${base}/config/rollback/preview`, { cmdId: 'cmd_x' }], [`${base}/config/rollback/apply`, { previewId: 'cmd_x' }]] as [string, unknown][]) {
+      const no = await bearer('post', path, t.token, body);
+      expect(no.status, path).toBe(403);
+      expect(no.body, path).toEqual({ error: 'scope' });
+    }
+    expect(commandCount(p)).toBe(before);
+    const c = issue(['config']);
+    expect((await bearer('post', `${base}/config/refresh`, c.token)).status).toBe(202);
+    const pv = await bearer('post', `${base}/config/preview`, c.token, { set: { 'sse.pingS': 7 } });
+    expect(pv.status, JSON.stringify(pv.body)).toBe(202);
+    // The proxy answers the dry run (as the test client would).
+    a.db.prepare(`UPDATE commands SET state = 'done', finished_at = ?, result = ? WHERE id = ?`).run(Date.now(), JSON.stringify({ changes: [{ path: 'sse.pingS', from: 30, to: 7 }] }), pv.body.commandId);
+    const ap = await bearer('post', `${base}/config/apply`, c.token, { previewId: pv.body.commandId });
+    expect(ap.status, JSON.stringify(ap.body)).toBe(202);
+    // The rollback routes reach their handlers too.
+    expect((await bearer('post', `${base}/config/rollback/preview`, c.token, { cmdId: 'nope' })).body).toEqual({ error: 'invalid', field: 'cmdId' });
+    expect((await bearer('post', `${base}/config/rollback/apply`, c.token, { previewId: 'nope' })).body).toEqual({ error: 'invalid', field: 'previewId' });
+    expect(auditOf('command-create').filter((x) => x.target_id === p && x.actor !== 'system').map((x) => x.actor)).toEqual(Array(3).fill(`ops-token:${c.prefix}`));
+    expect(a.registry.getProxy(acct, p).id).toBe(p);
+  });
+
+  it('an offboard token deletes a camera (audit camera-delete, token actor); a registry token may not', async () => {
+    const cam = a.registry.createCamera('admin@example.com', acc, { camsId: 'offb', name: 'Off', kind: 'camera', proxyId: px, proxyCameraId: 'cam7', host: '192.0.2.31', protocol: 'https' }).id;
+    const r = issue(['registry', 'onboard', 'actions', 'config']);
+    const no = await bearer('delete', `/accounts/${acc}/cameras/${cam}`, r.token);
+    expect(no.status).toBe(403);
+    expect(no.body).toEqual({ error: 'scope' });
+    expect(a.registry.getCamera(acc, cam).id).toBe(cam);
+    const t = issue(['offboard']);
+    expect((await bearer('delete', `/accounts/${acc}/cameras/${cam}`, t.token)).status).toBe(204);
+    expect(a.registry.listCameras(acc).some((c) => c.id === cam)).toBe(false);
+    const rec = auditOf('camera-delete').at(-1)!;
+    expect(rec.actor).toBe(`ops-token:${t.prefix}`);
+    expect(rec.target_id).toBe(cam);
   });
 
   it('a moves token cancels a move', async () => {

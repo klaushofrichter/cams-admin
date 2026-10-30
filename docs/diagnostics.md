@@ -158,6 +158,15 @@ actor `ops-token:<8 hex>`. The list is also at `/diag/ops-tokens`.
 | `registry` | `PATCH /accounts/:accountId/proxies/:proxyId` |
 | `registry` | `PATCH /accounts/:accountId/cameras/:cameraId` |
 | `onboard` | `POST /accounts/:accountId/proxies/:proxyId/adopt` |
+| `actions` | `POST /accounts/:accountId/proxies/:proxyId/actions` |
+| `actions` | `POST /accounts/:accountId/proxies/:proxyId/cameras/:camera/name` |
+| `actions` | `POST /accounts/:accountId/proxies/:proxyId/restart` |
+| `config` | `POST /accounts/:accountId/proxies/:proxyId/config/refresh` |
+| `config` | `POST /accounts/:accountId/proxies/:proxyId/config/preview` |
+| `config` | `POST /accounts/:accountId/proxies/:proxyId/config/apply` |
+| `config` | `POST /accounts/:accountId/proxies/:proxyId/config/rollback/preview` |
+| `config` | `POST /accounts/:accountId/proxies/:proxyId/config/rollback/apply` |
+| `offboard` | `DELETE /accounts/:accountId/cameras/:cameraId` |
 
 Paths must be exactly as listed (the fixed words in lower case, ids as issued, no trailing slash). Anything else,
 and every route not in the table, gets 403 `scope`. No token can issue proxy
@@ -201,6 +210,41 @@ Audited as `camera-adopt`. Creating a camera any other way
 curl -fsS -X POST -H "Authorization: Bearer $(cat ~/.config/cams-admin/ops-token)" -H 'Content-Type: application/json' \
   -d '{"proxyCameraId":"cam2","camsId":"garden","name":"Garden"}' \
   "https://cams-admin.example.net/api/v1/accounts/acc_…/proxies/prx_…/adopt"
+```
+
+An `actions` token runs what the proxy page's camera actions do: a camera
+action (`{"camera":"cam1","action":"camera-test"}`; a disruptive one needs
+`"confirm"` set to the action's name and passes the fleet gate), a rename
+(`{"name":"Front door"}`) and a proxy restart (`{"confirm":"proxy.restart"}`).
+Each answers 202 `{commandId}`; the proxy still refuses what its allow-list
+lacks (409 `not_allowed_on_proxy`). The result shows on the proxy page; the
+command list itself (`GET …/proxies/:proxyId/commands/:cmdId`) is not a
+diagnostics route.
+
+```sh
+curl -fsS -X POST -H "Authorization: Bearer $(cat ~/.config/cams-admin/ops-token)" -H 'Content-Type: application/json' \
+  -d '{"camera":"cam1","action":"camera-test"}' \
+  "https://cams-admin.example.net/api/v1/accounts/acc_…/proxies/prx_…/actions"
+```
+
+A `config` token previews a settings change (`{"set":{"sse.pingS":20}}` or
+`{"unset":["sse.pingS"]}`; only the remote-settable settings, never storage),
+then applies that preview by its id (`{"previewId":"cmd_…"}`); the same for a
+rollback. A preview is applied only by the token or person who made it.
+
+```sh
+curl -fsS -X POST -H "Authorization: Bearer $(cat ~/.config/cams-admin/ops-token)" -H 'Content-Type: application/json' \
+  -d '{"set":{"sse.pingS":20}}' \
+  "https://cams-admin.example.net/api/v1/accounts/acc_…/proxies/prx_…/config/preview"
+```
+
+An `offboard` token removes a camera from its account (204; audited as
+`camera-delete`). The proxy keeps the camera until it is removed there; with
+auto-adopt on, a removed camera is never added back by itself.
+
+```sh
+curl -fsS -X DELETE -H "Authorization: Bearer $(cat ~/.config/cams-admin/ops-token)" \
+  "https://cams-admin.example.net/api/v1/accounts/acc_…/cameras/cam_…"
 ```
 
 ## Start a move
