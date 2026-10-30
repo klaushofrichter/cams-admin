@@ -21,7 +21,7 @@ const resign = (m: Record<string, any>) => { const { sig: _s, ...rest } = m; ret
 
 describe('the reference proxy check agrees with every proxy fixture', () => {
   const cases = all.filter((x) => x.$expect?.receiver === 'proxy' || (x.schema === 'command' && x.name.startsWith('valid-')));
-  it('covers 63 fixtures (P2 17, P3 24, moves 22)', () => expect(cases).toHaveLength(63));
+  it('covers 66 fixtures (P2 17, P3 24, moves 22, onboarding 3)', () => expect(cases).toHaveLength(66));
   for (const f of cases) {
     it(f.name, () => {
       const c = f.$context;
@@ -98,6 +98,78 @@ describe('the reference proxy check agrees with every proxy fixture', () => {
   });
   it('another command running: busy', () => {
     expect(refCheck(valid.message, ctx({ running: true }))).toEqual({ kind: 'nack', code: 'busy' });
+  });
+});
+
+// --- camera onboarding (the cams-admin onboarding plan, Task 1) --------------------------------
+describe('onboarding commands', () => {
+  const PIN = 'SHA256:' + 'AB'.repeat(32);
+  const STEPS = ['reachable', 'login', 'trust', 'capabilities', 'stream', 'events', 'ftp', 'time', 'name', 'poe', 'profile'];
+  const status = (): Record<string, any> => ({
+    camera: 'cam1', ready: false, checkedAt: 1791273600000,
+    steps: Object.fromEntries(STEPS.map((k) => [k, { ok: k === 'trust' ? false : true, detail: k === 'trust' ? 'certificate not trusted' : '', ...(k === 'trust' ? { action: 'camera-trust-pin' } : {}) }])),
+    trust: { mode: 'none', fingerprint: null, served: PIN },
+    time: { clockOffsetMs: null, zone: 'Europe/Berlin', cameraStdOffsetMinutes: -360, cameraDst: null },
+  });
+  const argsOk = (a: unknown) => strictValid('commands/camera.onboarding.get.args', a);
+  const resultOk = (r: unknown) => strictValid('commands/camera.onboarding.get.result', r);
+  it('camera.onboarding.get: args {v, camera | null} closed (strict)', () => {
+    expect(argsOk({ v: 1, camera: 'cam1' }), strictErrors()).toBe(true);
+    expect(argsOk({ v: 1, camera: null }), strictErrors()).toBe(true);
+    expect(argsOk({ v: 1, camera: 'cam1', extra: 1 })).toBe(false);
+    expect(argsOk({ v: 1, camera: 'Cam 1' })).toBe(false);
+    expect(argsOk({ v: 2, camera: 'cam1' })).toBe(false);
+    expect(argsOk({ v: 1 })).toBe(false);
+    expect(argsOk({ v: 1, camera: 'cam1', password: 'x' })).toBe(false);
+  });
+  it('camera.onboarding.get result: {cameras: {<id>: status}, clamped?}; every step required, ok nullable, closed', () => {
+    expect(resultOk({ cameras: { cam1: status() } }), strictErrors()).toBe(true);
+    expect(resultOk({ cameras: {}, clamped: true }), strictErrors()).toBe(true);
+    const many = Object.fromEntries(Array.from({ length: 65 }, (_, i) => [`cam${i}`, { ...status(), camera: `cam${i}` }]));
+    expect(resultOk({ cameras: many })).toBe(false);
+    const st = (f: (s: Record<string, any>) => void) => { const s = status(); f(s); return { cameras: { cam1: s } }; };
+    for (const [why, r] of [
+      ['a step missing', st((s) => { delete s.steps.poe; })],
+      ['an unknown step', st((s) => { s.steps.lens = { ok: true, detail: '' }; })],
+      ['ok a string', st((s) => { s.steps.poe.ok = 'yes'; })],
+      ['detail missing', st((s) => { delete s.steps.poe.detail; })],
+      ['detail of 201', st((s) => { s.steps.poe.detail = 'x'.repeat(201); })],
+      ['action of 33', st((s) => { s.steps.poe.action = 'x'.repeat(33); })],
+      ['an extra step field', st((s) => { s.steps.poe.extra = 1; })],
+      ['a bad trust mode', st((s) => { s.trust.mode = 'self'; })],
+      ['a lower-case pin', st((s) => { s.trust.served = 'SHA256:' + 'ab'.repeat(32); })],
+      ['no time', st((s) => { delete s.time; })],
+      ['a zone of 65', st((s) => { s.time.zone = 'x'.repeat(65); })],
+      ['an extra status field', st((s) => { s.password = 'x'; })],
+      ['no checkedAt', st((s) => { delete s.checkedAt; })],
+      ['a bad camera key', { cameras: { 'Cam 1': status() } }],
+      ['an extra result field', { cameras: {}, extra: 1 }],
+    ] as [string, unknown][]) expect(resultOk(r), why).toBe(false);
+  });
+  it('camera.action takes camera-time-set (camera required); there are no camera.ftp.setup or camera.time.set commands', () => {
+    expect(strictValid('commands/camera.action.args', { v: 1, camera: 'cam1', action: 'camera-time-set' }), strictErrors()).toBe(true);
+    expect(strictValid('commands/camera.action.args', { v: 1, camera: null, action: 'camera-time-set' })).toBe(false);
+    for (const c of ['camera.ftp.setup', 'camera.time.set']) expect(() => readFileSync(join(__dirname, '../contract/v1/strict/commands', `${c}.args.schema.json`)), c).toThrow();
+  });
+  it('the journal budget counts camera-time-set with the disruptive camera actions; camera.onboarding.get is not counted', () => {
+    const v = all.find((x) => x.name === 'valid-command-camera-time-set')!;
+    const at = (i: number) => v.$context.now - (i + 1) * 60_000;
+    const entry = (i: number, command: string, action?: string) => ({ cmdId: `cmd_${String(i).padStart(20, '0')}`, command, at: at(i), ...(action ? { action } : {}) });
+    const mixed = [0, 1, 2].map((i) => entry(i, 'camera.action', 'camera-time-set')).concat([3, 4, 5].map((i) => entry(i, 'camera.action', 'camera-reboot')));
+    expect(refCheck(v.message, { ...v.$context, seen: new Set<string>(), journal: mixed })).toMatchObject({ kind: 'nack', code: 'rate_limited' });
+    const reads = [0, 1, 2, 3, 4, 5].map((i) => entry(i, 'camera.onboarding.get'));
+    expect(refCheck(v.message, { ...v.$context, seen: new Set<string>(), journal: reads })).toEqual({ kind: 'run' });
+  });
+  it('the time-set not-allowed fixture is refused with not_allowed by the reference check; onboarding.get with camera null runs', () => {
+    const f = all.find((x) => x.name === 'refused-camera-action-time-set-not-allowed')!;
+    expect(refCheck(f.message, { ...f.$context, seen: new Set(f.$context.seen) })).toEqual({ kind: 'nack', code: 'not_allowed' });
+    const g = all.find((x) => x.name === 'valid-command-onboarding-get')!;
+    expect(refCheck(g.message, { ...g.$context, seen: new Set(g.$context.seen) })).toEqual({ kind: 'run' });
+    const allCams = structuredClone(g.message);
+    allCams.body.args = { v: 1, camera: null };
+    expect(refCheck(resign(allCams), { ...g.$context, seen: new Set<string>() })).toEqual({ kind: 'run' });
+    allCams.body.args = { v: 1, camera: 'cam1', extra: 1 };
+    expect(refCheck(resign(allCams), { ...g.$context, seen: new Set<string>() })).toEqual({ kind: 'nack', code: 'invalid_args' });
   });
 });
 

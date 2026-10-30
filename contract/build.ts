@@ -176,8 +176,20 @@ export function buildSchemas(mode: Mode): Record<string, S> {
     camera: { type: 'string', pattern: CAMERA_ID_PATTERN }, moveId: { type: 'string', pattern: MOVE_ID_PATTERN },
     items: arr(str(MOVE_LEFTOVER_ITEM_LEN, { minLength: 1 }), MOVE_LEFTOVER_ITEMS_MAX, { minItems: 1 }),
   }, ['camera', 'moveId', 'items']), MOVE_LEFTOVERS_MAX)) : {};
+  // The onboarding status per camera (camera onboarding spec §4.5, the heartbeat's compact form): optional in both
+  // modes, also when truncated; null = none. Lenient: anything (the server reads it with clamps, never a reason to
+  // refuse the heartbeat). Strict: at most 64 cameras, `missing` the steps that are not ok (unique, known names), and
+  // ready: true never with a required step missing.
+  const onboarding: S = strict ? nullable({
+    type: 'object', propertyNames: { pattern: CAMERA_ID_PATTERN }, maxProperties: ONBOARDING_CAMERAS_MAX,
+    additionalProperties: {
+      ...obj({ ready: bool, missing: arr(en([...ONBOARDING_STEPS]), ONBOARDING_STEPS.length, { uniqueItems: true }) }, ['ready', 'missing']),
+      if: { properties: { ready: { const: true } }, required: ['ready'] },
+      then: { properties: { missing: { type: 'array', items: { not: { enum: [...ONBOARDING_REQUIRED] } } } } },
+    },
+  }) : {};
   const heartbeatBody: S = {
-    ...obj({ summary: { type: 'object' }, proxy: proxyInfo, truncated: bool, profile, moveLeftovers }, ['summary'], ['profile', 'moveLeftovers']),
+    ...obj({ summary: { type: 'object' }, proxy: proxyInfo, truncated: bool, profile, moveLeftovers, onboarding }, ['summary'], ['profile', 'moveLeftovers', 'onboarding']),
     // The summary's own checks run separately at run time (an unreadable
     // summary is stored as such, never a closed connection); strict picks
     // the full or the truncated shape.
@@ -349,6 +361,31 @@ export function buildSchemas(mode: Mode): Record<string, S> {
     moveSchemas[`commands/${c}.result`] = { $id: BASE + `commands/${c}.result.schema.json`, title: `${c} result v1`, ...moveResults[c] };
   }
 
+  // --- camera onboarding (camera onboarding spec §4.5–§4.7; cam-proxy onboarding plan A, Prerequisites 1) -----
+  // camera.onboarding.get reads the full onboarding status of one camera (camera: its id) or of all (camera: null).
+  // FTP setup and time set are camera actions (camera.action:camera-ftp-setup, camera.action:camera-time-set).
+  const onboardingStep = obj({ ok: nullable(bool), detail: str(), action: str(32) }, ['ok'], ['action']);
+  const onboardingStatus = obj({
+    camera: camId, ready: bool, checkedAt: int(),
+    steps: obj(Object.fromEntries(ONBOARDING_STEPS.map((k) => [k, onboardingStep])), []),
+    trust: obj({ mode: en(['site-ca', 'pinned', 'public', 'none']), fingerprint: nullable(fp), served: nullable(fp) }, []),
+    time: obj({ clockOffsetMs: nullable({ type: 'integer' }), zone: nullable(str(64)), cameraStdOffsetMinutes: nullable({ type: 'integer' }), cameraDst: nullable(bool) }, []),
+  }, ['camera', 'ready', 'checkedAt', 'steps']);
+  const onboardingArgs: Record<(typeof ONBOARDING_COMMANDS)[number], S> = {
+    'camera.onboarding.get': obj({ v: { const: 1 }, camera: nullable(camId) }, ['v', 'camera']),
+  };
+  const onboardingResults: Record<(typeof ONBOARDING_COMMANDS)[number], S> = {
+    'camera.onboarding.get': obj({
+      cameras: { type: 'object', propertyNames: { pattern: CAMERA_ID_PATTERN }, maxProperties: ONBOARDING_CAMERAS_MAX, additionalProperties: onboardingStatus },
+      clamped: bool,
+    }, ['cameras'], ['clamped']),
+  };
+  const onboardingSchemas: Record<string, S> = {};
+  for (const c of ONBOARDING_COMMANDS) {
+    onboardingSchemas[`commands/${c}.args`] = { $id: BASE + `commands/${c}.args.schema.json`, title: `${c} args v1`, ...onboardingArgs[c] };
+    onboardingSchemas[`commands/${c}.result`] = { $id: BASE + `commands/${c}.result.schema.json`, title: `${c} result v1`, ...onboardingResults[c] };
+  }
+
   // --- events (proxy -> cams-admin): command.done and the move kinds ---------------
   const doneEvent = obj({ ...resultCore, kind: en(['command.done']), phase: { const: 'done' } },
     ['proxyId', 'connId', 'kind', 'cmdId', 'phase', 'status'], ['code', 'retryAfterS', 'duplicate', 'result']);
@@ -423,6 +460,7 @@ export function buildSchemas(mode: Mode): Record<string, S> {
     'health-summary-truncated': truncated,
     ...p3Schemas,
     ...moveSchemas,
+    ...onboardingSchemas,
   };
   if (strict) for (const s of Object.values(schemas)) s.$id = (s.$id as string).replace(BASE, BASE + 'strict/');
   return Object.fromEntries(Object.entries(schemas).map(([k, v]) => [k, { $schema: 'https://json-schema.org/draft/2020-12/schema', ...v }]));
@@ -468,18 +506,33 @@ export const SITE_PATTERN = '^[a-z0-9][a-z0-9-]{0,30}$';
 const V4_OCTET = '(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])';
 export const CIDR_PATTERN = `^(${V4_OCTET}(\\.${V4_OCTET}){3}/(3[0-2]|[12]?[0-9])|[0-9A-Fa-f.]{0,44}:[0-9A-Fa-f:.]{1,44}/(12[0-8]|1[01][0-9]|[1-9]?[0-9]))$`;
 
+// --- camera onboarding (camera onboarding spec §4.5–§4.7) -------------------------
+// The onboarding steps in the spec's order, and the ones `ready` needs.
+export const ONBOARDING_STEPS = ['reachable', 'login', 'trust', 'capabilities', 'stream', 'events', 'ftp', 'time', 'name', 'poe', 'profile'] as const;
+export const ONBOARDING_REQUIRED = ['reachable', 'login', 'trust', 'capabilities', 'stream', 'events'] as const;
+// The heartbeat's onboarding: at most 64 cameras; a step name (lenient) at most 32 characters.
+export const ONBOARDING_CAMERAS_MAX = 64;
+export const ONBOARDING_STEP_LEN = 32;
+// The onboarding command (allow entry: its own name; on by default on cam-proxy). FTP setup and time set are
+// camera actions: camera-ftp-setup (as before) and camera-time-set (disruptive, off by default).
+export const ONBOARDING_COMMANDS = ['camera.onboarding.get'] as const;
+
 // The command names on the wire (strict enum). P2 implements tokens.apply.
-export const WIRE_COMMANDS = ['tokens.apply', 'config.get', 'config.set', 'config.unset', 'config.rollback', 'camera.action', 'camera.name.set', 'proxy.restart', ...MOVE_COMMANDS] as const;
+export const WIRE_COMMANDS = ['tokens.apply', 'config.get', 'config.set', 'config.unset', 'config.rollback', 'camera.action', 'camera.name.set', 'proxy.restart', ...MOVE_COMMANDS, ...ONBOARDING_COMMANDS] as const;
 // The camera actions a proxy may allow for remote use (camera.action:<a>).
 export const REMOTE_ACTIONS = [
   'camera-test', 'onvif-resubscribe', 'camera-ftp-test', 'poe-switch-read', 'inventory', 'inventory-cancel', 'retention-run', 'restart',
   'camera-reboot', 'camera-powercycle', 'camera-ftp-setup', 'camera-ntp-set', 'camera-cert-push',
+  // Camera onboarding: the camera's time zone and DST rule from the proxy's time.zone (or the host's zone).
+  'camera-time-set',
 ] as const;
 // The proxy's allow-list entries (camsAdmin.allowCommands); anything else is a load error on the proxy.
 export const ALLOW_ENTRIES: readonly string[] = [
   'tokens.apply', 'tokens.apply.admin', 'config.get', 'config.set', 'config.unset', 'config.rollback', 'camera.name.set', 'proxy.restart',
   // Camera moves: both local, off by default. move.send starts a move from a proxy (the source's commands); move.receive accepts one (the target's).
   'move.send', 'move.receive',
+  // Camera onboarding: camera.onboarding.get, on by default on cam-proxy.
+  ...ONBOARDING_COMMANDS,
   ...REMOTE_ACTIONS.map((a) => `camera.action:${a}`),
 ];
 
@@ -493,7 +546,7 @@ export const NEVER_REMOTE_ACTIONS = [
   'camera-ftp-off',
 ] as const;
 // Remote actions the UIs group and warn about (with proxy.restart); the journal budget counts them.
-export const DISRUPTIVE_ACTIONS = ['restart', 'camera-reboot', 'camera-powercycle', 'camera-ftp-setup', 'camera-ntp-set', 'camera-cert-push'] as const;
+export const DISRUPTIVE_ACTIONS = ['restart', 'camera-reboot', 'camera-powercycle', 'camera-ftp-setup', 'camera-ntp-set', 'camera-cert-push', 'camera-time-set'] as const;
 // What the journal budget counts: the disruptive actions, and camera-ftp-off
 // entries journaled before it became never-remote.
 export const JOURNAL_BUDGET_ACTIONS = [...DISRUPTIVE_ACTIONS, 'camera-ftp-off'] as const;
@@ -550,5 +603,7 @@ export const REMOTE_SETTABLE: { v: 1; remote: string[]; narrow: Record<string, '
     'cameras.*.moved', 'moves',
     // The proxy profile (proxy profile design §0): set on the proxy only; it holds the storage budget.
     'profile',
+    // The proxy's time zone for camera-time-set (camera onboarding): set on the proxy only.
+    'time.zone',
   ],
 };

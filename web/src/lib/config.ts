@@ -147,5 +147,6 @@ export const EFFECT: Record<string, string> = {
   'camera-ftp-setup': "Writes the proxy's FTP upload settings into the camera.",
   'camera-ntp-set': "Writes the proxy's NTP server into the camera.",
   'camera-cert-push': "Pushes the proxy's certificate to the camera; the camera restarts its web server.",
+  'camera-time-set': "Writes the proxy's time zone and daylight saving rule into the camera.",
   'proxy.restart': "Restarts the proxy process: every camera's stream and events pause until it is back.",
 };

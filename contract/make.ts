@@ -5,7 +5,7 @@
 import { mkdirSync, rmSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 import type { KeyObject } from 'crypto';
-import { ALLOW_ENTRIES, buildSchemas, FILE_KINDS, MOVE_KINDS, DISRUPTIVE_ACTIONS, REMOTE_SETTABLE } from './build';
+import { ALLOW_ENTRIES, buildSchemas, FILE_KINDS, MOVE_KINDS, DISRUPTIVE_ACTIONS, ONBOARDING_STEPS, REMOTE_SETTABLE } from './build';
 import { buildCamsSchemas, camsFixtures, camsVectors } from './cams-build';
 import { keyFromSeed, privateFromB64, sign, signEnvelope, signedText } from '../server/crypto/ed25519';
 import { makeProfile, makeProxyInfo, makeSummary, truncateSummary } from '../test-client/summaries';
@@ -238,6 +238,39 @@ export function fixtures(): Record<string, unknown> {
     }), PROXY), 'the summary keeps the five file kinds: lenient takes a sixth key, strict refuses it (cam-proxy never sends one)'),
   };
 
+  // --- camera onboarding (the cams-admin onboarding plan, Task 1; cam-proxy plan A, Prerequisites 1). $context.feature:
+  // the cross-check treats the command fixtures as pending while cam-proxy does not implement camera.onboarding.get.
+  const onb = (f: { $context: object }) => ({ ...f, $context: { ...f.$context, feature: 'onboarding' } });
+  const hbOnb = (onboarding: unknown) => env('heartbeat', 2, { summary: pi, proxy: makeProxyInfo({ now: NOW }), truncated: false, onboarding });
+  const PIN = 'SHA256:' + 'AB'.repeat(32);
+  const stepOf: Record<string, { ok: boolean | null; detail: string; action?: string }> = {
+    ftp: { ok: false, detail: 'camera upload off', action: 'camera-ftp-setup' }, time: { ok: null, detail: 'zone unknown: set time.zone' }, poe: { ok: true, detail: 'none' },
+  };
+  const onboarding = {
+    'valid-heartbeat-onboarding': valid('heartbeat', hbOnb({ cam1: { ready: true, missing: ['ftp'] }, cam2: { ready: false, missing: ['login', 'trust'] } }),
+      'the onboarding status per camera (onboarding, optional): cam1 ready without FTP, cam2 not ready (login and trust missing)'),
+    'valid-heartbeat-onboarding-null': valid('heartbeat', hbOnb(null), 'onboarding null: none'),
+    'drift-heartbeat-onboarding-unknown-step': drift('heartbeat', hbOnb({ cam1: { ready: false, missing: ['lens'] } }),
+      'run time keeps an unknown step (a newer proxy) clamped and the heartbeat; strict refuses (missing lists known steps)'),
+    'drift-heartbeat-onboarding-ready-missing-login': drift('heartbeat', hbOnb({ cam1: { ready: true, missing: ['login'] } }),
+      'run time reads ready: true with a required step missing as not ready and keeps the heartbeat; strict refuses'),
+    'valid-command-onboarding-get': onb(p3Valid("read a camera's onboarding status (camera null: every camera; on by default on cam-proxy)", ['camera.onboarding.get'], 'camera.onboarding.get', { v: 1, camera: 'cam1' })),
+    'valid-command-camera-time-set': onb(p3Valid("set the camera's time zone and DST rule (a disruptive camera action, off by default)", ['camera.action:camera-time-set'], 'camera.action', { v: 1, camera: 'cam1', action: 'camera-time-set' })),
+    'refused-camera-action-time-set-not-allowed': onb(p3Refused('not_allowed', 'camera.action', { v: 1, camera: 'cam1', action: 'camera-time-set' }, ['camera.onboarding.get', 'camera.action:camera-ftp-setup'],
+      'camera-time-set needs its own entry camera.action:camera-time-set')),
+    'valid-result-onboarding-get': p3Result('camera.onboarding.get', 'one camera, all eleven steps: FTP off (not required), time unknown (no zone), ready', {
+      status: 'ok', result: { cameras: { cam1: {
+        camera: 'cam1', ready: true, checkedAt: NOW - 1000,
+        steps: Object.fromEntries(ONBOARDING_STEPS.map((k) => [k, stepOf[k] ?? { ok: true, detail: '' }])),
+        trust: { mode: 'pinned', fingerprint: PIN, served: PIN },
+        time: { clockOffsetMs: -1200, zone: null, cameraStdOffsetMinutes: 60, cameraDst: true },
+      } } },
+    }),
+    'valid-result-camera-time-set-verified': p3Result('camera.action', "camera-time-set: the camera's zone and DST rule written, re-read and compared", {
+      status: 'ok', result: { action: 'camera-time-set', camera: 'cam1', httpStatus: 200, answer: { outcome: 'set' }, verified: true, mismatch: [] },
+    }),
+  };
+
   return {
     'valid-heartbeat-4cam': valid('heartbeat', hb(four, false, makeProxyInfo({ now: NOW, site: 'garage', publicUrl: 'https://proxy.example.net' })), 'four cameras, site CA, cam3 offline'),
     'valid-heartbeat-1cam-pi': valid('heartbeat', hb(pi), 'the Pi: one camera, host stats'),
@@ -326,6 +359,7 @@ export function fixtures(): Record<string, unknown> {
     'invalid-enroll-no-proof': invalid('enroll-request', 'bad_request', { v: 1, code, publicKey: proxyKey.publicKeySpkiB64 }, ''),
     ...p3,
     ...moves,
+    ...onboarding,
   };
 }
 
