@@ -245,6 +245,8 @@ export function apiRouter(d: ApiDeps): express.Router {
   r.post(`${proxyBase}/actions`, h((req, res) => accepted(res, d.actions.cameraAction(actor(res), p(req, 'accountId'), p(req, 'proxyId'), req.body))));
   r.post(`${proxyBase}/cameras/:camera/name`, h((req, res) => accepted(res, d.actions.rename(actor(res), p(req, 'accountId'), p(req, 'proxyId'), p(req, 'camera'), req.body))));
   r.post(`${proxyBase}/restart`, h((req, res) => accepted(res, d.actions.restart(actor(res), p(req, 'accountId'), p(req, 'proxyId'), req.body))));
+  // The full onboarding status of one camera (camera.onboarding.get); time set and FTP setup are camera actions above.
+  r.post(`${proxyBase}/cameras/:camera/onboarding/refresh`, h((req, res) => accepted(res, d.actions.onboardingRefresh(actor(res), p(req, 'accountId'), p(req, 'proxyId'), p(req, 'camera')))));
 
   // --- camera moves (plan 2026-10-21 Task 8) ---------------------------------------------------
   const mview = (m: Move, chunks?: ChunkState[]) => moveView(d.db, m, m.phase === 'copying' && d.moves.archivePending(m, chunks));

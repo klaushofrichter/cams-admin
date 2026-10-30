@@ -219,6 +219,31 @@ describe('scoped writes', () => {
     expect(rows.map((x) => x.actor)).toEqual(Array(3).fill(`ops-token:${t.prefix}`));
   });
 
+  it('an actions token refreshes onboarding and sets the time; an offboard token may not', async () => {
+    const { p, base } = commandProxy('onbact', ['camera.onboarding.get', 'camera.action:camera-time-set']);
+    // The fleet gate counts every proxy's disruptive commands: the earlier tests' restart is over and out of the window.
+    a.db.prepare(`UPDATE commands SET state = 'expired', created_at = created_at - 3600000 WHERE state IN ('queued', 'sent', 'received')`).run();
+    const cases: [string, unknown, string][] = [
+      [`${base}/cameras/cam1/onboarding/refresh`, {}, 'camera.onboarding.get'],
+      [`${base}/actions`, { camera: 'cam1', action: 'camera-time-set', confirm: 'camera-time-set' }, 'camera.action'],
+    ];
+    const o = issue(['offboard', 'onboard', 'registry']);
+    for (const [path, body] of cases) {
+      const no = await bearer('post', path, o.token, body);
+      expect(no.status, path).toBe(403);
+      expect(no.body, path).toEqual({ error: 'scope' });
+    }
+    expect(commandCount(p)).toBe(0);
+    const t = issue(['actions']);
+    for (const [path, body] of cases) expect((await bearer('post', path, t.token, body)).status, path).toBe(202);
+    const made = a.db.prepare('SELECT command, args FROM commands WHERE proxy_id = ? ORDER BY rowid').all(p) as { command: string; args: string }[];
+    expect(made.map((x) => [x.command, JSON.parse(x.args)])).toEqual([['camera.onboarding.get', { v: 1, camera: 'cam1' }], ['camera.action', { v: 1, camera: 'cam1', action: 'camera-time-set' }]]);
+    expect(auditOf('command-create').filter((x) => x.target_id === p).map((x) => x.actor)).toEqual(Array(2).fill(`ops-token:${t.prefix}`));
+    // The typed confirm still applies to a token.
+    expect((await bearer('post', `${base}/actions`, t.token, { camera: 'cam2', action: 'camera-time-set' })).body).toEqual({ error: 'confirm_required', field: 'confirm' });
+    expect(cases.map((c) => c[2])).toEqual(made.map((x) => x.command));
+  });
+
   it('a config token previews and applies; an actions token may not', async () => {
     const { acct, p, base } = commandProxy('cfg', ['config.get', 'config.set', 'config.unset', 'config.rollback']);
     const view = { revision: 'sha256:' + 'c'.repeat(64), schema: 1, cameras: ['cam1'], omittedCameras: [], settable: { 'sse.pingS': { type: 'integer', min: 5, max: 300 } }, paths: { 'sse.pingS': { v: 30, s: 'default' } } };

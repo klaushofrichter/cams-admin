@@ -32,6 +32,7 @@ export const OPS_ROUTES: readonly OpsRoute[] = [
   { method: 'POST', path: `${proxyBase}/actions`, scope: 'actions' },
   { method: 'POST', path: `${proxyBase}/cameras/:camera/name`, scope: 'actions' },
   { method: 'POST', path: `${proxyBase}/restart`, scope: 'actions' },
+  { method: 'POST', path: `${proxyBase}/cameras/:camera/onboarding/refresh`, scope: 'actions' },
   // Proxy settings: preview, then apply by preview id (the remote-settable ones only).
   { method: 'POST', path: `${proxyBase}/config/refresh`, scope: 'config' },
   { method: 'POST', path: `${proxyBase}/config/preview`, scope: 'config' },

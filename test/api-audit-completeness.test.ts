@@ -58,6 +58,7 @@ describe('audit completeness', () => {
     ['post', '/accounts/:accountId/proxies/:proxyId/config/rollback/apply', () => `/accounts/${ids.acc}/proxies/${ids.prx}/config/rollback/apply`, () => ({ previewId: ids.rbPreview }), 'command-create'],
     ['post', '/accounts/:accountId/proxies/:proxyId/actions', () => `/accounts/${ids.acc}/proxies/${ids.prx}/actions`, () => ({ camera: 'cam1', action: 'camera-test' }), 'command-create'],
     ['post', '/accounts/:accountId/proxies/:proxyId/cameras/:camera/name', () => `/accounts/${ids.acc}/proxies/${ids.prx}/cameras/cam1/name`, () => ({ name: 'Porch' }), 'command-create'],
+    ['post', '/accounts/:accountId/proxies/:proxyId/cameras/:camera/onboarding/refresh', () => `/accounts/${ids.acc}/proxies/${ids.prx}/cameras/cam1/onboarding/refresh`, () => ({}), 'command-create'],
     ['post', '/accounts/:accountId/proxies/:proxyId/restart', () => `/accounts/${ids.acc}/proxies/${ids.prx}/restart`, () => ({ confirm: 'proxy.restart' }), 'command-create'],
     ['post', '/accounts/:accountId/cameras', () => `/accounts/${ids.acc}/cameras`, () => ({ camsId: 's1', name: 'S1', kind: 'sim' }), 'camera-create'],
     ['patch', '/accounts/:accountId/cameras/:cameraId', () => `/accounts/${ids.acc}/cameras/${ids.cam}`, () => ({ name: 'S one', version: 1 }), 'camera-update'],
@@ -117,7 +118,7 @@ describe('audit completeness', () => {
       // A stored settings view first, so the heartbeat below queues no read of its own.
       a.config.storeView(ids.prx, 'cmd_0123456789ABCDEFGHJK', { revision: REV, cameras: ['cam1'], omittedCameras: [], paths: { 'sse.pingS': { v: 30, s: 'default' } }, settable: { 'sse.pingS': { type: 'integer' } } });
       a.status.hello(ids.prx, 'v2', Date.now(), ['status', 'commands']);
-      a.status.heartbeat(ids.prx, { summary: makeSummary({ cameras: 2, now: Date.now() }), proxy: { ...makeProxyInfo({ now: Date.now() }), commands: { enabled: true, paused: false, pauseReason: null, allow: ['tokens.apply', ...P3_ALLOW], seenWindow: 1000 } }, truncated: false }, Date.now());
+      a.status.heartbeat(ids.prx, { summary: makeSummary({ cameras: 2, now: Date.now() }), proxy: { ...makeProxyInfo({ now: Date.now() }), commands: { enabled: true, paused: false, pauseReason: null, allow: ['tokens.apply', ...P3_ALLOW, 'camera.onboarding.get'], seenWindow: 1000 } }, truncated: false }, Date.now());
     }
     // The proxy isn't connected: finish the P3 commands by hand, as the proxy would.
     const finish = (id: string, result: object) => a.db.prepare(`UPDATE commands SET state = 'done', finished_at = ?, result = ? WHERE id = ?`).run(Date.now(), JSON.stringify({ body: { phase: 'done', status: 'ok', result } }), id);

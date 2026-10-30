@@ -10,7 +10,7 @@ import { createHash } from 'crypto';
 import Ajv2020 from 'ajv/dist/2020';
 import type { ValidateFunction } from 'ajv';
 import { publicFromB64, verifyEnvelope } from '../server/crypto/ed25519';
-import { buildSchemas, CAMERA_NAME_PATTERN, DISRUPTIVE_ACTIONS, JOURNAL_BUDGET_ACTIONS, MOVE_COMMANDS, NEVER_REMOTE_ACTIONS, ONBOARDING_COMMANDS, P3_COMMANDS, PATH_PATTERN, REMOTE_ACTIONS } from '../contract/build';
+import { buildSchemas, CAMERA_NAME_PATTERN, DISRUPTIVE_ACTIONS, JOURNAL_BUDGET_ACTIONS, MOVE_COMMANDS, NEVER_REMOTE_ACTIONS, ONBOARDING_COMMANDS, ONBOARDING_REQUIRED, ONBOARDING_STEPS, P3_COMMANDS, PATH_PATTERN, REMOTE_ACTIONS } from '../contract/build';
 
 export interface CheckContext {
   now: number; // cams-admin time: Date.now() + the offset learned from the challenge
@@ -132,6 +132,26 @@ export function moveRequestFromBegin(a: { camera: string; target: string; bounds
     summary: moveSummaryOf(),
     settings: { name: `Cam ${a.camera}` },
   };
+}
+
+// camera.onboarding.get's result from the client's compact onboarding ({<camera>: {ready, missing}}, the heartbeat's):
+// every step ok unless missing (an optional step missing reads ok: false, a required one too); args.camera null = every camera.
+export function onboardingResultOf(compact: unknown, camera: string | null, now: number): Record<string, unknown> {
+  const all = compact && typeof compact === 'object' && !Array.isArray(compact) ? (compact as Record<string, { ready?: unknown; missing?: unknown }>) : {};
+  const cameras: Record<string, unknown> = {};
+  for (const [id, c] of Object.entries(all)) {
+    if (camera !== null && id !== camera) continue;
+    const missing = Array.isArray(c?.missing) ? (c.missing as string[]) : [];
+    const steps = Object.fromEntries(ONBOARDING_STEPS.map((k) => [k, missing.includes(k)
+      ? { ok: false, detail: `${k} not done`, ...((ONBOARDING_REQUIRED as readonly string[]).includes(k) ? {} : { action: k === 'ftp' ? 'camera-ftp-setup' : k === 'time' ? 'camera-time-set' : 'local' }) }
+      : { ok: true, detail: '' }]));
+    cameras[id] = {
+      camera: id, ready: c?.ready === true, checkedAt: now, steps,
+      trust: { mode: 'site-ca', fingerprint: null, served: null },
+      time: { clockOffsetMs: 0, zone: null, cameraStdOffsetMinutes: null, cameraDst: null },
+    };
+  }
+  return { cameras };
 }
 
 const isDisruptive = (a: string | undefined) => (DISRUPTIVE_ACTIONS as readonly string[]).includes(a ?? '');

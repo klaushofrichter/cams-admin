@@ -18,7 +18,7 @@ export interface RefOutcome { status: 'ok' | 'failed' | 'conflict'; code?: strin
 interface Step { before?: Leaf; after?: Leaf }
 interface Backup { paths: Record<string, Step>; rolledBack: boolean }
 
-const CAMERA_WRITES = ['camera-ftp-setup', 'camera-ntp-set', 'camera-cert-push'];
+const CAMERA_WRITES = ['camera-ftp-setup', 'camera-ntp-set', 'camera-cert-push', 'camera-time-set'];
 const LESS_REASON = 'a remote change may only lower spending';
 const MORE_REASON = 'a remote change may only keep data longer';
 // Google Vision caps where 0 means "no cap".

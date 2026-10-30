@@ -161,6 +161,7 @@ actor `ops-token:<8 hex>`. The list is also at `/diag/ops-tokens`.
 | `actions` | `POST /accounts/:accountId/proxies/:proxyId/actions` |
 | `actions` | `POST /accounts/:accountId/proxies/:proxyId/cameras/:camera/name` |
 | `actions` | `POST /accounts/:accountId/proxies/:proxyId/restart` |
+| `actions` | `POST /accounts/:accountId/proxies/:proxyId/cameras/:camera/onboarding/refresh` |
 | `config` | `POST /accounts/:accountId/proxies/:proxyId/config/refresh` |
 | `config` | `POST /accounts/:accountId/proxies/:proxyId/config/preview` |
 | `config` | `POST /accounts/:accountId/proxies/:proxyId/config/apply` |

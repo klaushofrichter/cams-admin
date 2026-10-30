@@ -1,6 +1,6 @@
 import { EventEmitter } from 'events';
 import { generateKeyPair, privateFromB64, publicFromB64, sign, signEnvelope, signedText, verify } from '../server/crypto/ed25519';
-import { moveRequestFromBegin, moveSummaryOf, refCheck, type JournalEntry } from './commands';
+import { moveRequestFromBegin, moveSummaryOf, onboardingResultOf, refCheck, type JournalEntry } from './commands';
 import type { RefProxyConfig } from './config';
 import { normaliseCode, ulid } from '../server/ids';
 import { makeProxyInfo } from './summaries';
@@ -319,7 +319,8 @@ export class ProxyClient extends EventEmitter {
     this.sendSigned('result', { ...head, phase: 'received' }, { re: m.id });
     this.executed.push(b.cmdId);
     this.journalEntries.push({ cmdId: b.cmdId, command: b.command, at: this.now() + this.serverOffset, ...(b.command === 'camera.action' ? { action: b.args.action } : {}) });
-    const d: DoneBody = b.command === 'tokens.apply' ? this.applyTokens(b.args) : b.command.startsWith('move.') ? this.runMove(b) : this.runP3(b);
+    const d: DoneBody = b.command === 'tokens.apply' ? this.applyTokens(b.args) : b.command.startsWith('move.') ? this.runMove(b)
+      : b.command === 'camera.onboarding.get' ? { status: 'ok', result: onboardingResultOf(this.o.onboarding?.(), b.args.camera, this.now() + this.serverOffset) } : this.runP3(b);
     this.journal.set(b.cmdId, d);
     if (this.dropAfterReceived > 0) {
       this.dropAfterReceived--;
