@@ -39,7 +39,7 @@ for (const e of vectors.envelopes) {
 }
 
 interface JournalEntry { cmdId: string; command: string; at: number; action?: string }
-interface Ctx { now: number; proxyId: string; connId: string; serverKeys: string[]; allow: string[]; paused: boolean; seen: string[]; enabled?: boolean; tokens?: object[]; journal?: JournalEntry[] }
+interface Ctx { now: number; proxyId: string; connId: string; serverKeys: string[]; allow: string[]; paused: boolean; seen: string[]; enabled?: boolean; tokens?: object[]; journal?: JournalEntry[]; feature?: string }
 const implemented = (c: string) => (IMPLEMENTED instanceof Set ? IMPLEMENTED.has(c) : (IMPLEMENTED as string[]).includes(c));
 // $context.journal as cam-proxy's Journal.countSince(pred, sinceMs) → {n, oldest}.
 const countSince = (entries: JournalEntry[]) => (pred: (e: JournalEntry) => boolean, sinceMs: number) => {
@@ -52,6 +52,10 @@ const P3_STARTED = P3.some(implemented);
 const MOVE = ['move.begin', 'move.summary', 'move.targets', 'move.open', 'move.offer', 'move.answer', 'move.start', 'move.go', 'move.release', 'move.finish', 'move.cancel', 'move.return.open', 'move.return.start'];
 // move.summary (added later) is pending on its own until cam-proxy implements it; the rest of the group is already implemented and stays strict.
 const MOVE_STARTED = MOVE.filter((c) => c !== 'move.summary').some(implemented);
+// A fixture of a feature cam-proxy has not started ($context.feature) is pending on its own: move-ptz until
+// cam-proxy's moves know the ptz kind; strict once they do.
+const PTZ_STARTED = existsSync(file('src/moves/types.ts')) && readFileSync(file('src/moves/types.ts'), 'utf8').includes("'ptz'");
+const FEATURE_STARTED: Record<string, boolean> = { 'move-ptz': PTZ_STARTED };
 const DIR = join(__dirname, '../../contract/v1/fixtures');
 const ctxOf = (c: Ctx, journal: (id: string) => unknown = () => undefined) => {
   const seen = new SeenIds();
@@ -76,6 +80,12 @@ for (const f of cmds) {
   // match (a forgotten IMPLEMENTED entry is drift).
   const cmd = f.message.body.command;
   const group = cmd === 'move.summary' ? false : MOVE.includes(cmd) ? MOVE_STARTED : P3_STARTED;
+  const feature = f.$context.feature as string | undefined;
+  if (got !== want && feature && !FEATURE_STARTED[feature]) {
+    pending++;
+    console.log(`pending ${f.name} (cam-proxy does not have ${feature} yet)`);
+    continue;
+  }
   if (got !== want && !implemented(cmd) && !group) {
     pending++;
     console.log(`pending ${f.name} (cam-proxy does not implement ${f.message.body.command} yet)`);

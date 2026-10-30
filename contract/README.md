@@ -125,6 +125,23 @@ the target reports no subnet or the host is no IPv4 literal. The firewall lines
 hold camera LAN addresses: never logged on either side. cams-admin never sets
 the profile (it holds the storage budget).
 
+## Move leftovers (heartbeat `moveLeftovers`)
+
+Additive: the heartbeat body gains an optional `moveLeftovers` (also when
+truncated; `null` = none): what a proxy could not clean up itself after a camera
+moved away (cam-proxy's capabilities design §7). **Strict:** an array of at most
+16 (`MOVE_LEFTOVERS_MAX`) closed `{camera, moveId, items}`: `camera` a proxy
+camera id, `moveId` an `mv_` id, `items` 1..4 strings (`MOVE_LEFTOVER_ITEMS_MAX`)
+of 1..80 characters (`MOVE_LEFTOVER_ITEM_LEN`). **Lenient:** anything; cams-admin
+reads it with clamps (16 entries, 4 items, 80 characters) and drops what it
+can't read, never the heartbeat. The item forms cam-proxy sends:
+`config.json entry`, `env CAMPROXY_CAMERA_PASSWORD_<ID>` and
+`env CAMPROXY_CAMERA_PASSWORD_<ID>_FILE`. cams-admin shows them in
+`/api/v1/diag/proxies` (`reported.moveLeftovers`) and on the Diagnostics page.
+
+Fixtures: `valid-heartbeat-move-leftovers`, `valid-heartbeat-move-leftovers-null`,
+`drift-heartbeat-move-leftovers-long` (five items: run time keeps four; strict refuses).
+
 ## Remote configuration (P3)
 
 Additive: the envelope stays v1, the subprotocol `cams-admin.v1`, signatures
@@ -296,7 +313,7 @@ Rulings of the camera-move plan that the schemas carry:
   never null, closed objects. `summary` has all five kinds, times nullable.
 - `move.begin` (cams-admin → source, entry `move.send`) starts a move from cams-admin:
   args `{v: 1, camera: <proxy camera id>, target: <proxy id>, bounds: MoveBounds | null}`,
-  all required, closed. `MoveBounds` is `{transfer, kinds (unique, at most five),
+  all required, closed. `MoveBounds` is `{transfer, kinds (unique, at most six: the move kinds),
   space (all | omit | fit | retention), maxBudgetS (integer, 60 to 604800)}`: what
   the source may approve on its own. No password, token or key travels. The result
   is `{requestId}`; the source then emits the usual `move.request` event. A refusal
@@ -337,7 +354,7 @@ Rulings of the camera-move plan that the schemas carry:
     (step 11 of the check order).
   - `move.phase` gains three optional fields: `check` (the completeness check:
     `{complete, missing, recovered, failed, expired}`; `complete` is a boolean, the
-    other four are objects with optional keys among the five kinds, each a file count),
+    other four are objects with optional keys among the six move kinds, each a count),
     `keepDays` (integer 7 to 3650: how long cams-admin keeps the ended move) and
     `returnPending` (boolean: a cancel past the switch-over left content to copy back).
   - The check counts files; rows that could not be imported count as `failed`.
@@ -345,6 +362,30 @@ Rulings of the camera-move plan that the schemas carry:
     proxies: no wire change.
 - `site` (`move.targets`, and cams-v1 `proxies[].site`) is null or
   `^[a-z0-9][a-z0-9-]{0,30}$`, cam-proxy's `tls.site`.
+- **PTZ positions (`ptz`).** A camera's PTZ positions travel with it (cam-proxy's
+  capabilities design §7). The move kinds are split:
+  - the five **file kinds** (`FILE_KINDS`: `stills`, `clips`, `events`, `checks`,
+    `archive`) are the only keys of `summary` (`move.request`, `move.offer`, the
+    `move.summary` result; still all five, closed), `space.perKind` and the
+    `move.finish` result's `deleted`; the copy back's plan names them too;
+  - all six **move kinds** (`MOVE_KINDS`: the five and `ptz`) are allowed in
+    `plan.kinds` and `bounds.kinds` (unique, at most six), chunk ids
+    (`ptz:<YYYY-MM-DD>`), the `move.phase` check counts and `kinds`.
+  - `kinds` (optional, unique `MOVE_KINDS`, at most six): the target lists the kinds
+    it accepts in the `move.offer` accept branch (`{accept: true, space, probeBps,
+    kinds?}`), and cams-admin passes it on in `move.answer`. Absent means the five
+    file kinds (a proxy before `ptz`). cams-admin relays it only to a source whose
+    last hello listed the capability `move-ptz`: an older source's closed
+    `move.answer` check would refuse the whole answer.
+  - Positions travel also with `transfer: false` (a plan of `kinds: ['ptz']`); a
+    `ptz` chunk has no files and no summary entry. `bounds.kinds` may name `ptz`,
+    but cam-proxy ignores it there (positions are not a choice).
+  - Fixtures: `valid-result-move-offer-kinds`, `valid-command-move-answer-kinds`
+    (`$context.feature: 'move-ptz'`: the cross-check reports it `pending` until
+    cam-proxy's `src/moves/types.ts` names `'ptz'`), `valid-event-move-approve-ptz`,
+    `valid-event-move-approve-ptz-only`, `valid-event-move-progress-ptz`,
+    `valid-event-move-phase-check-ptz`, `drift-event-move-request-summary-ptz` (a
+    sixth summary key: lenient takes it, strict refuses).
 
 ## cams-v1 (P4: the cams service API)
 

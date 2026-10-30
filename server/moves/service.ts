@@ -8,7 +8,7 @@ import type { Logger } from '../log';
 import type { LiveHub } from '../live';
 import type { CommandRow, Commands, WireCommand } from '../commands/service';
 import { validateResultPayload } from '../contract';
-import { MOVE_ANSWER_REASONS, MOVE_KINDS } from '../../contract/build';
+import { FILE_KINDS, MOVE_ANSWER_REASONS } from '../../contract/build';
 import { newId } from '../ids';
 import { cancelOwed, detailOf, GIVE_UP_CLOSED, GIVE_UP_CLOSED_OPEN_CODES, MoveBusy, targetCancelDone, MoveStore, type ChunkState, type ChunkStateName, type Move } from './store';
 import { eligibleTargets, precheck, type Candidate, type EligibleTarget, type PrecheckDeps } from './precheck';
@@ -126,7 +126,7 @@ export function estimateS(summary: unknown, probeBps: number): number {
   let files = 0;
   let chunks = 0;
   const s = (summary && typeof summary === 'object' ? summary : {}) as Record<string, { bytes?: unknown; files?: unknown; oldest?: unknown; newest?: unknown } | undefined>;
-  for (const k of MOVE_KINDS) {
+  for (const k of FILE_KINDS) {
     const e = s[k];
     if (isCount(e?.bytes)) bytes += e.bytes;
     if (!isCount(e?.files) || e.files === 0) continue;
@@ -145,7 +145,7 @@ export function hostnameOf(host: string): string {
   const i = h.indexOf(':');
   return i >= 0 && h.indexOf(':', i + 1) < 0 ? h.slice(0, i) : h;
 }
-const bytesOf = (summary: unknown) => MOVE_KINDS.reduce((n, k) => {
+const bytesOf = (summary: unknown) => FILE_KINDS.reduce((n, k) => {
   const b = (summary as Record<string, { bytes?: unknown }> | null)?.[k]?.bytes;
   return n + (isCount(b) ? b : 0);
 }, 0);
@@ -155,7 +155,7 @@ function answerSpace(x: unknown): Record<string, unknown> | null {
   const s = x as Record<string, unknown> | null;
   if (!s || typeof s !== 'object' || !isCount(s.needed) || !isCount(s.available) || typeof s.fits !== 'boolean') return null;
   const pk = (s.perKind && typeof s.perKind === 'object' ? s.perKind : {}) as Record<string, unknown>;
-  const perKind = Object.fromEntries(MOVE_KINDS.filter((k) => isCount(pk[k])).map((k) => [k, pk[k]]));
+  const perKind = Object.fromEntries(FILE_KINDS.filter((k) => isCount(pk[k])).map((k) => [k, pk[k]]));
   return { needed: s.needed, available: s.available, fits: s.fits, perKind, retentionProposal: s.retentionProposal ?? null };
 }
 

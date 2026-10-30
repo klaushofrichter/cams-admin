@@ -139,6 +139,26 @@ describe('move events', () => {
       expect(validateMessage(m), key).toMatchObject({ ok: false, code: 'bad_message' });
     }
   });
+  it('move.progress with a ptz chunk id, move.phase check with ptz, move.approve with ptz validate', () => {
+    expect(strictValid('event', progress([{ id: 'ptz:2026-10-30', state: 'verified' }]))).toBe(true);
+    expect(strictValid('event', phase({ phase: 'copied', check: { complete: false, missing: {}, recovered: {}, failed: { ptz: 1 }, expired: {} } }))).toBe(true);
+    expect(strictValid('event', wrap({ kind: 'move.approve', moveId: MV, plan: { transfer: false, kinds: ['ptz'], space: 'all', targetSettings: null, budgetS: 60, estimateS: 0 } }))).toBe(true);
+    for (const n of ['valid-event-move-approve-ptz', 'valid-event-move-approve-ptz-only', 'valid-event-move-progress-ptz', 'valid-event-move-phase-check-ptz']) {
+      expect(strictValid('event', fixtureNamed(n).message), `${n} ${strictErrors()}`).toBe(true);
+      expect(validateMessage(fixtureNamed(n).message), n).toMatchObject({ ok: true });
+    }
+    expect(fixtureNamed('valid-event-move-approve-ptz-only').message.body.plan).toMatchObject({ transfer: false, kinds: ['ptz'] });
+  });
+  it('a move.request summary with a ptz key: lenient takes it, strict refuses', () => {
+    const f = fixtureNamed('drift-event-move-request-summary-ptz');
+    expect(f.message.body.summary.ptz).toBeDefined();
+    expect(strictValid('event', f.message)).toBe(false);
+    expect(validateMessage(f.message)).toMatchObject({ ok: true });
+  });
+  it('a move.finish result with deleted.ptz is refused in strict', () => {
+    expect(strictValid('commands/move.finish.result', { deleted: { ptz: { files: 1, bytes: 1 } } })).toBe(false);
+    expect(strictValid('commands/move.finish.result', { deleted: { clips: { files: 1, bytes: 1 } } })).toBe(true);
+  });
   it('an unknown event kind is refused in strict', () => {
     expect(strictValid('event', wrap({ kind: 'move.explode' }))).toBe(false);
   });

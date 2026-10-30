@@ -1,4 +1,4 @@
-import { MOVE_KINDS } from '../../contract/build';
+import { FILE_KINDS } from '../../contract/build';
 import type { Profile } from '../status/profile';
 import { isCount } from '../validate';
 
@@ -12,16 +12,16 @@ export interface SpaceCheck {
   // The kinds bigger than their cap on the target (stills.maxGB, ftp.maxGB for clips), from its last settings view.
   overCaps: { kind: string; bytes: number; capBytes: number }[];
 }
-export type KindCaps = Partial<Record<(typeof MOVE_KINDS)[number], number>>;
+export type KindCaps = Partial<Record<(typeof FILE_KINDS)[number], number>>;
 
 const count = (x: unknown): number => (isCount(x) ? x : 0);
 
 export function spaceCheck(summary: unknown, p: Profile | null | undefined, caps: KindCaps, now: number): SpaceCheck | null {
   if (!p || p.storage.budgetBytes === null || p.storage.usedBytes === null) return null;
   const s = (summary && typeof summary === 'object' ? summary : {}) as Record<string, { bytes?: unknown } | undefined>;
-  const needBytes = MOVE_KINDS.reduce((n, k) => n + count(s[k]?.bytes), 0);
+  const needBytes = FILE_KINDS.reduce((n, k) => n + count(s[k]?.bytes), 0);
   const leftBytes = Math.max(0, p.storage.budgetBytes - p.storage.usedBytes);
-  const overCaps = MOVE_KINDS.flatMap((k) => {
+  const overCaps = FILE_KINDS.flatMap((k) => {
     const cap = caps[k];
     const b = count(s[k]?.bytes);
     return cap !== undefined && b > cap ? [{ kind: k, bytes: b, capBytes: cap }] : [];

@@ -5,7 +5,7 @@
 import { mkdirSync, rmSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 import type { KeyObject } from 'crypto';
-import { ALLOW_ENTRIES, buildSchemas, MOVE_KINDS, DISRUPTIVE_ACTIONS, REMOTE_SETTABLE } from './build';
+import { ALLOW_ENTRIES, buildSchemas, FILE_KINDS, MOVE_KINDS, DISRUPTIVE_ACTIONS, REMOTE_SETTABLE } from './build';
 import { buildCamsSchemas, camsFixtures, camsVectors } from './cams-build';
 import { keyFromSeed, privateFromB64, sign, signEnvelope, signedText } from '../server/crypto/ed25519';
 import { makeProfile, makeProxyInfo, makeSummary, truncateSummary } from '../test-client/summaries';
@@ -147,7 +147,7 @@ export function fixtures(): Record<string, unknown> {
   const LEAF = `SHA256:${'AB'.repeat(32)}`;
   // A fixed X25519 SPKI public key (the 12-byte prefix and 32 bytes: RFC 8410), base64.
   const X25519 = Buffer.concat([Buffer.from('302a300506032b656e032100', 'hex'), Buffer.alloc(32, 7)]).toString('base64');
-  const summary = Object.fromEntries(MOVE_KINDS.map((k) => [k, k === 'archive'
+  const summary = Object.fromEntries(FILE_KINDS.map((k) => [k, k === 'archive'
     ? { files: 0, bytes: 0, rows: 0, oldest: null, newest: null }
     : { files: 120, bytes: 52_428_800, rows: 130, oldest: NOW - 86_400_000 * 30, newest: NOW - 60_000 }]));
   const settings = { name: 'Garage Süd', statusPollS: 30, ftp: { enabled: true, stream: 'main' }, stills: { stream: 'sub', intervalS: 1 }, storage: { sharePercent: 40 }, events: { poll: { enabled: true } } };
@@ -219,6 +219,23 @@ export function fixtures(): Record<string, unknown> {
     'invalid-event-move-progress-bad-chunk': invalid('event', 'bad_message', signed(env('event', 3, {
       proxyId: PRX, connId: CON, kind: 'move.progress', moveId: MV, chunks: [{ id: 'clips', state: 'copied' }], bytesDone: 0, bytesTotal: 1, rateBps: 0, etaS: 0,
     }), PROXY), 'a chunk id without a date'),
+    // --- the ptz kind (a camera's PTZ positions travel with it; cam-proxy plan D). $context.feature: the cross-check
+    // treats the fixture as pending while cam-proxy's moves know no ptz kind.
+    'valid-result-move-offer-kinds': { $note: 'the target accepts and lists the move kinds it takes (optional; absent = the five file kinds)', $command: 'move.offer', schema: 'result',
+      message: result(5, { phase: 'done', status: 'ok', result: { accept: true, space, probeBps: 12_500_000, kinds: [...MOVE_KINDS] } }) },
+    'valid-command-move-answer-kinds': { ...moveValid('move.answer', ['move.send'], { v: 1, moveId: MV, requestId: RQ, target: { proxyId: PRX_T, name: 'Pi' }, accept: true, space, estimateS: 1800, kinds: [...MOVE_KINDS] },
+      "the target's accepted kinds, relayed only to a source whose hello announced move-ptz"), $context: { ...ctx({ allow: ['move.send'] }), feature: 'move-ptz' } },
+    'valid-event-move-approve-ptz': moveEvent(3, { kind: 'move.approve', moveId: MV, plan: { ...plan, kinds: ['clips', 'ptz'] } }, "a plan with the camera's PTZ positions"),
+    'valid-event-move-approve-ptz-only': moveEvent(3, { kind: 'move.approve', moveId: MV, plan: { ...plan, transfer: false, kinds: ['ptz'] } }, 'no content transfer: the PTZ positions still travel'),
+    'valid-event-move-progress-ptz': moveEvent(3, {
+      kind: 'move.progress', moveId: MV, chunks: [{ id: 'clips:2026-10-30', state: 'verified' }, { id: 'ptz:2026-10-30', state: 'verified' }], bytesDone: 1_048_576, bytesTotal: 1_048_576, rateBps: 1_048_576, etaS: 0,
+    }, 'a ptz chunk: the positions as one chunk (no files)'),
+    'valid-event-move-phase-check-ptz': moveEvent(3, { kind: 'move.phase', moveId: MV, role: 'target', phase: 'copied', ok: false, check: { complete: false, missing: {}, recovered: {}, failed: { ptz: 1 }, expired: {} }, keepDays: 30 },
+      'the completeness check counts ptz too'),
+    'drift-event-move-request-summary-ptz': drift('event', signed(env('event', 3, {
+      proxyId: PRX, connId: CON, kind: 'move.request', requestId: RQ, camera: { proxyCameraId: 'cam1', ...camConn }, target: PRX_T, actor: { origin: 'local', label: 'admin' },
+      summary: { ...summary, ptz: { files: 0, bytes: 0, rows: 3, oldest: null, newest: null } }, settings,
+    }), PROXY), 'the summary keeps the five file kinds: lenient takes a sixth key, strict refuses it (cam-proxy never sends one)'),
   };
 
   return {
@@ -236,6 +253,13 @@ export function fixtures(): Record<string, unknown> {
       'no site CA: site and cameraSubnet null'),
     'drift-heartbeat-profile-tls-bad-subnet': drift('heartbeat', env('heartbeat', 2, { summary: pi, proxy: makeProxyInfo({ now: NOW }), truncated: false, profile: makeProfile({ tls: { site: 'garage', cameraSubnet: '192.0.2.0' } }) }),
       'run time reads the profile without the unreadable subnet (null) and keeps the heartbeat; strict refuses (cameraSubnet is a CIDR)'),
+    'valid-heartbeat-move-leftovers': valid('heartbeat', env('heartbeat', 2, { summary: pi, proxy: makeProxyInfo({ now: NOW }), truncated: false,
+      moveLeftovers: [{ camera: 'cam4', moveId: 'mv_0123456789ABCDEFGHJK', items: ['config.json entry', 'env CAMPROXY_CAMERA_PASSWORD_CAM4_FILE'] }] }),
+      'what the proxy could not clean up after a camera moved away (moveLeftovers, optional)'),
+    'valid-heartbeat-move-leftovers-null': valid('heartbeat', env('heartbeat', 2, { summary: pi, proxy: makeProxyInfo({ now: NOW }), truncated: false, moveLeftovers: null }), 'moveLeftovers null: none'),
+    'drift-heartbeat-move-leftovers-long': drift('heartbeat', env('heartbeat', 2, { summary: pi, proxy: makeProxyInfo({ now: NOW }), truncated: false,
+      moveLeftovers: [{ camera: 'cam4', moveId: 'mv_0123456789ABCDEFGHJK', items: ['config.json entry', 'env CAMPROXY_CAMERA_PASSWORD_CAM4', 'env CAMPROXY_CAMERA_PASSWORD_CAM4_FILE', 'a', 'b'] }] }),
+      'run time keeps the first four items and the heartbeat; strict refuses (at most 4 items)'),
     'valid-heartbeat-profile-null': valid('heartbeat', env('heartbeat', 2, { summary: pi, proxy: makeProxyInfo({ now: NOW }), truncated: false, profile: null }), 'profile null: the same as none'),
     'drift-heartbeat-profile-cameras-0': drift('heartbeat', env('heartbeat', 2, { summary: pi, proxy: makeProxyInfo({ now: NOW }), truncated: false, profile: { ...makeProfile(), cameras: 0 } }),
       'run time drops an unreadable profile and keeps the heartbeat; strict refuses (cameras is 1..64)'),

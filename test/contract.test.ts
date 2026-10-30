@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { existsSync, readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
 import Ajv2020 from 'ajv/dist/2020';
-import { ALLOW_ENTRIES, JOURNAL_BUDGET_ACTIONS, buildSchemas, DISRUPTIVE_ACTIONS, LOCAL_ONLY, NEVER_REMOTE_ACTIONS, P3_COMMANDS, PATH_PATTERN, REMOTE_ACTIONS, REMOTE_SETTABLE, SECRET_KEY_PATTERN, CAMERA_NAME_PATTERN } from '../contract/build';
+import { ALLOW_ENTRIES, FILE_KINDS, MOVE_KINDS, MOVE_LEFTOVERS_MAX, MOVE_LEFTOVER_ITEMS_MAX, MOVE_LEFTOVER_ITEM_LEN, JOURNAL_BUDGET_ACTIONS, buildSchemas, DISRUPTIVE_ACTIONS, LOCAL_ONLY, NEVER_REMOTE_ACTIONS, P3_COMMANDS, PATH_PATTERN, REMOTE_ACTIONS, REMOTE_SETTABLE, SECRET_KEY_PATTERN, CAMERA_NAME_PATTERN } from '../contract/build';
 import { fixtures } from '../contract/make';
 import { validateCommandArgs, validateEnroll, validateMessage, validateResultPayload, validateSummary } from '../server/contract';
 import { publicFromB64, verifyEnvelope } from '../server/crypto/ed25519';
@@ -187,6 +187,55 @@ describe('the v1 contract', () => {
     ] as [string, unknown][]) expect(hb(withTls(t)), why).toBe(false);
     expect(fixture('drift-heartbeat-profile-tls-bad-subnet').$expect).toEqual({ runtime: 'accepted', strict: 'invalid' });
     expect(runtimeVerdict('heartbeat', withTls({ site: 7, cameraSubnet: 'x', extra: 1 }))).toBe('accepted');
+  });
+  it('FILE_KINDS and MOVE_KINDS: the five file kinds, and ptz on top', () => {
+    expect([...FILE_KINDS]).toEqual(['stills', 'clips', 'events', 'checks', 'archive']);
+    expect([...MOVE_KINDS]).toEqual(['stills', 'clips', 'events', 'checks', 'archive', 'ptz']);
+    expect([MOVE_LEFTOVERS_MAX, MOVE_LEFTOVER_ITEMS_MAX, MOVE_LEFTOVER_ITEM_LEN]).toEqual([16, 4, 80]);
+  });
+  it('summary and space.perKind keep the five file kinds, plan and bounds take six', () => {
+    const s = buildSchemas('strict') as Record<string, any>;
+    const ev = s.event.properties.body.anyOf.find((b: any) => b.properties?.kind?.const === 'move.request');
+    expect(Object.keys(ev.properties.summary.properties)).toEqual([...FILE_KINDS]);
+    expect(Object.keys(s['commands/move.offer.args'].properties.summary.properties)).toEqual([...FILE_KINDS]);
+    expect(Object.keys(s['commands/move.answer.args'].properties.space.properties.perKind.properties)).toEqual([...FILE_KINDS]);
+    expect(Object.keys(s['commands/move.finish.result'].properties.deleted.properties)).toEqual([...FILE_KINDS]);
+    const plan = s['commands/move.start.args'].properties.plan.properties.kinds;
+    expect(plan.items.enum).toEqual([...MOVE_KINDS]);
+    expect(plan.maxItems).toBe(6);
+    const bounds = s['commands/move.begin.args'].properties.bounds.anyOf[0].properties.kinds;
+    expect(bounds.items.enum).toEqual([...MOVE_KINDS]);
+    expect(bounds.maxItems).toBe(6);
+  });
+  it('the ptz fixtures and moveLeftovers fixtures exist and validate as named', () => {
+    const names = allFixtures().map((f) => f.name);
+    for (const n of ['valid-result-move-offer-kinds', 'valid-command-move-answer-kinds', 'valid-event-move-approve-ptz', 'valid-event-move-approve-ptz-only', 'valid-event-move-progress-ptz',
+      'valid-event-move-phase-check-ptz', 'valid-heartbeat-move-leftovers', 'valid-heartbeat-move-leftovers-null', 'drift-heartbeat-move-leftovers-long', 'drift-event-move-request-summary-ptz']) expect(names, n).toContain(n);
+    expect(fixture('valid-command-move-answer-kinds').$context.feature).toBe('move-ptz');
+    expect(fixture('valid-heartbeat-move-leftovers').message.body.moveLeftovers[0]).toMatchObject({ camera: 'cam4', items: ['config.json entry', 'env CAMPROXY_CAMERA_PASSWORD_CAM4_FILE'] });
+    expect(fixture('valid-heartbeat-move-leftovers-null').message.body.moveLeftovers).toBeNull();
+    for (const n of ['drift-heartbeat-move-leftovers-long', 'drift-event-move-request-summary-ptz']) expect(fixture(n).$expect, n).toEqual({ runtime: 'accepted', strict: 'invalid' });
+  });
+  it('heartbeat moveLeftovers: optional, also when truncated; closed in strict; lenient takes anything', () => {
+    const hb = strictValidator('heartbeat');
+    const m = fixture('valid-heartbeat-move-leftovers').message;
+    const withL = (l: unknown) => ({ ...m, body: { ...m.body, moveLeftovers: l } });
+    const e = m.body.moveLeftovers[0];
+    expect(hb(withL(Array(16).fill(e))), JSON.stringify(ajv.errors)).toBe(true);
+    for (const [why, l] of [
+      ['17 entries', Array(17).fill(e)],
+      ['no items', [{ ...e, items: [] }]],
+      ['an item of 81', [{ ...e, items: ['x'.repeat(81)] }]],
+      ['an empty item', [{ ...e, items: [''] }]],
+      ['a bad camera', [{ ...e, camera: 'Cam 4' }]],
+      ['a bad move id', [{ ...e, moveId: 'mv_x' }]],
+      ['an extra field', [{ ...e, extra: 1 }]],
+      ['an object', {}],
+    ] as [string, unknown][]) expect(hb(withL(l)), why).toBe(false);
+    for (const l of [{}, 'x', [{ camera: 42 }], Array(40).fill(e)]) expect(runtimeVerdict('heartbeat', withL(l))).toBe('accepted');
+    const t = fixture('valid-heartbeat-truncated').message;
+    expect(hb({ ...t, body: { ...t.body, moveLeftovers: [e] } }), JSON.stringify(ajv.errors)).toBe(true);
+    expect(hb({ ...t, body: { ...t.body, moveLeftovers: null } })).toBe(true);
   });
   it('a P1 heartbeat stays valid in strict (the new proxy fields are optional)', () => {
     expect(strictValidator('heartbeat')(fixture('valid-heartbeat-1cam-pi').message)).toBe(true);
