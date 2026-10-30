@@ -20,7 +20,8 @@ describe('parseMoveLeftovers', () => {
   });
   it.each([
     ['not an array', { a: 1 }, (r: unknown[]) => expect(r).toEqual([])],
-    ['20 entries', Array(20).fill(entry), (r: unknown[]) => expect(r).toHaveLength(16)],
+    ['20 entries', Array.from({ length: 20 }, (_, i) => ({ ...entry, camera: `cam${i}` })), (r: unknown[]) => expect(r).toHaveLength(16)],
+    ['the same camera and move twice (the first is kept)', [entry, { ...entry, items: ['other'] }], (r: unknown[]) => expect(r).toEqual([entry])],
     ['an item of 500 characters', [{ ...entry, items: ['x'.repeat(500)] }], (r: any[]) => expect(r[0].items[0]).toHaveLength(80)],
     ['6 items', [{ ...entry, items: ['a', 'b', 'c', 'd', 'e', 'f'] }], (r: any[]) => expect(r[0].items).toEqual(['a', 'b', 'c', 'd'])],
     ['camera 42', [{ ...entry, camera: 42 }], (r: unknown[]) => expect(r).toEqual([])],
