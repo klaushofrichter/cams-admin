@@ -43,6 +43,7 @@ A signed-in sysadmin's browser session works on the same routes.
 | `/diag/proxies/:proxyId/profile` | the proxy's latest reported profile, as `GET /api/v1/proxies/:proxyId/profile` answers it (see "Proxy profile" below) |
 | `/diag/cams-instances` | state, accounts, routes, the last report: mode, applied vs current revision, held changes and held proxies, kept-old, shadow, token counts, problems (code, account, detail) |
 | `/diag/cameras` | registry fields (cams id, model, proxy, proxy camera id, host, protocol, TLS name), move id, online |
+| `/diag/cameras/:camsId/onboarding?accountId=` | one camera's onboarding: `{camera, proxy, proxyCameraId, online, reported, detail, viewers, ready, missing, optional}`; `:camsId` is a cams id or a registry id (`cam_…`); a cams id in several accounts is 409 `ambiguous` unless `accountId` names one; 409 `no_proxy` for a camera without a proxy (see below) |
 | `/diag/tokens` | per proxy, its managed tokens: holder (cams instance id and name, or `manual`), label, kind, state, on proxy, created, retire/revoke times, last token command; no hash |
 | `/diag/moves?accountId=` | the newest 100 moves with chunk counts |
 | `/diag/moves/precheck?source=&target=&camera=` | every precheck rule in order with ok, reason and a detail; `camera` is the registry id or the cams id |
@@ -407,3 +408,38 @@ The source must run a cam-proxy that knows `move.begin`: an older one allows
 command (429 `rate_limited`, 400 `invalid_args`, 409 `paused_on_proxy` or
 `not_allowed_on_proxy`) also undo the fixes; the token's limit of 60 writes a
 minute applies.
+
+## A camera's onboarding
+
+`/diag/cameras/:camsId/onboarding` puts together what onboarding a camera
+needs, in one answer (the proxy page's camera view shows the same,
+`GET /api/v1/accounts/:accountId/proxies/:proxyId/cameras/:camera/onboarding`,
+also before the camera is in the account):
+
+- `proxy`: state, pin, the command policy, and which onboarding entries it
+  allows (`onboardingAllowed`: `get`, `ftpSetup`, `timeSet`);
+- `reported`: the proxy's compact status from its heartbeat
+  (`{ready, missing}`), null when the proxy sends none (older than cam-proxy's
+  onboarding release);
+- `detail`: the newest full status the proxy answered to
+  `camera.onboarding.get` (`POST …/cameras/:camera/onboarding/refresh`, scope
+  `actions`): every step with `ok` and `detail`, trust, time; with its
+  `state` and `finishedAt` (its age). A GET never asks the proxy;
+- `camera`: the registry row (null before the adopt);
+- `viewers`: each cams instance serving the account: `applied` (its report's
+  revision is the current one), `held` / `heldProxy` / `keptOld` (fields it
+  holds for this camera or its proxy until confirmed there), `problems`,
+  `hidden` (it doesn't show this proxy: not counted);
+- `ready` and `missing`: ready when nothing is missing and the proxy reports
+  the camera ready. `missing` names each gap in order: `proxy-offline`,
+  `proxy:onboarding-unreported`, `proxy:<required step>` or `proxy:not-ready`,
+  `not-registered`, `viewer:<name>:no-report|not-applied|held|kept-old`.
+  `optional` lists the proxy's optional steps not done (`proxy:ftp`,
+  `proxy:time`, …); they never block `ready`.
+
+```sh
+curl -fsS -H "Authorization: Bearer $(cat ~/.config/cams-admin/diag-token)" \
+  https://cams-admin.example.net/api/v1/diag/cameras/garden/onboarding
+# {"camera":{"camsId":"garden",…},"proxy":{"state":"online",…},"reported":{"ready":true,"missing":["ftp"]},
+#  "viewers":[{"name":"cluster","applied":true,"held":[],…}],"ready":true,"missing":[],"optional":["proxy:ftp"]}
+```

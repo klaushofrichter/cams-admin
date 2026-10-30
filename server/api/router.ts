@@ -19,6 +19,7 @@ import { snapshotRevision } from '../cams/snapshot';
 import type { ProxyConfig } from '../config/service';
 import type { RemoteActions } from '../actions/service';
 import type { ReportedPins } from '../onboarding/pins';
+import { onboardingView } from '../onboarding/view';
 import type { Moves } from '../moves/service';
 import { chunkCounts, moveView } from '../moves/view';
 import { SummaryRefused } from '../moves/summary';
@@ -248,6 +249,8 @@ export function apiRouter(d: ApiDeps): express.Router {
   r.post(`${proxyBase}/actions`, h((req, res) => accepted(res, d.actions.cameraAction(actor(res), p(req, 'accountId'), p(req, 'proxyId'), req.body))));
   r.post(`${proxyBase}/cameras/:camera/name`, h((req, res) => accepted(res, d.actions.rename(actor(res), p(req, 'accountId'), p(req, 'proxyId'), p(req, 'camera'), req.body))));
   r.post(`${proxyBase}/restart`, h((req, res) => accepted(res, d.actions.restart(actor(res), p(req, 'accountId'), p(req, 'proxyId'), req.body))));
+  // One camera's onboarding view (works before the adopt: camera null). A GET never sends a command.
+  r.get(`${proxyBase}/cameras/:camera/onboarding`, h((req) => onboardingView(d, p(req, 'accountId'), p(req, 'proxyId'), p(req, 'camera'))));
   // The full onboarding status of one camera (camera.onboarding.get); time set and FTP setup are camera actions above.
   r.post(`${proxyBase}/cameras/:camera/onboarding/refresh`, h((req, res) => accepted(res, d.actions.onboardingRefresh(actor(res), p(req, 'accountId'), p(req, 'proxyId'), p(req, 'camera')))));
 
