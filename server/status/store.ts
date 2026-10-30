@@ -6,6 +6,7 @@ import type { LiveHub } from '../live';
 import { validateSummary } from '../contract';
 import { parseProfile } from './profile';
 import { parseMoveLeftovers } from './leftovers';
+import { parseOnboarding } from './onboarding';
 import { isCount } from '../validate';
 import { cameraStates, deriveCommands, deriveProxyState, type CommandsPolicy, heartbeatFresh, pinState, SKEW_PROBLEM_MS, type CommandsInfo, type PinState, type ProxyState, type Reported, type StatusRow, type TokensInfo } from './derive';
 
@@ -18,7 +19,7 @@ import { cameraStates, deriveCommands, deriveProxyState, type CommandsPolicy, he
 // `snapshotMs` (10 min), so a restart shows the last known state, marked
 // stale until the proxies reconnect.
 
-export interface HeartbeatBody { summary: unknown; proxy?: Record<string, unknown> | null; truncated?: boolean; profile?: unknown; moveLeftovers?: unknown }
+export interface HeartbeatBody { summary: unknown; proxy?: Record<string, unknown> | null; truncated?: boolean; profile?: unknown; moveLeftovers?: unknown; onboarding?: unknown }
 
 export interface ProxyView {
   proxyId: string; accountId: string; state: ProxyState; connected: boolean; connectedSince: number | null; lastHelloAt: number | null; lastHeartbeatAt: number | null;
@@ -70,6 +71,7 @@ export class StatusStore {
   onTokens?: (proxyId: string, tokens: TokensInfo | null) => void;
   onConfig?: (proxyId: string) => void; // P3: the heartbeat's configRevision (ProxyConfig.onHeartbeat)
   onCameras?: (proxyId: string, cameras: Reported['cameras']) => void; // the reported cameras (Registry.fillCameraModels)
+  onHeartbeat?: (proxyId: string) => void; // after the hooks above (onboarding: reported pins, then auto-adopt)
   private dirty = new Set<string>();
   private lastFlush: number;
   private snapshotMs: number;
@@ -189,6 +191,7 @@ export class StatusStore {
         commands: parseCommandsInfo(info.commands), tokens: parseTokensInfo(info.tokens), configRevision: parseConfigRevision(info.configRevision),
         profile, profileUnreadable: body.profile !== undefined && body.profile !== null && profile === null,
         moveLeftovers: parseMoveLeftovers(body.moveLeftovers),
+        onboarding: parseOnboarding(body.onboarding),
       };
       Object.assign(r, { lastHeartbeatAt: now, summary, summaryAt, ok, problemCount, reported, clockSkewMs: proxyTs - now, proxyVersion: version ?? r.proxyVersion, online: true, stopped: false });
 
@@ -201,6 +204,12 @@ export class StatusStore {
         if (was !== undefined && was !== c.online) ev(c.online ? 'camera-online' : 'camera-offline', c.ref);
       }
       if (version && old.proxyVersion && version !== old.proxyVersion) ev('version-changed', null, { from: old.proxyVersion, to: version });
+      // A camera's onboarding ready flip, only against a known previous value (like camera-online).
+      const wasReady = old.reported?.onboarding ?? {};
+      for (const [ref, o] of Object.entries(reported.onboarding ?? {})) {
+        const was = wasReady[ref]?.ready;
+        if (was !== undefined && was !== o.ready) ev(o.ready ? 'onboarding-ready' : 'onboarding-not-ready', ref, { missing: o.missing });
+      }
       const oldPin = old.reported?.pin ?? 'none';
       if (pin === 'mismatch' && oldPin !== 'mismatch') ev('pin-mismatch');
       if (pin === 'match' && oldPin === 'mismatch') ev('pin-match');
@@ -210,6 +219,7 @@ export class StatusStore {
     if (this.onConfig && this.mem.get(proxyId)?.reported?.commands) this.onConfig(proxyId);
     const cams = this.mem.get(proxyId)?.reported?.cameras;
     if (cams?.length && this.onCameras) this.onCameras(proxyId, cams);
+    if (this.onHeartbeat && this.mem.has(proxyId)) this.onHeartbeat(proxyId);
   }
 
   disconnected(proxyId: string, reason: string): void {

@@ -159,6 +159,25 @@ describe('database', () => {
     expect(db.prepare('SELECT count(*) n FROM commands').get()).toEqual({ n: 0 });
   });
 
+  it('migration 17: a version-16 database keeps its status events and takes the onboarding kinds', () => {
+    const f = join(dir, 'm17.db');
+    const raw = new DatabaseSync(f);
+    for (let i = 0; i < 16; i++) MIGRATIONS[i](raw);
+    raw.exec('PRAGMA user_version = 16');
+    seed(raw);
+    raw.exec(`INSERT INTO status_events (proxy_id, camera_ref, at, kind, detail) VALUES ('prx_a', 'cam1', 5, 'camera-offline', NULL)`);
+    raw.close();
+    const db = openDb(f);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(LATEST_VERSION);
+    expect(db.prepare('SELECT proxy_id, camera_ref, at, kind FROM status_events').all()).toEqual([{ proxy_id: 'prx_a', camera_ref: 'cam1', at: 5, kind: 'camera-offline' }]);
+    for (const kind of ['onboarding-ready', 'onboarding-not-ready']) db.prepare(`INSERT INTO status_events (proxy_id, camera_ref, at, kind) VALUES ('prx_a', 'cam1', 6, ?)`).run(kind);
+    expect(() => db.prepare(`INSERT INTO status_events (proxy_id, at, kind) VALUES ('prx_a', 7, 'nope')`).run()).toThrow(/CHECK/);
+    expect(db.prepare(`SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'status_events'`).all()).toEqual([{ name: 'status_events_proxy_at' }]);
+    // The cascade from the proxy still holds.
+    db.exec(`DELETE FROM proxies WHERE id = 'prx_a'`);
+    expect(db.prepare('SELECT count(*) n FROM status_events').get()).toEqual({ n: 0 });
+  });
+
   it('migration 6 (P3): a version-5 database gains proxy_config and commands.preview_of with its rows intact', () => {
     const f = join(dir, 'm6.db');
     const raw = new DatabaseSync(f);

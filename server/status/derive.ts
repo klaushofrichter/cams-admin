@@ -6,6 +6,7 @@ export type PinState = 'match' | 'mismatch' | 'hint' | 'none';
 
 import type { Profile } from './profile';
 import type { MoveLeftover } from './leftovers';
+import type { CameraOnboarding } from './onboarding';
 
 export interface ReportedCamera { ref: string; online: boolean; name?: string; model?: string | null }
 export interface CommandsInfo { enabled: boolean; paused: boolean; pauseReason: string | null; allow: string[]; seenWindow: number }
@@ -18,6 +19,8 @@ export interface Reported {
   profile?: Profile | null; profileUnreadable?: boolean;
   // What the proxy could not clean up after a camera moved away (heartbeat moveLeftovers, read with clamps; [] when none).
   moveLeftovers?: MoveLeftover[];
+  // Each camera's compact onboarding status (heartbeat onboarding, read with clamps); null when the proxy sends none.
+  onboarding?: Record<string, CameraOnboarding> | null;
 }
 
 export interface StatusRow {

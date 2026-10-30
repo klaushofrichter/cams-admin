@@ -44,6 +44,8 @@ export interface ClientOptions {
   proxyInfo?: () => unknown;
   // The heartbeat's proxy profile (contract v1 heartbeat `profile`); without it the client is a proxy from before the profile.
   profile?: () => unknown;
+  // The heartbeat's onboarding (contract v1 heartbeat `onboarding`): {<camera>: {ready, missing}}; without it the client is a proxy from before onboarding.
+  onboarding?: () => unknown;
   heartbeatS?: number; // overrides the server's welcome (tests)
   minIntervalS?: number; // the floor under ack.nextInS (10 s by spec)
   jitterS?: number; // ±2 s by spec
@@ -438,7 +440,8 @@ export class ProxyClient extends EventEmitter {
         ...(this.commands.config ? { configRevision: this.commands.config.revision() } : {}),
       } : info;
       const profile = this.o.profile ? this.o.profile() : undefined;
-      const body = { summary, proxy, truncated: false, ...(profile === undefined ? {} : { profile }) };
+      const onboarding = this.o.onboarding ? this.o.onboarding() : undefined;
+      const body = { summary, proxy, truncated: false, ...(profile === undefined ? {} : { profile }), ...(onboarding === undefined ? {} : { onboarding }) };
       const id = this.send('heartbeat', body);
       this.unacked.set(id, Date.now());
       this.stats.sent++;

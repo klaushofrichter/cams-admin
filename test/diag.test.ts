@@ -200,6 +200,15 @@ describe('diagnostics answers', () => {
     expect((await bearer('/diag/proxies', token)).body.items.find((x: { id: string }) => x.id === px2).reported.moveLeftovers).toEqual([]);
   });
 
+  it('diag proxies show onboarding', async () => {
+    const { token } = await issue('onboarding', 1);
+    a.status.heartbeat(px2, { summary: makeSummary({ cameras: 1, now: Date.now() }), proxy: makeProxyInfo({ now: Date.now() }), truncated: false, onboarding: { cam1: { ready: true, missing: [] } } }, Date.now());
+    const p = (await bearer('/diag/proxies', token)).body.items.find((x: { id: string }) => x.id === px2);
+    expect(p.reported.onboarding).toEqual({ cam1: { ready: true, missing: [] } });
+    a.status.heartbeat(px2, { summary: makeSummary({ cameras: 1, now: Date.now() }), proxy: makeProxyInfo({ now: Date.now() }), truncated: false }, Date.now());
+    expect((await bearer('/diag/proxies', token)).body.items.find((x: { id: string }) => x.id === px2).reported.onboarding).toBeNull();
+  });
+
   it('the secret guard: markers in hashes, codes, keys, e-mails and notes never appear in any answer', async () => {
     const MARK = 'f00dfeed';
     const { token } = await issue('guard', 1);
