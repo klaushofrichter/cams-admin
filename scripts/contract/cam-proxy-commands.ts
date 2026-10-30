@@ -55,7 +55,9 @@ const MOVE_STARTED = MOVE.filter((c) => c !== 'move.summary').some(implemented);
 // A fixture of a feature cam-proxy has not started ($context.feature) is pending on its own: move-ptz until
 // cam-proxy's moves know the ptz kind; strict once they do.
 const PTZ_STARTED = existsSync(file('src/moves/types.ts')) && readFileSync(file('src/moves/types.ts'), 'utf8').includes("'ptz'");
-const FEATURE_STARTED: Record<string, boolean> = { 'move-ptz': PTZ_STARTED };
+// onboarding: the camera onboarding commands, pending until cam-proxy implements camera.onboarding.get.
+const ONBOARDING_STARTED = implemented('camera.onboarding.get');
+const FEATURE_STARTED: Record<string, boolean> = { 'move-ptz': PTZ_STARTED, onboarding: ONBOARDING_STARTED };
 const DIR = join(__dirname, '../../contract/v1/fixtures');
 const ctxOf = (c: Ctx, journal: (id: string) => unknown = () => undefined) => {
   const seen = new SeenIds();

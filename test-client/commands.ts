@@ -10,7 +10,7 @@ import { createHash } from 'crypto';
 import Ajv2020 from 'ajv/dist/2020';
 import type { ValidateFunction } from 'ajv';
 import { publicFromB64, verifyEnvelope } from '../server/crypto/ed25519';
-import { buildSchemas, CAMERA_NAME_PATTERN, DISRUPTIVE_ACTIONS, JOURNAL_BUDGET_ACTIONS, MOVE_COMMANDS, NEVER_REMOTE_ACTIONS, P3_COMMANDS, PATH_PATTERN, REMOTE_ACTIONS } from '../contract/build';
+import { buildSchemas, CAMERA_NAME_PATTERN, DISRUPTIVE_ACTIONS, JOURNAL_BUDGET_ACTIONS, MOVE_COMMANDS, NEVER_REMOTE_ACTIONS, ONBOARDING_COMMANDS, P3_COMMANDS, PATH_PATTERN, REMOTE_ACTIONS } from '../contract/build';
 
 export interface CheckContext {
   now: number; // cams-admin time: Date.now() + the offset learned from the challenge
@@ -35,8 +35,8 @@ const TOK_RE = new RegExp(`^tok_${ULID20}$`);
 const HASH_RE = /^sha256:[0-9a-f]{64}$/;
 // eslint-disable-next-line no-control-regex
 const LABEL_RE = /^[^\u0000-\u001f\u007f]{1,64}$/;
-// What this version implements: tokens.apply (P2), the P3 commands and the camera-move commands.
-export const IMPLEMENTED: readonly string[] = ['tokens.apply', ...P3_COMMANDS, ...MOVE_COMMANDS];
+// What this version implements: tokens.apply (P2), the P3 commands, the camera-move commands and camera.onboarding.get.
+export const IMPLEMENTED: readonly string[] = ['tokens.apply', ...P3_COMMANDS, ...MOVE_COMMANDS, ...ONBOARDING_COMMANDS];
 const PATH_RE = new RegExp(PATH_PATTERN);
 const REV_RE = /^sha256:[0-9a-f]{64}$/;
 const CAM_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
@@ -96,6 +96,9 @@ export function p3ArgsOk(command: string, a: Record<string, any>): boolean {
     }
     case 'camera.name.set':
       return only(a, ['v', 'camera', 'name']) && typeof a.camera === 'string' && CAM_RE.test(a.camera) && typeof a.name === 'string' && NAME_RE.test(a.name);
+    // The onboarding command: {v, camera}, closed; camera null = every camera.
+    case 'camera.onboarding.get':
+      return only(a, ['v', 'camera']) && (a.camera === null || (typeof a.camera === 'string' && CAM_RE.test(a.camera)));
   }
   return false;
 }

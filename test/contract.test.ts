@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { existsSync, readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
 import Ajv2020 from 'ajv/dist/2020';
-import { ALLOW_ENTRIES, FILE_KINDS, MOVE_KINDS, MOVE_LEFTOVERS_MAX, MOVE_LEFTOVER_ITEMS_MAX, MOVE_LEFTOVER_ITEM_LEN, JOURNAL_BUDGET_ACTIONS, buildSchemas, DISRUPTIVE_ACTIONS, LOCAL_ONLY, NEVER_REMOTE_ACTIONS, P3_COMMANDS, PATH_PATTERN, REMOTE_ACTIONS, REMOTE_SETTABLE, SECRET_KEY_PATTERN, CAMERA_NAME_PATTERN } from '../contract/build';
+import { ALLOW_ENTRIES, ONBOARDING_CAMERAS_MAX, ONBOARDING_COMMANDS, ONBOARDING_REQUIRED, ONBOARDING_STEPS, ONBOARDING_STEP_LEN, WIRE_COMMANDS, FILE_KINDS, MOVE_KINDS, MOVE_LEFTOVERS_MAX, MOVE_LEFTOVER_ITEMS_MAX, MOVE_LEFTOVER_ITEM_LEN, JOURNAL_BUDGET_ACTIONS, buildSchemas, DISRUPTIVE_ACTIONS, LOCAL_ONLY, NEVER_REMOTE_ACTIONS, P3_COMMANDS, PATH_PATTERN, REMOTE_ACTIONS, REMOTE_SETTABLE, SECRET_KEY_PATTERN, CAMERA_NAME_PATTERN } from '../contract/build';
 import { fixtures } from '../contract/make';
 import { validateCommandArgs, validateEnroll, validateMessage, validateResultPayload, validateSummary } from '../server/contract';
 import { publicFromB64, verifyEnvelope } from '../server/crypto/ed25519';
@@ -95,7 +95,7 @@ describe('the v1 contract', () => {
   it('every proxy-receiver fixture has a $context and a runtime code from the nack list', () => {
     const NACKS = ['bad_signature', 'wrong_target', 'expired', 'replayed', 'not_allowed', 'paused', 'rate_limited', 'invalid_args', 'unsupported_version', 'busy'];
     const proxyFixtures = allFixtures().filter((x) => x.$expect?.receiver === 'proxy');
-    expect(proxyFixtures.length).toBe(36);
+    expect(proxyFixtures.length).toBe(37);
     for (const f of proxyFixtures) {
       expect(f.$context, f.name).toMatchObject({ now: expect.any(Number), proxyId: expect.stringMatching(/^prx_/), connId: expect.stringMatching(/^con_/), serverKeys: [vectors.keys.server.publicKey] });
       expect(NACKS, f.name).toContain(f.$expect.runtime);
@@ -237,6 +237,82 @@ describe('the v1 contract', () => {
     expect(hb({ ...t, body: { ...t.body, moveLeftovers: [e] } }), JSON.stringify(ajv.errors)).toBe(true);
     expect(hb({ ...t, body: { ...t.body, moveLeftovers: null } })).toBe(true);
   });
+  it('ONBOARDING constants: steps, required steps, bounds; one new command; camera-time-set a disruptive camera action; time.zone denied', () => {
+    expect([...ONBOARDING_STEPS]).toEqual(['reachable', 'login', 'trust', 'capabilities', 'stream', 'events', 'ftp', 'time', 'name', 'poe', 'profile']);
+    expect([...ONBOARDING_REQUIRED]).toEqual(['reachable', 'login', 'trust', 'capabilities', 'stream', 'events']);
+    expect(ONBOARDING_CAMERAS_MAX).toBe(64);
+    expect(ONBOARDING_STEP_LEN).toBe(32);
+    expect([...ONBOARDING_COMMANDS]).toEqual(['camera.onboarding.get']);
+    expect(WIRE_COMMANDS as readonly string[]).toContain('camera.onboarding.get');
+    for (const c of ['camera.ftp.setup', 'camera.time.set']) expect(WIRE_COMMANDS as readonly string[], c).not.toContain(c);
+    for (const e of ['camera.onboarding.get', 'camera.action:camera-time-set', 'camera.action:camera-ftp-setup']) expect(ALLOW_ENTRIES, e).toContain(e);
+    expect(REMOTE_ACTIONS as readonly string[]).toContain('camera-time-set');
+    expect(DISRUPTIVE_ACTIONS as readonly string[]).toContain('camera-time-set');
+    expect(JOURNAL_BUDGET_ACTIONS as readonly string[]).toContain('camera-time-set');
+    expect(REMOTE_SETTABLE.denied).toContain('time.zone');
+    expect(REMOTE_SETTABLE.remote).not.toContain('time.zone');
+    const s = buildSchemas('strict');
+    expect((s['commands/camera.action.args'] as any).properties.action.enum).toContain('camera-time-set');
+    expect((s.command as any).properties.body.properties.command.enum).toContain('camera.onboarding.get');
+  });
+  it('the onboarding fixtures exist and validate as named', () => {
+    const names = allFixtures().map((f) => f.name);
+    for (const n of ['valid-heartbeat-onboarding', 'valid-heartbeat-onboarding-null', 'drift-heartbeat-onboarding-unknown-step', 'drift-heartbeat-onboarding-ready-missing-login',
+      'valid-command-onboarding-get', 'valid-command-camera-time-set', 'refused-camera-action-time-set-not-allowed', 'valid-result-onboarding-get', 'valid-result-camera-time-set-verified']) expect(names, n).toContain(n);
+    expect(fixture('valid-heartbeat-onboarding').message.body.onboarding).toEqual({ cam1: { ready: true, missing: ['ftp'] }, cam2: { ready: false, missing: ['login', 'trust'] } });
+    expect(fixture('valid-heartbeat-onboarding-null').message.body.onboarding).toBeNull();
+    expect(fixture('drift-heartbeat-onboarding-unknown-step').message.body.onboarding.cam1.missing).toEqual(['lens']);
+    expect(fixture('drift-heartbeat-onboarding-ready-missing-login').message.body.onboarding.cam1).toEqual({ ready: true, missing: ['login'] });
+    for (const n of ['drift-heartbeat-onboarding-unknown-step', 'drift-heartbeat-onboarding-ready-missing-login']) expect(fixture(n).$expect, n).toEqual({ runtime: 'accepted', strict: 'invalid' });
+    for (const [n, allow] of [['valid-command-onboarding-get', ['camera.onboarding.get']], ['valid-command-camera-time-set', ['camera.action:camera-time-set']],
+      ['refused-camera-action-time-set-not-allowed', ['camera.onboarding.get', 'camera.action:camera-ftp-setup']]] as [string, string[]][]) {
+      expect(fixture(n).$context.feature, n).toBe('onboarding');
+      expect(fixture(n).$context.allow, n).toEqual(allow);
+    }
+    expect(fixture('valid-command-camera-time-set').message.body).toMatchObject({ command: 'camera.action', args: { v: 1, camera: 'cam1', action: 'camera-time-set' } });
+    expect(fixture('refused-camera-action-time-set-not-allowed').$expect).toEqual({ runtime: 'not_allowed', strict: 'valid', receiver: 'proxy' });
+    const status = fixture('valid-result-onboarding-get').message.body.result.cameras.cam1;
+    expect(Object.keys(status.steps)).toEqual([...ONBOARDING_STEPS]);
+    expect(status.steps.time.ok).toBeNull();
+    for (const [n, c] of [['valid-result-onboarding-get', 'camera.onboarding.get'], ['valid-result-camera-time-set-verified', 'camera.action']]) {
+      const f = fixture(n);
+      expect(f.$command, n).toBe(c);
+      expect(strictValidator(`commands/${c}.result`)(f.message.body.result), `${n} ${JSON.stringify(ajv.errors)}`).toBe(true);
+      expect(validateResultPayload(c, f.message.body.result), n).toBe(true);
+      expect(verifyEnvelope(publicFromB64(vectors.keys.proxy.publicKey), f.message), n).toBe(true);
+    }
+    for (const n of ['valid-command-onboarding-get', 'valid-command-camera-time-set']) {
+      const m = fixture(n).message;
+      expect(strictValidator(`commands/${m.body.command}.args`)(m.body.args), n).toBe(true);
+      expect(validateCommandArgs(m.body.command, m.body.args), n).toEqual({ ok: true });
+    }
+  });
+  it('heartbeat onboarding: optional, also when truncated; closed in strict; lenient takes anything', () => {
+    const hb = strictValidator('heartbeat');
+    const m = fixture('valid-heartbeat-onboarding').message;
+    const withO = (o: unknown) => ({ ...m, body: { ...m.body, onboarding: o } });
+    const many = (n: number) => Object.fromEntries(Array.from({ length: n }, (_, i) => [`cam${i}`, { ready: false, missing: ['ftp'] }]));
+    expect(hb(withO(many(64))), JSON.stringify(ajv.errors)).toBe(true);
+    expect(hb(withO({ cam1: { ready: true, missing: ['ftp', 'poe'] } })), JSON.stringify(ajv.errors)).toBe(true);
+    expect(hb(withO({ cam1: { ready: false, missing: [...ONBOARDING_STEPS] } })), JSON.stringify(ajv.errors)).toBe(true);
+    expect(hb(withO({}))).toBe(true);
+    for (const [why, o] of [
+      ['65 cameras', many(65)],
+      ['key Cam 1', { 'Cam 1': { ready: false, missing: [] } }],
+      ['a step twice', { cam1: { ready: false, missing: ['login', 'login'] } }],
+      ['an extra field', { cam1: { ready: false, missing: [], extra: 1 } }],
+      ['ready a string', { cam1: { ready: 'yes', missing: [] } }],
+      ['ready with a required step missing', { cam1: { ready: true, missing: ['events'] } }],
+      ['an unknown step', { cam1: { ready: false, missing: ['lens'] } }],
+      ['missing a string', { cam1: { ready: false, missing: 'login' } }],
+      ['no missing', { cam1: { ready: true } }],
+      ['an array', []],
+    ] as [string, unknown][]) expect(hb(withO(o)), why).toBe(false);
+    for (const o of [{}, 'x', { cam1: 5 }, many(200), { cam1: { ready: true, missing: ['login', 'x'.repeat(500)] } }]) expect(runtimeVerdict('heartbeat', withO(o))).toBe('accepted');
+    const t = fixture('valid-heartbeat-truncated').message;
+    expect(hb({ ...t, body: { ...t.body, onboarding: m.body.onboarding } }), JSON.stringify(ajv.errors)).toBe(true);
+    expect(hb({ ...t, body: { ...t.body, onboarding: null } })).toBe(true);
+  });
   it('a P1 heartbeat stays valid in strict (the new proxy fields are optional)', () => {
     expect(strictValidator('heartbeat')(fixture('valid-heartbeat-1cam-pi').message)).toBe(true);
     expect(strictValidator('heartbeat')(fixture('valid-heartbeat-p2').message)).toBe(true);
@@ -305,7 +381,7 @@ describe('the v1 contract', () => {
   it('action lists: never-remote and remote are disjoint; disruptive ⊂ remote', () => {
     for (const a of NEVER_REMOTE_ACTIONS) expect(REMOTE_ACTIONS as readonly string[], a).not.toContain(a);
     for (const a of DISRUPTIVE_ACTIONS) expect(REMOTE_ACTIONS as readonly string[], a).toContain(a);
-    expect([...DISRUPTIVE_ACTIONS]).toEqual(['restart', 'camera-reboot', 'camera-powercycle', 'camera-ftp-setup', 'camera-ntp-set', 'camera-cert-push']);
+    expect([...DISRUPTIVE_ACTIONS]).toEqual(['restart', 'camera-reboot', 'camera-powercycle', 'camera-ftp-setup', 'camera-ntp-set', 'camera-cert-push', 'camera-time-set']);
     // Contract change (cam-proxy #196): camera-ftp-off is never remote; the journal budget still counts it.
     expect(NEVER_REMOTE_ACTIONS as readonly string[]).toContain('camera-ftp-off');
     expect(REMOTE_ACTIONS as readonly string[]).not.toContain('camera-ftp-off');

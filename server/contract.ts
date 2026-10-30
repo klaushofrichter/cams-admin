@@ -48,6 +48,8 @@ import moveFinishArgsStrict from '../contract/v1/strict/commands/move.finish.arg
 import moveFinishResult from '../contract/v1/commands/move.finish.result.schema.json';
 import moveCancelArgsStrict from '../contract/v1/strict/commands/move.cancel.args.schema.json';
 import moveCancelResult from '../contract/v1/commands/move.cancel.result.schema.json';
+import cameraOnboardingGetArgsStrict from '../contract/v1/strict/commands/camera.onboarding.get.args.schema.json';
+import cameraOnboardingGetResult from '../contract/v1/commands/camera.onboarding.get.result.schema.json';
 import eventStrict from '../contract/v1/strict/event.schema.json';
 import { jcs } from './crypto/jcs';
 import enrollRequest from '../contract/v1/enroll-request.schema.json';
@@ -116,6 +118,7 @@ const vArgs: Record<string, ValidateFunction> = {
   'proxy.restart': compile(proxyRestartArgs),
   'move.begin': compile(moveBeginArgsStrict), 'move.summary': compile(moveSummaryArgsStrict), 'move.targets': compile(moveTargetsArgsStrict), 'move.open': compile(moveOpenArgsStrict), 'move.offer': compile(moveOfferArgsStrict), 'move.answer': compile(moveAnswerArgsStrict), 'move.start': compile(moveStartArgsStrict), 'move.go': compile(moveGoArgsStrict), 'move.release': compile(moveReleaseArgsStrict), 'move.finish': compile(moveFinishArgsStrict), 'move.cancel': compile(moveCancelArgsStrict),
   'move.return.open': compile(moveReturnOpenArgsStrict), 'move.return.start': compile(moveReturnStartArgsStrict),
+  'camera.onboarding.get': compile(cameraOnboardingGetArgsStrict),
 };
 // A proxy's result payload, leniently (unknown fields ignored).
 const vResult: Record<string, ValidateFunction> = {
@@ -125,6 +128,7 @@ const vResult: Record<string, ValidateFunction> = {
   'proxy.restart': compile(proxyRestartResult),
   'move.begin': compile(moveBeginResult), 'move.summary': compile(moveSummaryResult), 'move.targets': compile(moveTargetsResult), 'move.open': compile(moveOpenResult), 'move.offer': compile(moveOfferResult), 'move.answer': compile(moveAnswerResult), 'move.start': compile(moveStartResult), 'move.go': compile(moveGoResult), 'move.release': compile(moveReleaseResult), 'move.finish': compile(moveFinishResult), 'move.cancel': compile(moveCancelResult),
   'move.return.open': compile(moveReturnOpenResult), 'move.return.start': compile(moveReturnStartResult),
+  'camera.onboarding.get': compile(cameraOnboardingGetResult),
 };
 export function validateCommandArgs(command: string, args: unknown): { ok: true } | { ok: false; detail: string } {
   const v = Object.hasOwn(vArgs, command) ? vArgs[command] : undefined;
