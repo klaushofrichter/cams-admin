@@ -103,14 +103,15 @@ export const PROXY_NAME_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
 export const CAMS_ID_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const HOSTNAME_RE = /^[A-Za-z0-9.-]{1,253}$/;
 
-export interface AccountFields { name: string; displayName: string; notes: string | null }
+export interface AccountFields { name: string; displayName: string; notes: string | null; autoAdopt: boolean }
 export function accountInput(raw: unknown, partial: boolean): Partial<AccountFields> {
   const b = body(raw);
   return shape({
     name: str(b, 'name', { max: 32, re: ACCOUNT_NAME_RE, required: !partial }),
     displayName: str(b, 'displayName', { min: 1, max: 80, required: !partial }),
     notes: str(b, 'notes', { max: 2000 }),
-  }, partial, {}) as Partial<AccountFields>;
+    autoAdopt: bool(b, 'autoAdopt'),
+  }, partial, { autoAdopt: false }) as Partial<AccountFields>;
 }
 
 export const ROLES = ['admin', 'viewer'] as const;

@@ -18,6 +18,7 @@ import { Tokens } from './tokens/service';
 import { ProxyConfig } from './config/service';
 import { RemoteActions } from './actions/service';
 import { ReportedPins } from './onboarding/pins';
+import { AutoAdopt } from './onboarding/autoAdopt';
 import { Enrollment } from './enroll/codes';
 import { enrollRouter } from './enroll/route';
 import { CamsInstances } from './cams/instances';
@@ -82,7 +83,11 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
   const actions = new RemoteActions({ db, audit, registry, commands, status, clock, config });
   // Onboarding (cam-proxy onboarding design §5): after each heartbeat, the reported site-CA pins.
   const pins = new ReportedPins({ registry, status, live, log });
-  status.onHeartbeat = (proxyId) => { pins.onHeartbeat(proxyId); };
+  const autoAdopt = new AutoAdopt({ db, registry, status, audit, live, log });
+  status.onHeartbeat = (proxyId) => {
+    pins.onHeartbeat(proxyId);
+    autoAdopt.onHeartbeat(proxyId);
+  };
   const enrollment = new Enrollment({ db, clock, audit, registry, cfg, serverKeys: [signing.publicKeyB64], onKeyRevoked: (k) => hub.closeKey(k, 4401), onProxyChanged: (p) => live.publishRegistry('proxy', p) });
   const backup = createBackup({ db, clock, cfg, audit, env: merged });
   // P4: cams instances. R4-19: blocking or deleting one revokes the tokens it holds.

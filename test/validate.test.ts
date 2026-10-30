@@ -23,7 +23,11 @@ describe('fingerprints', () => {
 });
 
 describe('accounts', () => {
-  it('accept a valid account', () => expect(accountInput({ name: 'home', displayName: 'Home' }, false)).toEqual({ name: 'home', displayName: 'Home', notes: null }));
+  it('accept a valid account', () => expect(accountInput({ name: 'home', displayName: 'Home' }, false)).toEqual({ name: 'home', displayName: 'Home', notes: null, autoAdopt: false }));
+  it('autoAdopt is a boolean, off unless given', () => {
+    expect(accountInput({ autoAdopt: true }, true)).toEqual({ autoAdopt: true });
+    expect(field(() => accountInput({ autoAdopt: 1 }, true))).toBe('autoAdopt');
+  });
   it.each([['h', 'name'], ['-ab', 'name'], ['Home', 'name'], ['a'.repeat(33), 'name']])('refuse name %s', (name, f) => {
     expect(field(() => accountInput({ name, displayName: 'x' }, false))).toBe(f);
   });

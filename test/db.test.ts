@@ -178,6 +178,24 @@ describe('database', () => {
     expect(db.prepare('SELECT count(*) n FROM status_events').get()).toEqual({ n: 0 });
   });
 
+  it('migration 18: a version-17 database gains accounts.auto_adopt (off) and adopt_blocks', () => {
+    const f = join(dir, 'm18.db');
+    const raw = new DatabaseSync(f);
+    for (let i = 0; i < 17; i++) MIGRATIONS[i](raw);
+    raw.exec('PRAGMA user_version = 17');
+    seed(raw);
+    raw.close();
+    const db = openDb(f);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(LATEST_VERSION);
+    expect(db.prepare('SELECT id, auto_adopt FROM accounts ORDER BY id').all()).toEqual([{ id: 'acc_a', auto_adopt: 0 }, { id: 'acc_b', auto_adopt: 0 }]);
+    expect(() => db.exec(`UPDATE accounts SET auto_adopt = 2 WHERE id = 'acc_a'`)).toThrow(/CHECK/);
+    db.prepare(`INSERT INTO adopt_blocks (proxy_id, proxy_camera_id, reason, blocked_at) VALUES ('prx_a', 'cam1', 'deleted', 1)`).run();
+    expect(() => db.prepare(`INSERT INTO adopt_blocks (proxy_id, proxy_camera_id, reason, blocked_at) VALUES ('prx_a', 'cam2', 'gone', 1)`).run()).toThrow(/CHECK/);
+    expect(db.prepare(`SELECT strict FROM pragma_table_list WHERE name = 'adopt_blocks'`).get()).toEqual({ strict: 1 });
+    db.exec(`DELETE FROM proxies WHERE id = 'prx_a'`);
+    expect(db.prepare('SELECT count(*) n FROM adopt_blocks').get()).toEqual({ n: 0 });
+  });
+
   it('migration 6 (P3): a version-5 database gains proxy_config and commands.preview_of with its rows intact', () => {
     const f = join(dir, 'm6.db');
     const raw = new DatabaseSync(f);

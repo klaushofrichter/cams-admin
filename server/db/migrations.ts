@@ -520,4 +520,17 @@ DROP TABLE status_events;
 ALTER TABLE status_events_m17 RENAME TO status_events;
 CREATE INDEX status_events_proxy_at ON status_events(proxy_id, at);
 `),
+  // 18: auto-adopt per account (cam-proxy onboarding design §5; off by default) and
+  // the cameras it must never bring back: one row per (proxy, proxy camera id) that
+  // was deleted from the registry or moved off that proxy; a manual adopt lifts it.
+  (db) => db.exec(`
+ALTER TABLE accounts ADD COLUMN auto_adopt INTEGER NOT NULL DEFAULT 0 CHECK (auto_adopt IN (0, 1));
+CREATE TABLE adopt_blocks (
+  proxy_id TEXT NOT NULL REFERENCES proxies(id) ON DELETE CASCADE,
+  proxy_camera_id TEXT NOT NULL,
+  reason TEXT NOT NULL CHECK (reason IN ('deleted', 'moved')),
+  blocked_at INTEGER NOT NULL,
+  PRIMARY KEY (proxy_id, proxy_camera_id)
+) STRICT;
+`),
 ];

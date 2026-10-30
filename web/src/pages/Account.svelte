@@ -51,10 +51,11 @@
   let editDisplay = $state('');
   let editNotes = $state('');
   let editName = $state('');
-  $effect(() => { if (account) { editDisplay = account.displayName; editNotes = account.notes ?? ''; editName = account.name; } });
+  let editAutoAdopt = $state(false);
+  $effect(() => { if (account) { editDisplay = account.displayName; editNotes = account.notes ?? ''; editName = account.name; editAutoAdopt = account.autoAdopt === true; } });
   async function saveAccount() {
     error = '';
-    try { account = await api('PATCH', `/accounts/${accountId}`, { name: editName, displayName: editDisplay, notes: editNotes || null, version: account.version }); } catch (e) { error = errorText(e); }
+    try { account = await api('PATCH', `/accounts/${accountId}`, { name: editName, displayName: editDisplay, notes: editNotes || null, autoAdopt: editAutoAdopt, version: account.version }); } catch (e) { error = errorText(e); }
   }
   async function deleteAccount() {
     try { await api('DELETE', `/accounts/${accountId}`, { confirmName: account.name }); location.hash = '#/accounts'; } catch (e) { error = errorText(e); confirmDelete = false; }
@@ -172,6 +173,8 @@
         <label>Account name (users may type it at login later; cams refers to the id)<input data-testid="account-edit-name" bind:value={editName} /></label>
         <label>Display name<input data-testid="account-edit-display" bind:value={editDisplay} /></label>
         <label class="wide">Notes<textarea rows="3" bind:value={editNotes}></textarea></label>
+        <label class="wide"><input type="checkbox" bind:checked={editAutoAdopt} data-testid="account-auto-adopt" /> Add cameras automatically when their proxy reports them ready
+          <span class="muted">(never a camera removed from the account or moved away; set only here, signed in)</span></label>
       </div>
       <div class="row">
         <button class="btn primary" data-testid="account-save" onclick={saveAccount}>Save</button>

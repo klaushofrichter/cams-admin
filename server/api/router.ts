@@ -323,6 +323,8 @@ export function apiRouter(d: ApiDeps): express.Router {
       camsId: req.body?.camsId ?? rep.proposedCamsId, name: req.body?.name ?? reported?.name ?? ref, kind: req.body?.kind ?? 'camera',
       proxyId: px.id, proxyCameraId: ref, model: reported?.model ?? null, host: 'from-proxy',
     }, 'camera-adopt');
+    // A manual adopt lifts what auto-adopt was blocked from (a camera deleted or moved off this proxy).
+    d.registry.liftAdoptBlock(px.id, ref);
     reg('camera', cam.id);
     return cam;
   }));
