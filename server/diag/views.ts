@@ -1,5 +1,6 @@
 import type { ApiDeps } from '../api/router';
 import { reconcile } from '../status/derive';
+import { ApiError } from '../registry';
 import { snapshotRevision } from '../cams/snapshot';
 import { createHash } from 'crypto';
 import type { AuditFilter } from '../audit';
@@ -50,6 +51,25 @@ export function diagProxies(d: ApiDeps) {
         },
         reconcile: reconcile(px, accCams.filter((c) => c.proxyId === px.id), new Set(accCams.map((c) => c.camsId)), row),
       };
+    }),
+  };
+}
+
+// The cameras a proxy reports and the registry lacks, for onboarding: what the adopt route
+// (POST /accounts/:accountId/proxies/:proxyId/adopt, ops scope onboard) takes. Named fields
+// only: never the camera's address. reported: false until the proxy has sent a summary.
+export function diagUnregistered(d: ApiDeps, proxyId: string) {
+  const px = d.registry.proxyById(proxyId);
+  if (!px) throw new ApiError(404, 'not_found');
+  const row = d.status.row(px.id);
+  const accCams = d.registry.listCameras(px.accountId);
+  const rec = reconcile(px, accCams.filter((c) => c.proxyId === px.id), new Set(accCams.map((c) => c.camsId)), row);
+  const rep = new Map((row?.reported?.cameras ?? []).map((c) => [c.ref, c]));
+  return {
+    proxyId: px.id, accountId: px.accountId, reported: !!row?.reported?.cameras,
+    items: rec.reportedNotRegistered.map((c) => {
+      const r = rep.get(c.ref);
+      return { ref: c.ref, name: r?.name ?? null, model: r?.model ?? null, online: r?.online ?? null, proposedCamsId: c.proposedCamsId };
     }),
   };
 }

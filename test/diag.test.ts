@@ -156,6 +156,22 @@ describe('diagnostics answers', () => {
     await a.api('post', `/ops-tokens/${o.body.item.id}/revoke`);
   });
 
+  it('proxies/:proxyId/unregistered: the cameras a proxy reports and the registry lacks, without addresses', async () => {
+    const { token } = await issue('onboard', 1);
+    const p3 = a.registry.createProxy('admin@example.com', acc, { name: 'onb', displayName: 'Onb', runsOn: 'local-host' }).id;
+    expect((await bearer(`/diag/proxies/${p3}/unregistered`, token)).body).toEqual({ proxyId: p3, accountId: acc, reported: false, items: [] });
+    a.db.prepare(`UPDATE proxies SET state = 'enrolled' WHERE id = ?`).run(p3);
+    a.status.heartbeat(p3, { summary: makeSummary({ cameras: 2, now: Date.now() }), proxy: makeProxyInfo({ now: Date.now() }), truncated: false }, Date.now());
+    a.registry.createCamera('admin@example.com', acc, { camsId: 'onb1', name: 'Onb 1', kind: 'camera', proxyId: p3, proxyCameraId: 'cam1', host: 'from-proxy' });
+    const r = await bearer(`/diag/proxies/${p3}/unregistered`, token);
+    expect(r.status).toBe(200);
+    // cam2 is not a cams id in the account yet, so it is proposed as is.
+    expect(r.body).toEqual({ proxyId: p3, accountId: acc, reported: true, items: [{ ref: 'cam2', name: 'Camera 2', model: 'RLC-1224A', online: expect.any(Boolean), proposedCamsId: 'cam2' }] });
+    expect(JSON.stringify(r.body)).not.toMatch(/192\.0\.2\./);
+    expect((await bearer('/diag/proxies/prx_NOPE/unregistered', token)).status).toBe(404);
+    expect((await bearer('/diag', token)).body.routes).toContain('/diag/proxies/:proxyId/unregistered');
+  });
+
   it('the move precheck names every rule: an offline target, and the instance that sees only the source', async () => {
     const { token } = await issue('precheck', 1);
     const r = await bearer(`/diag/moves/precheck?source=${px}&target=${px2}&camera=porch`, token);
