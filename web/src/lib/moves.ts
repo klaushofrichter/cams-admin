@@ -115,7 +115,7 @@ export const canDelete = (phase: string): boolean => phase === 'rejected';
 
 // The content checklist of the move detail (GET /moves/:id content).
 export interface ContentKind { kind: string; included: boolean | null; files: number | null; bytes: number | null; rows?: number | null; chunks: { total: number; done: number; failed: number; abandoned: number } }
-const KIND_LABEL: Record<string, string> = { clips: 'Clips', stills: 'Stills', events: 'Events', checks: 'Checks', archive: 'Archive' };
+const KIND_LABEL: Record<string, string> = { clips: 'Clips', stills: 'Stills', events: 'Events', checks: 'Checks', archive: 'Archive', ptz: 'PTZ positions' };
 // Events and checks are database rows, not files: counted by rows ("654 events"), with a size only when one is known.
 const ROW_KINDS: Record<string, [string, string]> = { events: ['event', 'events'], checks: ['check', 'checks'] };
 function rowSize(k: ContentKind, [one, many]: [string, string]): string[] {
@@ -140,6 +140,7 @@ export function contentLine(k: ContentKind): string {
 }
 // The content before a move (the Start move form, move.summary): one line per kind, as the move detail counts it.
 export interface KindSummary { files: number; bytes: number; rows: number; oldest: number | null; newest: number | null }
+// The five file kinds only: a summary has no ptz entry.
 const KIND_ORDER = ['stills', 'clips', 'events', 'checks', 'archive'];
 export function presummaryLines(summary: Partial<Record<string, KindSummary>>): { kind: string; text: string }[] {
   return KIND_ORDER.filter((kind) => summary[kind]).map((kind) => {

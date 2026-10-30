@@ -63,6 +63,8 @@ export interface ClientOptions {
   // (test-client/config.ts) and reports its configRevision; without it a P3
   // command that passes the check is answered failed not_implemented.
   commands?: { allow: string[]; paused?: boolean; enabled?: boolean; config?: RefProxyConfig };
+  // More hello capabilities after status and commands (tests: `move-ptz`).
+  capabilities?: string[];
 }
 
 export interface ManagedToken { id: string; kind: 'client' | 'admin'; label: string; retireAt: number | null }
@@ -223,7 +225,7 @@ export class ProxyClient extends EventEmitter {
         this.connId = b.connId;
         this.seen = new Set();
         this.serverOffset = b.serverTime - this.now();
-        this.send('hello', { proxyId: k.proxyId, keyId: k.keyId, connId: b.connId, nonce: b.nonce, ts, version: this.o.version ?? 'test-client', capabilities: this.commands ? ['status', 'commands'] : ['status'] }, {
+        this.send('hello', { proxyId: k.proxyId, keyId: k.keyId, connId: b.connId, nonce: b.nonce, ts, version: this.o.version ?? 'test-client', capabilities: [...(this.commands ? ['status', 'commands'] : ['status']), ...(this.o.capabilities ?? [])] }, {
           sig: sign(privateFromB64(k.privateKey), signedText.hello(b.connId, b.nonce, k.proxyId, k.keyId, ts)),
         });
         return;

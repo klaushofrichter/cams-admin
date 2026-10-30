@@ -10,12 +10,13 @@ import { enrolled, makeClient, resetAccounts, startServer, until, type Running }
 import { makeProxyInfo } from '../test-client/summaries';
 import type { ProxyClient } from '../test-client/client';
 import { GIVE_UP_AFTER_MS, RESEND_AFTER_MS } from '../server/commands/service';
-import { estimateS, FALLBACK_BPS, hostnameOf, MIN_ESTIMATE_S, OFFER_EXPIRY_MS, RESUME_GAP_MS } from '../server/moves/service';
+import { answerKinds, estimateS, FALLBACK_BPS, hostnameOf, MIN_ESTIMATE_S, OFFER_EXPIRY_MS, RESUME_GAP_MS } from '../server/moves/service';
 import { readEpoch } from '../server/db/open';
 import { AUDIT_ACTIONS } from '../server/audit';
 import { moveToken, targetAddress } from '../server/moves/token';
 import { precheckReport } from '../server/moves/precheck';
 import { moveView } from '../server/moves/view';
+import { spaceCheck } from '../server/moves/space';
 
 const ACTOR = 'admin@example.com';
 const fx = (name: string) => JSON.parse(readFileSync(join(__dirname, '../contract/v1/fixtures', name), 'utf8')).message.body as Record<string, any>;
@@ -42,11 +43,11 @@ afterEach(async () => {
 
 interface Px { proxyId: string; accountId: string; client: ProxyClient; name: string; ip: string }
 // An enrolled, online proxy reporting `site`; the registry has the same site, a LAN url, a TLS name and the CA pin.
-async function proxy(o: { allow?: string[]; site?: string | null; registrySite?: string | null; account?: string } = {}): Promise<Px> {
+async function proxy(o: { allow?: string[]; site?: string | null; registrySite?: string | null; account?: string; caps?: string[] } = {}): Promise<Px> {
   const name = `mv${n++}`;
   const p = await enrolled(s, name, o.account ?? 'home');
   const site = o.site === undefined ? `site-${name}` : o.site;
-  const client = makeClient(p.key, { commands: { allow: o.allow ?? ['move.send', 'move.receive'] }, proxyInfo: () => makeProxyInfo({ now: Date.now(), site, caFingerprint: [FP] }) });
+  const client = makeClient(p.key, { commands: { allow: o.allow ?? ['move.send', 'move.receive'] }, proxyInfo: () => makeProxyInfo({ now: Date.now(), site, caFingerprint: [FP] }), capabilities: o.caps });
   clients.push(client);
   client.start();
   await until(() => client.state === 'connected' && !!s.built.status.row(p.proxyId)?.reported?.commands, 5000, 'connected');
@@ -137,6 +138,52 @@ describe('move request, pre-approval bounds', () => {
     expect(got(src.client, 'move.open')).toHaveLength(1);
     expect(JSON.stringify(got(src.client, 'move.open')[0].body.args)).not.toContain('bounds');
     expect(JSON.stringify(got(tgt.client, 'move.offer')[0].body.args)).not.toContain('bounds');
+  });
+});
+
+describe('the ptz kind: the accepted kinds of the target', () => {
+  const ALL = ['stills', 'clips', 'events', 'checks', 'archive', 'ptz'];
+  const offerWith = (tgt: Px, kinds: unknown) => {
+    tgt.client.moveResults['move.offer'] = { status: 'ok', result: { accept: true, space: { needed: 1000, available: 5000, fits: true, perKind: {}, retentionProposal: null }, probeBps: 50_000_000, kinds } };
+  };
+  const run = async (caps: string[], kinds: unknown) => {
+    const src = await proxy({ caps });
+    const tgt = await proxy();
+    camera(src);
+    offerWith(tgt, kinds);
+    const requestId = request(src, tgt.proxyId);
+    const a = await answerOf(src, requestId);
+    await until(() => moves()[0]?.phase === 'awaiting-approval', 5000, 'awaiting-approval');
+    return a;
+  };
+  it('an offer result with kinds is accepted and relayed', async () => {
+    const a = await run(['move-ptz'], ALL);
+    expect(a).toMatchObject({ accept: true, kinds: ALL });
+    const offer = auditFor('move-offer').map((x) => JSON.parse(x.detail)).find((d) => d.phase === 'awaiting-approval');
+    expect(offer.kinds).toEqual(ALL);
+  });
+  it('kinds are not relayed to a source without move-ptz', async () => {
+    const a = await run([], ALL);
+    expect(a.accept).toBe(true);
+    expect('kinds' in a).toBe(false);
+    expect(moves()[0].phase).toBe('awaiting-approval');
+  });
+  it('an offer result with bad kinds: relayed without kinds', async () => {
+    const a = await run(['move-ptz'], ['ptz', 'ptz']);
+    expect(a.accept).toBe(true);
+    expect('kinds' in a).toBe(false);
+  });
+  it('answerKinds reads unique move kinds, else null', () => {
+    expect(answerKinds(ALL)).toEqual(ALL);
+    expect(answerKinds(['ptz'])).toEqual(['ptz']);
+    for (const bad of [undefined, null, 'ptz', ['ptz', 'ptz'], ['video'], [1], Array(7).fill('ptz')]) expect(answerKinds(bad), JSON.stringify(bad)).toBeNull();
+  });
+  it('estimateS and the space check ignore ptz', () => {
+    const summary = fx('valid-event-move-request.json').summary;
+    const withPtz = { ...summary, ptz: { files: 9, bytes: 9_000_000_000, rows: 3, oldest: 0, newest: 1 } };
+    expect(estimateS(withPtz, 1_000_000)).toBe(estimateS(summary, 1_000_000));
+    const profile = { storage: { budgetBytes: 10_000_000_000, usedBytes: 0, diskBytes: null, freeBytes: null } } as any;
+    expect(spaceCheck(withPtz, profile, {}, 1)).toEqual(spaceCheck(summary, profile, {}, 1));
   });
 });
 
