@@ -1,6 +1,6 @@
 import { EventEmitter } from 'events';
 import { generateKeyPair, privateFromB64, publicFromB64, sign, signEnvelope, signedText, verify } from '../server/crypto/ed25519';
-import { moveRequestFromBegin, moveSummaryOf, refCheck, type JournalEntry } from './commands';
+import { moveRequestFromBegin, moveSummaryOf, onboardingResultOf, refCheck, type JournalEntry } from './commands';
 import type { RefProxyConfig } from './config';
 import { normaliseCode, ulid } from '../server/ids';
 import { makeProxyInfo } from './summaries';
@@ -44,6 +44,8 @@ export interface ClientOptions {
   proxyInfo?: () => unknown;
   // The heartbeat's proxy profile (contract v1 heartbeat `profile`); without it the client is a proxy from before the profile.
   profile?: () => unknown;
+  // The heartbeat's onboarding (contract v1 heartbeat `onboarding`): {<camera>: {ready, missing}}; without it the client is a proxy from before onboarding.
+  onboarding?: () => unknown;
   heartbeatS?: number; // overrides the server's welcome (tests)
   minIntervalS?: number; // the floor under ack.nextInS (10 s by spec)
   jitterS?: number; // ±2 s by spec
@@ -317,7 +319,8 @@ export class ProxyClient extends EventEmitter {
     this.sendSigned('result', { ...head, phase: 'received' }, { re: m.id });
     this.executed.push(b.cmdId);
     this.journalEntries.push({ cmdId: b.cmdId, command: b.command, at: this.now() + this.serverOffset, ...(b.command === 'camera.action' ? { action: b.args.action } : {}) });
-    const d: DoneBody = b.command === 'tokens.apply' ? this.applyTokens(b.args) : b.command.startsWith('move.') ? this.runMove(b) : this.runP3(b);
+    const d: DoneBody = b.command === 'tokens.apply' ? this.applyTokens(b.args) : b.command.startsWith('move.') ? this.runMove(b)
+      : b.command === 'camera.onboarding.get' ? { status: 'ok', result: onboardingResultOf(this.o.onboarding?.(), b.args.camera, this.now() + this.serverOffset) } : this.runP3(b);
     this.journal.set(b.cmdId, d);
     if (this.dropAfterReceived > 0) {
       this.dropAfterReceived--;
@@ -438,7 +441,8 @@ export class ProxyClient extends EventEmitter {
         ...(this.commands.config ? { configRevision: this.commands.config.revision() } : {}),
       } : info;
       const profile = this.o.profile ? this.o.profile() : undefined;
-      const body = { summary, proxy, truncated: false, ...(profile === undefined ? {} : { profile }) };
+      const onboarding = this.o.onboarding ? this.o.onboarding() : undefined;
+      const body = { summary, proxy, truncated: false, ...(profile === undefined ? {} : { profile }), ...(onboarding === undefined ? {} : { onboarding }) };
       const id = this.send('heartbeat', body);
       this.unacked.set(id, Date.now());
       this.stats.sent++;

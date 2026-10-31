@@ -200,6 +200,37 @@ describe('diagnostics answers', () => {
     expect((await bearer('/diag/proxies', token)).body.items.find((x: { id: string }) => x.id === px2).reported.moveLeftovers).toEqual([]);
   });
 
+  it('diag proxies show onboarding', async () => {
+    const { token } = await issue('onboarding', 1);
+    a.status.heartbeat(px2, { summary: makeSummary({ cameras: 1, now: Date.now() }), proxy: makeProxyInfo({ now: Date.now() }), truncated: false, onboarding: { cam1: { ready: true, missing: [] } } }, Date.now());
+    const p = (await bearer('/diag/proxies', token)).body.items.find((x: { id: string }) => x.id === px2);
+    expect(p.reported.onboarding).toEqual({ cam1: { ready: true, missing: [] } });
+    a.status.heartbeat(px2, { summary: makeSummary({ cameras: 1, now: Date.now() }), proxy: makeProxyInfo({ now: Date.now() }), truncated: false }, Date.now());
+    expect((await bearer('/diag/proxies', token)).body.items.find((x: { id: string }) => x.id === px2).reported.onboarding).toBeNull();
+  });
+
+  it('diag camera onboarding by cams id, by registry id; ambiguous across accounts unless accountId; 404 for unknown', async () => {
+    const { token } = await issue('onboarding-view', 1);
+    const cam = (a.db.prepare(`SELECT id FROM cameras WHERE cams_id = 'porch'`).get() as { id: string }).id;
+    const one = await bearer('/diag/cameras/porch/onboarding', token);
+    expect(one.status, JSON.stringify(one.body)).toBe(200);
+    expect(one.body).toMatchObject({ camera: { id: cam, camsId: 'porch', accountId: acc }, proxy: { id: px }, proxyCameraId: 'cam1' });
+    expect((await bearer(`/diag/cameras/${cam}/onboarding`, token)).body).toMatchObject({ camera: { id: cam } });
+    // The same cams id in another account.
+    const other = a.registry.createAccount('admin@example.com', { name: 'twin', displayName: 'Twin' }).id;
+    const otherPx = a.registry.createProxy('admin@example.com', other, { name: 'tw', displayName: 'Tw', runsOn: 'cloud' }).id;
+    a.registry.createCamera('admin@example.com', other, { camsId: 'porch', name: 'Porch 2', kind: 'camera', proxyId: otherPx, proxyCameraId: 'cam1', host: 'from-proxy' });
+    expect((await bearer('/diag/cameras/porch/onboarding', token)).body).toEqual({ error: 'ambiguous' });
+    expect((await bearer('/diag/cameras/porch/onboarding', token)).status).toBe(409);
+    expect((await bearer(`/diag/cameras/porch/onboarding?accountId=${other}`, token)).body).toMatchObject({ camera: { accountId: other }, proxy: { id: otherPx } });
+    expect((await bearer(`/diag/cameras/porch/onboarding?accountId=${acc}`, token)).body).toMatchObject({ camera: { id: cam } });
+    expect((await bearer('/diag/cameras/nope/onboarding', token)).status).toBe(404);
+    expect((await bearer('/diag/cameras/cam_NOPE/onboarding', token)).status).toBe(404);
+    // A camera without a proxy has no onboarding.
+    a.registry.createCamera('admin@example.com', other, { camsId: 'loose', name: 'Loose', kind: 'camera' });
+    expect((await bearer('/diag/cameras/loose/onboarding', token)).body).toEqual({ error: 'no_proxy' });
+  });
+
   it('the secret guard: markers in hashes, codes, keys, e-mails and notes never appear in any answer', async () => {
     const MARK = 'f00dfeed';
     const { token } = await issue('guard', 1);
@@ -220,7 +251,11 @@ describe('diagnostics answers', () => {
     // The leak-prone sources filled: a proxy summary and its reported info, a cams report, a move with its secret columns.
     a.db.prepare(`UPDATE proxies SET state = 'enrolled' WHERE id = ?`).run(px);
     a.status.hello(px, 'v2', Date.now(), ['status', 'commands']);
-    a.status.heartbeat(px, { summary: makeSummary({ cameras: 2, now: Date.now() }), proxy: makeProxyInfo({ now: Date.now() }), truncated: false }, Date.now());
+    a.status.heartbeat(px, { summary: makeSummary({ cameras: 2, now: Date.now() }), proxy: makeProxyInfo({ now: Date.now() }), truncated: false, onboarding: { cam1: { ready: true, missing: [] } } }, Date.now());
+    // An onboarding result with secret-shaped fields (the view passes it through sanitize).
+    a.db.prepare(`INSERT INTO commands (id, account_id, proxy_id, actor, command, args, state, result, created_at, finished_at) VALUES ('cmd_GUARD00000000000000', ?, ?, 'admin@example.com', 'camera.onboarding.get', ?, 'done', ?, 1, 2)`)
+      .run(acc, px, JSON.stringify({ v: 1, camera: 'cam1' }), JSON.stringify({ body: { phase: 'done', status: 'ok', result: { cameras: { cam1: { camera: 'cam1', ready: true, password: MARK, token: MARK, steps: {} } } } } }));
+    expect((await bearer(`/diag/cameras/porch/onboarding?accountId=${acc}`, token)).body.detail.result).toMatchObject({ camera: 'cam1', ready: true });
     a.camsInstances.report(i.id, { v: 1, mode: 'cams-admin', held: [{ accountId: acc, camsId: 'porch', fields: ['host'] }], heldProxies: [], keptOld: [], shadow: null, tokens: { managed: 1, pending: 0, legacy: 1 }, problems: [{ code: 'token_retire_failed', accountId: acc, detail: `proxy ${px}` }] }, Date.now());
     const cam = (a.db.prepare(`SELECT id FROM cameras WHERE cams_id = 'porch'`).get() as { id: string }).id;
     a.db.prepare(`INSERT INTO moves (id, account_id, camera_id, source_proxy_id, target_proxy_id, request_id, phase, token_hash, target_ip, target_public_key, leaf_fingerprint, created_at, updated_at, ended_at)
@@ -238,7 +273,7 @@ describe('diagnostics answers', () => {
     const byReq = await bearer('/diag/moves?requestId=rq_guard', token);
     expect(byReq.body.items.map((m: { id: string; requestId: string }) => [m.id, m.requestId])).toEqual([['mv_GUARD000000000000000', 'rq_guard']]);
     expect((await bearer('/diag/moves?requestId=rq_nope', token)).body).toEqual({ items: [] });
-    for (const r of [...ROUTES, '/diag/audit?limit=200', `/diag/moves/precheck?source=${px}&target=${px2}&camera=porch`]) {
+    for (const r of [...ROUTES, '/diag/audit?limit=200', `/diag/moves/precheck?source=${px}&target=${px2}&camera=porch`, `/diag/cameras/porch/onboarding?accountId=${acc}`, `/diag/cameras/${cam}/onboarding`]) {
       const body = JSON.stringify((await bearer(r, token)).body);
       expect(body, r).not.toContain(MARK);
       expect(body, r).not.toContain(token);

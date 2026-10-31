@@ -1,3 +1,4 @@
+import { onboardingByCamsId } from '../onboarding/view';
 import express from 'express';
 import type { Request, RequestHandler, Response } from 'express';
 import { proxyProfile, type ApiDeps } from '../api/router';
@@ -14,7 +15,7 @@ import { diagAudit, diagCameras, diagCamsInstances, diagMoves, diagOpsTokens, di
 // diagnostics token (Authorization: Bearer cad_…) or a sysadmin session.
 // GET only; the token opens nothing outside this router.
 
-const ROUTES = ['/diag', '/diag/proxies', '/diag/proxies/:proxyId/profile', '/diag/proxies/:proxyId/unregistered', '/diag/cams-instances', '/diag/cameras', '/diag/tokens', '/diag/ops-tokens', '/diag/moves?accountId=&requestId=', '/diag/moves/precheck?source=&target=&camera=', '/diag/audit?account=&actorType=&action=&from=&to=&limit=&cursor='];
+const ROUTES = ['/diag', '/diag/proxies', '/diag/proxies/:proxyId/profile', '/diag/proxies/:proxyId/unregistered', '/diag/cams-instances', '/diag/cameras', '/diag/cameras/:camsId/onboarding?accountId=', '/diag/tokens', '/diag/ops-tokens', '/diag/moves?accountId=&requestId=', '/diag/moves/precheck?source=&target=&camera=', '/diag/audit?account=&actorType=&action=&from=&to=&limit=&cursor='];
 
 export function diagAuth(d: Pick<ApiDeps, 'sessions' | 'audit'> & { diag: DiagTokens }): RequestHandler {
   return (req, res, next) => {
@@ -63,6 +64,8 @@ export function diagRouter(d: ApiDeps & { diag: DiagTokens }): express.Router {
   r.get('/proxies/:proxyId/unregistered', h((req) => diagUnregistered(d, String(req.params.proxyId))));
   r.get('/cams-instances', h(() => diagCamsInstances(d)));
   r.get('/cameras', h(() => diagCameras(d)));
+  // One camera's onboarding (a cams id or a registry id; ?accountId= when a cams id is in several accounts).
+  r.get('/cameras/:camsId/onboarding', h((req) => onboardingByCamsId(d, String(req.params.camsId), q(req, 'accountId'))));
   r.get('/tokens', h(() => diagTokens(d)));
   r.get('/ops-tokens', h(() => diagOpsTokens(d)));
   r.get('/moves', h((req) => {

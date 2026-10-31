@@ -29,7 +29,11 @@ const only = (o: Record<string, unknown>, keys: string[]) => Object.keys(o).ever
 const isDisruptive = (a: string) => (DISRUPTIVE_ACTIONS as readonly string[]).includes(a);
 
 export interface ActionsDeps { db: Db; audit: Audit; registry: Registry; commands: Commands; status: StatusStore; clock: Clock; config?: ProxyConfig }
-export interface Available { actions: { action: string; disruptive: boolean; allowed: boolean }[]; rename: boolean; restart: boolean; cameras: string[] }
+export interface Available {
+  actions: { action: string; disruptive: boolean; allowed: boolean }[]; rename: boolean; restart: boolean; cameras: string[];
+  // The onboarding entries on the proxy: camera.onboarding.get, camera.action:camera-ftp-setup, camera.action:camera-time-set.
+  onboarding: { get: boolean; ftpSetup: boolean; timeSet: boolean };
+}
 
 export class RemoteActions {
   // proxy|camera|action → the command of the last request (a double click within 10 s is busy while it is open).
@@ -53,14 +57,34 @@ export class RemoteActions {
     }
     if (isDisruptive(action) && body.confirm !== action) throw new ApiError(400, 'confirm_required', 'confirm');
     const key = `${proxyId}|${String(camera)}|${action}`;
-    const now = this.d.clock.now();
-    const last = this.recent.get(key);
-    if (last && now - last.at < BUSY_MS && this.isOpen(accountId, proxyId, last.cmdId)) throw new ApiError(409, 'busy');
+    this.checkBusy(accountId, proxyId, key);
     if (isDisruptive(action)) this.fleetGate(actor, accountId, proxyId, 'camera.action', action);
     const row = this.d.commands.create(actor, accountId, proxyId, 'camera.action', { v: 1, camera, action, ...(input ? { input } : {}) });
-    this.recent.set(key, { at: now, cmdId: row.id });
-    for (const [k, v] of this.recent) if (now - v.at >= BUSY_MS) this.recent.delete(k);
+    this.remember(key, row.id);
     return { commandId: row.id };
+  }
+
+  // The full onboarding status of one camera (cam-proxy onboarding design §4.5): a read on the proxy, its result
+  // shown with its age (the onboarding view takes the newest). Same busy rule as a camera action.
+  onboardingRefresh(actor: string, accountId: string, proxyId: string, camera: string): { commandId: string } {
+    this.d.registry.getProxy(accountId, proxyId);
+    if (typeof camera !== 'string' || !CAM_RE.test(camera)) throw new ApiError(400, 'invalid', 'camera');
+    const key = `${proxyId}|${camera}|camera.onboarding.get`;
+    this.checkBusy(accountId, proxyId, key);
+    const row = this.d.commands.create(actor, accountId, proxyId, 'camera.onboarding.get', { v: 1, camera });
+    this.remember(key, row.id);
+    return { commandId: row.id };
+  }
+
+  // A double click within 10 s is busy while the first command is open.
+  private checkBusy(accountId: string, proxyId: string, key: string): void {
+    const last = this.recent.get(key);
+    if (last && this.d.clock.now() - last.at < BUSY_MS && this.isOpen(accountId, proxyId, last.cmdId)) throw new ApiError(409, 'busy');
+  }
+  private remember(key: string, cmdId: string): void {
+    const now = this.d.clock.now();
+    this.recent.set(key, { at: now, cmdId });
+    for (const [k, v] of this.recent) if (now - v.at >= BUSY_MS) this.recent.delete(k);
   }
 
   rename(actor: string, accountId: string, proxyId: string, camera: string, body: unknown): { commandId: string } {
@@ -86,6 +110,7 @@ export class RemoteActions {
     return {
       actions: REMOTE_ACTIONS.map((a) => ({ action: a, disruptive: isDisruptive(a), allowed: allow.includes(`camera.action:${a}`) })),
       rename: allow.includes('camera.name.set'), restart: allow.includes('proxy.restart'), cameras,
+      onboarding: { get: allow.includes('camera.onboarding.get'), ftpSetup: allow.includes('camera.action:camera-ftp-setup'), timeSet: allow.includes('camera.action:camera-time-set') },
     };
   }
 

@@ -100,6 +100,50 @@ directly for status and settings. Each viewer keeps its own logins. A
 planned change moves those calls behind the proxy, after which this step
 goes away.
 
+## The scripted path
+
+Every cams-admin step above can run without a sign-in, except two that stay
+with a person on purpose: enrolling the proxy, and switching auto-adopt on.
+
+1. **Adopt.** Either the account adopts by itself (Accounts → the account →
+   "Add cameras automatically when their proxy reports them ready"; off by
+   default, set only signed in): a camera the proxy reports ready (its
+   required onboarding steps done) is added with host `from-proxy`, audited
+   `camera-adopt` with the actor `system:auto-adopt`. A camera removed from
+   the account or moved off that proxy is never added back by itself (a
+   manual adopt lifts that). Or a script adopts it with an `onboard` token, as
+   above.
+2. **The proxy's pins.** A proxy without pins in the registry takes the
+   site-CA fingerprints it reports on its next heartbeat (audit
+   `system:proxy-report`). A change of existing pins is never automatic: the
+   proxy page's "Use the reported pins", or
+   `POST …/proxies/prx_…/pins/from-report` with a `registry` token.
+3. **Optional steps, as each proxy allows** (scope `actions`): the full
+   status `POST …/proxies/prx_…/cameras/cam2/onboarding/refresh`; the time
+   (`camera-time-set`) and the camera's FTP target (`camera-ftp-setup`) as
+   camera actions, with the action's name typed back:
+
+   ```sh
+   curl -fsS -X POST -H "Authorization: Bearer $(cat ~/.config/cams-admin/ops-token)" -H 'Content-Type: application/json' \
+     -d '{"camera":"cam2","action":"camera-time-set","confirm":"camera-time-set"}' \
+     "https://cams-admin.example.net/api/v1/accounts/acc_…/proxies/prx_…/actions"
+   ```
+
+   Both are off on each proxy until its owner allows them there (409
+   `not_allowed_on_proxy`), and count against the fleet budget for
+   disruptive actions. A script must not assume them.
+4. **Wait for ready.** Poll the camera's onboarding view until `ready` is
+   true; `missing` says what is still open (see
+   [diagnostics.md](diagnostics.md), "A camera's onboarding"):
+
+   ```sh
+   until curl -fsS -H "Authorization: Bearer $(cat ~/.config/cams-admin/diag-token)" \
+       https://cams-admin.example.net/api/v1/diag/cameras/garden/onboarding | grep -q '"ready":true'; do sleep 30; done
+   ```
+
+   A viewer that holds a change (`viewer:<name>:held`) waits for someone to
+   confirm it in that viewer: that is never scripted.
+
 ## 3. Checks
 
 - **The viewer's camera list:** the camera is there, online, with its name.

@@ -43,6 +43,7 @@ A signed-in sysadmin's browser session works on the same routes.
 | `/diag/proxies/:proxyId/profile` | the proxy's latest reported profile, as `GET /api/v1/proxies/:proxyId/profile` answers it (see "Proxy profile" below) |
 | `/diag/cams-instances` | state, accounts, routes, the last report: mode, applied vs current revision, held changes and held proxies, kept-old, shadow, token counts, problems (code, account, detail) |
 | `/diag/cameras` | registry fields (cams id, model, proxy, proxy camera id, host, protocol, TLS name), move id, online |
+| `/diag/cameras/:camsId/onboarding?accountId=` | one camera's onboarding: `{camera, proxy, proxyCameraId, online, reported, detail, viewers, ready, missing, optional}`; `:camsId` is a cams id or a registry id (`cam_…`); a cams id in several accounts is 409 `ambiguous` unless `accountId` names one; 409 `no_proxy` for a camera without a proxy (see below) |
 | `/diag/tokens` | per proxy, its managed tokens: holder (cams instance id and name, or `manual`), label, kind, state, on proxy, created, retire/revoke times, last token command; no hash |
 | `/diag/moves?accountId=` | the newest 100 moves with chunk counts |
 | `/diag/moves/precheck?source=&target=&camera=` | every precheck rule in order with ok, reason and a detail; `camera` is the registry id or the cams id |
@@ -158,6 +159,16 @@ actor `ops-token:<8 hex>`. The list is also at `/diag/ops-tokens`.
 | `registry` | `PATCH /accounts/:accountId/proxies/:proxyId` |
 | `registry` | `PATCH /accounts/:accountId/cameras/:cameraId` |
 | `onboard` | `POST /accounts/:accountId/proxies/:proxyId/adopt` |
+| `actions` | `POST /accounts/:accountId/proxies/:proxyId/actions` |
+| `actions` | `POST /accounts/:accountId/proxies/:proxyId/cameras/:camera/name` |
+| `actions` | `POST /accounts/:accountId/proxies/:proxyId/restart` |
+| `actions` | `POST /accounts/:accountId/proxies/:proxyId/cameras/:camera/onboarding/refresh` |
+| `config` | `POST /accounts/:accountId/proxies/:proxyId/config/refresh` |
+| `config` | `POST /accounts/:accountId/proxies/:proxyId/config/preview` |
+| `config` | `POST /accounts/:accountId/proxies/:proxyId/config/apply` |
+| `config` | `POST /accounts/:accountId/proxies/:proxyId/config/rollback/preview` |
+| `config` | `POST /accounts/:accountId/proxies/:proxyId/config/rollback/apply` |
+| `offboard` | `DELETE /accounts/:accountId/cameras/:cameraId` |
 
 Paths must be exactly as listed (the fixed words in lower case, ids as issued, no trailing slash). Anything else,
 and every route not in the table, gets 403 `scope`. No token can issue proxy
@@ -201,6 +212,41 @@ Audited as `camera-adopt`. Creating a camera any other way
 curl -fsS -X POST -H "Authorization: Bearer $(cat ~/.config/cams-admin/ops-token)" -H 'Content-Type: application/json' \
   -d '{"proxyCameraId":"cam2","camsId":"garden","name":"Garden"}' \
   "https://cams-admin.example.net/api/v1/accounts/acc_…/proxies/prx_…/adopt"
+```
+
+An `actions` token runs what the proxy page's camera actions do: a camera
+action (`{"camera":"cam1","action":"camera-test"}`; a disruptive one needs
+`"confirm"` set to the action's name and passes the fleet gate), a rename
+(`{"name":"Front door"}`) and a proxy restart (`{"confirm":"proxy.restart"}`).
+Each answers 202 `{commandId}`; the proxy still refuses what its allow-list
+lacks (409 `not_allowed_on_proxy`). The result shows on the proxy page; the
+command list itself (`GET …/proxies/:proxyId/commands/:cmdId`) is not a
+diagnostics route.
+
+```sh
+curl -fsS -X POST -H "Authorization: Bearer $(cat ~/.config/cams-admin/ops-token)" -H 'Content-Type: application/json' \
+  -d '{"camera":"cam1","action":"camera-test"}' \
+  "https://cams-admin.example.net/api/v1/accounts/acc_…/proxies/prx_…/actions"
+```
+
+A `config` token previews a settings change (`{"set":{"sse.pingS":20}}` or
+`{"unset":["sse.pingS"]}`; only the remote-settable settings, never storage),
+then applies that preview by its id (`{"previewId":"cmd_…"}`); the same for a
+rollback. A preview is applied only by the token or person who made it.
+
+```sh
+curl -fsS -X POST -H "Authorization: Bearer $(cat ~/.config/cams-admin/ops-token)" -H 'Content-Type: application/json' \
+  -d '{"set":{"sse.pingS":20}}' \
+  "https://cams-admin.example.net/api/v1/accounts/acc_…/proxies/prx_…/config/preview"
+```
+
+An `offboard` token removes a camera from its account (204; audited as
+`camera-delete`). The proxy keeps the camera until it is removed there; with
+auto-adopt on, a removed camera is never added back by itself.
+
+```sh
+curl -fsS -X DELETE -H "Authorization: Bearer $(cat ~/.config/cams-admin/ops-token)" \
+  "https://cams-admin.example.net/api/v1/accounts/acc_…/cameras/cam_…"
 ```
 
 ## Start a move
@@ -362,3 +408,38 @@ The source must run a cam-proxy that knows `move.begin`: an older one allows
 command (429 `rate_limited`, 400 `invalid_args`, 409 `paused_on_proxy` or
 `not_allowed_on_proxy`) also undo the fixes; the token's limit of 60 writes a
 minute applies.
+
+## A camera's onboarding
+
+`/diag/cameras/:camsId/onboarding` puts together what onboarding a camera
+needs, in one answer (the proxy page's camera view shows the same,
+`GET /api/v1/accounts/:accountId/proxies/:proxyId/cameras/:camera/onboarding`,
+also before the camera is in the account):
+
+- `proxy`: state, pin, the command policy, and which onboarding entries it
+  allows (`onboardingAllowed`: `get`, `ftpSetup`, `timeSet`);
+- `reported`: the proxy's compact status from its heartbeat
+  (`{ready, missing}`), null when the proxy sends none (older than cam-proxy's
+  onboarding release);
+- `detail`: the newest full status the proxy answered to
+  `camera.onboarding.get` (`POST …/cameras/:camera/onboarding/refresh`, scope
+  `actions`): every step with `ok` and `detail`, trust, time; with its
+  `state` and `finishedAt` (its age). A GET never asks the proxy;
+- `camera`: the registry row (null before the adopt);
+- `viewers`: each cams instance serving the account: `applied` (its report's
+  revision is the current one), `held` / `heldProxy` / `keptOld` (fields it
+  holds for this camera or its proxy until confirmed there), `problems`,
+  `hidden` (it doesn't show this proxy: not counted);
+- `ready` and `missing`: ready when nothing is missing and the proxy reports
+  the camera ready. `missing` names each gap in order: `proxy-offline`,
+  `proxy:onboarding-unreported`, `proxy:<required step>` or `proxy:not-ready`,
+  `not-registered`, `viewer:<name>:no-report|not-applied|held|kept-old`.
+  `optional` lists the proxy's optional steps not done (`proxy:ftp`,
+  `proxy:time`, …); they never block `ready`.
+
+```sh
+curl -fsS -H "Authorization: Bearer $(cat ~/.config/cams-admin/diag-token)" \
+  https://cams-admin.example.net/api/v1/diag/cameras/garden/onboarding
+# {"camera":{"camsId":"garden",…},"proxy":{"state":"online",…},"reported":{"ready":true,"missing":["ftp"]},
+#  "viewers":[{"name":"cluster","applied":true,"held":[],…}],"ready":true,"missing":[],"optional":["proxy:ftp"]}
+```
