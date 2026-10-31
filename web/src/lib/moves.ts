@@ -211,7 +211,7 @@ export function endLabel(m: { archivePending: boolean; endRequested: boolean }):
 // What the request was pre-approved within (the bounds it carried), for the move detail.
 export function boundsText(b: { transfer: boolean; kinds: string[]; space: string; maxBudgetS: number } | null): string {
   if (!b) return 'Approval on the source proxy';
-  const what = b.transfer ? `${b.kinds.join(', ')}; space ${b.space}` : 'no content';
+  const what = b.transfer ? `${b.kinds.map((k) => (k === 'ptz' ? KIND_LABEL.ptz : k)).join(', ')}; space ${b.space}` : 'no content';
   return `Auto-approved within: ${what}; at most ${Math.ceil(b.maxBudgetS / 60)} min`;
 }
 
