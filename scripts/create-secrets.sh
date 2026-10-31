@@ -38,14 +38,30 @@ done
 case "$ONLY" in check|oauth|signing|backup|runner|github|all) ;; *) echo "create-secrets: bad --only $ONLY" >&2; exit 2 ;; esac
 die() { echo "create-secrets: $*" >&2; exit 1; }
 
-# Temp files hold secret values: removed on every exit, Ctrl-C and SIGTERM included.
-TMPFILES=()
-cleanup() { [ "${#TMPFILES[@]}" -gt 0 ] && rm -f "${TMPFILES[@]}"; return 0; }
+# Temp files hold secret values. They live in one private directory (mode 700)
+# that the EXIT trap removes, on Ctrl-C, SIGTERM and SIGHUP too.
+# The signal traps only note the signal; the script exits at its next
+# checkpoint (stop_if_signalled), a plain exit that runs the EXIT trap. Calling
+# exit inside a signal trap is unreliable: when the signal lands while bash
+# reads a $(…) (every value is read that way), bash can drop the EXIT trap
+# half way and even carry on with the script, so the secret file stayed
+# behind (issue #114).
+SECRET_DIR=
+SIG=
+cleanup() { if [ -n "$SECRET_DIR" ]; then rm -rf -- "$SECRET_DIR"; fi; return 0; }
 trap cleanup EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
-# Sets NEWTMP (not via $(…): a subshell would lose the TMPFILES entry).
-newtmp() { NEWTMP=$(mktemp "${TMPDIR:-/tmp}/cams-admin-secret.XXXXXX"); TMPFILES+=("$NEWTMP"); }
+trap 'SIG=130' INT
+trap 'SIG=143' TERM
+trap 'SIG=129' HUP
+stop_if_signalled() { if [ -n "$SIG" ]; then exit "$SIG"; fi; }
+# Sets NEWTMP to a new empty file in SECRET_DIR (not via $(…): a subshell would
+# lose SECRET_DIR).
+NTMP=0
+newtmp() {
+  [ -n "$SECRET_DIR" ] || SECRET_DIR=$(mktemp -d "${TMPDIR:-/tmp}/cams-admin-secret.XXXXXX")
+  NTMP=$((NTMP + 1)); NEWTMP="$SECRET_DIR/$NTMP"; : > "$NEWTMP"
+  stop_if_signalled
+}
 
 [ -f "$ENV_FILE" ] || die "$ENV_FILE not found"
 perms=$(stat -c '%a' "$ENV_FILE" 2>/dev/null || stat -f '%Lp' "$ENV_FILE")
@@ -60,8 +76,8 @@ get() {
   case "$v" in \"*\") v="${v#\"}"; v="${v%\"}" ;; \'*\') v="${v#\'}"; v="${v%\'}" ;; esac
   printf '%s' "$v"
 }
-need() { local k; for k in "$@"; do [ -n "$(get "$k")" ] || die "missing $k in $ENV_FILE"; done; }
-say() { if [ "$DRY" = 1 ]; then echo "would $*"; else echo "$*"; fi; }
+need() { local k; for k in "$@"; do [ -n "$(get "$k")" ] || die "missing $k in $ENV_FILE"; stop_if_signalled; done; }
+say() { stop_if_signalled; if [ "$DRY" = 1 ]; then echo "would $*"; else echo "$*"; fi; }
 want() { [ "$ONLY" = "$1" ] || [ "$ONLY" = all ]; }
 
 OAUTH=(GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET ALLOWED_EMAILS)
@@ -69,7 +85,7 @@ DEFAULT_REDIRECT=https://cams-admin.skylar.technology/auth/callback
 BACKUP=(AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_REGION BACKUP_S3_BUCKET BACKUP_S3_PREFIX)
 
 # Check first, so a bad line stops the run before anything changes.
-for k in "${OAUTH[@]}" GOOGLE_REDIRECT_URI "${BACKUP[@]}" SIGNING_KEY_PEM_FILE CAMSADMIN_GITHUB_PAT GITHUB_KUBE_SETUP_PAT KUBE_CONTEXT; do get "$k" >/dev/null; done
+for k in "${OAUTH[@]}" GOOGLE_REDIRECT_URI "${BACKUP[@]}" SIGNING_KEY_PEM_FILE CAMSADMIN_GITHUB_PAT GITHUB_KUBE_SETUP_PAT KUBE_CONTEXT; do get "$k" >/dev/null; stop_if_signalled; done
 if [ "$ONLY" = check ]; then
   for k in "${OAUTH[@]}" "${BACKUP[@]}" SIGNING_KEY_PEM_FILE CAMSADMIN_GITHUB_PAT GITHUB_KUBE_SETUP_PAT KUBE_CONTEXT; do
     if [ -n "$(get "$k")" ]; then echo "ok      $k"; else echo "missing $k"; fi
@@ -94,8 +110,10 @@ apply_env_secret() { # NAMESPACE NAME KEY...
   if [ "$name" = cams-admin-oauth ]; then
     local ru; ru=$(get GOOGLE_REDIRECT_URI); printf 'GOOGLE_REDIRECT_URI=%s\n' "${ru:-$DEFAULT_REDIRECT}" >> "$tmp"
   fi
+  stop_if_signalled
   kubectl --context "$CONTEXT" -n "$ns" create secret generic "$name" --from-env-file="$tmp" --dry-run=client -o yaml | kubectl --context "$CONTEXT" apply -f - >/dev/null
   rm -f "$tmp"
+  stop_if_signalled
 }
 
 want oauth && apply_env_secret cams-admin cams-admin-oauth "${OAUTH[@]}"
@@ -118,8 +136,10 @@ if want runner; then
   say "apply secret runner-pat in cams-admin-runner (context $CONTEXT): token"
   if [ "$DRY" = 0 ]; then
     newtmp; tmp="$NEWTMP"; printf 'token=%s\n' "$(get CAMSADMIN_GITHUB_PAT)" > "$tmp"
+    stop_if_signalled
     kubectl --context "$CONTEXT" -n cams-admin-runner create secret generic runner-pat --from-env-file="$tmp" --dry-run=client -o yaml | kubectl --context "$CONTEXT" apply -f - >/dev/null
     rm -f "$tmp"
+    stop_if_signalled
   fi
 fi
 if want github; then
@@ -127,3 +147,4 @@ if want github; then
   say "set github secret KUBE_SETUP_DEPLOY_TOKEN on klaushofrichter/cams-admin"
   [ "$DRY" = 1 ] || printf '%s' "$(get GITHUB_KUBE_SETUP_PAT)" | gh secret set KUBE_SETUP_DEPLOY_TOKEN --repo klaushofrichter/cams-admin >/dev/null
 fi
+stop_if_signalled
