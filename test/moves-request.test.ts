@@ -1,6 +1,6 @@
 // Camera move, the start of the job (plan Task 4): targets, the request's
 // precheck, move.open then move.offer (A15), and the answer to the source.
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash, randomInt } from 'crypto';
 import { readFileSync } from 'fs';
 import { join } from 'path';
@@ -161,6 +161,18 @@ describe('the ptz kind: the accepted kinds of the target', () => {
     expect(a).toMatchObject({ accept: true, kinds: ALL });
     const offer = auditFor('move-offer').map((x) => JSON.parse(x.detail)).find((d) => d.phase === 'awaiting-approval');
     expect(offer.kinds).toEqual(ALL);
+  });
+  it('kinds are relayed by the hello capabilities, not by the reported state', async () => {
+    const src = await proxy({ caps: ['move-ptz'] });
+    const tgt = await proxy();
+    camera(src);
+    offerWith(tgt, ALL);
+    // The source's reported state without the hello's capabilities (as a proxy that has not sent a heartbeat yet).
+    const row = s.built.status.row.bind(s.built.status);
+    vi.spyOn(s.built.status, 'row').mockImplementation((id) => { const r = row(id); return r?.reported && id === src.proxyId ? { ...r, reported: { ...r.reported, capabilities: r.reported.capabilities?.filter((c) => c !== 'move-ptz') } } : r; });
+    const a = await answerOf(src, request(src, tgt.proxyId));
+    expect(a).toMatchObject({ accept: true, kinds: ALL });
+    vi.restoreAllMocks();
   });
   it('kinds are not relayed to a source without move-ptz', async () => {
     const a = await run([], ALL);

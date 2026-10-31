@@ -86,6 +86,12 @@ export class StatusStore {
     return r ? { ...r } : null;
   }
 
+  // The last hello's capabilities, also before the first heartbeat (no reported state yet); after a
+  // restart, the stored reported ones until the proxy says hello again.
+  capabilities(proxyId: string): string[] {
+    return [...(this.caps.get(proxyId) ?? this.mem.get(proxyId)?.reported?.capabilities ?? [])];
+  }
+
   private persist(r: StatusRow): void {
     this.d.db.prepare(`INSERT INTO proxy_status (proxy_id, connected, connected_since, last_hello_at, last_heartbeat_at, closed_reason, stopped, proxy_version, clock_skew_ms, summary, summary_at, ok, problem_count, reported, online)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(proxy_id) DO UPDATE SET connected = excluded.connected, connected_since = excluded.connected_since,

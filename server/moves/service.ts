@@ -622,7 +622,7 @@ export class Moves {
       const est = estimateS(m.summary, res.probeBps);
       const kinds = answerKinds(rawKinds);
       // Only a source whose last hello announced move-ptz takes kinds: an older one's closed move.answer check would refuse the answer.
-      const sourceCaps = this.d.status.row(m.sourceProxyId)?.reported?.capabilities ?? [];
+      const sourceCaps = this.d.status.capabilities(m.sourceProxyId);
       tx(this.d.db, () => {
         const a = this.answer(m, { accept: true, space, estimateS: est, ...(kinds && sourceCaps.includes('move-ptz') ? { kinds } : {}) });
         const mv = this.store.setPhase(m.id, 'awaiting-approval', { rateBps: res.probeBps as number, etaS: est, bytesTotal: bytesOf(m.summary) });
