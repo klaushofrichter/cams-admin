@@ -40,6 +40,7 @@ describe('moves (UI text)', () => {
   it('reasons in plain words, else the code', () => {
     expect(reasonText('busy')).not.toBe('target_declined');
     expect(reasonText('some_code')).toBe('some_code');
+    expect(reasonText('kind_not_accepted')).toBe('the approved plan has a kind the target did not accept');
     expect(reasonText(null)).toBe('');
   });
   it('reasons cams-admin itself answers and fails with', () => {

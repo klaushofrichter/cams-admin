@@ -156,6 +156,14 @@ export function answerKinds(x: unknown): MoveKind[] | null {
   return x.every((k) => (MOVE_KINDS as readonly unknown[]).includes(k)) ? (x as MoveKind[]) : null;
 }
 
+// The plan's kinds the target's offer result did not accept: its kinds, or the five file kinds when it listed none (a proxy before ptz).
+export function kindsNotAccepted(plan: unknown, offerResult: unknown): string[] {
+  const kinds = (plan as { kinds?: unknown } | null)?.kinds;
+  if (!Array.isArray(kinds)) return [];
+  const accepted: readonly string[] = answerKinds((offerResult as { kinds?: unknown } | null)?.kinds) ?? FILE_KINDS;
+  return kinds.filter((k) => !accepted.includes(k)).map(String);
+}
+
 // The offer result's space, as the answer's strict schema takes it.
 function answerSpace(x: unknown): Record<string, unknown> | null {
   const s = x as Record<string, unknown> | null;
@@ -651,6 +659,13 @@ export class Moves {
       if (this.expired(m)) {
         this.audit(m, 'move-approve', 'refused', { reason: 'offer_expired', phase: m.phase }, { actorType: 'proxy', actor: proxyId });
         this.failMoveIn(m, 'offer_expired');
+        return;
+      }
+      // Defence in depth (the source owns this): move.start and move.go carry this plan, so a kind the target's offer did not accept stops here.
+      const notAccepted = kindsNotAccepted(ev.plan, this.lastCommand(m, m.targetProxyId, 'move.offer')?.result);
+      if (notAccepted.length) {
+        this.audit(m, 'move-approve', 'refused', { reason: 'kind_not_accepted', phase: m.phase, kinds: notAccepted }, { actorType: 'proxy', actor: proxyId });
+        this.failMoveIn(m, 'kind_not_accepted');
         return;
       }
       // The plan as the source approved it, unchanged: move.go must carry exactly this one (plan_mismatch otherwise).

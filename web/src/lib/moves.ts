@@ -55,6 +55,7 @@ const REASONS: Record<string, string> = {
   host_overridden: "a cams instance overrides the camera's address",
   target_failed: 'the target failed',
   offer_expired: 'the offer expired unanswered',
+  kind_not_accepted: 'the approved plan has a kind the target did not accept',
   end_transfer: 'the transfer was ended early',
   not_registered: 'the camera is not in the registry',
   internal: 'an internal error',
