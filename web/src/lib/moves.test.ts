@@ -40,6 +40,7 @@ describe('moves (UI text)', () => {
   it('reasons in plain words, else the code', () => {
     expect(reasonText('busy')).not.toBe('target_declined');
     expect(reasonText('some_code')).toBe('some_code');
+    expect(reasonText('kind_not_accepted')).toBe('the approved plan has a kind the target did not accept');
     expect(reasonText(null)).toBe('');
   });
   it('reasons cams-admin itself answers and fails with', () => {
@@ -69,6 +70,7 @@ describe('boundsText', () => {
     expect(boundsText(null)).toBe('Approval on the source proxy');
     expect(boundsText({ transfer: true, kinds: ['clips', 'stills'], space: 'fit', maxBudgetS: 3600 })).toBe('Auto-approved within: clips, stills; space fit; at most 60 min');
     expect(boundsText({ transfer: false, kinds: [], space: 'all', maxBudgetS: 90 })).toBe('Auto-approved within: no content; at most 2 min');
+    expect(boundsText({ transfer: true, kinds: ['clips', 'ptz'], space: 'fit', maxBudgetS: 3600 })).toBe('Auto-approved within: clips, PTZ positions; space fit; at most 60 min');
   });
 });
 

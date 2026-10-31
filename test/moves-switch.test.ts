@@ -66,9 +66,10 @@ const cmdRows = (moveId: string, command: string) => (s.built.db.prepare(`SELECT
 const settle = () => new Promise((r) => setTimeout(r, 250));
 
 // A move up to awaiting-approval: the source asked, the target accepted.
-async function awaiting() {
+async function awaiting(offerKinds?: string[]) {
   const src = await proxy();
   const tgt = await proxy();
+  if (offerKinds) tgt.client.moveResults['move.offer'] = { status: 'ok', result: { accept: true, space: { needed: 1000, available: 5000, fits: true, perKind: {}, retentionProposal: null }, probeBps: 50_000_000, kinds: offerKinds } };
   const cam = s.built.registry.createCamera(ACTOR, src.accountId, { camsId: 'cam1', name: 'Cam 1', kind: 'camera', proxyId: src.proxyId, proxyCameraId: 'cam1', host: '192.0.2.10', protocol: 'https' });
   const { proxyId: _p, connId: _c, ...rest } = fx('valid-event-move-request.json');
   const requestId = rq();
@@ -109,6 +110,32 @@ describe('approval', () => {
     // The source still can.
     approve(src, m.id);
     await until(() => move(m.id).phase !== 'awaiting-approval', 5000, 'approved');
+  });
+
+  it('a plan with a kind the target did not accept is refused: no move.start, the move fails kind_not_accepted', async () => {
+    // The target's offer had no kinds: the five file kinds, no ptz.
+    const { src, tgt, m } = await awaiting();
+    approve(src, m.id, { ...PLAN, kinds: ['clips', 'ptz'] });
+    await until(() => move(m.id).phase === 'failed', 5000, 'failed');
+    expect(move(m.id)).toMatchObject({ reason: 'kind_not_accepted', plan: null, approvedAt: null });
+    expect(got(tgt.client, 'move.start')).toHaveLength(0);
+    expect(got(src.client, 'move.go')).toHaveLength(0);
+    await until(() => got(src.client, 'move.cancel', m.id).length === 1 && got(tgt.client, 'move.cancel', m.id).length === 1, 5000, 'cancels');
+    expect(auditFor('move-approve').map((a) => [a.outcome, a.d.reason, a.d.kinds])).toEqual([['refused', 'kind_not_accepted', ['ptz']]]);
+  });
+
+  it('a plan within the kinds the target accepted goes on to move.start', async () => {
+    const { src, tgt, m } = await awaiting(['clips', 'ptz']);
+    approve(src, m.id, { ...PLAN, kinds: ['clips', 'ptz'] });
+    await until(() => got(tgt.client, 'move.start', m.id).length === 1, 5000, 'move.start');
+    expect(got(tgt.client, 'move.start', m.id)[0].body.args.plan.kinds).toEqual(['clips', 'ptz']);
+  });
+
+  it('a target that accepted only some kinds: a plan beyond them is refused', async () => {
+    const { src, m } = await awaiting(['clips', 'ptz']);
+    approve(src, m.id, { ...PLAN, kinds: ['clips', 'events'] });
+    await until(() => move(m.id).phase === 'failed', 5000, 'failed');
+    expect(move(m.id).reason).toBe('kind_not_accepted');
   });
 
   it('approve after 30 minutes is refused and the move fails offer_expired', async () => {

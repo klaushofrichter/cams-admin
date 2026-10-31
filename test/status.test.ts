@@ -25,6 +25,16 @@ describe('status store', () => {
   const dir = tmpDir();
   const V = 'v2026.10.06.1'; // makeSummary's version
 
+  it('capabilities: the last hello\'s, also before any heartbeat', () => {
+    const s = setup(dir);
+    expect(s.store.capabilities(s.prx.id)).toEqual([]);
+    s.store.hello(s.prx.id, V, s.clock.now(), ['status', 'move-ptz']);
+    expect(s.store.row(s.prx.id)?.reported).toBeNull();
+    expect(s.store.capabilities(s.prx.id)).toEqual(['status', 'move-ptz']);
+    s.hb();
+    s.store.hello(s.prx.id, V, s.clock.now(), ['status']);
+    expect(s.store.capabilities(s.prx.id)).toEqual(['status']);
+  });
   it('hello, heartbeats, disconnect and ageing out write each transition once', () => {
     const s = setup(dir);
     s.store.hello(s.prx.id, 'v2026.10.06.1', s.clock.now() - 5000);

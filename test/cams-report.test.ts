@@ -15,7 +15,8 @@ describe('cams status reports (POST /cams/v1/report)', () => {
     return { status: r.status, json: await r.json() };
   };
   beforeAll(async () => {
-    s = await startServer(dir);
+    // No background tick: its first run does the daily prunes (three writes), which bump the write epoch the first test counts.
+    s = await startServer(dir, { TICK_MS: '60000' });
     acc = await s.api('POST', '/accounts', { name: 'home', displayName: 'Home' });
     inst = await s.api('POST', '/cams-instances', { name: 'cluster', displayName: 'Cluster', accounts: [acc.id] });
     key = await enrollCamsKey(s, inst.id);
