@@ -7,12 +7,14 @@
   import { api, errorText } from '../lib/api';
   import { when } from '../lib/format';
   import ShownOnce from '../components/ShownOnce.svelte';
+  import { longLivedDays, tokenExpiry } from '../lib/tokens';
 
   const SAVE = 'mkdir -p ~/.config/cams-admin && (umask 077; pbpaste > ~/.config/cams-admin/diag-token)';
   let items = $state<any[]>([]);
   let error = $state('');
   let name = $state('mac');
   let days = $state(90);
+  let never = $state(false);
   let shown = $state<string | null>(null);
   let busy = $state(false);
 
@@ -30,6 +32,7 @@
   let opsItems = $state<any[]>([]);
   let opsName = $state('script');
   let opsDays = $state(30);
+  let opsNever = $state(false);
   let opsScopes = $state<string[]>([]);
   let opsShown = $state<string | null>(null);
   let opsBusy = $state(false);
@@ -55,7 +58,7 @@
   async function issue() {
     busy = true;
     try {
-      shown = (await api('POST', '/diag-tokens', { name, days: Number(days) })).token;
+      shown = (await api('POST', '/diag-tokens', { name, days: never ? 0 : Number(days) })).token;
       await load();
     } catch (e) { error = errorText(e); }
     busy = false;
@@ -69,7 +72,7 @@
   async function issueOps() {
     opsBusy = true;
     try {
-      opsShown = (await api('POST', '/ops-tokens', { name: opsName, days: Number(opsDays), scopes: opsScopes })).token;
+      opsShown = (await api('POST', '/ops-tokens', { name: opsName, days: opsNever ? 0 : Number(opsDays), scopes: opsScopes })).token;
       opsScopes = [];
       await load();
     } catch (e) { error = errorText(e); }
@@ -83,16 +86,23 @@
   }
 </script>
 
+{#snippet expiry(t: any, kind: string)}
+  {@const x = tokenExpiry(t)}
+  <span class:long={x.long} title={x.title || undefined} data-testid="{kind}-expires-{t.name}">{x.text}</span>
+{/snippet}
+
 <section class="card grid">
   <h2>Diagnostics</h2>
   <p class="muted">
     A diagnostics token lets a tool read cams-admin's state without a sign-in: proxies, cams instances and their problems, cameras, moves,
-    the move precheck and the audit log, at <code>/api/v1/diag/…</code>. It reads only; it never opens another route or a write, and no answer carries a secret.
+    the move precheck and the audit log, at <code>/api/v1/diag/…</code>. It reads only; it never opens another route or a write, and no answer carries a secret. Valid for 1–365 days, or never expires; one valid for more than 90 days is shown in orange.
   </p>
   {#if error}<p class="error" data-testid="diag-error">{error}</p>{/if}
   <form class="row" onsubmit={(e) => { e.preventDefault(); issue(); }}>
     <label>Name <input bind:value={name} maxlength="64" data-testid="diag-name" /></label>
-    <label>Days <input type="number" min="1" max="365" bind:value={days} data-testid="diag-days" /></label>
+    <label>Days <input type="number" min="1" max="365" bind:value={days} disabled={never} data-testid="diag-days" /></label>
+    <label><input type="checkbox" bind:checked={never} data-testid="diag-never" /> Never expires</label>
+    {#if longLivedDays(never ? 0 : Number(days))}<span class="long" data-testid="diag-long-note">{never ? 'Never expires' : 'Long-lived token (over 90 days)'}</span>{/if}
     <button class="btn primary" disabled={busy || !name.trim()} data-testid="diag-issue">Issue token</button>
   </form>
   <div class="scroll-x">
@@ -104,7 +114,7 @@
             <td>{t.name}</td>
             <td class="mono">{t.hashPrefix}</td>
             <td>{when(t.createdAt)}<div class="muted small">{t.createdBy}</div></td>
-            <td>{when(t.expiresAt)}</td>
+            <td>{@render expiry(t, 'diag')}</td>
             <td>{t.lastUsedAt ? when(t.lastUsedAt) : '—'}</td>
             <td><span class="chip {t.state === 'active' ? 'ok' : ''}" data-testid="diag-state-{t.name}">{t.state}</span></td>
             <td>{#if t.state === 'active'}<button class="btn" data-testid="diag-revoke-{t.name}" onclick={() => revoke(t.id)}>Revoke</button>{/if}</td>
@@ -123,12 +133,15 @@
     An operations token lets a script make a few writes without a sign-in: revoke, retire or apply proxy tokens, set or delete cams routes and
     camera overrides, cancel a move or end its transfer, edit a proxy or a camera, adopt or remove a camera, run camera actions, preview and apply proxy
     settings, each only if its scope was ticked at issue. It never reads (reads use the diagnostics
-    token), and it never issues tokens, codes or passwords. At most 5 are live; 60 writes a minute each.
+    token), and it never issues tokens, codes or passwords. At most 5 are live; 60 writes a minute each. Valid for 1–180 days, or never expires;
+    one valid for more than 90 days is shown in orange.
   </p>
   <form class="grid" onsubmit={(e) => { e.preventDefault(); issueOps(); }}>
     <div class="row">
       <label>Name <input bind:value={opsName} maxlength="64" data-testid="ops-name" /></label>
-      <label>Days <input type="number" min="1" max="90" bind:value={opsDays} data-testid="ops-days" /></label>
+      <label>Days <input type="number" min="1" max="180" bind:value={opsDays} disabled={opsNever} data-testid="ops-days" /></label>
+      <label><input type="checkbox" bind:checked={opsNever} data-testid="ops-never" /> Never expires</label>
+      {#if longLivedDays(opsNever ? 0 : Number(opsDays))}<span class="long" data-testid="ops-long-note">{opsNever ? 'Never expires' : 'Long-lived token (over 90 days)'}</span>{/if}
     </div>
     <div class="row">
       {#each SCOPES as sc (sc.id)}
@@ -147,7 +160,7 @@
             <td>{t.scopes.join(', ')}</td>
             <td class="mono">{t.hashPrefix}</td>
             <td>{when(t.createdAt)}<div class="muted small">{t.createdBy}</div></td>
-            <td>{when(t.expiresAt)}</td>
+            <td>{@render expiry(t, 'ops')}</td>
             <td>{t.lastUsedAt ? when(t.lastUsedAt) : '—'}</td>
             <td><span class="chip {t.state === 'active' ? 'ok' : ''}" data-testid="ops-state-{t.name}">{t.state}</span></td>
             <td>{#if t.state === 'active'}<button class="btn" data-testid="ops-revoke-{t.name}" onclick={() => revokeOps(t.id)}>Revoke</button>{/if}</td>
@@ -203,4 +216,5 @@
   .small { font-size: 12px; }
   pre { margin: 0; white-space: pre-wrap; word-break: break-all; background: var(--chrome); padding: 8px; border-radius: 6px; }
   input[type='number'] { width: 6em; }
+  .long { color: var(--warning); font-weight: 600; }
 </style>

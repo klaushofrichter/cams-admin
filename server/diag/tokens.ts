@@ -9,7 +9,7 @@ import { BearerTokens, hashOf, type BearerView } from '../auth/bearer-tokens';
 export const DIAG_PREFIX = 'cad_';
 export const MAX_LIVE = 5;
 export const DEFAULT_DAYS = 90;
-export const MAX_DAYS = 365;
+export const MAX_DAYS = 365; // or 0: never expires (INDEFINITE_DAYS)
 
 export type DiagTokenView = BearerView;
 export { hashOf };

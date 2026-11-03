@@ -33,5 +33,8 @@ describe('api', () => {
   it('fleet refusals of disruptive actions read as plain text (I3)', () => {
     expect(errorText(new ApiFailure(409, 'fleet_busy'))).toBe("Another proxy's disruptive action is still running: wait until it reports back (at most 15 min).");
     expect(errorText(new ApiFailure(429, 'fleet_limit', 'try again in 4 min'))).toBe('Fleet limit: at most 3 disruptive actions in 10 minutes across all proxies; try again in 4 min.');
+    expect(errorText(new ApiFailure(400, 'invalid', 'days', { error: 'invalid', field: 'days', message: 'days must be a whole number from 1 to 180, or 0 for a token that never expires' })))
+      .toBe('Not valid: days must be a whole number from 1 to 180, or 0 for a token that never expires.');
+    expect(errorText(new ApiFailure(400, 'invalid', 'name', { error: 'invalid', field: 'name' }))).toBe('Not valid: name');
   });
 });

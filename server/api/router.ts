@@ -95,7 +95,7 @@ export function apiRouter(d: ApiDeps): express.Router {
       }
     } catch (e) {
       if (e instanceof ApiError) return void res.status(e.status).json({ error: e.code, ...(e.field ? { field: e.field } : {}) });
-      if (e instanceof FieldError) return void res.status(400).json({ error: 'invalid', field: e.field });
+      if (e instanceof FieldError) return void res.status(400).json({ error: 'invalid', field: e.field, ...(e.hint ? { message: e.hint } : {}) });
       throw e;
     }
   };

@@ -15,14 +15,19 @@ export interface BearerConfig {
   table: string; prefix: string; idPrefix: IdPrefix; auditPrefix: 'diag-token' | 'ops-token';
   defaultDays: number; maxDays: number; maxLive: number;
 }
+// days 0 at issue: the token never expires (expires_at NULL).
+export const INDEFINITE_DAYS = 0;
 export interface BearerView {
-  id: string; name: string; hashPrefix: string; createdAt: number; createdBy: string; expiresAt: number;
+  id: string; name: string; hashPrefix: string; createdAt: number; createdBy: string; expiresAt: number | null;
   revokedAt: number | null; revokedBy: string | null; lastUsedAt: number | null; state: 'active' | 'expired' | 'revoked';
 }
 export type Row = Record<string, unknown>;
 export interface BearerDeps { db: Db; clock: Clock; audit: Audit; journal?: (tokenId: string) => void }
 
 const DAY = 86400_000;
+
+// A NULL expiry (issued with days 0) never expires.
+const expired = (expiresAt: number | null, now: number) => expiresAt !== null && expiresAt <= now;
 
 export const hashOf = (token: string) => `sha256:${createHash('sha256').update(token, 'utf8').digest('hex')}`;
 
@@ -45,11 +50,11 @@ export class BearerTokens<V extends BearerView = BearerView> {
     const now = this.d.clock.now();
     const id = r.id as string;
     const revokedAt = r.revoked_at as number | null;
-    const expiresAt = r.expires_at as number;
+    const expiresAt = r.expires_at as number | null;
     return {
       id, name: r.name as string, hashPrefix: (r.hash as string).slice(7, 15), createdAt: r.created_at as number, createdBy: r.created_by as string,
       expiresAt, revokedAt, revokedBy: r.revoked_by as string | null, lastUsedAt: this.lastUsed.get(id) ?? null,
-      state: revokedAt !== null ? 'revoked' : expiresAt <= now ? 'expired' : 'active',
+      state: revokedAt !== null ? 'revoked' : expired(expiresAt, now) ? 'expired' : 'active',
       ...this.viewExtra(r),
     } as V;
   }
@@ -64,7 +69,9 @@ export class BearerTokens<V extends BearerView = BearerView> {
     const name = typeof o.name === 'string' ? o.name.trim() : '';
     if (!NAME_RE.test(name)) throw new FieldError('name');
     const days = o.days === undefined ? this.cfg.defaultDays : o.days;
-    if (typeof days !== 'number' || !Number.isInteger(days) || days < 1 || days > this.cfg.maxDays) throw new FieldError('days');
+    if (typeof days !== 'number' || !Number.isInteger(days) || days < INDEFINITE_DAYS || days > this.cfg.maxDays) {
+      throw new FieldError('days', 'range', `days must be a whole number from 1 to ${this.cfg.maxDays}, or 0 for a token that never expires`);
+    }
     const extra = this.parseExtra(o);
     const now = this.d.clock.now();
     const token = prefix + randomBytes(32).toString('base64url');
@@ -72,10 +79,10 @@ export class BearerTokens<V extends BearerView = BearerView> {
     const id = newId(this.cfg.idPrefix);
     const cols = ['id', 'name', 'hash', 'created_at', 'created_by', 'expires_at', ...Object.keys(extra.cols)];
     tx(this.d.db, () => {
-      const live = (this.d.db.prepare(`SELECT count(*) n FROM ${table} WHERE revoked_at IS NULL AND expires_at > ?`).get(now) as { n: number }).n;
+      const live = (this.d.db.prepare(`SELECT count(*) n FROM ${table} WHERE revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)`).get(now) as { n: number }).n;
       if (live >= this.cfg.maxLive) throw new ApiError(409, 'too_many_tokens');
       this.d.db.prepare(`INSERT INTO ${table} (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(',')})`)
-        .run(id, name, hash, now, actor, now + days * DAY, ...Object.values(extra.cols));
+        .run(id, name, hash, now, actor, days === INDEFINITE_DAYS ? null : now + days * DAY, ...Object.values(extra.cols));
       this.d.audit.write({ actorType: 'sysadmin', actor, action: `${auditPrefix}-issue`, targetType: auditPrefix, targetId: id, targetLabel: name, outcome: 'ok', detail: { hashPrefix: hash.slice(7, 15), days, ...extra.detail } });
     });
     return { token, item: this.view(this.d.db.prepare(`SELECT * FROM ${table} WHERE id = ?`).get(id) as Row) };
@@ -111,7 +118,7 @@ export class BearerTokens<V extends BearerView = BearerView> {
     if (!token.startsWith(this.cfg.prefix) || token.length > 128) return null;
     const r = this.d.db.prepare(`SELECT * FROM ${this.cfg.table} WHERE hash = ?`).get(hashOf(token)) as Row | undefined;
     const now = this.d.clock.now();
-    if (!r || r.revoked_at !== null || (r.expires_at as number) <= now) return null;
+    if (!r || r.revoked_at !== null || expired(r.expires_at as number | null, now)) return null;
     this.lastUsed.set(r.id as string, now);
     return r;
   }

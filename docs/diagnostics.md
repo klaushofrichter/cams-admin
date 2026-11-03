@@ -6,8 +6,8 @@ sysadmin's machine, without a Google sign-in (issue #45, spec
 
 ## The token
 
-Diagnostics page (`#/diagnostics`) → name, days (1–365, default 90) → Issue
-token. It is shown once. On the Mac press Copy, then:
+Diagnostics page (`#/diagnostics`) → name, days (1–365, default 90, or 0 /
+"Never expires") → Issue token. It is shown once. On the Mac press Copy, then:
 
 ```sh
 mkdir -p ~/.config/cams-admin && (umask 077; pbpaste > ~/.config/cams-admin/diag-token)
@@ -18,6 +18,11 @@ also written to the revocation journal, so a restore from an older backup
 can't bring it back. Issue and revoke are audited (`diag-token-issue`,
 `diag-token-revoke`); refused bearer tokens are audited as `diag-auth-refused`
 (throttled).
+
+A token that never expires has `expiresAt: null` (the page shows "never");
+the token lists show a token valid for more than 90 days, or one that never
+expires, in orange. The issue's audit detail carries the chosen `days` (0 for
+never). A token from before keeps its expiry.
 
 The token opens only the GET routes below. It never opens another `/api/v1`
 route or a write (405), and no answer carries a token, hash, code, key,
@@ -136,8 +141,10 @@ with the diagnostics token it is shown once, and it is stored only as a hash
 mkdir -p ~/.config/cams-admin && (umask 077; pbpaste > ~/.config/cams-admin/ops-token)
 ```
 
-Limits: 1–90 days (default 30), at most 5 live at a time, 60 writes a minute
-per token (else 429 `rate_limited`). Revoke on the same page; a revoke is
+Limits: 1–180 days (default 30), or 0 for a token that never expires ("Never
+expires" on the page); anything else is 400 `invalid` with `field: "days"` and
+a `message`. At most 5 live at a time, 60 writes a minute per token (else 429
+`rate_limited`). Revoke on the same page; a revoke is
 journalled like the diagnostics token's, so a restore can't bring it back.
 Issue and revoke are audited (`ops-token-issue`, `ops-token-revoke`); a
 refused token is audited as `ops-auth-refused` and a token outside its scopes
