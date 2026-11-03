@@ -19,10 +19,13 @@ can't bring it back. Issue and revoke are audited (`diag-token-issue`,
 `diag-token-revoke`); refused bearer tokens are audited as `diag-auth-refused`
 (throttled).
 
-A token that never expires has `expiresAt: null` (the page shows "never");
-the token lists show a token valid for more than 90 days, or one that never
-expires, in orange. The issue's audit detail carries the chosen `days` (0 for
-never). A token from before keeps its expiry.
+A token that never expires has `expiresAt: null` (the page shows "never").
+A live token that expires more than 90 days from now, or never, is shown in
+orange in the token lists, and while there is one the dashboard shows a "long
+token" badge ("2 long tokens" for two; the tooltip names them; it links to the
+Diagnostics page). The rule is the time left, not the validity issued: a
+180-day token stops counting 90 days after its issue. The issue's audit detail
+carries the chosen `days` (0 for never). A token from before keeps its expiry.
 
 The token opens only the GET routes below. It never opens another `/api/v1`
 route or a write (405), and no answer carries a token, hash, code, key,

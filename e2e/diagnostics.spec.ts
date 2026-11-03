@@ -106,7 +106,7 @@ test('long-lived tokens: 180 days and "Never expires" are shown in orange, "neve
     expect(await color(`ops-expires-${never}`)).toBe(warning);
     expect(await color(`ops-expires-${n30}`)).not.toBe(warning);
     await expect(page.getByTestId(`ops-expires-${n30}`)).not.toHaveAttribute('title');
-    await expect(page.getByTestId(`ops-expires-${n180}`)).toHaveAttribute('title', 'Long-lived token (over 90 days)');
+    await expect(page.getByTestId(`ops-expires-${n180}`)).toHaveAttribute('title', 'Long-lived token (expires in over 90 days)');
     await expect(page.getByTestId(`ops-expires-${never}`)).toHaveText('never');
     await expect(page.getByTestId(`ops-expires-${never}`)).toHaveAttribute('title', 'Never expires');
 
@@ -125,6 +125,17 @@ test('long-lived tokens: 180 days and "Never expires" are shown in orange, "neve
     await expect(page.getByTestId(`diag-expires-${dn}`)).toHaveText('never');
     await expect(page.getByTestId(`diag-expires-${dn}`)).toHaveAttribute('title', 'Never expires');
     mine.push(dn);
+
+    // The dashboard's badge names them (not the 30-day one) and leads to the token lists.
+    await page.goto('/#/');
+    const badge = page.getByTestId('dash-long-tokens');
+    await expect(badge).toHaveText(/^\d+ long tokens$/);
+    for (const n of [n180, never, dn]) await expect(badge).toHaveAttribute('title', new RegExp(`[:,] ${n}(,|$)`));
+    expect(await badge.getAttribute('title')).not.toContain(n30);
+    expect(await badge.evaluate((e) => getComputedStyle(e).color)).toBe(warning);
+    await badge.click();
+    await expect(page).toHaveURL(/#\/diagnostics$/);
+    await expect(page.getByTestId('ops-tokens')).toBeVisible();
   } finally {
     for (const t of (await api(page, 'GET', '/ops-tokens')).items) if (t.state === 'active' && [n30, n180, never].includes(t.name)) await api(page, 'POST', `/ops-tokens/${t.id}/revoke`);
     for (const t of (await api(page, 'GET', '/diag-tokens')).items) if (t.state === 'active' && mine.includes(t.name)) await api(page, 'POST', `/diag-tokens/${t.id}/revoke`);
