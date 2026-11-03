@@ -8,6 +8,7 @@
   import { when } from '../lib/format';
   import ShownOnce from '../components/ShownOnce.svelte';
   import { longLivedDays, tokenExpiry } from '../lib/tokens';
+  import { clock } from '../lib/clock.svelte';
 
   const SAVE = 'mkdir -p ~/.config/cams-admin && (umask 077; pbpaste > ~/.config/cams-admin/diag-token)';
   let items = $state<any[]>([]);
@@ -87,7 +88,7 @@
 </script>
 
 {#snippet expiry(t: any, kind: string)}
-  {@const x = tokenExpiry(t)}
+  {@const x = tokenExpiry(t, clock.now)}
   <span class:long={x.long} title={x.title || undefined} data-testid="{kind}-expires-{t.name}">{x.text}</span>
 {/snippet}
 
@@ -95,7 +96,7 @@
   <h2>Diagnostics</h2>
   <p class="muted">
     A diagnostics token lets a tool read cams-admin's state without a sign-in: proxies, cams instances and their problems, cameras, moves,
-    the move precheck and the audit log, at <code>/api/v1/diag/…</code>. It reads only; it never opens another route or a write, and no answer carries a secret. Valid for 1–365 days, or never expires; one valid for more than 90 days is shown in orange.
+    the move precheck and the audit log, at <code>/api/v1/diag/…</code>. It reads only; it never opens another route or a write, and no answer carries a secret. Valid for 1–365 days, or never expires; one that expires more than 90 days from now, or never, is shown in orange.
   </p>
   {#if error}<p class="error" data-testid="diag-error">{error}</p>{/if}
   <form class="row" onsubmit={(e) => { e.preventDefault(); issue(); }}>
@@ -134,7 +135,7 @@
     camera overrides, cancel a move or end its transfer, edit a proxy or a camera, adopt or remove a camera, run camera actions, preview and apply proxy
     settings, each only if its scope was ticked at issue. It never reads (reads use the diagnostics
     token), and it never issues tokens, codes or passwords. At most 5 are live; 60 writes a minute each. Valid for 1–180 days, or never expires;
-    one valid for more than 90 days is shown in orange.
+    one that expires more than 90 days from now, or never, is shown in orange.
   </p>
   <form class="grid" onsubmit={(e) => { e.preventDefault(); issueOps(); }}>
     <div class="row">

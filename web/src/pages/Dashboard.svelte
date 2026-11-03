@@ -10,12 +10,20 @@
   import { instanceState, stateClass as camsClass, stateText as camsText } from '../lib/cams';
   import { moving } from '../lib/activeMoves.svelte';
   import { activeLine } from '../lib/moves';
+  import { longTokens, longTokenText } from '../lib/tokens';
 
   let d = $state<any>(null);
   let onlyProblems = $state(false);
   let error = $state('');
 
-  const load = () => api('GET', '/dashboard').then((x) => { d = x; error = ''; }).catch((e) => (error = String(e)));
+  // Diagnostics and operations tokens, for the "long token" badge (a failed read just hides it).
+  let tokens = $state<{ diag: any[]; ops: any[] }>({ diag: [], ops: [] });
+  const loadTokens = () => Promise.all([api('GET', '/diag-tokens'), api('GET', '/ops-tokens')])
+    .then(([g, o]) => { tokens = { diag: g.items, ops: o.items }; }).catch(() => undefined);
+  const load = () => {
+    loadTokens();
+    return api('GET', '/dashboard').then((x) => { d = x; error = ''; }).catch((e) => (error = String(e)));
+  };
   onMount(() => {
     load();
     const soon = coalesced(load, 300);
@@ -42,6 +50,7 @@
   const visible = $derived(d ? d.accounts.filter((a: any) => !onlyProblems || a.proxies.some(hasProblem) || a.warnings.length) : []);
   // Proxies that report a profile not set yet (set: false); an older proxy reports none and is not listed.
   const unset = $derived(d ? d.accounts.flatMap((a: any) => a.proxies.filter((p: any) => p.profile && !p.profile.set).map((p: any) => ({ ...p, accountId: a.id }))) : []);
+  const longNames = $derived(longTokens(tokens.diag, tokens.ops, clock.now));
   const counts = $derived.by(() => {
     if (!d) return null;
     const px = d.accounts.flatMap((a: any) => a.proxies);
@@ -57,6 +66,9 @@
     <div><b data-testid="sum-proxies">{counts.online}/{counts.proxies}</b> proxies online</div>
     <div><b data-testid="sum-cameras">{counts.camsOnline}/{counts.cameras}</b> cameras online</div>
     <div><b data-testid="sum-problems">{counts.problems}</b> with problems</div>
+    {#if longNames.length}
+      <a href="#/diagnostics" class="badge warn" title="Expires in over 90 days or never: {longNames.join(', ')}" data-testid="dash-long-tokens">{longTokenText(longNames.length)}</a>
+    {/if}
     {#each moving.items as m (m.id)}
       <a href="#/moves" class="backup" data-testid="dash-move-{m.id}"><span class="chip">moving</span><span class="muted">{activeLine(m)}</span></a>
     {/each}
