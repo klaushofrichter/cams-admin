@@ -10,7 +10,7 @@ export type OpsScope = (typeof OPS_SCOPES)[number];
 export const OPS_PREFIX = 'cao_';
 export const OPS_MAX_LIVE = 5;
 export const OPS_DEFAULT_DAYS = 30;
-export const OPS_MAX_DAYS = 90;
+export const OPS_MAX_DAYS = 180; // or 0: never expires (INDEFINITE_DAYS)
 
 export interface OpsTokenView extends BearerView { scopes: OpsScope[] }
 

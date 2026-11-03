@@ -49,11 +49,31 @@ describe('diagnostics tokens', () => {
     expect(JSON.parse(rec.detail)).toEqual({ hashPrefix: item.hashPrefix, days: 90 });
   });
 
+  it('days 0 never expires: expiresAt null in the list and /diag/ops-tokens, days 0 in the audit', async () => {
+    const { token, item } = await issue('forever', 0);
+    expect(item.expiresAt).toBeNull();
+    expect(item.state).toBe('active');
+    expect(JSON.parse(auditOf('diag-token-issue').find((r) => r.target_id === item.id)!.detail)).toEqual({ hashPrefix: item.hashPrefix, days: 0 });
+    expect((await bearer('/diag', token)).status).toBe(200);
+    const o = await a.api('post', '/ops-tokens', { name: 'ops-forever', days: 0, scopes: ['moves'] });
+    expect(o.status).toBe(201);
+    expect(o.body.item.expiresAt).toBeNull();
+    const view = (await bearer('/diag/ops-tokens', token)).body.items.find((t: { id: string }) => t.id === o.body.item.id);
+    expect(view).toMatchObject({ expiresAt: null, state: 'active' });
+    expect((await a.api('post', '/ops-tokens', { name: 'ops-long', days: 181, scopes: ['moves'] })).body)
+      .toEqual({ error: 'invalid', field: 'days', message: 'days must be a whole number from 1 to 180, or 0 for a token that never expires' });
+    await a.api('post', `/ops-tokens/${o.body.item.id}/revoke`);
+    await a.api('post', `/diag-tokens/${item.id}/revoke`);
+  });
+
   it('name and days are checked; at most MAX_LIVE live tokens', async () => {
     expect((await a.api('post', '/diag-tokens', { name: '' })).body).toEqual({ error: 'invalid', field: 'name' });
-    expect((await a.api('post', '/diag-tokens', { name: 'x', days: 0 })).body).toEqual({ error: 'invalid', field: 'days' });
-    expect((await a.api('post', '/diag-tokens', { name: 'x', days: 366 })).body).toEqual({ error: 'invalid', field: 'days' });
-    expect((await a.api('post', '/diag-tokens', { name: 'x', days: 1.5 })).body).toEqual({ error: 'invalid', field: 'days' });
+    const DAYS_MSG = 'days must be a whole number from 1 to 365, or 0 for a token that never expires';
+    for (const days of [-1, 366, 1.5, '7']) {
+      const r = await a.api('post', '/diag-tokens', { name: 'x', days });
+      expect(r.status).toBe(400);
+      expect(r.body).toEqual({ error: 'invalid', field: 'days', message: DAYS_MSG });
+    }
     const live = () => (a.db.prepare('SELECT count(*) n FROM diag_tokens WHERE revoked_at IS NULL').get() as { n: number }).n;
     while (live() < MAX_LIVE) await issue(`fill${live()}`, 1);
     const r = await a.api('post', '/diag-tokens', { name: 'one-too-many' });

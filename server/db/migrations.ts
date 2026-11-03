@@ -533,4 +533,35 @@ CREATE TABLE adopt_blocks (
   PRIMARY KEY (proxy_id, proxy_camera_id)
 ) STRICT;
 `),
+  // 19: a diagnostics or operations token may never expire (issued with days 0):
+  // expires_at becomes nullable, NULL meaning never. A column constraint needs a
+  // table rebuild; nothing references either table, so the rows are copied over
+  // as they are (every existing token keeps its expiry).
+  (db) => db.exec(`
+CREATE TABLE diag_tokens_m19 (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 64),
+  hash TEXT NOT NULL UNIQUE CHECK (hash GLOB 'sha256:*' AND length(hash) = 71),
+  created_at INTEGER NOT NULL, created_by TEXT NOT NULL,
+  expires_at INTEGER,
+  revoked_at INTEGER, revoked_by TEXT
+) STRICT;
+INSERT INTO diag_tokens_m19 (id, name, hash, created_at, created_by, expires_at, revoked_at, revoked_by)
+  SELECT id, name, hash, created_at, created_by, expires_at, revoked_at, revoked_by FROM diag_tokens;
+DROP TABLE diag_tokens;
+ALTER TABLE diag_tokens_m19 RENAME TO diag_tokens;
+CREATE TABLE ops_tokens_m19 (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 64),
+  hash TEXT NOT NULL UNIQUE CHECK (hash GLOB 'sha256:*' AND length(hash) = 71),
+  created_at INTEGER NOT NULL, created_by TEXT NOT NULL,
+  expires_at INTEGER,
+  revoked_at INTEGER, revoked_by TEXT,
+  scopes TEXT NOT NULL
+) STRICT;
+INSERT INTO ops_tokens_m19 (id, name, hash, created_at, created_by, expires_at, revoked_at, revoked_by, scopes)
+  SELECT id, name, hash, created_at, created_by, expires_at, revoked_at, revoked_by, scopes FROM ops_tokens;
+DROP TABLE ops_tokens;
+ALTER TABLE ops_tokens_m19 RENAME TO ops_tokens;
+`),
 ];

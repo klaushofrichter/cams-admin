@@ -2,8 +2,9 @@
 // (camelCase); outputs are normalised values. Errors name the field.
 
 export class FieldError extends Error {
-  constructor(public field: string, message = 'invalid') {
-    super(`${field}: ${message}`);
+  // hint: a sentence for the person, sent with the 400 as `message` (opt-in).
+  constructor(public field: string, reason = 'invalid', public hint?: string) {
+    super(`${field}: ${reason}`);
   }
 }
 

@@ -196,6 +196,32 @@ describe('database', () => {
     expect(db.prepare('SELECT count(*) n FROM adopt_blocks').get()).toEqual({ n: 0 });
   });
 
+  it('migration 19: a version-18 database keeps its diag and ops tokens (expiry intact); expires_at may be NULL', () => {
+    const f = join(dir, 'm19.db');
+    const raw = new DatabaseSync(f);
+    for (let i = 0; i < 18; i++) MIGRATIONS[i](raw);
+    raw.exec('PRAGMA user_version = 18');
+    const h = (c: string) => `sha256:${c.repeat(64)}`;
+    raw.exec(`INSERT INTO diag_tokens (id,name,hash,created_at,created_by,expires_at,revoked_at,revoked_by) VALUES ('dgt_a','mac','${h('a')}',1,'admin@example.com',1000,NULL,NULL),('dgt_b','old','${h('b')}',1,'admin@example.com',2000,5,'admin@example.com');
+      INSERT INTO ops_tokens (id,name,hash,created_at,created_by,expires_at,revoked_at,revoked_by,scopes) VALUES ('opt_a','script','${h('c')}',1,'admin@example.com',3000,NULL,NULL,'["moves"]');`);
+    raw.close();
+    const db = openDb(f);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(LATEST_VERSION);
+    expect(db.prepare('SELECT * FROM diag_tokens ORDER BY id').all()).toEqual([
+      { id: 'dgt_a', name: 'mac', hash: h('a'), created_at: 1, created_by: 'admin@example.com', expires_at: 1000, revoked_at: null, revoked_by: null },
+      { id: 'dgt_b', name: 'old', hash: h('b'), created_at: 1, created_by: 'admin@example.com', expires_at: 2000, revoked_at: 5, revoked_by: 'admin@example.com' },
+    ]);
+    expect(db.prepare('SELECT * FROM ops_tokens').all()).toEqual([
+      { id: 'opt_a', name: 'script', hash: h('c'), created_at: 1, created_by: 'admin@example.com', expires_at: 3000, revoked_at: null, revoked_by: null, scopes: '["moves"]' },
+    ]);
+    for (const t of ['diag_tokens', 'ops_tokens']) {
+      expect(db.prepare(`SELECT strict FROM pragma_table_list WHERE name = ?`).get(t)).toEqual({ strict: 1 });
+      db.prepare(`UPDATE ${t} SET expires_at = NULL WHERE id LIKE '%_a'`).run();
+      expect(() => db.prepare(`UPDATE ${t} SET hash = 'x' WHERE id LIKE '%_a'`).run()).toThrow(/CHECK/);
+    }
+    expect(() => db.exec(`INSERT INTO diag_tokens (id,name,hash,created_at,created_by) VALUES ('dgt_c','mac','${h('a')}',1,'x')`)).toThrow(/UNIQUE/);
+  });
+
   it('migration 6 (P3): a version-5 database gains proxy_config and commands.preview_of with its rows intact', () => {
     const f = join(dir, 'm6.db');
     const raw = new DatabaseSync(f);
