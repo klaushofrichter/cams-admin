@@ -3,7 +3,8 @@
 From a new camera on the LAN to a camera in every cams viewer. The steps
 run in this order: the proxy first (it talks to the camera), then cams-admin
 (it tells the viewers), then the checks. Everything except the camera
-password can be scripted; the password stays with the camera's owner.
+password can be scripted; the password stays with the camera's owner, who
+types it once.
 
 Placeholders below: `192.0.2.40` for the camera's address, `cam2` for its id
 on the proxy, `garden` for its cams id, `acc_…` / `prx_…` for registry ids
@@ -12,39 +13,55 @@ on the proxy, `garden` for its cams id, `acc_…` / `prx_…` for registry ids
 
 ## 1. On the proxy (cam-proxy)
 
-**Find it.** `POST /control/actions/find-camera` (or Settings → Find camera)
-sends one ONVIF probe on the LAN and lists what answers: address (`useAddress`
-when the answering address differs from the advertised one), model, name.
-Only a proxy on the host network (the Pi, a mini PC) sees the LAN; in a pod
-network nothing answers.
+All of it is cam-proxy's API (its README, "Onboarding a camera"), without
+file edits or a restart, on a several-camera proxy and on the Pi alike, and
+only with the proxy's own admin token or admin page: none of these steps is a
+cams-admin command, because they carry the camera's password or decide where
+it goes.
 
-**Add it.** On a multi-camera proxy, add the camera with
-`PUT /control/config`; it applies without a restart:
+**The short way: the script.** cam-proxy's `scripts/onboard-camera.sh` runs
+the steps below in order, on the proxy host or anywhere that reaches the
+proxy, and waits until cams-admin has the camera too:
 
 ```sh
-curl -fsS -X PUT -H 'Content-Type: application/json' \
-  -d '{"cameras":{"cam2":{"host":"192.0.2.40"}}}' \
-  https://proxy.example.internal/control/config
+export CAMPROXY_URL=http://proxy.example.internal:8480 CAMPROXY_ADMIN_TOKEN_FILE=<file with the proxy's admin token>
+export CAMS_ADMIN_URL=https://cams-admin.example.net \
+  CAMS_ADMIN_DIAG_TOKEN_FILE=~/.config/cams-admin/diag-token CAMS_ADMIN_OPS_TOKEN_FILE=~/.config/cams-admin/ops-token
+scripts/onboard-camera.sh --find
+scripts/onboard-camera.sh --host 192.0.2.40 --id cam2 --name Garden --time --cams-admin-proxy prx_… --cams-id garden
 ```
 
-A single-camera proxy instead has `camera` in `config.json` and the address
-in `CAMERA_HOST` (Settings → Find camera → "Use this address" writes it;
-it applies after a restart of the proxy).
+It shows the certificate the camera serves; type `yes` once it matches the
+camera's own page, then the camera password (not echoed). One `ok`/`FAIL`
+line per step. The ops token needs `onboard` to adopt (without it the
+account must adopt by itself, below). `scripts/offboard-camera.sh --id cam2
+--cams-admin-proxy prx_…` is the reverse (an ops token with `offboard`).
 
-Pitfalls:
+**Step by step:**
 
-- With a `cameras` list the proxy refuses `CAMERA_HOST`: set each camera's
-  `host` in the list instead.
-- The single `camera` object takes no per-camera `ftp`; per-camera FTP
-  needs the `cameras` list.
-- An overrides entry `cameras.<id>` left over from a camera that moved away
-  counts as an added camera and needs a `host`: remove it, or give it one.
+1. **Find it.** `POST /control/actions/find-camera` (or Settings → Find
+   camera) sends one ONVIF probe on the LAN and lists what answers: address
+   (`useAddress` when the answering address differs from the advertised
+   one), model, name. Only a proxy on the host network (the Pi, a mini PC)
+   sees the LAN; in a pod network nothing answers.
+2. **Probe it.** `POST /control/actions/camera-probe` `{host}`: which ports
+   answer and the certificate the camera serves (its fingerprint). Compare
+   the fingerprint with the camera's own web page.
+3. **Add it.** `POST /control/cameras` `{id, name, host, password, trust:
+   {fingerprint}}`: the proxy logs in with the password first and stores
+   nothing unless the camera accepts it, over https only to that
+   certificate; then the password is stored, the certificate pinned, and the
+   camera runs at once. On the Pi it replaces a camera that moved away or was
+   offboarded, and writes `CAMERA_HOST`.
+4. **Extras**, each optional: `camera-time-set` (zone from `time.zone`),
+   `camera-ftp-setup` (clips to the proxy), as camera actions.
+5. **Ready.** `GET /control/cameras/cam2/onboarding` until `ready` (each
+   step with why and the fix).
 
-**The camera password.** The camera's owner sets it on the proxy: the
-environment variable `CAMPROXY_CAMERA_PASSWORD_<ID>` (the id upper-cased,
-`-` → `_`, e.g. `CAMPROXY_CAMERA_PASSWORD_CAM2`) or cams Settings → Camera
-login. Never through cams-admin (it never sees camera passwords), and never
-by an automation that would have to hold the password.
+The password comes from the camera's owner, once, in the proxy's admin page
+(Camera password, Add camera) or on the script's stdin. Never through
+cams-admin (it never sees camera passwords), and cams viewers no longer need
+it: they reach the camera through its proxy.
 
 Once the proxy reaches the camera, its next heartbeat reports it to
 cams-admin.
@@ -92,13 +109,10 @@ To change the camera later (name, host, TLS name), PATCH it with the row's
 `version` (`rowVersion` in `/diag/cameras`; the field in the body is
 `version`, not `rowVersion`) and an operations token with `registry`.
 
-**Camera login in each cams viewer.** The owner enters the camera's
-password in cams Settings → Camera login. Until then the viewer lists the
-camera as offline ("cams has no password for this camera yet") although
-stills through the proxy work, because cams still talks to the camera
-directly for status and settings. Each viewer keeps its own logins. A
-planned change moves those calls behind the proxy, after which this step
-goes away.
+**No camera login in the viewers.** A viewer reaches a camera through its
+proxy (status, snapshot, live video, settings), so it needs no camera
+password. Only a camera whose proxy is older than cam-proxy's camera calls
+still needs one in cams Settings → Camera login.
 
 ## The scripted path
 
