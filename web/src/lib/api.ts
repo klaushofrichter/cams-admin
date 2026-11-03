@@ -36,5 +36,7 @@ export const errorText = (e: unknown): string => {
     invalid: 'Not valid', fleet_busy: "Another proxy's disruptive action is still running: wait until it reports back (at most 15 min).", rate_limited: 'Too many requests: wait a moment.', proxy_blocked: 'The proxy is blocked.', not_reported: 'The proxy does not report that camera.',
   };
   if (e.code === 'fleet_limit') return `Fleet limit: at most 3 disruptive actions in 10 minutes across all proxies${e.field ? `; ${e.field}` : ''}.`;
+  const message = (e.body as { message?: unknown } | undefined)?.message;
+  if (e.code === 'invalid' && typeof message === 'string') return `Not valid: ${message}.`;
   return (known[e.code] ?? e.code) + (e.field && e.code === 'invalid' ? `: ${e.field}` : '');
 };

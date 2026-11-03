@@ -39,12 +39,36 @@ describe('OpsTokens', () => {
   });
 
   it('rejects bad days and bad scopes with a field error', () => {
-    expect(() => issue('x', { days: 91 })).toThrow(FieldError);
-    expect(() => issue('x', { days: 0 })).toThrow(FieldError);
+    for (const days of [181, -1, 1.5, '30', null, 1e9]) expect(() => issue('x', { days }), String(days)).toThrow(FieldError);
+    try { issue('x', { days: 181 }); } catch (e) { expect((e as FieldError).hint).toBe('days must be a whole number from 1 to 180, or 0 for a token that never expires'); }
     for (const scopes of [[], ['nope'], ['tokens', 'tokens'], 'tokens', undefined]) {
       expect(() => ops.issue('admin@example.com', { name: 'x', scopes })).toThrow(FieldError);
     }
     try { ops.issue('admin@example.com', { name: 'x', scopes: [] }); } catch (e) { expect((e as FieldError).field).toBe('scopes'); }
+  });
+
+  it('accepts 1 to 180 days; 0 never expires (expiresAt null) and the audit carries days 0', () => {
+    expect(issue('one', { days: 1 }).item.expiresAt).toBe(clock.now() + DAY);
+    expect(issue('max', { days: 180 }).item.expiresAt).toBe(clock.now() + 180 * DAY);
+    const { token, item } = issue('forever', { days: 0 });
+    expect(item.expiresAt).toBeNull();
+    expect(item.state).toBe('active');
+    expect((a.db.prepare('SELECT expires_at FROM ops_tokens WHERE id = ?').get(item.id) as { expires_at: number | null }).expires_at).toBeNull();
+    const rec = a.db.prepare(`SELECT detail FROM audit_log WHERE action = 'ops-token-issue' AND target_id = ?`).get(item.id) as { detail: string };
+    expect(JSON.parse(rec.detail)).toMatchObject({ days: 0 });
+    clock.advance(3650 * DAY);
+    try {
+      expect(ops.verifyScoped(token)?.id).toBe(item.id);
+      expect(ops.list().items.find((t) => t.id === item.id)?.state).toBe('active');
+    } finally { clock.advance(-3650 * DAY); }
+    ops.revoke('admin@example.com', item.id);
+    expect(ops.verifyScoped(token)).toBeNull();
+  });
+
+  it('a token that never expires counts as live toward the limit', () => {
+    for (let i = 0; i < OPS_MAX_LIVE; i++) issue(`n${i}`, { days: 0 });
+    clock.advance(3650 * DAY);
+    try { expect(() => issue('one-too-many')).toThrow(ApiError); } finally { clock.advance(-3650 * DAY); }
   });
 
   it('the 6th live token gets 409 too_many_tokens', () => {

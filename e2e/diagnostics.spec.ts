@@ -74,3 +74,59 @@ test('an operations token is shown once with its scopes, listed as active, and r
   await page.getByTestId(`ops-revoke-${name}`).click();
   await expect(page.getByTestId(`ops-state-${name}`)).toHaveText('revoked');
 });
+
+test('long-lived tokens: 180 days and "Never expires" are shown in orange, "never" as the expiry; 30 days is not', async ({ page }, info) => {
+  // Desktop only, and it revokes only its own tokens: the tests above clear the lists and the live cap is 5.
+  test.skip(info.project.name === 'phone', 'shares the live-token cap with the tests above');
+  const mine: string[] = [];
+  const issue = async (name: string, days: string | null) => {
+    await page.getByTestId('ops-name').fill(name);
+    if (days === null) await page.getByTestId('ops-never').check();
+    else { await page.getByTestId('ops-never').uncheck(); await page.getByTestId('ops-days').fill(days); }
+    await page.getByTestId('ops-scope-moves').check();
+    await page.getByTestId('ops-issue').click();
+    await page.getByTestId('shown-stored').check();
+    await page.getByTestId('shown-close').click();
+  };
+  await page.goto('/#/diagnostics');
+  const n30 = uniq(info, 'ops30').slice(0, 64), n180 = uniq(info, 'ops180').slice(0, 64), never = uniq(info, 'opsnever').slice(0, 64);
+  try {
+    await issue(n30, '30');
+    await expect(page.getByTestId('ops-long-note')).toHaveCount(0);
+    await page.getByTestId('ops-days').fill('180');
+    await expect(page.getByTestId('ops-long-note')).toHaveText('Long-lived token (over 90 days)');
+    await issue(n180, '180');
+    await issue(never, null);
+    await expect(page.getByTestId('ops-days')).toBeDisabled();
+    await expect(page.getByTestId('ops-long-note')).toHaveText('Never expires');
+
+    const color = (id: string) => page.getByTestId(id).evaluate((e) => getComputedStyle(e).color);
+    const warning = await page.evaluate(() => { const s = document.createElement('span'); s.style.color = 'var(--warning)'; document.body.append(s); const c = getComputedStyle(s).color; s.remove(); return c; });
+    expect(await color(`ops-expires-${n180}`)).toBe(warning);
+    expect(await color(`ops-expires-${never}`)).toBe(warning);
+    expect(await color(`ops-expires-${n30}`)).not.toBe(warning);
+    await expect(page.getByTestId(`ops-expires-${n30}`)).not.toHaveAttribute('title');
+    await expect(page.getByTestId(`ops-expires-${n180}`)).toHaveAttribute('title', 'Long-lived token (over 90 days)');
+    await expect(page.getByTestId(`ops-expires-${never}`)).toHaveText('never');
+    await expect(page.getByTestId(`ops-expires-${never}`)).toHaveAttribute('title', 'Never expires');
+
+    // Over 180 days: the form does not send it.
+    await page.getByTestId('ops-never').uncheck();
+    await page.getByTestId('ops-days').fill('181');
+    expect(await page.getByTestId('ops-days').evaluate((e) => (e as HTMLInputElement).validity.rangeOverflow)).toBe(true);
+
+    // A diagnostics token that never expires.
+    const dn = uniq(info, 'diagnever').slice(0, 64);
+    await page.getByTestId('diag-name').fill(dn);
+    await page.getByTestId('diag-never').check();
+    await page.getByTestId('diag-issue').click();
+    await page.getByTestId('shown-stored').check();
+    await page.getByTestId('shown-close').click();
+    await expect(page.getByTestId(`diag-expires-${dn}`)).toHaveText('never');
+    await expect(page.getByTestId(`diag-expires-${dn}`)).toHaveAttribute('title', 'Never expires');
+    mine.push(dn);
+  } finally {
+    for (const t of (await api(page, 'GET', '/ops-tokens')).items) if (t.state === 'active' && [n30, n180, never].includes(t.name)) await api(page, 'POST', `/ops-tokens/${t.id}/revoke`);
+    for (const t of (await api(page, 'GET', '/diag-tokens')).items) if (t.state === 'active' && mine.includes(t.name)) await api(page, 'POST', `/diag-tokens/${t.id}/revoke`);
+  }
+});
