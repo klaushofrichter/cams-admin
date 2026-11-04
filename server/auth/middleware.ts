@@ -5,7 +5,7 @@ import { SESSION_COOKIE, type Sessions } from './session';
 import { Buckets } from '../channel/limits';
 import type { Audit } from '../audit';
 import type { OpsScope, OpsTokens } from '../ops/tokens';
-import { opsScopeFor } from '../ops/scopes';
+import { opsBodyAllowed, opsScopeFor } from '../ops/scopes';
 
 const SAFE = new Set(['GET', 'HEAD', 'OPTIONS']);
 
@@ -99,7 +99,7 @@ export function requireAuth(d: AuthDeps): RequestHandler[] {
     if (!t) return refuseToken(d.audit, res);
     // Writes only; reads use the diag token.
     const scope = SAFE.has(req.method) ? null : opsScopeFor(req.method, req.path);
-    if (!scope || !t.scopes.includes(scope)) return refuseScope(d.audit, res, t, req.method, scope);
+    if (!scope || !t.scopes.includes(scope) || !opsBodyAllowed(req.method, req.path, req.body)) return refuseScope(d.audit, res, t, req.method, scope);
     const b = tokenWrites.take(`ops:${t.id}`, d.clock.now());
     if (!b.ok) return void res.status(429).set('Retry-After', String(b.retryAfterS)).json({ error: 'rate_limited', retryAfterS: b.retryAfterS });
     res.locals.actor = `ops-token:${t.hashPrefix}`;

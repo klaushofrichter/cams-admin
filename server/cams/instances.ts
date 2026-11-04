@@ -200,8 +200,9 @@ export class CamsInstances {
           this.d.audit.write({ actorType: 'sysadmin', actor, action: 'camera-override-clear', accountId: o.account_id as string, targetType: 'cams-instance', targetId: id, targetLabel: old.name, outcome: 'ok', detail: { camera: o.cams_id, host: o.host, cameraUser: o.camera_user, reason: 'account-not-served' } });
         }
       }
-      this.log(actor, 'cams-instance-update', { id, name: old.name }, { fields, ...(accounts ? { accounts } : {}) });
-      return { old, now: this.get(id) };
+      const now = this.get(id);
+      this.log(actor, 'cams-instance-update', { id, name: old.name }, { fields, ...(accounts ? { accounts } : {}), ...(now.name !== old.name ? { renamedTo: now.name } : {}) });
+      return { old, now };
     }));
     // An account it no longer serves keeps no token of it.
     const removed = r.old.accounts.filter((a) => !r.now.accounts.includes(a));

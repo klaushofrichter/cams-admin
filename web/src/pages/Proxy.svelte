@@ -4,6 +4,9 @@
   import { coalesced, live } from '../lib/live';
   import { camClass, keyState, when } from '../lib/format';
   import { phaseText } from '../lib/moves';
+  import { addressInfo } from '../lib/address';
+  import { keepEdits } from '../lib/edits';
+  import { proxyForm, proxyPatch, validProxyName } from '../lib/proxy';
   import { summaryLeaves } from '../lib/summaryTree';
   import StateChip from '../components/StateChip.svelte';
   import Ago from '../components/Ago.svelte';
@@ -27,10 +30,17 @@
   let showAll = $state(false);
   let activeMove = $state<any>(null);
   let refresh = $state(0); // bumps after every load: the command and token cards reload with it
+  let f = $state<Record<string, string>>({});
+  let formSeen: Record<string, string> = {};
+  let formError = $state('');
 
   async function load() {
     try {
       d = await api('GET', `/accounts/${accountId}/proxies/${proxyId}/status`);
+      // A reload keeps what is being typed; a field the server changed takes the server's value.
+      const fresh = proxyForm(d.proxy);
+      f = keepEdits(f, formSeen, fresh);
+      formSeen = fresh;
       events = (await api('GET', `/accounts/${accountId}/proxies/${proxyId}/status-events?limit=30`)).items;
       activeMove = (await api('GET', `/moves?accountId=${accountId}`)).items.find((m: any) => m.endedAt === null && (m.source.id === proxyId || m.target.id === proxyId)) ?? null;
       refresh++;
@@ -46,22 +56,23 @@
   });
 
   // --- registry fields --------------------------------------------------------------------------
-  let f = $state<any>({});
-  $effect(() => {
-    if (d && f.id !== d.proxy.id + d.proxy.version) {
-      const p = d.proxy;
-      f = { id: p.id + p.version, displayName: p.displayName, runsOn: p.runsOn, hostKind: p.hostKind ?? '', url: p.url ?? '', adminUiUrl: p.adminUiUrl ?? '', dnsName: p.dnsName ?? '', tlsSite: p.tlsSite ?? '', tlsServername: p.tlsServername ?? '', fps: p.caFingerprints.join('\n'), notes: p.notes ?? '' };
-    }
-  });
-  async function save() {
-    error = '';
+  const FIELD_ERROR: Record<string, string> = {
+    adminUiUrl: 'Not valid: the GUI address starts with http:// or https://, without a user name, query or fragment.',
+    url: 'Not valid: the URL starts with http:// or https://, without a user name, query or fragment.',
+    displayName: 'Not valid: the display name is needed, at most 80 characters.',
+    notes: 'Not valid: notes are at most 2000 characters.',
+  };
+  async function save(e: Event) {
+    e.preventDefault();
+    formError = '';
     try {
-      await api('PATCH', `/accounts/${accountId}/proxies/${proxyId}`, {
-        displayName: f.displayName, runsOn: f.runsOn, hostKind: f.hostKind || null, url: f.url || null, adminUiUrl: f.adminUiUrl || null, dnsName: f.dnsName || null,
-        tlsSite: f.tlsSite || null, tlsServername: f.tlsServername || null, caFingerprints: f.fps.split(/[\s,]+/).filter(Boolean), notes: f.notes || null, version: d.proxy.version,
-      });
+      await api('PATCH', `/accounts/${accountId}/proxies/${proxyId}`, { ...patch, version: d.proxy.version });
       await load();
-    } catch (e) { error = errorText(e); }
+    } catch (err: any) {
+      formError = (err?.code === 'invalid' && FIELD_ERROR[err.field]) || errorText(err);
+      // The buffer stays; the fresh version makes the next Save possible.
+      if (err?.code === 'conflict') await load();
+    }
   }
 
   // --- enrollment and keys ----------------------------------------------------------------------
@@ -102,6 +113,9 @@
 
   const s = $derived(d?.summary ?? null);
   const leaves = $derived(s ? summaryLeaves(s) : []);
+  const address = $derived(addressInfo(d?.proxy.adminUiUrl));
+  const patch = $derived(d && f.name !== undefined ? proxyPatch(f as any, proxyForm(d.proxy)) : {});
+  const nameOk = $derived(validProxyName(f.name ?? ''));
 </script>
 
 {#if gone}
@@ -113,6 +127,10 @@
       <h2 data-testid="proxy-title">{d.proxy.displayName}</h2><span class="mono muted">{d.proxy.name}</span>
       <StateChip state={d.view.state} testid="live-state" />
       {#if d.view.stale}<span class="badge">stale (before the last restart)</span>{/if}
+      {#if address.href}<a class="mono" href={address.href} target="_blank" rel="noopener noreferrer" data-testid="proxy-address">{d.proxy.adminUiUrl}</a>
+      {:else if d.proxy.adminUiUrl}<span class="mono" data-testid="proxy-address-text">{d.proxy.adminUiUrl}</span>
+      {:else}<button type="button" class="plain muted" data-testid="proxy-no-address" onclick={() => document.getElementById('proxy-edit-address')?.focus()}>no address set: enter it under Registry</button>{/if}
+      {#if address.warning}<span class="badge warn" data-testid="proxy-address-warning">{address.warning}</span>{/if}
     </div>
     <div class="row muted">
       <span>last heartbeat <Ago t={d.view.lastHeartbeatAt} testid="live-age" /></span>
@@ -228,19 +246,23 @@
 
   <section class="card grid" data-testid="registry-fields">
     <h3>Registry</h3>
-    <div class="grid two">
-      <label>Display name<input bind:value={f.displayName} /></label>
+    <form class="grid two" onsubmit={save} data-testid="proxy-details">
+      <label>Display name<input bind:value={f.displayName} data-testid="proxy-edit-display" /></label>
+      <label>Name<input class="mono" bind:value={f.name} data-testid="proxy-edit-name" aria-invalid={!nameOk} /></label>
       <label>Runs on<select bind:value={f.runsOn}><option>local-host</option><option>cluster</option><option>cloud</option></select></label>
       <label>Host<select bind:value={f.hostKind}><option value="">—</option>{#each ['pi', 'mini-pc', 'pc', 'mac', 'vm', 'container', 'other'] as k}<option>{k}</option>{/each}</select></label>
       <label>URL (how cams reaches it)<input bind:value={f.url} data-testid="proxy-url" /></label>
-      <label>Admin UI URL<input bind:value={f.adminUiUrl} /></label>
+      <label>GUI address (Admin UI URL)<input id="proxy-edit-address" class="mono" bind:value={f.adminUiUrl} placeholder="https://proxy.example.net:8480" data-testid="proxy-edit-address" /></label>
       <label>DNS name<input bind:value={f.dnsName} /></label>
       <label>TLS site<input bind:value={f.tlsSite} /></label>
       <label>TLS server name<input bind:value={f.tlsServername} /></label>
       <label class="wide">Site CA fingerprints (cams's pins; 0–2; taken from the proxy's report on its first heartbeat, a change with "Use the reported pins" above)<textarea rows="2" class="mono" bind:value={f.fps} data-testid="proxy-fingerprints"></textarea></label>
       <label class="wide">Notes<textarea rows="2" bind:value={f.notes}></textarea></label>
-    </div>
-    <div><button class="btn primary" data-testid="proxy-save" onclick={save}>Save</button></div>
+      <p class="muted wide">The name is the short label in lists, audit records and the suggested id of a camera whose id is taken. The proxy, its keys, tokens, routes and moves go by the proxy id, so a rename is safe: cams shows it from its next snapshot, and a move already running keeps the old name in its messages.</p>
+      {#if !nameOk}<p class="error wide" data-testid="proxy-name-error">Name: lower-case letters, digits and hyphens, starting with a letter or digit, at most 32 characters.</p>{/if}
+      {#if formError}<p class="error wide" data-testid="proxy-form-error">{formError}</p>{/if}
+      <div class="row wide"><button class="btn primary" data-testid="proxy-save" disabled={!nameOk || !Object.keys(patch).length}>Save</button></div>
+    </form>
   </section>
 
   <section class="card grid" data-testid="history">
@@ -269,6 +291,8 @@
   h2, h3 { margin: 0; }
   .two { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
   .wide { grid-column: 1 / -1; }
+  form p { margin: 0; }
+  .plain { background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline; }
   tr.problem td { color: var(--danger); }
   .cam { border-top: 1px solid var(--border); padding-top: 6px; display: grid; gap: 4px; }
   .items { gap: 4px; }

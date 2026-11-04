@@ -168,6 +168,8 @@ actor `ops-token:<8 hex>`. The list is also at `/diag/ops-tokens`.
 | `moves` | `DELETE /moves/:moveId` |
 | `registry` | `PATCH /accounts/:accountId/proxies/:proxyId` |
 | `registry` | `PATCH /accounts/:accountId/cameras/:cameraId` |
+| `registry` | `PATCH /cams-instances/:instanceId` (only `name`, `displayName`, `baseUrl`, `notes`, `version`) |
+| `registry` | `POST /accounts/:accountId/proxies/:proxyId/pins/from-report` |
 | `onboard` | `POST /accounts/:accountId/proxies/:proxyId/adopt` |
 | `actions` | `POST /accounts/:accountId/proxies/:proxyId/actions` |
 | `actions` | `POST /accounts/:accountId/proxies/:proxyId/cameras/:camera/name` |
@@ -207,6 +209,37 @@ banner.
 curl -fsS -X PATCH -H "Authorization: Bearer $(cat ~/.config/cams-admin/ops-token)" -H 'Content-Type: application/json' \
   -d '{"version":3,"tlsSite":"cluster","caFingerprints":["SHA256:…"]}' \
   "https://cams-admin.example.net/api/v1/accounts/acc_…/proxies/prx_…"
+```
+
+**Renaming a proxy** and setting its GUI address use the same route:
+
+```sh
+curl -fsS -X PATCH -H "Authorization: Bearer $(cat ~/.config/cams-admin/ops-token)" -H 'Content-Type: application/json' \
+  -d '{"version":3,"name":"garage","displayName":"Garage","adminUiUrl":"https://proxy.example.net:8480"}' \
+  "https://cams-admin.example.net/api/v1/accounts/acc_…/proxies/prx_…"
+```
+
+A rename is safe: the proxy's keys, tokens, routes, moves and camera links, and
+cam-proxy itself, go by the proxy id (`prx_…`), which never changes; the name
+is unique per account (409 `duplicate_name`), lower-case letters, digits and
+hyphens, at most 32. cams shows the new name from its next snapshot, and no
+viewer holds anything for it. A move already running keeps the old name in its
+messages and records. Earlier audit records keep the old label; the rename's
+own record is under the old name with `renamedTo`, and the proxy's id ties them
+together. A script that picks a proxy by name has to use the new one: use the
+id.
+
+**Renaming a cams instance:** a `registry` token may send `name`, `displayName`,
+`baseUrl`, `notes` and `version` here (`rowVersion` in `/diag/cams-instances`),
+nothing else. Any other key, `accounts` included and even with its current
+value, is refused as a whole: 403 `scope`, audited as `ops-scope-refused`.
+Which accounts an instance serves stays with a sign-in: that decides whose
+users and cameras it is sent, and dropping an account revokes tokens.
+
+```sh
+curl -fsS -X PATCH -H "Authorization: Bearer $(cat ~/.config/cams-admin/ops-token)" -H 'Content-Type: application/json' \
+  -d '{"version":2,"name":"mini-pc","displayName":"Mini PC","baseUrl":"https://cams.example.net"}' \
+  "https://cams-admin.example.net/api/v1/cams-instances/cms_…"
 ```
 
 An `onboard` token adopts a camera the proxy reports and the registry lacks

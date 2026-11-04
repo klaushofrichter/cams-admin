@@ -10,8 +10,8 @@ import { once } from 'events';
 import { tmpDir } from './helpers/tmp';
 import { testApp } from './helpers/app';
 import { apiRouter } from '../server/api/router';
-import { diagCameras, diagProxies } from '../server/diag/views';
-import { OPS_ROUTES, opsScopeFor } from '../server/ops/scopes';
+import { diagCameras, diagCamsInstances, diagProxies } from '../server/diag/views';
+import { OPS_ROUTES, opsBodyAllowed, opsScopeFor } from '../server/ops/scopes';
 import { OPS_SCOPES, type OpsScope } from '../server/ops/tokens';
 import { makeProxyInfo, makeSummary } from '../test-client/summaries';
 
@@ -74,6 +74,7 @@ describe('the scope table', () => {
     expect(opsScopeFor('POST', '/accounts/acc_1/proxies/prx_1/tokens')).toBeNull();
     expect(opsScopeFor('PATCH', '/accounts/acc_1/proxies/prx_1')).toBe('registry');
     expect(opsScopeFor('PATCH', '/accounts/acc_1/cameras/cam_1')).toBe('registry');
+    expect(opsScopeFor('PATCH', '/cams-instances/cms_1')).toBe('registry');
     expect(opsScopeFor('DELETE', '/accounts/acc_1/proxies/prx_1')).toBeNull();
     expect(opsScopeFor('POST', '/accounts/acc_1/proxies/prx_1/adopt')).toBe('onboard');
     expect(opsScopeFor('POST', '/accounts/acc_1/cameras')).toBeNull();
@@ -101,6 +102,20 @@ describe('the scope table', () => {
     // Nothing but one throttled refusal for the token.
     expect(auditCount()).toBe(before);
     expect(scopeRefusals(`ops-token:${prefix}`)).toHaveLength(1);
+  });
+});
+
+describe('a route limited to some body keys', () => {
+  const path = '/cams-instances/cms_1';
+  it('allows exactly the listed keys there, and limits no other route', () => {
+    expect(opsBodyAllowed('PATCH', path, { name: 'a', displayName: 'A', baseUrl: null, notes: null, version: 1 })).toBe(true);
+    expect(opsBodyAllowed('PATCH', path, {})).toBe(true);
+    expect(opsBodyAllowed('PATCH', path, { accounts: [] })).toBe(false);
+    expect(opsBodyAllowed('PATCH', path, { name: 'a', accounts: [] })).toBe(false);
+    expect(opsBodyAllowed('PATCH', path, JSON.parse('{"__proto__":{"accounts":[]}}'))).toBe(false);
+    expect(opsBodyAllowed('PATCH', path, undefined)).toBe(true);
+    expect(opsBodyAllowed('PATCH', path, [])).toBe(true);
+    expect(opsBodyAllowed('PATCH', '/accounts/acc_1/proxies/prx_1', { anything: 1 })).toBe(true);
   });
 });
 
@@ -154,6 +169,88 @@ describe('scoped writes', () => {
     expect(auditOf('camera-update').at(-1)!.actor).toBe(`ops-token:${t.prefix}`);
     // Creating stays with a sign-in; deleting needs the offboard scope.
     expect((await bearer('delete', `/accounts/${acc}/cameras/${cam}`, t.token)).status).toBe(403);
+  });
+
+  it('a registry token renames a proxy and sets its GUI address; audited with the old and new name', async () => {
+    const p = a.registry.createProxy('admin@example.com', acc, { name: 'rename-me', displayName: 'Before', runsOn: 'local-host' }).id;
+    a.registry.createProxy('admin@example.com', acc, { name: 'rename-taken', displayName: 'Taken', runsOn: 'local-host' });
+    const other = issue(['tokens', 'routes', 'moves', 'actions']);
+    expect((await bearer('patch', `/accounts/${acc}/proxies/${p}`, other.token, { name: 'nope', version: 1 })).status).toBe(403);
+    const t = issue(['registry']);
+    const version = diagProxies({ ...a, serverKeyFingerprints: [a.signing.fingerprint] }).items.find((x) => x.id === p)!.rowVersion;
+    const r = await bearer('patch', `/accounts/${acc}/proxies/${p}`, t.token, { version, name: 'renamed', displayName: 'After', adminUiUrl: 'https://proxy.example.net:8480' });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.body).toMatchObject({ id: p, name: 'renamed', displayName: 'After', adminUiUrl: 'https://proxy.example.net:8480', version: version + 1 });
+    const rec = auditOf('proxy-update').at(-1)!;
+    expect(rec.actor).toBe(`ops-token:${t.prefix}`);
+    expect(rec.target_id).toBe(p);
+    expect(JSON.parse(rec.detail)).toEqual({ fields: ['name', 'displayName', 'adminUiUrl'], renamedTo: 'renamed' });
+    // Refused, nothing changed: a stale version, a taken or malformed name, an emptied name, a bad address.
+    const refused: [Record<string, unknown>, number, string][] = [
+      [{ version, name: 'other' }, 409, 'conflict'],
+      [{ version: version + 1, name: 'rename-taken' }, 409, 'duplicate_name'],
+      [{ version: version + 1, name: 'Not Valid' }, 400, 'invalid'],
+      [{ version: version + 1, name: null }, 400, 'invalid'],
+      [{ version: version + 1, name: '' }, 400, 'invalid'],
+      [{ version: version + 1, displayName: null }, 400, 'invalid'],
+      [{ version: version + 1, runsOn: null }, 400, 'invalid'],
+      [{ version: version + 1, adminUiUrl: 'javascript:alert(1)' }, 400, 'invalid'],
+    ];
+    for (const [body, status, error] of refused) {
+      const x = await bearer('patch', `/accounts/${acc}/proxies/${p}`, t.token, body);
+      expect([x.status, x.body.error], JSON.stringify(body)).toEqual([status, error]);
+    }
+    expect(a.registry.getProxy(acc, p)).toMatchObject({ name: 'renamed', displayName: 'After', adminUiUrl: 'https://proxy.example.net:8480', version: version + 1 });
+    // An edit that leaves the name alone says nothing of a rename.
+    expect((await bearer('patch', `/accounts/${acc}/proxies/${p}`, t.token, { version: version + 1, name: 'renamed', adminUiUrl: null })).body.adminUiUrl).toBeNull();
+    expect(JSON.parse(auditOf('proxy-update').at(-1)!.detail)).toEqual({ fields: ['name', 'adminUiUrl'] });
+  });
+
+  it('a registry token edits a cams instance\'s name, display name, address and notes, and nothing else', async () => {
+    const served = a.registry.createAccount('admin@example.com', { name: 'cmsserved', displayName: 'Served' }).id;
+    const added = a.registry.createAccount('admin@example.com', { name: 'cmsadded', displayName: 'Added' }).id;
+    const i = a.camsInstances.create('admin@example.com', { name: 'cms-before', displayName: 'Before', accounts: [served] }).id;
+    const path = `/cams-instances/${i}`;
+    const rowVersion = () => diagCamsInstances({ ...a, serverKeyFingerprints: [a.signing.fingerprint] } as never).items.find((x) => x.id === i)!.rowVersion;
+    const other = issue(['tokens', 'routes', 'moves', 'actions', 'config', 'onboard', 'offboard']);
+    expect((await bearer('patch', path, other.token, { displayName: 'Nope', version: rowVersion() })).status).toBe(403);
+
+    const t = issue(['registry']);
+    const ok = await bearer('patch', path, t.token, { name: 'cms-after', displayName: 'After', baseUrl: 'https://cams.example.net', notes: 'by a script', version: rowVersion() });
+    expect(ok.status, JSON.stringify(ok.body)).toBe(200);
+    expect(ok.body).toMatchObject({ id: i, name: 'cms-after', displayName: 'After', baseUrl: 'https://cams.example.net', notes: 'by a script', accounts: [served] });
+    const rec = auditOf('cams-instance-update').at(-1)!;
+    expect(rec.actor).toBe(`ops-token:${t.prefix}`);
+    expect(JSON.parse(rec.detail)).toEqual({ fields: ['name', 'displayName', 'baseUrl', 'notes'], renamedTo: 'cms-after' });
+    expect((await bearer('patch', path, t.token, { baseUrl: 'ftp://cams.example.net', version: rowVersion() })).status).toBe(400);
+    expect((await bearer('patch', path, t.token, { displayName: 'Stale', version: rowVersion() - 1 })).status).toBe(409);
+
+    // `accounts`, alone or beside allowed fields, even unchanged, and any other key: refused, nothing written, one
+    // throttled refusal that names neither the path's id nor the body.
+    const narrow = issue(['registry']);
+    const before = auditCount();
+    const shape = () => a.camsInstances.get(i);
+    const was = shape();
+    for (const body of [{ accounts: [served, added], version: rowVersion() }, { accounts: [served], version: rowVersion() }, { accounts: [], displayName: 'Mixed', version: rowVersion() }, { state: 'revoked', version: rowVersion() }, { rotateBefore: 1, version: rowVersion() }]) {
+      const r = await bearer('patch', path, narrow.token, body);
+      expect([r.status, r.body], JSON.stringify(body)).toEqual([403, { error: 'scope' }]);
+    }
+    expect(shape()).toEqual(was);
+    expect(auditCount()).toBe(before);
+    const refused = scopeRefusals(`ops-token:${narrow.prefix}`);
+    expect(refused).toHaveLength(1);
+    expect(JSON.parse(refused[0].detail)).toEqual({ method: 'PATCH', scope: 'registry' });
+    for (const leak of [i, served, added, 'Mixed']) expect(JSON.stringify(refused)).not.toContain(leak);
+
+    // The rest of the instance stays with a sign-in, whatever the scopes.
+    const all = issue([...OPS_SCOPES]);
+    for (const [method, sub] of [['post', '/block'], ['post', '/rotate'], ['post', '/enrollment-codes'], ['delete', '']] as const) {
+      expect((await bearer(method, `${path}${sub}`, all.token, {})).status, `${method} ${sub}`).toBe(403);
+    }
+    // A session keeps the whole route.
+    const s = await a.api('patch', path, { accounts: [served, added], version: rowVersion() });
+    expect(s.status, JSON.stringify(s.body)).toBe(200);
+    expect(s.body.accounts).toEqual(expect.arrayContaining([served, added]));
   });
 
   it('a registry token takes the reported pins; an onboard token may not', async () => {

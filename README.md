@@ -89,6 +89,11 @@ It will run at `cams-admin.skylar.technology`. Phase 1 is specified in
 - **Roll back:** a real settings change in the Commands card has *Roll back*:
   first a dry run of the rollback, then *Apply rollback*. The proxy refuses
   the rollback for any setting that changed since.
+- **Proxy page:** the proxy's GUI address is a link at the top, with a warning
+  when it is a loopback or local network one. The *Registry* form edits the
+  display name, the name and the address. Everything goes by the proxy id, so a
+  rename is safe: it shows in the next cams snapshot, and a move already running
+  keeps the old name in its messages.
 - **Camera actions:** each camera on the proxy page gets the allowed actions
   as buttons. The disruptive ones (reboot, power-cycle, worker restart, FTP
   setup, NTP set, cert push, proxy restart) are grouped, and each asks
