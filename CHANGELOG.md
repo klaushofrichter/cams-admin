@@ -5,4 +5,8 @@ then empties it on `main`.
 
 ## [Unreleased]
 
-- A rename's audit record now has both names: `nameFrom`/`nameTo` and `displayNameFrom`/`displayNameTo` for accounts, proxies and cams instances, `nameFrom`/`nameTo` and `camsIdFrom`/`camsIdTo` for cameras, under the name before the change. Earlier records are left as written (`renamedTo`, `renamedFrom`).
+- The account page's Proxies table is tidied: columns Proxy, Host ("This
+  network · PC" instead of `local-host (pc)`), State, Proxy GUI (a link, marked
+  "LAN" with the full warning in its tooltip) and Viewer address (how cams
+  viewers reach the proxy; hidden on phones). A missing address shows a muted
+  "–". The dashboard labels the same address "GUI" and marks it the same way.

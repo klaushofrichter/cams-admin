@@ -1,15 +1,18 @@
 <script lang="ts">
-  import { addressInfo } from '../lib/address';
   import { keepEdits } from '../lib/edits';
   import { onMount } from 'svelte';
   import { api, errorText } from '../lib/api';
   import { live } from '../lib/live';
   import { camClass } from '../lib/format';
+  import { hostLabel } from '../lib/proxy';
   import StateChip from '../components/StateChip.svelte';
+  import ProxyGui from '../components/ProxyGui.svelte';
   import Confirm from '../components/Confirm.svelte';
   import ImportPanel from '../components/ImportPanel.svelte';
 
   let { accountId, tab }: { accountId: string; tab: string } = $props();
+
+  const VIEWER_ADDRESS_HINT = 'How cams viewers reach this proxy';
 
   let account = $state<any>(null);
   let users = $state<any[]>([]);
@@ -210,15 +213,15 @@
     {:else if tab === 'proxies'}
       <div class="scroll-x">
         <table>
-          <thead><tr><th>Proxy</th><th>Runs on</th><th>State</th><th class="hide-phone">URL</th></tr></thead>
+          <thead><tr><th>Proxy</th><th>Host</th><th>State</th><th>Proxy GUI</th><th class="hide-phone" title={VIEWER_ADDRESS_HINT} data-testid="proxy-viewer-head">Viewer address</th></tr></thead>
           <tbody>
             {#each proxies as p (p.id)}
               <tr data-testid="proxy-item-{p.name}">
-                <td><a href="#/accounts/{accountId}/proxies/{p.id}" data-testid="proxy-open-{p.name}">{p.displayName}</a> <span class="mono muted">{p.name}</span>
-                  {#if addressInfo(p.adminUiUrl).href}<div><a class="mono" href={addressInfo(p.adminUiUrl).href} title={addressInfo(p.adminUiUrl).warning ?? undefined} target="_blank" rel="noopener noreferrer" data-testid="proxy-item-address-{p.name}">{p.adminUiUrl}</a></div>{/if}</td>
-                <td>{p.runsOn}{p.hostKind ? ` (${p.hostKind})` : ''}</td>
+                <td><a href="#/accounts/{accountId}/proxies/{p.id}" data-testid="proxy-open-{p.name}">{p.displayName}</a> <span class="mono muted">{p.name}</span></td>
+                <td data-testid="proxy-item-host-{p.name}">{hostLabel(p.runsOn, p.hostKind)}</td>
                 <td><StateChip state={p.status.state} /></td>
-                <td class="hide-phone mono">{p.url ?? ''}</td>
+                <td><ProxyGui address={p.adminUiUrl} testid="proxy-item-address-{p.name}" /></td>
+                <td class="hide-phone" title={VIEWER_ADDRESS_HINT} data-testid="proxy-item-viewer-{p.name}">{#if p.url}<span class="mono">{p.url}</span>{:else}<span class="muted">–</span>{/if}</td>
               </tr>
             {/each}
           </tbody>

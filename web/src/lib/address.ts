@@ -11,6 +11,10 @@ const WARNING: Record<AddressScope, string | null> = {
   public: null,
 };
 
+// The compact visible form of WARNING, for tables and lists.
+const MARKER: Record<AddressScope, string | null> = { loopback: 'loopback', private: 'LAN', public: null };
+export const addressMarker = (scope: AddressScope | null): string | null => (scope ? MARKER[scope] : null);
+
 function ipv4Scope(a: number, b: number): AddressScope {
   if (a === 127 || a === 0) return 'loopback';
   if (a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254) || (a === 100 && b >= 64 && b <= 127)) return 'private';
