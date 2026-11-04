@@ -39,7 +39,7 @@ export function buildSchemas(mode: Mode): Record<string, S> {
   // --- the health summary (cam-proxy src/health/summary.ts, schema 1) ----------
   // sd and warning (cam-proxy #199): the camera's SD card; warning (true) marks an item that needs a look but is no problem.
   const item = obj({
-    id: en(['camera', 'stream', 'events', 'ftp', 'sd', 'storage', 'disk', 'archive', 'certificates', 'cpuTemp', 'underVoltage', 'inventory', 'moveSync', 'version']),
+    id: en(['camera', 'stream', 'events', 'ftp', 'sd', 'storage', 'disk', 'archive', 'certificates', 'cpuTemp', 'underVoltage', 'inventory', 'moveSync', 'camsAdmin', 'version']),
     label: str(), value: { anyOf: [bool, num, str(), { type: 'null' }] }, text: str(), problem: bool, warning: { const: true },
   }, ['id', 'label', 'text', 'problem'], ['warning']);
   const items = arr(item, 64);
