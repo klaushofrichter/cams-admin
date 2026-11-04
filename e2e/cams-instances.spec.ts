@@ -53,6 +53,90 @@ test('a cams instance: served accounts, routes default-deny (one loopback route)
   await expect(page.getByTestId(`cms-state-${name}`)).toHaveText('blocked');
 });
 
+test('an instance page: address link and warning, Details form: errors, a reload keeps typing, a conflict keeps typing', async ({ page }, info) => {
+  const name = uniq(info, 'det');
+  const inst = await api(page, 'POST', '/cams-instances', { name, displayName: 'Details', accounts: [] });
+  const taken = await api(page, 'POST', '/cams-instances', { name: uniq(info, 'tkn'), displayName: 'Taken', accounts: [] });
+  const link = page.getByTestId('cms-address');
+  const warning = page.getByTestId('cms-address-warning');
+  const save = page.getByTestId('cms-edit-save');
+  await page.goto(`/#/cams-instances/${inst.id}`);
+
+  // No address: a pointer to the form, no link, no warning, nothing to save.
+  await expect(page.getByTestId('cms-no-address')).toBeVisible();
+  await expect(link).toHaveCount(0);
+  await expect(warning).toHaveCount(0);
+  await expect(save).toBeDisabled();
+  await page.getByTestId('cms-no-address').click();
+  await expect(page.getByTestId('cms-edit-address')).toBeFocused();
+
+  // Loopback, local network, public.
+  const address = page.getByTestId('cms-edit-address');
+  await address.fill('http://127.0.0.1:8080');
+  await save.click();
+  await expect(link).toHaveAttribute('href', 'http://127.0.0.1:8080/');
+  await expect(link).toHaveAttribute('target', '_blank');
+  await expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+  await expect(warning).toContainText('Only works on that machine itself');
+  await address.fill('http://192.168.0.10:8080');
+  await save.click();
+  await expect(link).toHaveText('http://192.168.0.10:8080');
+  await expect(warning).toContainText('Local network address');
+  await address.fill('https://cams.example.net');
+  await save.click();
+  await expect(link).toHaveText('https://cams.example.net');
+  await expect(warning).toHaveCount(0);
+  await expect(save).toBeDisabled();
+
+  // Server and name errors, with the typing left alone.
+  await address.fill('ftp://cams.example.net');
+  await save.click();
+  await expect(page.getByTestId('cms-form-error')).toContainText('http:// or https://');
+  await expect(address).toHaveValue('ftp://cams.example.net');
+  await expect(link).toHaveText('https://cams.example.net');
+  await address.fill('https://cams.example.net');
+  const nameInput = page.getByTestId('cms-edit-name');
+  await nameInput.fill('Not Valid');
+  await expect(page.getByTestId('cms-name-error')).toBeVisible();
+  await expect(save).toBeDisabled();
+  await nameInput.fill(taken.name);
+  await expect(page.getByTestId('cms-name-error')).toHaveCount(0);
+  await save.click();
+  await expect(page.getByTestId('cms-form-error')).toHaveText('That name is taken.');
+
+  // A change elsewhere reloads the page: the typing stays and the next Save needs no retry.
+  const renamed = uniq(info, 'ren');
+  await nameInput.fill(renamed);
+  await page.getByTestId('cms-edit-notes').fill('typed before the reload');
+  const cur = await api(page, 'GET', `/cams-instances/${inst.id}`);
+  await api(page, 'PATCH', `/cams-instances/${inst.id}`, { displayName: 'Changed elsewhere', version: cur.version });
+  await expect(page.getByTestId('cms-title')).toHaveText('Changed elsewhere');
+  await expect(page.getByTestId('cms-edit-display')).toHaveValue('Changed elsewhere');
+  await expect(page.getByTestId('cms-edit-notes')).toHaveValue('typed before the reload');
+  await expect(nameInput).toHaveValue(renamed);
+
+  // A conflict: told so, the typing stays, the second Save goes through.
+  let refused = false;
+  await page.route(`**/api/v1/cams-instances/${inst.id}`, async (route) => {
+    if (route.request().method() === 'PATCH' && !refused) {
+      refused = true;
+      await route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: 'conflict' }) });
+    } else await route.continue();
+  });
+  await save.click();
+  await expect(page.getByTestId('cms-form-error')).toContainText('Someone changed this meanwhile');
+  await expect(page.getByTestId('cms-edit-notes')).toHaveValue('typed before the reload');
+  await save.click();
+  await expect(page.getByTestId('cms-form-error')).toHaveCount(0);
+  await expect(save).toBeDisabled();
+  const saved = await api(page, 'GET', `/cams-instances/${inst.id}`);
+  expect(saved).toMatchObject({ name: renamed, displayName: 'Changed elsewhere', notes: 'typed before the reload', baseUrl: 'https://cams.example.net' });
+
+  // The list shows the address.
+  await page.goto('/#/cams-instances');
+  await expect(page.getByTestId(`cms-address-${renamed}`)).toHaveAttribute('href', 'https://cams.example.net/');
+});
+
 test('import on the account page: dry run, accept mismatches, apply, again → no changes; export', async ({ page }, info) => {
   const acc = await api(page, 'POST', '/accounts', { name: uniq(info, 'imp'), displayName: 'Import' });
   await api(page, 'POST', `/accounts/${acc.id}/proxies`, { name: 'pi', displayName: 'Pi', runsOn: 'local-host', url: 'https://proxy.example.net:8480' });

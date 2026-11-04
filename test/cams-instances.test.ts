@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { readEpoch } from '../server/db/open';
 import { CamsInstances } from '../server/cams/instances';
+import { validInstanceName } from '../web/src/lib/cams';
 import { tmpDir } from './helpers/tmp';
 import { ACTOR, makeRegistry } from './helpers/registry';
 
@@ -55,6 +56,40 @@ describe('cams instances (P4)', () => {
     expect(() => inst.update(ACTOR, i.id, { displayName: 'X', version: 1 })).toThrow(expect.objectContaining({ status: 409 }));
     expect(() => inst.update(ACTOR, 'cms_NOPE', { displayName: 'X', version: 1 })).toThrow(expect.objectContaining({ status: 404 }));
     expect(auditActions().filter((a) => a === 'cams-instance-update')).toHaveLength(1);
+  });
+
+  it('update: the Details form\'s fields; each save is audited with the fields it changed, under the name before it', () => {
+    const i = make();
+    const u = inst.update(ACTOR, i.id, { displayName: 'Mini PC', name: 'mini-pc', baseUrl: 'https://cams.example.net:8443', notes: 'n', version: 1 });
+    expect(u).toMatchObject({ id: i.id, displayName: 'Mini PC', name: 'mini-pc', baseUrl: 'https://cams.example.net:8443', notes: 'n', version: 2, accounts: [home.id] });
+    const cleared = inst.update(ACTOR, i.id, { baseUrl: null, notes: null, version: 2 });
+    expect(cleared).toMatchObject({ name: 'mini-pc', baseUrl: null, notes: null, version: 3 });
+    const log = (r.db.prepare(`SELECT target_id, target_label, detail FROM audit_log WHERE action = 'cams-instance-update' ORDER BY id`).all() as { target_id: string; target_label: string; detail: string }[]);
+    expect(log.map((x) => [x.target_id, x.target_label, JSON.parse(x.detail).fields])).toEqual([
+      [i.id, 'cluster', ['name', 'displayName', 'baseUrl', 'notes']],
+      [i.id, 'mini-pc', ['baseUrl', 'notes']],
+    ]);
+  });
+
+  it('update refuses a bad address, a bad or taken name, an empty display name; nothing changes', () => {
+    const i = make();
+    inst.create(ACTOR, { name: 'pi', displayName: 'Pi', accounts: [] });
+    for (const baseUrl of ['ftp://x.example.net', 'javascript:alert(1)', 'cams.example.net', 'https://u:p@x.example.net', 'https://x.example.net/?a=1']) {
+      expect(() => inst.update(ACTOR, i.id, { baseUrl, version: 1 }), baseUrl).toThrow(expect.objectContaining({ status: 400, code: 'invalid', field: 'baseUrl' }));
+    }
+    expect(() => inst.update(ACTOR, i.id, { displayName: '', version: 1 })).toThrow(expect.objectContaining({ status: 400, field: 'displayName' }));
+    expect(() => inst.update(ACTOR, i.id, { name: 'pi', version: 1 })).toThrow(expect.objectContaining({ status: 409, code: 'duplicate_name' }));
+    expect(inst.get(i.id)).toMatchObject({ name: 'cluster', baseUrl: null, version: 1 });
+  });
+
+  it('the page\'s name rule is the server\'s', () => {
+    const i = make();
+    let version = 1;
+    for (const name of ['a', 'pi', 'mini-pc', '1a', 'a'.repeat(32), 'a'.repeat(33), 'Pi', '-a', 'a b', 'a_b', 'é']) {
+      let accepted = true;
+      try { version = inst.update(ACTOR, i.id, { name, version }).version; } catch { accepted = false; }
+      expect(validInstanceName(name), name).toBe(accepted);
+    }
   });
 
   it('a route only for a proxy of a served account; url rules as proxy urls; no url = the registered URL', () => {

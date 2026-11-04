@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { describeChange, importSummary, instanceState, stateText } from './cams';
+import { describeChange, importSummary, instanceForm, instancePatch, instanceState, stateText, validInstanceName } from './cams';
 
 const NOW = 1_791_273_600_000;
 const row = (o: object = {}) => ({ lastPullAt: NOW - 60_000, mode: 'cams-admin', held: 0, keptOld: 0, shadowDifferences: null, current: true, diverged: false, problems: 0, ...o });
@@ -42,5 +42,27 @@ describe('an import change as a line', () => {
     expect(describeChange({ kind: 'route-add', name: 'pi', url: null })).toBe('route pi → (registered URL)');
     expect(describeChange({ kind: 'camera-kept', camsId: 'cam1', servedTo: ['cluster'], fields: { tlsServername: 'cam1.example.net' } })).toBe('camera cam1: kept, cluster uses them: TLS name "cam1.example.net"');
     expect(importSummary({ changes: [{ kind: 'camera-override' }], mismatches: [] })).toEqual([{ label: 'camera overrides for this instance', count: 1 }]);
+  });
+});
+
+describe('the instance Details form', () => {
+  const saved = { displayName: 'Mini PC', name: 'mini', baseUrl: 'http://127.0.0.1:8080', notes: '' };
+  it('fills empty values as empty strings', () => {
+    expect(instanceForm({ displayName: 'D', name: 'n', baseUrl: null, notes: null })).toEqual({ displayName: 'D', name: 'n', baseUrl: '', notes: '' });
+  });
+  it('a patch holds only what changed, trimmed', () => {
+    expect(instancePatch(saved, saved)).toEqual({});
+    expect(instancePatch({ ...saved, displayName: ' Mini PC ', notes: '  ' }, saved)).toEqual({});
+    expect(instancePatch({ ...saved, baseUrl: ' https://cams.example.net ' }, saved)).toEqual({ baseUrl: 'https://cams.example.net' });
+    expect(instancePatch({ ...saved, name: 'mini2', notes: 'n' }, saved)).toEqual({ name: 'mini2', notes: 'n' });
+  });
+  it('an emptied address or note is cleared; an emptied name is sent, for the server to refuse', () => {
+    expect(instancePatch({ ...saved, baseUrl: '' }, saved)).toEqual({ baseUrl: null });
+    expect(instancePatch({ ...saved, notes: '' }, { ...saved, notes: 'old' })).toEqual({ notes: null });
+    expect(instancePatch({ ...saved, displayName: '' }, saved)).toEqual({ displayName: '' });
+  });
+  it('the name rule', () => {
+    for (const ok of ['a', 'pi', 'mini-pc', '1a', 'a'.repeat(32)]) expect(validInstanceName(ok)).toBe(true);
+    for (const bad of ['', 'Pi', '-a', 'a b', 'a_b', 'a'.repeat(33)]) expect(validInstanceName(bad)).toBe(false);
   });
 });

@@ -112,6 +112,10 @@ It will run at `cams-admin.skylar.technology`. Phase 1 is specified in
   cams-admin (*Instances*) with the accounts it serves. It enrolls once with
   a one-time `CAC1-…` code and its own Ed25519 key (`admin-enroll` in cams;
   compare the server key fingerprint it prints with the instance page).
+  The page's *Details* edit its display name, name, address and notes, and
+  the address at the top warns when it is a loopback or local network one.
+  cams goes by the instance id, so a rename is safe: it shows in the next
+  snapshot, export file names and new token labels; existing labels stay.
 - **The service API** (`/cams/v1/*`, contract `contract/cams-v1/`): every
   request is signed by the instance's key (method, path, time, nonce, body
   hash) and checked in a fixed order (clock skew answered with the server
