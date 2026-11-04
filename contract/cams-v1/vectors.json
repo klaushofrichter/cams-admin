@@ -58,6 +58,16 @@
       "bodySha256": "5b15174b2ba6f60590b9b4ec8853f17382aa3023816468a8a0f424bcba2c4fe9",
       "text": "cams-admin/v1 request\nPOST\n/cams/v1/report\n1791273600000\nAAAAAAAAAAAAAAAAAAAAAA\n5b15174b2ba6f60590b9b4ec8853f17382aa3023816468a8a0f424bcba2c4fe9",
       "sig": "jMaowBPkn1dFVgqXNEjl5efWQYgGfFc2+WuuapzkA6yX1WnJ/TfxJ6ZycKfOFFlHXYu/0i9TtOLUSfVnX3IdCw=="
+    },
+    {
+      "method": "GET",
+      "pathAndQuery": "/cams/v1/accounts/acc_00000000000000000001/fleet",
+      "ts": 1791273600000,
+      "nonce": "AAAAAAAAAAAAAAAAAAAAAA",
+      "body": "",
+      "bodySha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "text": "cams-admin/v1 request\nGET\n/cams/v1/accounts/acc_00000000000000000001/fleet\n1791273600000\nAAAAAAAAAAAAAAAAAAAAAA\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "sig": "GhZ0y1oVZ1vptv27h83aX6YDN2OKXiDo8ONDGmv5dTAgGdoSEP3LhwaL+QjFcuFPNGshhMkINF1HtGfVJBVeCA=="
     }
   ],
   "responses": [

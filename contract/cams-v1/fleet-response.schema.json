@@ -1,0 +1,576 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cams-admin.skylar.technology/contract/cams-v1/fleet-response.schema.json",
+  "title": "GET /cams/v1/accounts/:accountId/fleet 200 answer",
+  "type": "object",
+  "properties": {
+    "v": {
+      "const": 1
+    },
+    "type": {
+      "const": "cams-fleet"
+    },
+    "accountId": {
+      "type": "string",
+      "pattern": "^acc_[0-9A-HJKMNP-TV-Z]{20}$"
+    },
+    "generatedAt": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "proxies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 32
+          },
+          "displayName": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "state": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ok": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "problemCount": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reportedAt": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "gui": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "url": {
+                    "type": "string",
+                    "maxLength": 512
+                  },
+                  "scope": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "note": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 120
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "url",
+                  "scope",
+                  "note"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "problems": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 64
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "label": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 120
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "text": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 240
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "camera": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "label",
+                "text",
+                "camera"
+              ]
+            },
+            "maxItems": 20
+          },
+          "cameras": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+                },
+                "name": {
+                  "type": "string",
+                  "maxLength": 200
+                },
+                "online": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "online"
+              ]
+            },
+            "maxItems": 256
+          }
+        },
+        "required": [
+          "name",
+          "displayName",
+          "state",
+          "version",
+          "ok",
+          "problemCount",
+          "reportedAt",
+          "gui",
+          "problems",
+          "cameras"
+        ]
+      },
+      "maxItems": 64
+    },
+    "notRouted": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "viewers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 32
+          },
+          "displayName": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "thisViewer": {
+            "type": "boolean"
+          },
+          "address": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "url": {
+                    "type": "string",
+                    "maxLength": 512
+                  },
+                  "scope": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "note": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 120
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "url",
+                  "scope",
+                  "note"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "held": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "camera": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+                },
+                "fields": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "maxItems": 6,
+                  "minItems": 1
+                }
+              },
+              "required": [
+                "camera",
+                "fields"
+              ]
+            },
+            "maxItems": 50
+          },
+          "keptOld": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "camera": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+                },
+                "fields": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "maxItems": 6,
+                  "minItems": 1
+                }
+              },
+              "required": [
+                "camera",
+                "fields"
+              ]
+            },
+            "maxItems": 50
+          },
+          "heldProxies": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "proxy": {
+                  "type": "string",
+                  "maxLength": 200
+                },
+                "fields": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "maxItems": 3,
+                  "minItems": 1
+                }
+              },
+              "required": [
+                "proxy",
+                "fields"
+              ]
+            },
+            "maxItems": 50
+          },
+          "heldTotal": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "name",
+          "displayName",
+          "thisViewer",
+          "address",
+          "held",
+          "keptOld",
+          "heldProxies",
+          "heldTotal"
+        ]
+      },
+      "maxItems": 32
+    },
+    "moves": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^mv_[0-9A-HJKMNP-TV-Z]{20}$"
+          },
+          "camera": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cameraName": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "phase": {
+            "type": "string",
+            "maxLength": 32
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "bytesTotal": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "bytesDone": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rateBps": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "etaS": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "chunks": {
+            "type": "object",
+            "properties": {
+              "pending": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "copied": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "verified": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "skipped": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "failed": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "abandoned": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "pending",
+              "copied",
+              "verified",
+              "skipped",
+              "failed",
+              "abandoned"
+            ]
+          },
+          "createdAt": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "updatedAt": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "endedAt": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "camera",
+          "cameraName",
+          "source",
+          "target",
+          "phase",
+          "reason",
+          "bytesTotal",
+          "bytesDone",
+          "rateBps",
+          "etaS",
+          "chunks",
+          "createdAt",
+          "updatedAt",
+          "endedAt"
+        ]
+      },
+      "maxItems": 50
+    }
+  },
+  "required": [
+    "v",
+    "type",
+    "accountId",
+    "generatedAt",
+    "proxies",
+    "notRouted",
+    "viewers",
+    "moves"
+  ]
+}
