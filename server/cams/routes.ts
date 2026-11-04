@@ -3,6 +3,7 @@ import type { KeyObject } from 'crypto';
 import type { CamsEnrollment } from './enroll';
 import type { CamsInstances } from './instances';
 import type { Tokens } from '../tokens/service';
+import { accountFleet, type FleetDeps } from './fleet';
 import { buildSnapshot, encodeSnapshot, snapshotRevision, type SnapshotDeps } from './snapshot';
 import { ApiError } from '../registry';
 import { FieldError } from '../validate';
@@ -16,7 +17,7 @@ import { bodyErrors } from '../bodyErrors';
 
 // The /cams/v1 service API (contract cams-v1). Mounted at the app root,
 // before the cookie parser: no cookie, session or CSRF rule applies here.
-export interface CamsRouterDeps { globalPerMin?: number; enrollment: CamsEnrollment; auth?: CamsAuth; signingKey?: KeyObject; testRoutes?: boolean; instances?: CamsInstances; snapshot?: SnapshotDeps; tokens?: Tokens }
+export interface CamsRouterDeps { globalPerMin?: number; enrollment: CamsEnrollment; auth?: CamsAuth; signingKey?: KeyObject; testRoutes?: boolean; instances?: CamsInstances; snapshot?: SnapshotDeps; tokens?: Tokens; fleet?: FleetDeps }
 
 export function camsRouter(d: CamsRouterDeps): express.Router {
   const r = express.Router();
@@ -88,6 +89,16 @@ export function camsRouter(d: CamsRouterDeps): express.Router {
       if (!v.ok) throw new ApiError(400, 'invalid', fieldOf(v.detail));
       const out = tokens.retireForInstance(me(c), inst.servedAccountIds(c.instanceId), String(req.params.tokenId), (c.json as { hours?: unknown }).hours);
       sendSigned(res, key, c.nonce, 200, out);
+    }));
+  }
+  const fleet = d.fleet;
+  if (inst && fleet) {
+    // One account's fleet for its admins' MCP tools, read only: only an account
+    // this instance serves, one answer for any other (existing or not).
+    r.get('/cams/v1/accounts/:accountId/fleet', route((req, res, c) => {
+      const accountId = String(req.params.accountId);
+      if (!inst.servedAccountIds(c.instanceId).includes(accountId)) return sendSigned(res, key, c.nonce, 403, { error: 'not_served' });
+      sendSigned(res, key, c.nonce, 200, accountFleet(fleet, c.instanceId, accountId));
     }));
   }
   r.use('/cams/v1', (_req, res) => sendSigned(res, key, cams(res).nonce, 404, { error: 'not_found' }));

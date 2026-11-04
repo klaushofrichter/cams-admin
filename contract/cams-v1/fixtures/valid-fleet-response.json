@@ -1,0 +1,104 @@
+{
+  "$note": "one account's fleet: only that account, never a token, key or fingerprint",
+  "schema": "fleet-response",
+  "message": {
+    "v": 1,
+    "type": "cams-fleet",
+    "accountId": "acc_00000000000000000001",
+    "generatedAt": 1791273600000,
+    "notRouted": 1,
+    "proxies": [
+      {
+        "name": "pi",
+        "displayName": "Pi",
+        "state": "online",
+        "version": "2026.10.07.1",
+        "ok": false,
+        "problemCount": 1,
+        "reportedAt": 1791273600000,
+        "gui": {
+          "url": "http://10.20.30.40:8480/",
+          "scope": "private",
+          "note": "Local network address: only reachable from inside that network."
+        },
+        "problems": [
+          {
+            "id": "disk",
+            "label": "Disk",
+            "text": "91% full",
+            "camera": null
+          },
+          {
+            "id": "stream",
+            "label": "Stream",
+            "text": "not connected",
+            "camera": "cam1"
+          }
+        ],
+        "cameras": [
+          {
+            "id": "cam1",
+            "name": "Backyard",
+            "online": true
+          }
+        ]
+      }
+    ],
+    "viewers": [
+      {
+        "name": "cluster",
+        "displayName": "Cluster",
+        "thisViewer": true,
+        "address": {
+          "url": "https://cams.example.net/",
+          "scope": "public",
+          "note": null
+        },
+        "held": [
+          {
+            "camera": "cam1",
+            "fields": [
+              "host"
+            ]
+          }
+        ],
+        "keptOld": [],
+        "heldProxies": [
+          {
+            "proxy": "Pi",
+            "fields": [
+              "proxyUrl"
+            ]
+          }
+        ],
+        "heldTotal": 2
+      }
+    ],
+    "moves": [
+      {
+        "id": "mv_0123456789ABCDEFGHJK",
+        "camera": "cam2",
+        "cameraName": "Driveway",
+        "source": "Pi",
+        "target": "Cluster",
+        "phase": "copying",
+        "reason": null,
+        "bytesTotal": 1000,
+        "bytesDone": 400,
+        "rateBps": 100,
+        "etaS": 6,
+        "chunks": {
+          "pending": 1,
+          "copied": 0,
+          "verified": 2,
+          "skipped": 0,
+          "failed": 0,
+          "abandoned": 0
+        },
+        "createdAt": 1791273540000,
+        "updatedAt": 1791273600000,
+        "endedAt": null
+      }
+    ]
+  }
+}

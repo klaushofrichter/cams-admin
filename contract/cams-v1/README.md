@@ -134,6 +134,28 @@ Request (≤ 64 KiB):
 
 `mode` `file` | `shadow` | `cams-admin`; `appliedRevision`, `cacheVerifiedAt`, `lastPullAt` may be null; `held`/`keptOld` ≤ 200 entries, `fields` ⊆ the trust fields `proxyUrl`, `caFingerprints`, `proxyTlsServername`, `host`, `protocol`, `tlsServername`; `shadow` null outside shadow mode, `items` ≤ 20 strings of ≤ 200 characters naming a camsId and a field, never a value; `problems` ≤ 50, `code` ≤ 64, `detail` ≤ 200. Answer `200 { "changed": <revision ≠ appliedRevision>, "revision": "r:…" }`. cams sends one at start, then at most one per 60 s, and at once after a held change is confirmed or kept. `heldProxies` (camera moves) is optional, ≤ 64 entries, each exactly `{accountId, proxyId, fields}` with `fields` ⊆ `proxyUrl`, `caFingerprints`, `proxyTlsServername` (no values).
 
+## `GET /cams/v1/accounts/:accountId/fleet`
+
+One account's fleet for the cams MCP's admin tools (design: cams `docs/superpowers/specs/2026-11-04-mcp-fleet-tools-design.md`). Read only; nothing is written and cams keeps it at most a few seconds. After the check order: the account must be in `cams_instance_accounts` for this instance, else `403 not_served` (the same for an account that doesn't exist). Answer `200`, schema `fleet-response`:
+
+```json
+{ "v": 1, "type": "cams-fleet", "accountId": "acc_…", "generatedAt": 1791273600000, "notRouted": 0,
+  "proxies": [ { "name": "pi", "displayName": "Pi", "state": "online", "version": "2026.10.07.1", "ok": false, "problemCount": 1, "reportedAt": 1791273600000,
+                 "gui": { "url": "http://192.0.2.20:8480/", "scope": "public", "note": null },
+                 "problems": [ { "id": "disk", "label": "Disk", "text": "91% full", "camera": null } ],
+                 "cameras": [ { "id": "cam1", "name": "Backyard", "online": true } ] } ],
+  "viewers": [ { "name": "cluster", "displayName": "Cluster", "thisViewer": true, "address": null,
+                 "held": [ { "camera": "cam1", "fields": ["host"] } ], "keptOld": [], "heldProxies": [ { "proxy": "Pi", "fields": ["proxyUrl"] } ], "heldTotal": 2 } ],
+  "moves": [ { "id": "mv_…", "camera": "cam2", "cameraName": "Driveway", "source": "Pi", "target": "Cluster", "phase": "copying", "reason": null,
+               "bytesTotal": 1000, "bytesDone": 400, "rateBps": 100, "etaS": 6, "chunks": { "pending": 1, "copied": 0, "verified": 2, "skipped": 0, "failed": 0, "abandoned": 0 },
+               "createdAt": 1791273540000, "updatedAt": 1791273600000, "endedAt": null } ] }
+```
+
+- `proxies`: the account's proxies routed to this instance and not hidden (the snapshot's default-deny rule); `notRouted` counts the account's others. `gui` is `adminUiUrl`, else `url`, with `scope` and `note` from `contract/address.ts` (`null` without an http(s) address). `problems` ≤ 20 per proxy, the problem items of its last summary, in the proxy's own words; `camera` is the camsId, `null` for the proxy as a whole or a camera this account doesn't have.
+- `viewers`: the enrolled instances serving this account (≤ 32). `held`, `keptOld`, `heldProxies` (≤ 50 each) hold only that instance's report entries for **this** account, by camsId and the proxy's display name; `heldTotal` is the number before the cap. **Never** another account's id, name or count, an instance's account list, or a value.
+- `moves`: this account's newest 50. `source` and `target` are proxy display names, `null` for a proxy outside the account; `reason` is a code, the free-text detail is left out.
+- **No secrets, ever:** no token, hash, key, CA fingerprint or camera password, and no audit rows. Fields are named one by one (`server/cams/fleet.ts`); a guard test fills the rows with markers and scans the answer.
+
 ## Fixtures and vectors
 
-`contract/cams-v1/fixtures/`: `valid-snapshot-two-accounts`, `valid-snapshot-empty`, `valid-tokens-request`, `valid-report-shadow`, `valid-report-cams-admin`, `valid-enroll-request`, `valid-enroll-response`, `invalid-snapshot-secret-field` (a camera with `password`), `invalid-snapshot-bad-camsid`, `invalid-snapshot-unsigned`, `invalid-tokens-request-upper-hex`, `invalid-report-value-in-items` (strict refuses an item over 200 characters), `drift-snapshot-new-field` (lenient accepts, strict refuses). `vectors.json`: `keys` (`server` = the v1 vectors' server seed, `cams` = a new fixed seed, `other`), `enroll` (`{code, publicKey, text, sig}`), `requests` (`{method, pathAndQuery, ts, nonce, body, bodySha256, text, sig}`: one GET config, one POST tokens, one POST report), `responses` (`{status, nonce, body, bodySha256, text, sig}`: a 200 snapshot, a 304, a 401 clock_skew), `snapshots` (`{snapshot, text, sig}`). Both repos reproduce every signature byte for byte.
+`contract/cams-v1/fixtures/`: `valid-snapshot-two-accounts`, `valid-snapshot-empty`, `valid-tokens-request`, `valid-report-shadow`, `valid-report-cams-admin`, `valid-enroll-request`, `valid-enroll-response`, `invalid-snapshot-secret-field` (a camera with `password`), `invalid-snapshot-bad-camsid`, `invalid-snapshot-unsigned`, `invalid-tokens-request-upper-hex`, `invalid-report-value-in-items` (strict refuses an item over 200 characters), `drift-snapshot-new-field` (lenient accepts, strict refuses), `valid-fleet-response`, `invalid-fleet-fingerprint`, `invalid-fleet-other-accounts`, `drift-fleet-new-field`. `vectors.json`: `keys` (`server` = the v1 vectors' server seed, `cams` = a new fixed seed, `other`), `enroll` (`{code, publicKey, text, sig}`), `requests` (`{method, pathAndQuery, ts, nonce, body, bodySha256, text, sig}`: one GET config, one POST tokens, one POST report, one GET fleet), `responses` (`{status, nonce, body, bodySha256, text, sig}`: a 200 snapshot, a 304, a 401 clock_skew), `snapshots` (`{snapshot, text, sig}`). Both repos reproduce every signature byte for byte.
