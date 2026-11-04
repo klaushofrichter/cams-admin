@@ -147,6 +147,18 @@ describe('the cams snapshot (GET /cams/v1/config)', () => {
     await s.api('PATCH', `/cams-instances/${cluster.id}`, { accounts: [home.id, beta.id], version: c2.version });
   });
 
+  it('a rename: the instance keeps its id, routes and served accounts; the snapshot says the new name and stays valid; the revision moves so cams pulls it', async () => {
+    const before = buildSnapshot(d, cluster.id);
+    const c = s.built.camsInstances.get(cluster.id);
+    await s.api('PATCH', `/cams-instances/${cluster.id}`, { name: 'renamed', displayName: 'Renamed', baseUrl: 'https://cams.example.net', version: c.version });
+    const after = buildSnapshot(d, cluster.id);
+    expect(after.instance).toEqual({ ...before.instance, name: 'renamed' });
+    expect(after.accounts).toEqual(before.accounts);
+    expect(after.revision).not.toBe(before.revision);
+    expect(strictCamsValidator('snapshot')(after), strictCamsErrors()).toBe(true);
+    await s.api('PATCH', `/cams-instances/${cluster.id}`, { name: 'cluster', displayName: c.displayName, baseUrl: null, version: c.version + 1 });
+  });
+
   it('a proxy moved between accounts takes its cameras out of the old account (no cross-account leak)', () => {
     const p = buildSnapshot(d, pi.id);
     expect(JSON.stringify(p)).not.toContain(b1.id);

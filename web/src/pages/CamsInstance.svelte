@@ -3,7 +3,9 @@
   import { onMount } from 'svelte';
   import { api, errorText } from '../lib/api';
   import { live } from '../lib/live';
-  import { instanceState, stateClass, stateText } from '../lib/cams';
+  import { addressInfo } from '../lib/address';
+  import { instanceForm, instancePatch, instanceState, stateClass, stateText, validInstanceName } from '../lib/cams';
+  import { keepEdits } from '../lib/edits';
   import { clock } from '../lib/clock.svelte';
   import { when } from '../lib/format';
   import Ago from '../components/Ago.svelte';
@@ -27,10 +29,17 @@
   let confirm = $state<'' | 'block' | 'delete' | 'rotate'>('');
   let error = $state('');
   let notFound = $state(false);
+  let form = $state<Record<string, string>>({});
+  let formSeen: Record<string, string> = {};
+  let formError = $state('');
 
   async function load() {
     try {
       inst = await api('GET', `/cams-instances/${instanceId}`);
+      // A reload keeps what is being typed; a field the server changed takes the server's value.
+      const fresh = instanceForm(inst);
+      form = keepEdits(form, formSeen, fresh);
+      formSeen = fresh;
       const [a, r, k, d] = await Promise.all([api('GET', '/accounts'), api('GET', `/cams-instances/${instanceId}/routes`), api('GET', `/cams-instances/${instanceId}/keys`), api('GET', '/dashboard')]);
       accounts = a.items;
       routes = r.items;
@@ -58,6 +67,23 @@
     try { await fn(); await load(); } catch (e) { error = errorText(e); }
   };
   const saveAccounts = () => run(() => api('PATCH', `/cams-instances/${instanceId}`, { accounts: Object.keys(served).filter((k) => served[k]), version: inst.version }));
+  const FIELD_ERROR: Record<string, string> = {
+    baseUrl: 'Not valid: the address starts with http:// or https://, without a user name, query or fragment.',
+    displayName: 'Not valid: the display name is needed, at most 200 characters.',
+    notes: 'Not valid: notes are at most 2000 characters.',
+  };
+  async function saveDetails(e: Event) {
+    e.preventDefault();
+    formError = '';
+    try {
+      await api('PATCH', `/cams-instances/${instanceId}`, { ...patch, version: inst.version });
+      await load();
+    } catch (err: any) {
+      formError = (err?.code === 'invalid' && FIELD_ERROR[err.field]) || errorText(err);
+      // The buffer stays; the fresh version makes the next Save possible.
+      if (err?.code === 'conflict') await load();
+    }
+  }
   const fromRoute = (proxyId: string) => {
     const rt = routes.find((x) => x.proxyId === proxyId);
     return { url: rt?.url ?? '', visible: !!rt && !rt.hidden };
@@ -98,6 +124,9 @@
   const keyState = (k: any) => (k.revokedAt ? `revoked (${k.revokedReason})` : k.confirmedAt ? 'active' : 'pending: waiting for its first signed request');
   const st = $derived(row ? instanceState(row, clock.now) : 'never');
   const report = $derived(inst?.live?.report ?? null);
+  const address = $derived(addressInfo(inst?.baseUrl));
+  const patch = $derived(inst && form.name !== undefined ? instancePatch(form as any, instanceForm(inst)) : {});
+  const nameOk = $derived(validInstanceName(form.name ?? ''));
 </script>
 
 {#if notFound}
@@ -105,7 +134,11 @@
 {:else if inst}
   <section class="card grid">
     <div class="row"><a href="#/cams-instances" class="muted">cams instances</a><span class="muted">/</span><h2 data-testid="cms-title">{inst.displayName}</h2><span class="mono muted">{inst.name}</span>
-      <span class="chip {inst.state === 'enrolled' ? 'ok' : inst.state === 'revoked' ? 'bad' : ''}" data-testid="cms-state">{inst.state === 'revoked' ? 'blocked' : inst.state}</span></div>
+      <span class="chip {inst.state === 'enrolled' ? 'ok' : inst.state === 'revoked' ? 'bad' : ''}" data-testid="cms-state">{inst.state === 'revoked' ? 'blocked' : inst.state}</span>
+      {#if address.href}<a class="mono" href={address.href} target="_blank" rel="noopener noreferrer" data-testid="cms-address">{inst.baseUrl}</a>
+      {:else if inst.baseUrl}<span class="mono" data-testid="cms-address-text">{inst.baseUrl}</span>
+      {:else}<button type="button" class="plain muted" data-testid="cms-no-address" onclick={() => document.getElementById('cms-edit-address')?.focus()}>no address set: enter it under Details</button>{/if}
+      {#if address.warning}<span class="badge warn" data-testid="cms-address-warning">{address.warning}</span>{/if}</div>
     {#if error}<p class="error" data-testid="cms-detail-error">{error}</p>{/if}
 
     <h3>Status</h3>
@@ -127,6 +160,18 @@
       <button class="btn" data-testid="cms-rotate" onclick={() => (confirm = 'rotate')} disabled={inst.state === 'revoked'}>Rotate tokens now</button>
       {#if inst.rotateBefore}<span class="muted">last rotation asked {when(inst.rotateBefore)}</span>{/if}
     </div>
+
+    <h3>Details</h3>
+    <form class="grid two" onsubmit={saveDetails} data-testid="cms-details">
+      <label>Display name<input bind:value={form.displayName} data-testid="cms-edit-display" /></label>
+      <label>Name<input class="mono" bind:value={form.name} data-testid="cms-edit-name" aria-invalid={!nameOk} /></label>
+      <label>Address<input id="cms-edit-address" class="mono" bind:value={form.baseUrl} placeholder="https://cams.example.net" data-testid="cms-edit-address" /></label>
+      <label class="wide">Notes<textarea rows="2" bind:value={form.notes} data-testid="cms-edit-notes"></textarea></label>
+      <p class="muted wide">The name is the short id in enrollment output, export file names and new token labels. cams goes by the instance id, so a rename is safe.</p>
+      {#if !nameOk}<p class="error wide" data-testid="cms-name-error">Name: lower-case letters, digits and hyphens, starting with a letter or digit, at most 32 characters.</p>{/if}
+      {#if formError}<p class="error wide" data-testid="cms-form-error">{formError}</p>{/if}
+      <div class="row wide"><button class="btn primary" data-testid="cms-edit-save" disabled={!nameOk || !Object.keys(patch).length}>Save</button></div>
+    </form>
 
     <h3>Served accounts</h3>
     <div class="row" data-testid="cms-served">
@@ -234,6 +279,9 @@
   h2, h3 { margin: 0; }
   h3 { margin-top: 8px; font-size: 16px; }
   .two { grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+  .wide { grid-column: 1 / -1; }
+  form p { margin: 0; }
+  .plain { background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline; }
   .check { display: flex; flex-direction: row; align-items: center; gap: 4px; color: var(--text); }
   .scrim { position: fixed; inset: 0; background: var(--scrim); z-index: 10; }
   .dialog { position: fixed; z-index: 11; left: 50%; top: 10%; transform: translateX(-50%); width: min(640px, calc(100vw - 32px)); box-shadow: var(--shadow); display: grid; gap: 10px; }
