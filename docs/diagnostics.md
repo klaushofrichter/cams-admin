@@ -225,7 +225,8 @@ is unique per account (409 `duplicate_name`), lower-case letters, digits and
 hyphens, at most 32. cams shows the new name from its next snapshot, and no
 viewer holds anything for it. A move already running keeps the old name in its
 messages and records. Earlier audit records keep the old label; the rename's
-own record is under the old name with `renamedTo`, and the proxy's id ties them
+own record is under the old name with `nameFrom` and `nameTo` (`displayNameFrom`
+and `displayNameTo` for the display name), and the proxy's id ties them
 together. A script that picks a proxy by name has to use the new one: use the
 id.
 

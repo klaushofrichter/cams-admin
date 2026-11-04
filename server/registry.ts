@@ -1,5 +1,6 @@
 import type { Clock } from './clock';
 import type { Audit, AuditAction } from './audit';
+import { nameChanges } from './audit';
 import { tx, type Db } from './db/open';
 import { newId } from './ids';
 import {
@@ -160,8 +161,9 @@ export class Registry {
       const f = accountInput(patch, true);
       const old = this.getAccount(id);
       const keys = this.updateRow('accounts', { id }, f, versionOf(patch as Row));
-      this.log(actor, 'account-update', id, 'account', id, f.name ?? old.name, { fields: keys, ...(f.name && f.name !== old.name ? { renamedFrom: old.name } : {}) });
-      return this.getAccount(id);
+      const now = this.getAccount(id);
+      this.log(actor, 'account-update', id, 'account', id, old.name, { fields: keys, ...nameChanges(old, now, ['name', 'displayName']) });
+      return now;
     }));
   }
 
@@ -271,11 +273,11 @@ export class Registry {
   updateProxy(actor: string, accountId: string, id: string, patch: unknown): Proxy {
     return guard(() => tx(this.db, () => {
       const f = proxyInput(patch, true);
-      const before = this.getProxy(accountId, id).name;
+      const before = this.getProxy(accountId, id);
       const keys = this.updateRow('proxies', { id, accountId }, f, versionOf(patch as Row));
       const p = this.getProxy(accountId, id);
       // Under the name before it, as a cams instance's; older records keep their label, the id ties them together.
-      this.log(actor, 'proxy-update', accountId, 'proxy', id, before, { fields: keys, ...(p.name !== before ? { renamedTo: p.name } : {}) });
+      this.log(actor, 'proxy-update', accountId, 'proxy', id, before.name, { fields: keys, ...nameChanges(before, p, ['name', 'displayName']) });
       return p;
     }));
   }
@@ -422,7 +424,7 @@ export class Registry {
       const keys = this.updateRow('cameras', { id, accountId }, f, versionOf(patch as Row));
       const c = this.getCamera(accountId, id);
       this.relocated(old, c);
-      this.log(actor, 'camera-update', accountId, 'camera', id, c.camsId, { fields: keys });
+      this.log(actor, 'camera-update', accountId, 'camera', id, old.camsId, { fields: keys, ...nameChanges(old, c, ['name', 'camsId']) });
       return c;
     }));
   }

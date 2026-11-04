@@ -57,6 +57,17 @@ const KEEP_MS = 400 * 86400_000;
 
 interface Window { start: number; suppressed: number; e: AuditEntry }
 
+// A rename's detail: `<key>From` and `<key>To` for each name that changed, so a
+// record says on its own what happened (Klaus, 2026-11-04). Older records stay
+// as written (`renamedTo`, `renamedFrom`); `targetId` ties them together.
+export function nameChanges<T extends object>(old: T, now: T, keys: (keyof T & string)[]): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const k of keys) {
+    if (old[k] !== now[k]) { out[`${k}From`] = old[k]; out[`${k}To`] = now[k]; }
+  }
+  return out;
+}
+
 export class Audit {
   private windows = new Map<string, Window>();
   constructor(private db: Db, private clock: Clock) {}
