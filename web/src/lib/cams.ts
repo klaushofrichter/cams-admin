@@ -58,3 +58,21 @@ export function describeChange(c: any): string {
     default: return c.kind;
   }
 }
+
+// The instance's editable fields as the form holds them: strings, '' = no value.
+export type InstanceForm = { displayName: string; name: string; baseUrl: string; notes: string };
+export const instanceForm = (i: { displayName: string; name: string; baseUrl: string | null; notes: string | null }): InstanceForm =>
+  ({ displayName: i.displayName, name: i.name, baseUrl: i.baseUrl ?? '', notes: i.notes ?? '' });
+
+// As the server's name rule (server/cams/instances.ts, test/cams-instances.test.ts holds them together).
+export const validInstanceName = (name: string): boolean => /^[a-z0-9][a-z0-9-]{0,31}$/.test(name.trim());
+
+// Only what really changed goes to the server, so the audit's `fields` tell what was edited.
+export function instancePatch(form: InstanceForm, saved: InstanceForm): Record<string, string | null> {
+  const patch: Record<string, string | null> = {};
+  for (const k of ['displayName', 'name', 'baseUrl', 'notes'] as const) {
+    const v = form[k].trim();
+    if (v !== saved[k].trim()) patch[k] = k === 'baseUrl' || k === 'notes' ? v || null : v;
+  }
+  return patch;
+}

@@ -2,6 +2,7 @@
   // P4: the cams instances (the cluster's cams, the Pi's) and a form for a new one.
   import { onMount } from 'svelte';
   import { api, errorText } from '../lib/api';
+  import { addressInfo } from '../lib/address';
   import { instanceState, stateClass, stateText } from '../lib/cams';
   import { clock } from '../lib/clock.svelte';
   import Ago from '../components/Ago.svelte';
@@ -44,7 +45,8 @@
           {@const r = rows[i.id]}
           {@const st = r ? instanceState(r, clock.now) : 'never'}
           <tr data-testid="cms-row-{i.name}">
-            <td><a href="#/cams-instances/{i.id}" data-testid="cms-open-{i.name}">{i.displayName}</a> <span class="mono muted">{i.name}</span></td>
+            <td><a href="#/cams-instances/{i.id}" data-testid="cms-open-{i.name}">{i.displayName}</a> <span class="mono muted">{i.name}</span>
+              {#if addressInfo(i.baseUrl).href}<div><a class="mono" href={addressInfo(i.baseUrl).href} target="_blank" rel="noopener noreferrer" data-testid="cms-address-{i.name}">{i.baseUrl}</a></div>{/if}</td>
             <td>{i.accounts.map(accountName).join(', ') || '—'}</td>
             <td><span class="chip {i.state === 'enrolled' ? 'ok' : i.state === 'revoked' ? 'bad' : ''}" data-testid="cms-state-{i.name}">{i.state === 'revoked' ? 'blocked' : i.state}</span></td>
             <td><Ago t={i.live.lastPullAt} /></td>
