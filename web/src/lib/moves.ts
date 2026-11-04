@@ -114,6 +114,18 @@ export function refusalLine(m: { phase: string; refusedBy?: string | null; reaso
 // A rejection is final: its record may be deleted (it holds no content).
 export const canDelete = (phase: string): boolean => phase === 'rejected';
 
+// One move at a time per proxy, as the server's `not_busy` rule (#130): the open
+// move on the chosen source or target, and what to say while it blocks a start.
+interface OpenMove { id: string; endedAt: number | null; source: { id: string; name: string }; target: { id: string; name: string } }
+export function blockingMove(moves: readonly OpenMove[], sourceId: string, targetId: string): { id: string; text: string } | null {
+  for (const m of moves) {
+    if (m.endedAt !== null) continue;
+    const on = [m.source, m.target].find((p) => p.id === sourceId || p.id === targetId);
+    if (on) return { id: m.id, text: `A move is open on ${on.name}. Wait until it ends, or cancel it below.` };
+  }
+  return null;
+}
+
 // The content checklist of the move detail (GET /moves/:id content).
 export interface ContentKind { kind: string; included: boolean | null; files: number | null; bytes: number | null; rows?: number | null; chunks: { total: number; done: number; failed: number; abandoned: number } }
 const KIND_LABEL: Record<string, string> = { clips: 'Clips', stills: 'Stills', events: 'Events', checks: 'Checks', archive: 'Archive', ptz: 'PTZ positions' };

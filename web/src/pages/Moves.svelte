@@ -3,7 +3,7 @@
   import { onMount } from 'svelte';
   import { api, errorText, ApiFailure } from '../lib/api';
   import { coalesced, live } from '../lib/live';
-  import { cancelable, etaText, phaseClass, phaseReason, phaseText, presummaryErrorText, presummaryLines, presummarySpaceText, progressText, refusalLine, refusalText, startBody, cameraLabel } from '../lib/moves';
+  import { blockingMove, cancelable, etaText, phaseClass, phaseReason, phaseText, presummaryErrorText, presummaryLines, presummarySpaceText, progressText, refusalLine, refusalText, startBody, cameraLabel } from '../lib/moves';
   import MoveDetail from '../components/MoveDetail.svelte';
   import FirewallLines from '../components/FirewallLines.svelte';
   import { moveFirewall } from '../lib/profile';
@@ -79,6 +79,7 @@
       .catch((e) => { if (presummary?.key === key) presummary = { key, loading: false, error: e instanceof ApiFailure ? presummaryErrorText(e.body) : errorText(e) }; });
   });
   const firewall = $derived(targetProfile && cameraId && targetProfile.id === targetId ? moveFirewall(targetName, targetProfile.profile, cameras.find((c) => c.id === cameraId)?.host) : null);
+  const blocked = $derived(blockingMove(items, sourceId, targetId));
   async function start(e: Event) {
     e.preventDefault();
     // A double click (or Enter twice) sends one request: the button stays disabled until it settles.
@@ -128,8 +129,9 @@
         {#each targets as p (p.id)}<option value={p.id}>{p.displayName}</option>{/each}
       </select>
     </label>
-    <button class="btn primary" data-testid="start-move-submit" disabled={sending || !sourceId || !cameraId || !targetId} aria-busy={sending}>{sending ? 'Starting…' : 'Start move'}</button>
+    <button class="btn primary" data-testid="start-move-submit" disabled={sending || !sourceId || !cameraId || !targetId || !!blocked} aria-busy={sending} title={blocked?.text}>{sending ? 'Starting…' : 'Start move'}</button>
   </form>
+  {#if blocked}<p class="muted" data-testid="start-move-blocked">{blocked.text} <button type="button" class="btn" data-testid="start-move-show" onclick={() => blocked && show(blocked.id)}>Show it</button></p>{/if}
   {#if presummary}
     <div class="grid presummary" data-testid="start-move-summary">
       {#if presummary.loading}
