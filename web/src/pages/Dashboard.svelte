@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { addressInfo } from '../lib/address';
   import { onMount } from 'svelte';
   import { api } from '../lib/api';
   import { coalesced, live } from '../lib/live';
@@ -126,6 +127,7 @@
         <div class="proxy" data-testid="proxy-row-{p.name}">
           <div class="row">
             <a href="#/accounts/{a.id}/proxies/{p.id}" data-testid="proxy-link-{p.name}"><b>{p.displayName}</b></a>
+            {#if addressInfo(p.adminUiUrl).href}<a class="mono" href={addressInfo(p.adminUiUrl).href} title={addressInfo(p.adminUiUrl).warning ?? undefined} target="_blank" rel="noopener noreferrer" data-testid="dash-proxy-address-{p.name}">{p.adminUiUrl}</a>{/if}
             <StateChip state={p.state} testid="proxy-state-{p.name}" />
             {#if p.stale}<span class="badge" data-testid="stale-{p.name}">stale</span>{/if}
             <span class="muted">heartbeat <Ago t={p.lastHeartbeatAt} testid="proxy-age-{p.name}" /></span>

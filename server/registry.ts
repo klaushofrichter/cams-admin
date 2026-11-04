@@ -271,9 +271,11 @@ export class Registry {
   updateProxy(actor: string, accountId: string, id: string, patch: unknown): Proxy {
     return guard(() => tx(this.db, () => {
       const f = proxyInput(patch, true);
+      const before = this.getProxy(accountId, id).name;
       const keys = this.updateRow('proxies', { id, accountId }, f, versionOf(patch as Row));
       const p = this.getProxy(accountId, id);
-      this.log(actor, 'proxy-update', accountId, 'proxy', id, p.name, { fields: keys });
+      // Under the name before it, as a cams instance's; older records keep their label, the id ties them together.
+      this.log(actor, 'proxy-update', accountId, 'proxy', id, before, { fields: keys, ...(p.name !== before ? { renamedTo: p.name } : {}) });
       return p;
     }));
   }

@@ -85,7 +85,8 @@ export function diagCamsInstances(d: ApiDeps) {
       const rep = i.live.report;
       const current = snapshotRevision(d.db, i.id, fp);
       return {
-        id: i.id, name: i.name, displayName: i.displayName, baseUrl: i.baseUrl, state: i.state, accounts: i.accounts, rotateBefore: i.rotateBefore,
+        // rowVersion: what an ops token's PATCH passes back.
+        id: i.id, name: i.name, displayName: i.displayName, baseUrl: i.baseUrl, state: i.state, accounts: i.accounts, rotateBefore: i.rotateBefore, rowVersion: i.version,
         lastSeenAt: i.live.lastSeenAt, lastPullAt: i.live.lastPullAt, lastPullStatus: i.live.lastPullStatus, reportAt: i.live.reportAt,
         routes: d.camsInstances.routes(i.id).map((r) => ({ proxyId: r.proxyId, accountId: r.accountId, url: r.url, hidden: r.hidden })),
         report: rep && {
