@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cancelable, etaText, phaseClass, phaseText, progressText, reasonText, boundsText, startBody, refusalText, cameraLabel, activeMoves, activeLine, checkText, endLabel, canGiveUp, phaseReason, refusedByText, refusalLine, contentLine, contentBasisText, canDelete, presummaryLines, presummarySpaceText, presummaryErrorText } from './moves';
+import { blockingMove, cancelable, etaText, phaseClass, phaseText, progressText, reasonText, boundsText, startBody, refusalText, cameraLabel, activeMoves, activeLine, checkText, endLabel, canGiveUp, phaseReason, refusedByText, refusalLine, contentLine, contentBasisText, canDelete, presummaryLines, presummarySpaceText, presummaryErrorText } from './moves';
 
 const PHASES = ['requested', 'offered', 'awaiting-approval', 'approved', 'switching', 'copying', 'cleaning', 'done', 'rejected', 'cancelling', 'cancelled', 'failed', 'returning', 'returned'];
 
@@ -271,5 +271,21 @@ describe('the content before a move (Start move form, move.summary)', () => {
     expect(presummaryErrorText({ error: 'proxy_failed', detail: 'internal' })).toBe('the source proxy failed: internal');
     expect(presummaryErrorText({ error: 'something_new' })).toBe('something_new');
     expect(presummaryErrorText(null)).toBe('no answer');
+  });
+});
+
+// Klaus, 2026-11-03: "Start move" stayed active after "Move requested" (#130).
+describe('blockingMove', () => {
+  const open = { id: 'mv_1', endedAt: null, source: { id: 'a', name: 'Pi' }, target: { id: 'b', name: 'een' } };
+  const ended = { ...open, id: 'mv_0', endedAt: 5 };
+  it('finds an open move on the chosen source or target', () => {
+    expect(blockingMove([ended, open], 'a', 'c')).toEqual({ id: 'mv_1', text: 'A move is open on Pi. Wait until it ends, or cancel it below.' });
+    expect(blockingMove([open], 'c', 'b')?.text).toBe('A move is open on een. Wait until it ends, or cancel it below.');
+    expect(blockingMove([open], 'b', 'a')?.id).toBe('mv_1');
+  });
+  it('an ended move, other proxies or nothing chosen block nothing', () => {
+    expect(blockingMove([ended], 'a', 'b')).toBeNull();
+    expect(blockingMove([open], 'c', 'd')).toBeNull();
+    expect(blockingMove([open], '', '')).toBeNull();
   });
 });

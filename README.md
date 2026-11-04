@@ -158,6 +158,7 @@ It will run at `cams-admin.skylar.technology`. Phase 1 is specified in
   passwords and tokens, for cams's file mode if cams-admin is ever lost
   ([docs/restore.md](docs/restore.md)). The cut-over is
   [docs/migration-p4-runbook.md](docs/migration-p4-runbook.md).
+  Removing a viewer: [docs/removing-a-cams-instance.md](docs/removing-a-cams-instance.md).
 
 A read-only diagnostics API (`/api/v1/diag/…`) answers tools with a
 revocable diagnostics token instead of a sign-in: proxies, cams instances and
