@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { proxyForm, proxyPatch, validProxyName } from './proxy';
+import { hostLabel, proxyForm, proxyPatch, validProxyName } from './proxy';
 
 const row = {
   displayName: 'Pi', name: 'pi', runsOn: 'local-host', hostKind: null, url: 'https://proxy.example.net:8480', adminUiUrl: null,
@@ -27,5 +27,27 @@ describe('the proxy registry form', () => {
     expect(proxyPatch({ ...saved, url: '' }, saved)).toEqual({ url: null });
     expect(proxyPatch({ ...saved, displayName: '' }, saved)).toEqual({ displayName: '' });
     expect(validProxyName('')).toBe(false);
+  });
+});
+
+describe('hostLabel: where a proxy runs, in words', () => {
+  it.each([
+    ['local-host', null, 'This network'],
+    ['cluster', null, 'Cluster'],
+    ['cloud', undefined, 'Cloud'],
+    ['cluster', '', 'Cluster'],
+    ['local-host', 'pi', 'This network · Pi'],
+    ['local-host', 'mini-pc', 'This network · Mini PC'],
+    ['local-host', 'pc', 'This network · PC'],
+    ['local-host', 'mac', 'This network · Mac'],
+    ['cloud', 'vm', 'Cloud · VM'],
+    ['cluster', 'container', 'Cluster · Container'],
+    ['local-host', 'other', 'This network · Other'],
+  ])('%s, %s: %s', (runsOn, kind, text) => {
+    expect(hostLabel(runsOn, kind)).toBe(text);
+  });
+
+  it('a value it does not know is shown as stored', () => {
+    expect(hostLabel('moon-base', 'rover')).toBe('moon-base · rover');
   });
 });
