@@ -22,8 +22,39 @@ describe('registry', () => {
     expect(code(() => reg.getAccount(a.id))).toBe('404 not_found');
     expect(auditCount()).toBe(3);
     expect(audit.list({}).items.map((r) => r.action)).toEqual(['account-delete', 'account-update', 'account-create']);
-    expect(audit.list({ action: 'account-update' }).items[0].detail).toEqual({ fields: ['displayName'] });
+    expect(audit.list({ action: 'account-update' }).items[0].detail).toEqual({ fields: ['displayName'], displayNameFrom: 'Home', displayNameTo: 'Home 2' });
     expect(audit.list({ action: 'account-delete' }).items[0].targetLabel).toBe('home');
+  });
+
+  // Klaus, 2026-11-04: both names in a rename's audit record, so what happened can be reconstructed.
+  it('a rename records the old and the new name, under the name before it; other edits record no names', () => {
+    const { reg, audit } = makeRegistry(dir);
+    const a = reg.createAccount(ACTOR, { name: 'home', displayName: 'Home' });
+    reg.updateAccount(ACTOR, a.id, { name: 'house', displayName: 'House', version: 1 });
+    let r = audit.list({ action: 'account-update' }).items[0];
+    expect(r.targetId).toBe(a.id);
+    expect(r.targetLabel).toBe('home');
+    expect(r.detail).toEqual({ fields: ['name', 'displayName'], nameFrom: 'home', nameTo: 'house', displayNameFrom: 'Home', displayNameTo: 'House' });
+    const p = reg.createProxy(ACTOR, a.id, { name: 'pi', displayName: 'Pi', runsOn: 'cloud' });
+    reg.updateProxy(ACTOR, a.id, p.id, { displayName: 'Pi 2', version: 1 });
+    r = audit.list({ action: 'proxy-update' }).items[0];
+    expect(r.targetLabel).toBe('pi');
+    expect(r.detail).toEqual({ fields: ['displayName'], displayNameFrom: 'Pi', displayNameTo: 'Pi 2' });
+    reg.updateProxy(ACTOR, a.id, p.id, { name: 'pi2', version: 2 });
+    r = audit.list({ action: 'proxy-update' }).items[0];
+    expect(r.targetLabel).toBe('pi');
+    expect(r.detail).toEqual({ fields: ['name'], nameFrom: 'pi', nameTo: 'pi2' });
+    reg.updateProxy(ACTOR, a.id, p.id, { name: 'pi2', displayName: 'Pi 2', dnsName: 'pi.example.net', version: 3 });
+    expect(audit.list({ action: 'proxy-update' }).items[0].detail).toEqual({ fields: ['name', 'displayName', 'dnsName'] });
+    const c = reg.createCamera(ACTOR, a.id, { camsId: 'garage', name: 'Garage', kind: 'camera', proxyId: p.id, proxyCameraId: 'cam1' });
+    reg.updateCamera(ACTOR, a.id, c.id, { name: 'Shed', version: 1 });
+    r = audit.list({ action: 'camera-update' }).items[0];
+    expect(r.targetLabel).toBe('garage');
+    expect(r.detail).toEqual({ fields: ['name'], nameFrom: 'Garage', nameTo: 'Shed' });
+    reg.updateCamera(ACTOR, a.id, c.id, { camsId: 'shed', version: 2 });
+    r = audit.list({ action: 'camera-update' }).items[0];
+    expect(r.targetLabel).toBe('garage');
+    expect(r.detail).toEqual({ fields: ['camsId'], camsIdFrom: 'garage', camsIdTo: 'shed' });
   });
 
   it('keeps one email once per account, allows it in another, and answers memberships', () => {

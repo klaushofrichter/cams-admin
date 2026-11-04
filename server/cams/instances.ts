@@ -1,5 +1,6 @@
 import type { Clock } from '../clock';
 import type { Audit, AuditAction } from '../audit';
+import { nameChanges } from '../audit';
 import type { Config } from '../config';
 import { stmt, tx, type Db } from '../db/open';
 import { codeHash, newCamsEnrollmentCode, newId } from '../ids';
@@ -201,7 +202,7 @@ export class CamsInstances {
         }
       }
       const now = this.get(id);
-      this.log(actor, 'cams-instance-update', { id, name: old.name }, { fields, ...(accounts ? { accounts } : {}), ...(now.name !== old.name ? { renamedTo: now.name } : {}) });
+      this.log(actor, 'cams-instance-update', { id, name: old.name }, { fields, ...(accounts ? { accounts } : {}), ...nameChanges(old, now, ['name', 'displayName']) });
       return { old, now };
     }));
     // An account it no longer serves keeps no token of it.

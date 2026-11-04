@@ -184,7 +184,7 @@ describe('scoped writes', () => {
     const rec = auditOf('proxy-update').at(-1)!;
     expect(rec.actor).toBe(`ops-token:${t.prefix}`);
     expect(rec.target_id).toBe(p);
-    expect(JSON.parse(rec.detail)).toEqual({ fields: ['name', 'displayName', 'adminUiUrl'], renamedTo: 'renamed' });
+    expect(JSON.parse(rec.detail)).toMatchObject({ fields: ['name', 'displayName', 'adminUiUrl'], nameTo: 'renamed', displayNameTo: 'After' });
     // Refused, nothing changed: a stale version, a taken or malformed name, an emptied name, a bad address.
     const refused: [Record<string, unknown>, number, string][] = [
       [{ version, name: 'other' }, 409, 'conflict'],
@@ -221,7 +221,7 @@ describe('scoped writes', () => {
     expect(ok.body).toMatchObject({ id: i, name: 'cms-after', displayName: 'After', baseUrl: 'https://cams.example.net', notes: 'by a script', accounts: [served] });
     const rec = auditOf('cams-instance-update').at(-1)!;
     expect(rec.actor).toBe(`ops-token:${t.prefix}`);
-    expect(JSON.parse(rec.detail)).toEqual({ fields: ['name', 'displayName', 'baseUrl', 'notes'], renamedTo: 'cms-after' });
+    expect(JSON.parse(rec.detail)).toMatchObject({ fields: ['name', 'displayName', 'baseUrl', 'notes'], nameTo: 'cms-after', displayNameTo: 'After' });
     expect((await bearer('patch', path, t.token, { baseUrl: 'ftp://cams.example.net', version: rowVersion() })).status).toBe(400);
     expect((await bearer('patch', path, t.token, { displayName: 'Stale', version: rowVersion() - 1 })).status).toBe(409);
 
