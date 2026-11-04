@@ -5,8 +5,6 @@ then empties it on `main`.
 
 ## [Unreleased]
 
-- The account page's Proxies table is tidied: columns Proxy, Host ("This
-  network · PC" instead of `local-host (pc)`), State, Proxy GUI (a link, marked
-  "LAN" with the full warning in its tooltip) and Viewer address (how cams
-  viewers reach the proxy; hidden on phones). A missing address shows a muted
-  "–". The dashboard labels the same address "GUI" and marks it the same way.
+- Docs: a runbook for removing a cams viewer.
+- Moves page: while a move is open on the chosen source or target, **Start move** is disabled and says why, with a link to that move (#130). It used to stay active and only show an error after a click.
+

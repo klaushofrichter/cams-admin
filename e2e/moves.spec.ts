@@ -270,6 +270,30 @@ test('start a move from the Moves page', async ({ page }, info) => {
   await expect.poll(() => reloads).toBeGreaterThan(0);
 });
 
+// One move per proxy (#130): once a move is open, the form says so instead of inviting a click.
+test('Start move is disabled, with the reason, while a move is open on the proxy', async ({ page }, info) => {
+  let posted: any = null;
+  await page.route('**/api/v1/moves', async (route) => {
+    if (route.request().method() === 'POST') {
+      posted = route.request().postDataJSON();
+      return route.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ commandId: 'cmd_x', fixed: [] }) });
+    }
+    if (!posted) return route.fallback();
+    const res = await route.fetch();
+    const body = await res.json();
+    const open = { id: 'mv_open', phase: 'copying', endedAt: null, createdAt: 1, reason: null, camera: { id: posted.cameraId, name: 'Porch' }, source: { id: posted.sourceProxyId, name: 'Old proxy' }, target: { id: posted.targetProxyId, name: 'New proxy' }, bytesDone: 0, bytesTotal: 1 };
+    await route.fulfill({ response: res, json: { ...body, items: [open, ...body.items] } });
+  });
+  const { b } = await startForm(page, info, 'mb');
+  await page.getByTestId('start-move-target').selectOption(b.id);
+  await expect(page.getByTestId('start-move-blocked')).toHaveCount(0);
+  await page.getByTestId('start-move-submit').click();
+  await expect(page.getByTestId('start-move-blocked')).toContainText('A move is open on Old proxy');
+  await expect(page.getByTestId('start-move-submit')).toBeDisabled();
+  await expect(page.getByTestId('start-move-submit')).toHaveAttribute('title', /A move is open on Old proxy/);
+  await expect(page.getByTestId('start-move-show')).toBeVisible();
+});
+
 test('a double click on Start move sends one request, the button busy until it settles', async ({ page }, info) => {
   let posts = 0;
   let release: () => void = () => {};
