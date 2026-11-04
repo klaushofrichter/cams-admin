@@ -23,7 +23,7 @@ export const HELD_PROXY_FIELDS = ['proxyUrl', 'caFingerprints', 'proxyTlsServern
 export const CAMS_ID_PATTERN = '^[a-z0-9][a-z0-9-]{0,31}$';
 export const REVISION_PATTERN = '^r:[0-9a-f]{16}$';
 
-export const CAMS_SCHEMA_NAMES = ['enroll-request', 'enroll-response', 'snapshot', 'tokens-request', 'tokens-response', 'retire-request', 'retire-response', 'report-request', 'report-response', 'error'] as const;
+export const CAMS_SCHEMA_NAMES = ['enroll-request', 'enroll-response', 'snapshot', 'tokens-request', 'tokens-response', 'retire-request', 'retire-response', 'report-request', 'report-response', 'fleet-response', 'error'] as const;
 
 export function buildCamsSchemas(mode: Mode): Record<string, S> {
   const strict = mode === 'strict';
@@ -92,6 +92,30 @@ export function buildCamsSchemas(mode: Mode): Record<string, S> {
   }, ['v', 'mode'], ['heldProxies']);
   const reportResponse = all({ changed: bool, revision });
 
+  // --- one account's fleet, for its admins' MCP tools (read only, never a token, key or fingerprint) ---
+  const place = nullable(all({ url: str(512), scope: en(['loopback', 'private', 'public']), note: nullable(str(120)) }));
+  const fleetProxy = all({
+    name: str(32), displayName: str(), state: en(['pending', 'never-connected', 'online', 'offline', 'stopped', 'rejected', 'revoked']), version: nullable(str(64)),
+    ok: nullable(bool), problemCount: nullable(int()), reportedAt: nullable(int()), gui: place,
+    problems: arr(all({ id: nullable(str(64)), label: nullable(str(120)), text: nullable(str(240)), camera: nullable(camsId) }), 20),
+    cameras: arr(all({ id: camsId, name: str(), online: nullable(bool) }), 256),
+  });
+  const heldCamera = all({ camera: camsId, fields: arr(en(TRUST_FIELDS), TRUST_FIELDS.length, { minItems: 1 }) });
+  const fleetViewer = all({
+    name: str(32), displayName: str(), thisViewer: bool, address: place, held: arr(heldCamera, 50), keptOld: arr(heldCamera, 50),
+    heldProxies: arr(all({ proxy: str(), fields: arr(en(HELD_PROXY_FIELDS), HELD_PROXY_FIELDS.length, { minItems: 1 }) }), 50), heldTotal: int(),
+  });
+  const fleetMove = all({
+    id: id('mv'), camera: nullable(camsId), cameraName: nullable(str()), source: nullable(str()), target: nullable(str()), phase: str(32), reason: nullable(str(64)),
+    bytesTotal: nullable(int()), bytesDone: nullable(int()), rateBps: nullable({ type: 'number', minimum: 0 }), etaS: nullable({ type: 'number', minimum: 0 }),
+    chunks: all({ pending: int(), copied: int(), verified: int(), skipped: int(), failed: int(), abandoned: int() }),
+    createdAt: int(), updatedAt: int(), endedAt: nullable(int()),
+  });
+  const fleetResponse = all({
+    v: { const: 1 }, type: { const: 'cams-fleet' }, accountId: id('acc'), generatedAt: int(),
+    proxies: arr(fleetProxy, 64), notRouted: int(), viewers: arr(fleetViewer, 32), moves: arr(fleetMove, 50),
+  });
+
   // --- enrollment and errors -----------------------------------------------------
   const enrollRequest = obj({ v: { const: 1 }, code: str(64), publicKey: b64(100), proof: b64(100), camsVersion: str(64) }, ['v', 'code', 'publicKey', 'proof']);
   const enrollResponse = all({
@@ -110,6 +134,7 @@ export function buildCamsSchemas(mode: Mode): Record<string, S> {
     'retire-response': { title: 'POST /cams/v1/tokens/:tokenId/retire 200 answer', ...retireResponse },
     'report-request': { title: 'POST /cams/v1/report request', ...reportRequest },
     'report-response': { title: 'POST /cams/v1/report 200 answer', ...reportResponse },
+    'fleet-response': { title: 'GET /cams/v1/accounts/:accountId/fleet 200 answer', ...fleetResponse },
     error: { title: 'any /cams/v1 error answer', ...error },
   };
   const base = strict ? BASE + 'strict/' : BASE;
@@ -167,6 +192,25 @@ function unsignedSnapshot(kind: 'two-accounts' | 'empty'): Record<string, unknow
   };
 }
 
+const fleet = () => ({
+  v: 1, type: 'cams-fleet', accountId: IDS.home, generatedAt: NOW, notRouted: 1,
+  proxies: [{
+    name: 'pi', displayName: 'Pi', state: 'online', version: '2026.10.07.1', ok: false, problemCount: 1, reportedAt: NOW,
+    gui: { url: 'http://10.20.30.40:8480/', scope: 'private', note: 'Local network address: only reachable from inside that network.' },
+    problems: [{ id: 'disk', label: 'Disk', text: '91% full', camera: null }, { id: 'stream', label: 'Stream', text: 'not connected', camera: 'cam1' }],
+    cameras: [{ id: 'cam1', name: 'Backyard', online: true }],
+  }],
+  viewers: [{
+    name: 'cluster', displayName: 'Cluster', thisViewer: true, address: { url: 'https://cams.example.net/', scope: 'public', note: null },
+    held: [{ camera: 'cam1', fields: ['host'] }], keptOld: [], heldProxies: [{ proxy: 'Pi', fields: ['proxyUrl'] }], heldTotal: 2,
+  }],
+  moves: [{
+    id: 'mv_0123456789ABCDEFGHJK', camera: 'cam2', cameraName: 'Driveway', source: 'Pi', target: 'Cluster', phase: 'copying', reason: null,
+    bytesTotal: 1000, bytesDone: 400, rateBps: 100, etaS: 6, chunks: { pending: 1, copied: 0, verified: 2, skipped: 0, failed: 0, abandoned: 0 },
+    createdAt: NOW - 60_000, updatedAt: NOW, endedAt: null,
+  }],
+});
+
 const report = (mode: 'shadow' | 'cams-admin') => ({
   v: 1, mode, version: '2026.10.07.1', appliedRevision: 'r:0123456789abcdef', cacheVerifiedAt: NOW, lastPullAt: NOW,
   held: mode === 'cams-admin' ? [{ accountId: IDS.home, camsId: 'cam1', fields: ['host'] }] : [],
@@ -217,6 +261,10 @@ export function camsFixtures(): Record<string, unknown> {
     'invalid-snapshot-unsigned': invalid('snapshot', two, 'no sig'),
     'invalid-tokens-request-upper-hex': invalid('tokens-request', { ...tokensReq, hash: 'sha256:' + 'A'.repeat(64) }, 'the hash is lower-case hex'),
     'invalid-report-value-in-items': invalid('report-request', longItems, 'a shadow item over 200 characters (a value, not a name)'),
+    'valid-fleet-response': valid('fleet-response', fleet(), "one account's fleet: only that account, never a token, key or fingerprint"),
+    'invalid-fleet-fingerprint': invalid('fleet-response', { ...fleet(), proxies: fleet().proxies.map((p) => ({ ...p, caFingerprints: ['SHA256:' + 'A1'.repeat(32)] })) }, 'a proxy with its CA fingerprints: never in a fleet answer'),
+    'invalid-fleet-other-accounts': invalid('fleet-response', { ...fleet(), viewers: fleet().viewers.map((v) => ({ ...v, accounts: [IDS.beta] })) }, 'a viewer naming the accounts it serves: never in a fleet answer'),
+    'drift-fleet-new-field': drift('fleet-response', { ...fleet(), newThing: 1 }, 'run time ignores an unknown field; strict refuses: add it to the contract first'),
     'drift-snapshot-new-field': drift('snapshot', withCamera({ newThing: 1 }), 'run time ignores an unknown field; strict refuses: add it to the contract first'),
   };
 }
@@ -245,6 +293,7 @@ export function camsVectors(): Record<string, unknown> {
       req('GET', '/cams/v1/config', ''),
       req('POST', '/cams/v1/tokens', JSON.stringify({ v: 1, proxyId: IDS.pi, kind: 'client', hash: 'sha256:' + '0'.repeat(63) + '1' })),
       req('POST', '/cams/v1/report', JSON.stringify(report('cams-admin'))),
+      req('GET', `/cams/v1/accounts/${IDS.home}/fleet`, ''),
     ],
     responses: [
       res(200, JSON.stringify(signedSnap)),

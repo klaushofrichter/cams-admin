@@ -127,6 +127,11 @@ It will run at `cams-admin.skylar.technology`. Phase 1 is specified in
   time, nonces remembered 10 minutes, 60 requests a minute per instance, a
   global budget for failed signatures); every answer is signed by
   cams-admin's key, errors included.
+- **One account's fleet** (`GET /cams/v1/accounts/:accountId/fleet`): read only,
+  for the admin tools of cams' MCP; `403 not_served` for any account the
+  instance doesn't serve. That account's routed proxies, the viewers serving it
+  (held changes of this account only) and its moves; never another account, a
+  token, a key or a fingerprint.
 - **The snapshot** (`GET /cams/v1/config`, with an ETag) carries the served
   accounts' users and roles, proxies (at the instance's route URL) and
   cameras, and the ids and states of the tokens the instance holds. It is

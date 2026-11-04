@@ -62,6 +62,7 @@ import camsRetireRequest from '../contract/cams-v1/retire-request.schema.json';
 import camsRetireResponse from '../contract/cams-v1/retire-response.schema.json';
 import camsReportRequest from '../contract/cams-v1/report-request.schema.json';
 import camsReportResponse from '../contract/cams-v1/report-response.schema.json';
+import camsFleetResponse from '../contract/cams-v1/fleet-response.schema.json';
 import camsError from '../contract/cams-v1/error.schema.json';
 import summarySchema from '../contract/v1/health-summary.schema.json';
 import truncatedSchema from '../contract/v1/health-summary-truncated.schema.json';
@@ -184,12 +185,12 @@ export function validateSummary(s: unknown, truncated: boolean): SummaryVerdict 
 }
 
 // --- cams-v1 (the cams service API), lenient, at run time ---------------------
-export const CAMS_SCHEMAS = ['enroll-request', 'enroll-response', 'snapshot', 'tokens-request', 'tokens-response', 'retire-request', 'retire-response', 'report-request', 'report-response', 'error'] as const;
+export const CAMS_SCHEMAS = ['enroll-request', 'enroll-response', 'snapshot', 'tokens-request', 'tokens-response', 'retire-request', 'retire-response', 'report-request', 'report-response', 'fleet-response', 'error'] as const;
 export type CamsSchema = (typeof CAMS_SCHEMAS)[number];
 const vCams: Record<CamsSchema, ValidateFunction> = {
   'enroll-request': compile(camsEnrollRequest), 'enroll-response': compile(camsEnrollResponse), snapshot: compile(camsSnapshot),
   'tokens-request': compile(camsTokensRequest), 'tokens-response': compile(camsTokensResponse), 'retire-request': compile(camsRetireRequest),
-  'retire-response': compile(camsRetireResponse), 'report-request': compile(camsReportRequest), 'report-response': compile(camsReportResponse), error: compile(camsError),
+  'retire-response': compile(camsRetireResponse), 'report-request': compile(camsReportRequest), 'report-response': compile(camsReportResponse), 'fleet-response': compile(camsFleetResponse), error: compile(camsError),
 };
 export function validateCams(name: CamsSchema, value: unknown): { ok: true } | { ok: false; detail: string } {
   const v = vCams[name];
