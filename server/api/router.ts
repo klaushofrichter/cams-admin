@@ -491,7 +491,7 @@ export function dashboard(d: ApiDeps) {
       if (v.state === 'online') proxiesOnline++;
       if (v.state === 'online' && (v.problemCount ?? 0) > 0) problems += v.problemCount ?? 0;
       const prof = d.status.row(px.id)?.reported?.profile ?? null;
-      return { id: px.id, name: px.name, displayName: px.displayName, runsOn: px.runsOn, profile: prof && { set: prof.set, held: prof.held, cameras: prof.cameras }, homeUrl: homeUrlOf(px), state: v.state, connected: v.connected, lastHeartbeatAt: v.lastHeartbeatAt, ok: v.ok, problemCount: v.problemCount, version: v.version, pin: v.pin, skewMs: v.skewMs, skewProblem: v.skewProblem, stale: v.stale, unreadable: v.unreadable, cameras: v.cameras, commands: v.commands, allow: v.allow, reconcile: rec };
+      return { id: px.id, name: px.name, displayName: px.displayName, runsOn: px.runsOn, profile: prof && { set: prof.set, held: prof.held, cameras: prof.cameras }, homeUrl: homeUrlOf(px), adminUiUrl: px.adminUiUrl, state: v.state, connected: v.connected, lastHeartbeatAt: v.lastHeartbeatAt, ok: v.ok, problemCount: v.problemCount, version: v.version, pin: v.pin, skewMs: v.skewMs, skewProblem: v.skewProblem, stale: v.stale, unreadable: v.unreadable, cameras: v.cameras, commands: v.commands, allow: v.allow, reconcile: rec };
     });
     const camRows = accCams.map((c) => {
       const px = pxs.find((x) => x.id === c.proxyId);

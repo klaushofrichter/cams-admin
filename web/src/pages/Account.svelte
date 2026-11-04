@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { addressInfo } from '../lib/address';
   import { keepEdits } from '../lib/edits';
   import { onMount } from 'svelte';
   import { api, errorText } from '../lib/api';
@@ -213,7 +214,8 @@
           <tbody>
             {#each proxies as p (p.id)}
               <tr data-testid="proxy-item-{p.name}">
-                <td><a href="#/accounts/{accountId}/proxies/{p.id}" data-testid="proxy-open-{p.name}">{p.displayName}</a> <span class="mono muted">{p.name}</span></td>
+                <td><a href="#/accounts/{accountId}/proxies/{p.id}" data-testid="proxy-open-{p.name}">{p.displayName}</a> <span class="mono muted">{p.name}</span>
+                  {#if addressInfo(p.adminUiUrl).href}<div><a class="mono" href={addressInfo(p.adminUiUrl).href} title={addressInfo(p.adminUiUrl).warning ?? undefined} target="_blank" rel="noopener noreferrer" data-testid="proxy-item-address-{p.name}">{p.adminUiUrl}</a></div>{/if}</td>
                 <td>{p.runsOn}{p.hostKind ? ` (${p.hostKind})` : ''}</td>
                 <td><StateChip state={p.status.state} /></td>
                 <td class="hide-phone mono">{p.url ?? ''}</td>

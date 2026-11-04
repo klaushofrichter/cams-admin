@@ -159,6 +159,20 @@ describe('the cams snapshot (GET /cams/v1/config)', () => {
     await s.api('PATCH', `/cams-instances/${cluster.id}`, { name: 'cluster', displayName: c.displayName, baseUrl: null, version: c.version + 1 });
   });
 
+  it('a proxy rename: its id, URL, pins, tokens and cameras stay; the snapshot says the new name and stays valid; the revision moves so cams pulls it', async () => {
+    const before = buildSnapshot(d, cluster.id);
+    const account = (x: typeof before) => x.accounts.find((y) => y.id === home.id)!;
+    const proxy = (x: typeof before) => account(x).proxies.find((y) => y.id === piProxy.id)!;
+    const cur = s.built.registry.getProxy(home.id, piProxy.id);
+    await s.api('PATCH', `/accounts/${home.id}/proxies/${piProxy.id}`, { name: 'garage', displayName: 'Garage', version: cur.version });
+    const after = buildSnapshot(d, cluster.id);
+    expect(proxy(after)).toEqual({ ...proxy(before), name: 'garage', displayName: 'Garage' });
+    expect(account(after).cameras).toEqual(account(before).cameras);
+    expect(after.revision).not.toBe(before.revision);
+    expect(strictCamsValidator('snapshot')(after), strictCamsErrors()).toBe(true);
+    await s.api('PATCH', `/accounts/${home.id}/proxies/${piProxy.id}`, { name: cur.name, displayName: cur.displayName, version: cur.version + 1 });
+  });
+
   it('a proxy moved between accounts takes its cameras out of the old account (no cross-account leak)', () => {
     const p = buildSnapshot(d, pi.id);
     expect(JSON.stringify(p)).not.toContain(b1.id);

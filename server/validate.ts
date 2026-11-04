@@ -141,9 +141,10 @@ export function proxyInput(raw: unknown, partial: boolean): Partial<ProxyFields>
     caFingerprints = b.caFingerprints.map((f) => normaliseFingerprint(f, 'caFingerprints'));
   }
   return shape({
-    name: str(b, 'name', { max: 32, re: PROXY_NAME_RE, required: !partial }),
-    displayName: str(b, 'displayName', { min: 1, max: 80, required: !partial }),
-    runsOn: oneOf(b, 'runsOn', RUNS_ON, !partial),
+    // An edit may leave these out, but not empty them: every proxy has them.
+    name: str(b, 'name', { max: 32, re: PROXY_NAME_RE, required: !partial || b.name !== undefined }),
+    displayName: str(b, 'displayName', { min: 1, max: 80, required: !partial || b.displayName !== undefined }),
+    runsOn: oneOf(b, 'runsOn', RUNS_ON, !partial || b.runsOn !== undefined),
     hostKind: oneOf(b, 'hostKind', HOST_KINDS),
     url: url(b, 'url'),
     adminUiUrl: url(b, 'adminUiUrl'),
