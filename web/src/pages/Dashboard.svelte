@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { addressInfo } from '../lib/address';
   import { onMount } from 'svelte';
   import { api } from '../lib/api';
   import { coalesced, live } from '../lib/live';
@@ -7,6 +6,7 @@
   import { commandsText } from '../lib/commands';
   import StateChip from '../components/StateChip.svelte';
   import Ago from '../components/Ago.svelte';
+  import ProxyGui from '../components/ProxyGui.svelte';
   import { clock } from '../lib/clock.svelte';
   import { instanceState, stateClass as camsClass, stateText as camsText } from '../lib/cams';
   import { moving } from '../lib/activeMoves.svelte';
@@ -127,11 +127,11 @@
         <div class="proxy" data-testid="proxy-row-{p.name}">
           <div class="row">
             <a href="#/accounts/{a.id}/proxies/{p.id}" data-testid="proxy-link-{p.name}"><b>{p.displayName}</b></a>
-            {#if addressInfo(p.adminUiUrl).href}<a class="mono" href={addressInfo(p.adminUiUrl).href} title={addressInfo(p.adminUiUrl).warning ?? undefined} target="_blank" rel="noopener noreferrer" data-testid="dash-proxy-address-{p.name}">{p.adminUiUrl}</a>{/if}
             <StateChip state={p.state} testid="proxy-state-{p.name}" />
             {#if p.stale}<span class="badge" data-testid="stale-{p.name}">stale</span>{/if}
             <span class="muted">heartbeat <Ago t={p.lastHeartbeatAt} testid="proxy-age-{p.name}" /></span>
             {#if p.version}<span class="muted mono hide-phone">{p.version}</span>{/if}
+            {#if p.adminUiUrl}<span class="row"><span class="muted">GUI</span><ProxyGui address={p.adminUiUrl} testid="dash-proxy-address-{p.name}" /></span>{/if}
             {#if p.state === 'online' && p.problemCount}<span class="badge bad" data-testid="problems-{p.name}">{p.problemCount} problem{p.problemCount === 1 ? '' : 's'}</span>{/if}
             {#if p.unreadable}<span class="badge bad">{p.unreadable}</span>{/if}
             {#if p.pin === 'mismatch'}<span class="badge bad" data-testid="badge-pin-{p.name}">pin mismatch</span>{/if}

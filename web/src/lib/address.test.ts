@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { addressInfo } from './address';
+import { addressInfo, addressMarker } from './address';
 
 const scope = (a: string) => addressInfo(a).scope;
 
@@ -49,5 +49,14 @@ describe('addressInfo: what becomes a link', () => {
   it('no address at all', () => {
     expect(addressInfo(null).href).toBeNull();
     expect(addressInfo(undefined).href).toBeNull();
+  });
+});
+
+describe('addressMarker: the compact form of the warning', () => {
+  it('marks exactly the addresses that warn', () => {
+    expect(addressMarker(addressInfo('http://garage.local:8480').scope)).toBe('LAN');
+    expect(addressMarker(addressInfo('http://127.0.0.1:8480').scope)).toBe('loopback');
+    expect(addressMarker(addressInfo('https://proxy.example.net').scope)).toBeNull();
+    expect(addressMarker(addressInfo(null).scope)).toBeNull();
   });
 });

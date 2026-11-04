@@ -92,6 +92,59 @@ test('a proxy page: GUI address link and warning, rename in the Registry form, e
   await expect(page.getByTestId(`dash-proxy-address-${renamed}`)).toHaveAttribute('href', 'https://proxy.example.net:8480/');
 });
 
+test('the Proxies table: labelled columns, readable host, GUI link with its reach marked, no overflow', async ({ page }, info) => {
+  const acc = await api(page, 'POST', '/accounts', { name: uniq(info, 'pxt'), displayName: 'Proxy table' });
+  const [lan, pub, bare] = [uniq(info, 'lan'), uniq(info, 'pub'), uniq(info, 'bare')];
+  const garage = await api(page, 'POST', `/accounts/${acc.id}/proxies`, { name: lan, displayName: 'Garage', runsOn: 'local-host', hostKind: 'pc', adminUiUrl: 'http://garage.local:8480', url: 'https://viewer-address-long-enough-to-wrap.proxy.example.net:8480' });
+  await api(page, 'POST', `/accounts/${acc.id}/proxies`, { name: pub, displayName: 'Hosted', runsOn: 'cloud', adminUiUrl: 'https://a-rather-long-gui-address-for-a-proxy.example.net:8480/gui' });
+  await api(page, 'POST', `/accounts/${acc.id}/proxies`, { name: bare, displayName: 'Bare', runsOn: 'cluster' });
+  await page.goto(`/#/accounts/${acc.id}/proxies`);
+  const phone = info.project.name === 'phone';
+
+  const heads = page.getByTestId(`proxy-item-${lan}`).locator('xpath=ancestor::table').locator('thead th');
+  await expect(heads).toHaveText(['Proxy', 'Host', 'State', 'Proxy GUI', 'Viewer address']);
+  await expect(page.getByTestId('proxy-viewer-head')).toHaveAttribute('title', 'How cams viewers reach this proxy');
+
+  await expect(page.getByTestId(`proxy-open-${lan}`)).toHaveAttribute('href', `#/accounts/${acc.id}/proxies/${garage.id}`);
+  await expect(page.getByTestId(`proxy-item-host-${lan}`)).toHaveText('This network · PC');
+  await expect(page.getByTestId(`proxy-item-host-${pub}`)).toHaveText('Cloud');
+  await expect(page.getByTestId(`proxy-item-host-${bare}`)).toHaveText('Cluster');
+
+  const gui = page.getByTestId(`proxy-item-address-${lan}`);
+  await expect(gui).toHaveAttribute('href', 'http://garage.local:8480/');
+  await expect(gui).toHaveAttribute('target', '_blank');
+  await expect(gui).toHaveAttribute('rel', 'noopener noreferrer');
+  const warning = 'Local network address: only reachable from inside that network.';
+  await expect(page.getByTestId(`proxy-item-address-${lan}-marker`)).toHaveText('LAN');
+  await expect(page.getByTestId(`proxy-item-address-${lan}-marker`)).toHaveAttribute('title', warning);
+  await expect(page.getByTestId(`proxy-item-address-${pub}`)).toHaveAttribute('href', /^https:/);
+  await expect(page.getByTestId(`proxy-item-address-${pub}-marker`)).toHaveCount(0);
+  await expect(page.getByTestId(`proxy-item-address-${bare}`)).toHaveText('–');
+  await expect(page.getByTestId(`proxy-item-address-${bare}`)).not.toHaveAttribute('href', /./);
+
+  const viewer = page.getByTestId(`proxy-item-viewer-${lan}`);
+  if (phone) {
+    await expect(viewer).toBeHidden();
+    await expect(page.getByTestId('proxy-viewer-head')).toBeHidden();
+  } else {
+    await expect(viewer).toHaveText('https://viewer-address-long-enough-to-wrap.proxy.example.net:8480');
+    await expect(viewer).toHaveAttribute('title', 'How cams viewers reach this proxy');
+    await expect(page.getByTestId(`proxy-item-viewer-${bare}`)).toHaveText('–');
+  }
+
+  // Neither the table nor the page scrolls sideways.
+  const overflow = await page.getByTestId(`proxy-item-${lan}`).evaluate((row) => {
+    const box = row.closest('.scroll-x')!;
+    return { table: box.scrollWidth - box.clientWidth, page: document.documentElement.scrollWidth - document.documentElement.clientWidth };
+  });
+  expect(overflow).toEqual({ table: 0, page: 0 });
+
+  await page.goto('/#/');
+  await expect(page.getByTestId(`dash-proxy-address-${lan}`)).toHaveAttribute('href', 'http://garage.local:8480/');
+  await expect(page.getByTestId(`dash-proxy-address-${lan}-marker`)).toHaveText('LAN');
+  await expect(page.getByTestId(`proxy-row-${bare}`).getByText('GUI', { exact: true })).toHaveCount(0);
+});
+
 test('create an account, users (duplicate refused here, allowed elsewhere), a proxy, a camera, a sim', async ({ page }, info) => {
   const a = uniq(info, 'acct');
   const b = uniq(info, 'other');
