@@ -5,5 +5,5 @@ then empties it on `main`.
 
 ## [Unreleased]
 
-- **Fleet answer for cams' assistant tools:** new read-only `GET /cams/v1/accounts/:accountId/fleet` for an enrolled cams instance, limited to an account it serves: that account's proxies, viewers and moves, never another account, a token, a key or a fingerprint. Contract cams-v1 gains `fleet-response`.
+- Contract v1: the health summary's item ids gain `camsAdmin` (cam-proxy's "cams-admin" item: the proxy's own connection here). A connected proxy reports it as ok; a proxy that has lost the connection can't report it here at all, it shows on the proxy's Status page and display. The lenient schema already took any id; the strict one now lists it.
 
