@@ -136,7 +136,8 @@ describe('last used survives a restart (saved with the 10-minute status snapshot
       // A newer use, saved by the shutdown flush; the restarted server reads it back.
       s.built.camsInstances.report(pi.id, { ...base, viewerTokens: [{ id: c.item.id, lastUsedAt: now }] }, now);
       s = await s.restart();
-      expect((await s.api('GET', `/viewer-tokens?account=${home.id}`)).items[0].lastUsedAt).toBe(now);
+      // Read from the new process's store (a fetch could reuse the old server's closed keep-alive socket).
+      expect(s.built.viewerTokens.list(home.id).items[0].lastUsedAt).toBe(now);
     } finally {
       await s.stop();
     }
