@@ -24,7 +24,7 @@ const issue = async (name: string, days?: number) => {
   return r.body as { token: string; item: { id: string; hashPrefix: string; state: string; expiresAt: number; createdAt: number } };
 };
 const auditOf = (action: string) => a.db.prepare('SELECT * FROM audit_log WHERE action = ? ORDER BY id').all(action) as { detail: string; outcome: string; target_id: string }[];
-const ROUTES = ['/diag', '/diag/proxies', '/diag/cams-instances', '/diag/cameras', '/diag/tokens', '/diag/ops-tokens', '/diag/moves', '/diag/audit'];
+const ROUTES = ['/diag', '/diag/proxies', '/diag/cams-instances', '/diag/cameras', '/diag/tokens', '/diag/ops-tokens', '/diag/viewer-tokens', '/diag/moves', '/diag/audit'];
 
 let acc: string, px: string, px2: string;
 beforeAll(() => {
@@ -266,6 +266,10 @@ describe('diagnostics answers', () => {
     a.db.prepare(`UPDATE cameras SET notes = ?, web_ui_note = ?`).run(MARK, MARK);
     a.db.prepare(`UPDATE accounts SET notes = ?`).run(MARK);
     a.db.prepare(`UPDATE cams_instances SET notes = ?`).run(MARK);
+    // A viewer token: its fingerprint (after the 8-hex prefix the list shows) and its ciphertext marked.
+    a.db.prepare(`INSERT INTO viewer_tokens (id, name, fingerprint, secret, days, created_at, created_by, updated_at, expires_at) VALUES ('vtk_GUARD000000000000000', 'guard', ?, ?, 7, 1, 'admin@example.com', 1, ?)`)
+      .run('sha256:00000000' + MARK.repeat(7), 'v1:' + MARK, Date.now() + 86400_000);
+    a.db.prepare(`INSERT INTO viewer_token_accounts (token_id, account_id) VALUES ('vtk_GUARD000000000000000', ?)`).run(acc);
     a.db.prepare(`UPDATE diag_tokens SET hash = 'sha256:' || ? || substr(hash, 16) WHERE name <> 'guard'`).run(MARK);
     const hash = (a.db.prepare(`SELECT hash FROM diag_tokens WHERE name = 'guard'`).get() as { hash: string }).hash;
     // The leak-prone sources filled: a proxy summary and its reported info, a cams report, a move with its secret columns.

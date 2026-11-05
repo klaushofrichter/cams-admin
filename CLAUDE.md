@@ -38,7 +38,9 @@ cam-sim). Spec: `docs/superpowers/specs/2026-10-06-cams-admin-phase1-design.md`.
   data (retention and size caps only up, `storage.*` local only).
 - **Tokens are shown once and stored only as SHA-256 hashes** (8 hex digits
   in views and audit details). Never log, store, audit or test with a real
-  token.
+  token. The one exception is viewer tokens (`cav_`, Klaus 2026-11-05):
+  kept AES-GCM encrypted so they can be copied any time, the key only in
+  `VIEWER_TOKEN_KEY_FILE`; viewers get only the fingerprint.
 - **e2e lock:** before any Playwright run in a shared scratchpad, take the
   lock the coordinator names (`mkdir …/e2e.lock`, retry every 30 s), `rmdir`
   after. Never kill processes by name pattern: stop only PIDs you started.

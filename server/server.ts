@@ -34,6 +34,8 @@ import { apiRouter, type BackupService } from './api/router';
 import { DiagTokens } from './diag/tokens';
 import { OpsTokens } from './ops/tokens';
 import { diagRouter } from './diag/router';
+import { ViewerTokens } from './viewerTokens/service';
+import { loadViewerKey } from './viewerTokens/crypto';
 import { loadSigningKey, type SigningKey } from './crypto/signingKey';
 import { createBackup } from './backup/service';
 import { log } from './log';
@@ -42,7 +44,7 @@ import { version } from './version';
 
 export interface Built {
   cfg: Config; clock: Clock; db: Db; audit: Audit; registry: Registry; live: LiveHub; status: StatusStore; hub: Hub; commands: Commands; moves: Moves; tokens: Tokens; actions: RemoteActions; config: ProxyConfig; enrollment: Enrollment; sessions: Sessions; backup: BackupService;
-  camsInstances: CamsInstances; camsAuth: CamsAuth; importer: Importer; signing: SigningKey; diag: DiagTokens; ops: OpsTokens; pins: ReportedPins;
+  camsInstances: CamsInstances; camsAuth: CamsAuth; importer: Importer; signing: SigningKey; diag: DiagTokens; ops: OpsTokens; pins: ReportedPins; viewerTokens: ViewerTokens;
   app: express.Express; http: Server; epochFile: string;
   tick(): void;
   writeRoutes(): string[];
@@ -99,13 +101,19 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
   // What was revoked stays revoked, whatever a restore brought back (review M5).
   const diag = new DiagTokens({ db, clock, audit, journal: (tokenId) => journal.append({ kind: 'diag-token', tokenId }, clock.now()) });
   const ops = new OpsTokens({ db, clock, audit, journal: (tokenId) => journal.append({ kind: 'ops-token', tokenId }, clock.now()) });
+  const viewerTokens = new ViewerTokens({ db, clock, audit, key: loadViewerKey(cfg.viewerTokenKeyFile), linkBase: cfg.viewerLinkUrl, journal: (e) => journal.append(e, clock.now()) });
+  const viewerEntries: Parameters<ViewerTokens['replay']>[0] = [];
   for (const r of journal.read()) {
     try {
-      if (r.kind === 'diag-token') diag.replay(r.tokenId);
+      if (r.kind === 'viewer-token') viewerEntries.push(r);
+      else if (r.kind === 'diag-token') diag.replay(r.tokenId);
       else if (r.kind === 'ops-token') ops.replay(r.tokenId);
       else camsInstances.replay(r, (t) => tokens.revokeReplayed(t));
     } catch (e) { log.error({ err: e }, 'cams_revocation_replay_failed'); }
   }
+  camsInstances.onViewerTokenUse = (instanceId, used) => viewerTokens.noteUse(
+    (db.prepare('SELECT account_id FROM cams_instance_accounts WHERE instance_id = ?').all(instanceId) as { account_id: string }[]).map((x) => x.account_id), used);
+  try { viewerTokens.replay(viewerEntries); } catch (e) { log.error({ err: e }, 'viewer_token_replay_failed'); }
   const importer = new Importer({ db, clock, audit, registry, instances: camsInstances, status });
   const camsAuth = new CamsAuth({ db, clock, audit, instances: camsInstances, signingKey: signing.key, limits: cfg.limits, log });
   const camsEnrollment = new CamsEnrollment({ db, clock, audit, instances: camsInstances, cfg, serverKeys: [signing.publicKeyB64], serverKeyFingerprints: [signing.fingerprint] });
@@ -128,7 +136,7 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
   app.use(camsRouter({ globalPerMin: cfg.limits.camsGlobalPerMin, enrollment: camsEnrollment, auth: camsAuth, signingKey: signing.key, testRoutes: cfg.nodeEnv === 'test', instances: camsInstances, tokens, fleet: { db, clock, instances: camsInstances, registry, status, moves }, snapshot: { db, clock, signingKey: signing.key, signingFingerprint: signing.fingerprint } }));
   app.use(cookieParser());
   app.use(authRoutes({ cfg, sessions, audit, clock, live }));
-  const apiDeps = { db, clock, cfg, audit, registry, enrollment, hub, status, live, sessions, backup, commands, tokens, config, actions, moves, camsInstances, serverKeyFingerprints: [signing.fingerprint], importer, diag, ops, pins };
+  const apiDeps = { db, clock, cfg, audit, registry, enrollment, hub, status, live, sessions, backup, commands, tokens, config, actions, moves, camsInstances, serverKeyFingerprints: [signing.fingerprint], importer, diag, ops, pins, viewerTokens };
   const api = apiRouter(apiDeps);
   // Before the API: the diagnostics token opens this router only (issue #45).
   app.use('/api/v1/diag', diagRouter(apiDeps));
@@ -176,7 +184,7 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
   let closed = false;
 
   return {
-    cfg, clock, db, audit, registry, live, status, hub, commands, moves, tokens, actions, config, enrollment, sessions, backup, camsInstances, camsAuth, importer, signing, diag, ops, pins, app, http, epochFile, tick,
+    cfg, clock, db, audit, registry, live, status, hub, commands, moves, tokens, actions, config, enrollment, sessions, backup, camsInstances, camsAuth, importer, signing, diag, ops, pins, viewerTokens, app, http, epochFile, tick,
     writeRoutes() {
       const out: string[] = [];
       for (const layer of (api as unknown as { stack: { route?: { path: string; methods: Record<string, boolean> } }[] }).stack) {

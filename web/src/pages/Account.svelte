@@ -9,6 +9,7 @@
   import ProxyGui from '../components/ProxyGui.svelte';
   import Confirm from '../components/Confirm.svelte';
   import ImportPanel from '../components/ImportPanel.svelte';
+  import ViewerTokens from '../components/ViewerTokens.svelte';
 
   let { accountId, tab }: { accountId: string; tab: string } = $props();
 
@@ -210,6 +211,7 @@
         <button class="btn primary" data-testid="user-add">Add user</button>
       </form>
       {#if uError}<p class="error" data-testid="user-error">{uError}</p>{/if}
+      <ViewerTokens {accountId} />
     {:else if tab === 'proxies'}
       <div class="scroll-x">
         <table>

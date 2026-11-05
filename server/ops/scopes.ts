@@ -16,6 +16,8 @@ export const OPS_ROUTES: readonly OpsRoute[] = [
   { method: 'POST', path: `${tokenBase}/:tokenId/revoke`, scope: 'tokens' },
   { method: 'POST', path: `${tokenBase}/:tokenId/retire`, scope: 'tokens' },
   { method: 'POST', path: `${tokenBase}/apply`, scope: 'tokens' },
+  // A viewer token's revoke (incident response from a script); creating, copying and the rest stay with a sign-in.
+  { method: 'POST', path: '/viewer-tokens/:tokenId/revoke', scope: 'tokens' },
   { method: 'PUT', path: '/cams-instances/:instanceId/routes/:proxyId', scope: 'routes' },
   { method: 'DELETE', path: '/cams-instances/:instanceId/routes/:proxyId', scope: 'routes' },
   { method: 'DELETE', path: '/cams-instances/:instanceId/camera-overrides/:cameraId', scope: 'routes' },

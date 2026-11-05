@@ -53,6 +53,7 @@ A signed-in sysadmin's browser session works on the same routes.
 | `/diag/cameras` | registry fields (cams id, model, proxy, proxy camera id, host, protocol, TLS name), move id, online |
 | `/diag/cameras/:camsId/onboarding?accountId=` | one camera's onboarding: `{camera, proxy, proxyCameraId, online, reported, detail, viewers, ready, missing, optional}`; `:camsId` is a cams id or a registry id (`cam_…`); a cams id in several accounts is 409 `ambiguous` unless `accountId` names one; 409 `no_proxy` for a camera without a proxy (see below) |
 | `/diag/tokens` | per proxy, its managed tokens: holder (cams instance id and name, or `manual`), label, kind, state, on proxy, created, retire/revoke times, last token command; no hash |
+| `/diag/viewer-tokens` | viewer tokens (design 2026-11-05): name, account ids, state, days, valid until, last used, fingerprint prefix; never the token, its fingerprint or its ciphertext; e-mails masked |
 | `/diag/moves?accountId=` | the newest 100 moves with chunk counts |
 | `/diag/moves/precheck?source=&target=&camera=` | every precheck rule in order with ok, reason and a detail; `camera` is the registry id or the cams id |
 | `/diag/audit?account=&actorType=&action=&from=&to=&limit=&cursor=` | the audit log, as on the Audit page, with every e-mail address replaced by `email:` + 8 hex of its SHA-256 |
@@ -159,6 +160,7 @@ actor `ops-token:<8 hex>`. The list is also at `/diag/ops-tokens`.
 | `tokens` | `POST /accounts/:accountId/proxies/:proxyId/tokens/:tokenId/revoke` |
 | `tokens` | `POST /accounts/:accountId/proxies/:proxyId/tokens/:tokenId/retire` |
 | `tokens` | `POST /accounts/:accountId/proxies/:proxyId/tokens/apply` |
+| `tokens` | `POST /viewer-tokens/:tokenId/revoke` (a viewer token; nothing else of viewer tokens takes a token) |
 | `routes` | `PUT /cams-instances/:instanceId/routes/:proxyId` |
 | `routes` | `DELETE /cams-instances/:instanceId/routes/:proxyId` |
 | `routes` | `DELETE /cams-instances/:instanceId/camera-overrides/:cameraId` |
