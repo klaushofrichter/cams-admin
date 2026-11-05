@@ -564,4 +564,35 @@ INSERT INTO ops_tokens_m19 (id, name, hash, created_at, created_by, expires_at, 
 DROP TABLE ops_tokens;
 ALTER TABLE ops_tokens_m19 RENAME TO ops_tokens;
 `),
+  // 20: viewer tokens (design 2026-11-05-viewer-tokens-design.md): kept readable for "Copy"
+  // (secret = AES-256-GCM ciphertext; the key is never in the database), the viewers get the
+  // fingerprint. Every change of what a snapshot says bumps the linked accounts' config_revision, so
+  // their viewers pull; last_used_at is not in a snapshot and moves no revision.
+  (db) => db.exec(`
+CREATE TABLE viewer_tokens (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 64),
+  fingerprint TEXT NOT NULL UNIQUE CHECK (fingerprint GLOB 'sha256:*' AND length(fingerprint) = 71),
+  secret TEXT NOT NULL,
+  days INTEGER NOT NULL CHECK (days IN (1, 7, 30, 90, 365)),
+  created_at INTEGER NOT NULL, created_by TEXT NOT NULL,
+  updated_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  revoked_at INTEGER, revoked_by TEXT,
+  -- The newest use a viewer reported: written only with the 10-minute status snapshot (the write budget).
+  last_used_at INTEGER,
+  version INTEGER NOT NULL DEFAULT 1
+) STRICT;
+CREATE TABLE viewer_token_accounts (
+  token_id TEXT NOT NULL REFERENCES viewer_tokens(id) ON DELETE CASCADE,
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  PRIMARY KEY (token_id, account_id)
+) STRICT;
+CREATE INDEX viewer_token_accounts_account ON viewer_token_accounts(account_id);
+CREATE TRIGGER rev_vta_ins AFTER INSERT ON viewer_token_accounts BEGIN UPDATE config_revision SET revision = revision + 1 WHERE account_id = NEW.account_id; END;
+CREATE TRIGGER rev_vta_del AFTER DELETE ON viewer_token_accounts BEGIN UPDATE config_revision SET revision = revision + 1 WHERE account_id = OLD.account_id; END;
+CREATE TRIGGER rev_vt_upd AFTER UPDATE OF name, fingerprint, expires_at, revoked_at ON viewer_tokens BEGIN
+  UPDATE config_revision SET revision = revision + 1 WHERE account_id IN (SELECT account_id FROM viewer_token_accounts WHERE token_id = NEW.id);
+END;
+`),
 ];

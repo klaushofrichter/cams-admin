@@ -1,3 +1,4 @@
+import { viewerLinkBase } from './viewerTokens/crypto';
 import { dirname } from 'path';
 
 // Everything the process reads from its environment (spec §14). Secrets
@@ -36,6 +37,9 @@ export interface Config {
   dbFile: string;
   dataDir: string;
   signingKeyFile: string | null;
+  // Viewer tokens (design 2026-11-05): the AES key file (null: create and copy are off) and the sign-in link's origin.
+  viewerTokenKeyFile: string | null;
+  viewerLinkUrl: string;
   heartbeatS: number;
   offlineAfterS: number;
   pingS: number;
@@ -138,6 +142,8 @@ export function loadConfig(env: Env = process.env): Config {
     dbFile,
     dataDir: dirname(dbFile),
     signingKeyFile: env.SERVER_SIGNING_KEY_FILE || null,
+    viewerTokenKeyFile: env.VIEWER_TOKEN_KEY_FILE || null,
+    viewerLinkUrl: viewerLinkBase(env.VIEWER_LINK_URL),
     heartbeatS,
     offlineAfterS: num(env, 'OFFLINE_AFTER_S', 90, 1, 3600),
     pingS: num(env, 'PING_S', 25, 1, 55),

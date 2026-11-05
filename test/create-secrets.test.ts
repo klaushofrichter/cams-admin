@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { execFileSync, spawn } from 'child_process';
-import { chmodSync, existsSync, mkdirSync, readdirSync, writeFileSync } from 'fs';
+import { execFileSync, spawn, spawnSync } from 'child_process';
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpDir } from './helpers/tmp';
 
@@ -61,4 +61,50 @@ describe('create-secrets.sh', () => {
     expect(r.left).toEqual([]);
     expect(r.applied).toBe(false);
   });
+
+  // --only viewer-key: a missing key file is made (mode 600, 32 bytes as base64), never printed, and applied as key=.
+  async function viewerKey(fileContent: string | null, mode = 0o600) {
+    const base = join(dir, `vk-${++n}`);
+    const bin = join(base, 'bin');
+    mkdirSync(bin, { recursive: true });
+    const args = join(base, 'kubectl-args');
+    writeFileSync(join(bin, 'kubectl'), `#!/bin/sh\necho "$@" >> '${args}'\ncat >/dev/null\n`);
+    chmodSync(join(bin, 'kubectl'), 0o755);
+    const key = join(base, 'viewer.key');
+    if (fileContent !== null) { writeFileSync(key, fileContent); chmodSync(key, mode); }
+    const env = join(base, 'env');
+    writeFileSync(env, `KUBE_CONTEXT=fake\nVIEWER_TOKEN_KEY_FILE_LOCAL=${key}\n`);
+    chmodSync(env, 0o600);
+    const r = spawnSync('bash', ['scripts/create-secrets.sh', '--env-file', env, '--only', 'viewer-key'], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}` }, encoding: 'utf8' });
+    return { out: r.stdout + r.stderr, status: r.status, key, kubectl: existsSync(args) ? readFileSync(args, 'utf8') : '' };
+  }
+
+  it('--only viewer-key: makes a missing key file (mode 600, 32 bytes as base64), names it, never prints it, applies key=', async () => {
+    const r = await viewerKey(null);
+    expect(r.status).toBe(0);
+    const value = readFileSync(r.key, 'utf8').trim();
+    expect(Buffer.from(value, 'base64')).toHaveLength(32);
+    expect(statSync(r.key).mode & 0o777).toBe(0o600);
+    expect(r.out).toContain(r.key);
+    expect(r.out).not.toContain(value);
+    expect(r.kubectl).toContain('create secret generic cams-admin-viewer-token-key');
+    expect(r.kubectl).toContain(`--from-file=key=${r.key}`);
+  });
+
+  it('--only viewer-key: an existing key is used as it is; a malformed or group-readable one is refused before kubectl', async () => {
+    const good = (await viewerKey(Buffer.alloc(32, 7).toString('base64') + '\n'));
+    expect(good.status).toBe(0);
+    expect(readFileSync(good.key, 'utf8').trim()).toBe(Buffer.alloc(32, 7).toString('base64'));
+    const short = await viewerKey(Buffer.alloc(16, 7).toString('base64'));
+    expect(short.status).not.toBe(0);
+    expect(short.out).toContain('32 bytes');
+    expect(short.kubectl).toBe('');
+    const empty = await viewerKey('');
+    expect(empty.status).not.toBe(0);
+    const open = await viewerKey(Buffer.alloc(32, 7).toString('base64'), 0o644);
+    expect(open.status).not.toBe(0);
+    expect(open.out).toContain('chmod 600');
+    expect(open.kubectl).toBe('');
+  });
 });
+

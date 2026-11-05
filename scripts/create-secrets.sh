@@ -5,7 +5,7 @@
 # Run by Klaus or with his OK, after kube-setup created the namespaces
 # (docs/kube-setup-request.md). Never from tests or CI.
 #
-#   scripts/create-secrets.sh [--only check|oauth|signing|backup|runner|github|all]
+#   scripts/create-secrets.sh [--only check|oauth|signing|viewer-key|backup|runner|github|all]
 #                             [--dry-run] [--env-file PATH]
 #
 #   check (default): every key present and well-formed; nothing is applied.
@@ -14,6 +14,11 @@
 #   signing: Secret cams-admin-signing: signing-key.pem from the file named
 #            by SIGNING_KEY_PEM_FILE (made by scripts/gen-signing-key.ts;
 #            mode 600). Replacing it means re-enrolling every proxy.
+#   viewer-key: Secret cams-admin-viewer-token-key: key = 32 random bytes as
+#            base64 from the file named by VIEWER_TOKEN_KEY_FILE_LOCAL (mode
+#            600). A missing file is made first (openssl rand -base64 32, mode
+#            600) and its path printed: keep that copy, the key is never
+#            printed. Replacing it makes existing viewer tokens uncopyable.
 #   backup:  Secret cams-admin-backup: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,
 #            AWS_REGION, BACKUP_S3_BUCKET, BACKUP_S3_PREFIX (app + Litestream)
 #   runner:  Secret runner-pat (key token) in cams-admin-runner: CAMSADMIN_GITHUB_PAT
@@ -30,12 +35,12 @@ while [ $# -gt 0 ]; do
     --dry-run) DRY=1 ;;
     --only) ONLY="$2"; shift ;;
     --env-file) ENV_FILE="$2"; shift ;;
-    -h|--help) sed -n '2,24p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,29p' "$0"; exit 0 ;;
     *) echo "create-secrets: unknown option $1" >&2; exit 2 ;;
   esac
   shift
 done
-case "$ONLY" in check|oauth|signing|backup|runner|github|all) ;; *) echo "create-secrets: bad --only $ONLY" >&2; exit 2 ;; esac
+case "$ONLY" in check|oauth|signing|viewer-key|backup|runner|github|all) ;; *) echo "create-secrets: bad --only $ONLY" >&2; exit 2 ;; esac
 die() { echo "create-secrets: $*" >&2; exit 1; }
 
 # Temp files hold secret values. They live in one private directory (mode 700)
@@ -85,9 +90,9 @@ DEFAULT_REDIRECT=https://cams-admin.skylar.technology/auth/callback
 BACKUP=(AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_REGION BACKUP_S3_BUCKET BACKUP_S3_PREFIX)
 
 # Check first, so a bad line stops the run before anything changes.
-for k in "${OAUTH[@]}" GOOGLE_REDIRECT_URI "${BACKUP[@]}" SIGNING_KEY_PEM_FILE CAMSADMIN_GITHUB_PAT GITHUB_KUBE_SETUP_PAT KUBE_CONTEXT; do get "$k" >/dev/null; stop_if_signalled; done
+for k in "${OAUTH[@]}" GOOGLE_REDIRECT_URI "${BACKUP[@]}" SIGNING_KEY_PEM_FILE VIEWER_TOKEN_KEY_FILE_LOCAL CAMSADMIN_GITHUB_PAT GITHUB_KUBE_SETUP_PAT KUBE_CONTEXT; do get "$k" >/dev/null; stop_if_signalled; done
 if [ "$ONLY" = check ]; then
-  for k in "${OAUTH[@]}" "${BACKUP[@]}" SIGNING_KEY_PEM_FILE CAMSADMIN_GITHUB_PAT GITHUB_KUBE_SETUP_PAT KUBE_CONTEXT; do
+  for k in "${OAUTH[@]}" "${BACKUP[@]}" SIGNING_KEY_PEM_FILE VIEWER_TOKEN_KEY_FILE_LOCAL CAMSADMIN_GITHUB_PAT GITHUB_KUBE_SETUP_PAT KUBE_CONTEXT; do
     if [ -n "$(get "$k")" ]; then echo "ok      $k"; else echo "missing $k"; fi
   done
   [ -n "$(get GOOGLE_REDIRECT_URI)" ] || echo "default GOOGLE_REDIRECT_URI ($DEFAULT_REDIRECT)"
@@ -128,6 +133,31 @@ if want signing; then
   say "apply secret cams-admin-signing in cams-admin (context $CONTEXT): signing-key.pem"
   if [ "$DRY" = 0 ]; then
     kubectl --context "$CONTEXT" -n cams-admin create secret generic cams-admin-signing --from-file=signing-key.pem="$pem" --dry-run=client -o yaml | kubectl --context "$CONTEXT" apply -f - >/dev/null
+  fi
+fi
+if want viewer-key; then
+  need VIEWER_TOKEN_KEY_FILE_LOCAL
+  vk=$(get VIEWER_TOKEN_KEY_FILE_LOCAL)
+  [ -n "$CONTEXT" ] || die "set KUBE_CONTEXT in $ENV_FILE"
+  if [ ! -e "$vk" ]; then
+    say "create $vk: 32 random bytes as base64, mode 600 (keep this copy; the key is not printed)"
+    if [ "$DRY" = 0 ]; then
+      [ -d "$(dirname -- "$vk")" ] || die "the folder of VIEWER_TOKEN_KEY_FILE_LOCAL does not exist"
+      (umask 077; openssl rand -base64 32 > "$vk") || die "openssl rand failed"
+      chmod 600 "$vk"
+    fi
+  fi
+  if [ "$DRY" = 0 ] || [ -e "$vk" ]; then
+    [ -f "$vk" ] || die "VIEWER_TOKEN_KEY_FILE_LOCAL does not name a file"
+    vm=$(stat -c '%a' "$vk" 2>/dev/null || stat -f '%Lp' "$vk")
+    case "$vm" in *00) ;; *) die "the viewer token key file is readable by others (chmod 600)" ;; esac
+    # 32 bytes once decoded; checked without printing it.
+    [ "$(tr -d ' \r\n' < "$vk" | openssl base64 -d -A 2>/dev/null | wc -c | tr -d ' ')" = 32 ] || die "the viewer token key file must hold 32 bytes as base64 (openssl rand -base64 32)"
+  fi
+  stop_if_signalled
+  say "apply secret cams-admin-viewer-token-key in cams-admin (context $CONTEXT): key"
+  if [ "$DRY" = 0 ]; then
+    kubectl --context "$CONTEXT" -n cams-admin create secret generic cams-admin-viewer-token-key --from-file=key="$vk" --dry-run=client -o yaml | kubectl --context "$CONTEXT" apply -f - >/dev/null
   fi
 fi
 if want runner; then

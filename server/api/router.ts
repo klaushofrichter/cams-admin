@@ -38,6 +38,7 @@ import { readEpoch } from '../db/open';
 import { bodyErrors } from '../bodyErrors';
 import type { DiagTokens } from '../diag/tokens';
 import type { OpsTokens } from '../ops/tokens';
+import type { CopyWhat, ViewerTokens } from '../viewerTokens/service';
 
 export interface ManualBackup { at: number; ok: boolean; litestream: { ok: boolean; status?: string; error?: string }; snapshot: { ok: boolean; key?: string; bytes?: number; error?: string } }
 export interface BackupState {
@@ -54,7 +55,7 @@ export interface BackupService { state(): BackupState; backupNow(actor: string):
 
 export interface ApiDeps {
   db: Db; clock: Clock; cfg: Config; audit: Audit; registry: Registry; enrollment: Enrollment; hub: Hub; status: StatusStore; live: LiveHub; sessions: Sessions; backup: BackupService;
-  commands: Commands; tokens: Tokens; camsInstances: CamsInstances; serverKeyFingerprints: string[]; importer: Importer; config: ProxyConfig; actions: RemoteActions; moves: Moves; diag: DiagTokens; ops: OpsTokens; pins: ReportedPins;
+  commands: Commands; tokens: Tokens; camsInstances: CamsInstances; serverKeyFingerprints: string[]; importer: Importer; config: ProxyConfig; actions: RemoteActions; moves: Moves; diag: DiagTokens; ops: OpsTokens; pins: ReportedPins; viewerTokens: ViewerTokens;
 }
 
 type H = (req: Request, res: Response) => unknown;
@@ -169,6 +170,30 @@ export function apiRouter(d: ApiDeps): express.Router {
   r.patch('/accounts/:accountId/users/:userId', h((req, res) => { const u = d.registry.updateUser(actor(res), p(req, 'accountId'), p(req, 'userId'), req.body); reg('user', u.id); return u; }));
   r.delete('/accounts/:accountId/users/:userId', h((req, res) => { d.registry.deleteUser(actor(res), p(req, 'accountId'), p(req, 'userId')); reg('user', p(req, 'userId')); }));
   r.get('/users', h((req) => ({ items: d.registry.usersByEmail(String(req.query.email ?? '')) })));
+
+  // --- viewer tokens (design 2026-11-05) ---------------------------------------------------
+  // Each change bumps its accounts' revision (migration 20's triggers); the viewers pull it within about a minute.
+  r.get('/viewer-tokens', h((req) => {
+    const acc = req.query.account;
+    if (acc !== undefined) d.registry.getAccount(String(acc));
+    return { ...d.viewerTokens.list(acc === undefined ? undefined : String(acc)), configured: d.viewerTokens.configured(), linkBase: d.cfg.viewerLinkUrl };
+  }));
+  r.post('/viewer-tokens', h((req, res) => {
+    created(res);
+    res.set('Cache-Control', 'no-store');
+    const out = d.viewerTokens.create(actor(res), req.body);
+    reg('viewer-token', out.item.id);
+    return out;
+  }));
+  r.post('/viewer-tokens/:tokenId/validity', h((req, res) => { const t = d.viewerTokens.setValidity(actor(res), p(req, 'tokenId'), req.body); reg('viewer-token', t.id); return t; }));
+  r.post('/viewer-tokens/:tokenId/revoke', h((req, res) => { const t = d.viewerTokens.revoke(actor(res), p(req, 'tokenId')); reg('viewer-token', t.id); return t; }));
+  r.put('/viewer-tokens/:tokenId/accounts', h((req, res) => { const t = d.viewerTokens.setAccounts(actor(res), p(req, 'tokenId'), req.body); reg('viewer-token', t.id); return t; }));
+  // The token itself (Copy, Copy link, the QR window): a session only, audited, never cached.
+  r.post('/viewer-tokens/:tokenId/copy', h((req, res) => {
+    res.set('Cache-Control', 'no-store');
+    return d.viewerTokens.reveal(actor(res), p(req, 'tokenId'), req.body?.what as CopyWhat);
+  }));
+  r.delete('/viewer-tokens/:tokenId', h((req, res) => { d.viewerTokens.remove(actor(res), p(req, 'tokenId')); reg('viewer-token', p(req, 'tokenId')); }));
 
   // --- proxies --------------------------------------------------------------------------
   const proxyBase = '/accounts/:accountId/proxies/:proxyId';

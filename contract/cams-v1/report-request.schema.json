@@ -234,6 +234,27 @@
         ]
       },
       "maxItems": 50
+    },
+    "viewerTokens": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^vtk_[0-9A-HJKMNP-TV-Z]{20}$"
+          },
+          "lastUsedAt": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "id",
+          "lastUsedAt"
+        ]
+      },
+      "maxItems": 200
     }
   },
   "required": [

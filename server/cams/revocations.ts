@@ -1,5 +1,6 @@
 import { appendFileSync, chmodSync, existsSync, readFileSync } from 'fs';
 import type { Logger } from '../log';
+import type { ViewerTokenJournal } from '../viewerTokens/service';
 
 // Security review 2026-10-07 (M5): what was revoked for cams instances is
 // also written to a journal next to the database (one JSON line each, mode
@@ -14,7 +15,9 @@ export type Revocation =
   // Diagnostics tokens (issue #45) share the journal.
   | { at: number; kind: 'diag-token'; tokenId: string }
   // Operations tokens share it too.
-  | { at: number; kind: 'ops-token'; tokenId: string };
+  | { at: number; kind: 'ops-token'; tokenId: string }
+  // Viewer tokens: revoked, deleted, or a new expiry (the newest per token wins at start).
+  | ({ at: number } & ViewerTokenJournal);
 export type RevocationEntry = Revocation extends infer R ? (R extends Revocation ? Omit<R, 'at'> : never) : never;
 
 export class RevocationJournal {
