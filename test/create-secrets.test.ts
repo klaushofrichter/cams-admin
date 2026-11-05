@@ -63,19 +63,20 @@ describe('create-secrets.sh', () => {
   });
 
   // --only viewer-key: a missing key file is made (mode 600, 32 bytes as base64), never printed, and applied as key=.
-  async function viewerKey(fileContent: string | null, mode = 0o600) {
+  async function viewerKey(fileContent: string | null, mode = 0o600, o: { exists?: boolean; rotate?: boolean } = {}) {
     const base = join(dir, `vk-${++n}`);
     const bin = join(base, 'bin');
     mkdirSync(bin, { recursive: true });
     const args = join(base, 'kubectl-args');
-    writeFileSync(join(bin, 'kubectl'), `#!/bin/sh\necho "$@" >> '${args}'\ncat >/dev/null\n`);
+    // `get secret`: found or not, as the test says; anything else just records its arguments.
+    writeFileSync(join(bin, 'kubectl'), `#!/bin/sh\necho "$@" >> '${args}'\ncase "$*" in *" get secret "*) exit ${o.exists ? 0 : 1};; esac\ncat >/dev/null\n`);
     chmodSync(join(bin, 'kubectl'), 0o755);
     const key = join(base, 'viewer.key');
     if (fileContent !== null) { writeFileSync(key, fileContent); chmodSync(key, mode); }
     const env = join(base, 'env');
     writeFileSync(env, `KUBE_CONTEXT=fake\nVIEWER_TOKEN_KEY_FILE_LOCAL=${key}\n`);
     chmodSync(env, 0o600);
-    const r = spawnSync('bash', ['scripts/create-secrets.sh', '--env-file', env, '--only', 'viewer-key'], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}` }, encoding: 'utf8' });
+    const r = spawnSync('bash', ['scripts/create-secrets.sh', '--env-file', env, '--only', 'viewer-key', ...(o.rotate ? ['--rotate-viewer-key'] : [])], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}` }, encoding: 'utf8' });
     return { out: r.stdout + r.stderr, status: r.status, key, kubectl: existsSync(args) ? readFileSync(args, 'utf8') : '' };
   }
 
@@ -98,13 +99,28 @@ describe('create-secrets.sh', () => {
     const short = await viewerKey(Buffer.alloc(16, 7).toString('base64'));
     expect(short.status).not.toBe(0);
     expect(short.out).toContain('32 bytes');
-    expect(short.kubectl).toBe('');
+    expect(short.kubectl).not.toContain('create secret');
     const empty = await viewerKey('');
     expect(empty.status).not.toBe(0);
     const open = await viewerKey(Buffer.alloc(32, 7).toString('base64'), 0o644);
     expect(open.status).not.toBe(0);
     expect(open.out).toContain('chmod 600');
-    expect(open.kubectl).toBe('');
+    expect(open.kubectl).not.toContain('create secret');
+  });
+
+  // Replacing the key makes every viewer token uncopyable (kube-setup, 2026-11-05):
+  // an existing Secret is kept unless the rotation is asked for by name.
+  it('--only viewer-key: an existing Secret is kept, and no key file is made; --rotate-viewer-key replaces it', async () => {
+    const kept = await viewerKey(null, 0o600, { exists: true });
+    expect(kept.status).toBe(0);
+    expect(kept.out).toContain('already exists');
+    expect(kept.out).toContain('--rotate-viewer-key');
+    expect(kept.kubectl).not.toContain('create secret');
+    expect(existsSync(kept.key)).toBe(false);
+    const rotated = await viewerKey(null, 0o600, { exists: true, rotate: true });
+    expect(rotated.status).toBe(0);
+    expect(rotated.kubectl).toContain('create secret generic cams-admin-viewer-token-key');
+    expect(existsSync(rotated.key)).toBe(true);
   });
 });
 
