@@ -9,6 +9,7 @@
 import { fingerprint, keyFromSeed, privateFromB64, sign, signEnvelope, signedText, camsRequestText, camsResponseText, sha256hex } from '../server/crypto/ed25519';
 import { jcs } from '../server/crypto/jcs';
 import { SITE_PATTERN } from './build';
+import { DEFAULT_VIEWER_LINK_URL, viewerFingerprint, viewerLink } from '../server/viewerTokens/crypto';
 
 export type Mode = 'lenient' | 'strict';
 type S = Record<string, unknown>;
@@ -66,7 +67,11 @@ export function buildCamsSchemas(mode: Mode): Record<string, S> {
     move: nullable(all({ id: id('mv'), sourceProxyId: id('prx'), targetProxyId: id('prx'), expiresAt: int() })),
   };
   const camera = obj(cameraProps, Object.keys(cameraProps).filter((k) => k !== 'moveId' && k !== 'move'));
-  const account = all({ id: id('acc'), name: str(32), displayName: str(), revision: int(0), users: arr(user, 500), proxies: arr(proxy, 64), cameras: arr(camera, 256) });
+  // Viewer tokens (snapshot format 4, design 2026-11-05): the tokens valid at generatedAt that include this account, sorted by id.
+  // Only the fingerprint, never the token. Required in strict, optional at run time (an older snapshot, an older cams).
+  const viewerToken = all({ id: id('vtk'), name: str(64), fingerprint: hash, expiresAt: int() });
+  const accountProps: Record<string, S> = { id: id('acc'), name: str(32), displayName: str(), revision: int(0), users: arr(user, 500), proxies: arr(proxy, 64), cameras: arr(camera, 256), viewerTokens: arr(viewerToken, 64) };
+  const account = obj(accountProps, Object.keys(accountProps).filter((k) => k !== 'viewerTokens'));
   const snapshot = all({
     v: { const: 1 }, type: { const: 'cams-config' }, instance: all({ id: id('cms'), name: str(32), rotateBefore: nullable(int()) }),
     revision, generatedAt: int(), accounts: arr(account, 64), sig: { type: 'string', pattern: '^[A-Za-z0-9+/]{86}==$' },
@@ -89,7 +94,9 @@ export function buildCamsSchemas(mode: Mode): Record<string, S> {
     shadow: nullable(all({ accountId: nullable(id('acc')), differences: int(), items: arr(str(200), 20) })),
     tokens: all({ managed: int(), pending: int(), legacy: int() }),
     problems: arr(obj({ code: str(64), accountId: nullable(id('acc')), detail: str(200) }, ['code'], ['accountId']), 50),
-  }, ['v', 'mode'], ['heldProxies']);
+    // Viewer tokens: the newest use per token since the last report (ids and times only). Optional in strict too.
+    viewerTokens: arr(all({ id: id('vtk'), lastUsedAt: int() }), 200),
+  }, ['v', 'mode'], ['heldProxies', 'viewerTokens']);
   const reportResponse = all({ changed: bool, revision });
 
   // --- one account's fleet, for its admins' MCP tools (read only, never a token, key or fingerprint) ---
@@ -153,7 +160,10 @@ export const IDS = {
   pi: fixedId('prx', 1), cluster: fixedId('prx', 2), b1: fixedId('prx', 3),
   cam1: fixedId('cam', 1), cam2: fixedId('cam', 2), bcam1: fixedId('cam', 3),
   tok1: fixedId('tok', 1), tok2: fixedId('tok', 2),
+  vtk1: fixedId('vtk', 1),
 };
+// A fixed fake viewer token (never a real one): cams reproduces its fingerprint and link.
+export const VIEWER_TOKEN_VECTOR = 'cav_TestOnlyNotARealToken0';
 
 function keys() {
   return Object.fromEntries(Object.entries(SEEDS).map(([n, seedHex]) => {
@@ -167,12 +177,14 @@ function unsignedSnapshot(kind: 'two-accounts' | 'empty'): Record<string, unknow
     {
       id: IDS.beta, name: 'beta', displayName: 'Beta', revision: 3,
       users: [{ email: 'klaus@example.org', role: 'viewer', disabled: false }],
+      viewerTokens: [],
       proxies: [{ id: IDS.b1, name: 'b1', displayName: 'Beta proxy', url: 'https://beta.example.net:8480', adminUiUrl: null, tlsServername: null, caFingerprints: [], tokens: [], site: null }],
       cameras: [{ id: IDS.bcam1, camsId: 'cam1', name: 'Gate', proxyId: IDS.b1, proxyCameraId: 'cam1', host: 'from-proxy', protocol: 'https', tlsServername: null, cameraUser: 'cams', webUiUrl: null, webUiNote: null, moveId: null, move: null }],
     },
     {
       id: IDS.home, name: 'home', displayName: 'Home', revision: 17,
       users: [{ email: 'klaus@example.org', role: 'admin', disabled: false }, { email: 'viewer@example.org', role: 'viewer', disabled: false }],
+      viewerTokens: [{ id: IDS.vtk1, name: 'Kitchen tablet', fingerprint: viewerFingerprint(VIEWER_TOKEN_VECTOR), expiresAt: NOW + 7 * 86_400_000 }],
       proxies: [
         { id: IDS.cluster, name: 'cluster', displayName: 'Cluster', url: 'https://proxy.example.net:8480', adminUiUrl: null, tlsServername: 'proxy.example.net',
           caFingerprints: ['SHA256:' + 'A1'.repeat(32)], tokens: [{ id: IDS.tok2, kind: 'admin', state: 'retiring', retireAt: NOW + 86_400_000 }], site: 'garage' },
@@ -219,6 +231,7 @@ const report = (mode: 'shadow' | 'cams-admin') => ({
   shadow: mode === 'shadow' ? { accountId: IDS.home, differences: 1, items: ['cam2: tlsServername'] } : null,
   tokens: { managed: 2, pending: 0, legacy: mode === 'shadow' ? 2 : 0 },
   problems: mode === 'shadow' ? [] : [{ code: 'snapshot_invalid', accountId: IDS.beta, detail: 'camera 3: protocol' }],
+  viewerTokens: mode === 'cams-admin' ? [{ id: IDS.vtk1, lastUsedAt: NOW - 60_000 }] : undefined,
 });
 
 export function camsFixtures(): Record<string, unknown> {
@@ -230,6 +243,11 @@ export function camsFixtures(): Record<string, unknown> {
   const invalid = (schema: string, message: unknown, note: string) => ({ $note: note, schema, $expect: { strict: 'invalid' }, message });
   const drift = (schema: string, message: unknown, note: string) => ({ $note: note, schema, $expect: { runtime: 'accepted', strict: 'invalid' }, message });
   const two = unsignedSnapshot('two-accounts');
+  const withAccount = (patch: (a: Record<string, unknown>) => void) => {
+    const s = structuredClone(two) as { accounts: Record<string, unknown>[] };
+    patch(s.accounts[1]);
+    return signed(s as unknown as Record<string, unknown>);
+  };
   const withCamera = (patch: Record<string, unknown>) => {
     const s = structuredClone(two) as { accounts: { cameras: Record<string, unknown>[] }[] };
     Object.assign(s.accounts[1].cameras[0], patch);
@@ -266,6 +284,9 @@ export function camsFixtures(): Record<string, unknown> {
     'invalid-fleet-other-accounts': invalid('fleet-response', { ...fleet(), viewers: fleet().viewers.map((v) => ({ ...v, accounts: [IDS.beta] })) }, 'a viewer naming the accounts it serves: never in a fleet answer'),
     'drift-fleet-new-field': drift('fleet-response', { ...fleet(), newThing: 1 }, 'run time ignores an unknown field; strict refuses: add it to the contract first'),
     'drift-snapshot-new-field': drift('snapshot', withCamera({ newThing: 1 }), 'run time ignores an unknown field; strict refuses: add it to the contract first'),
+    'drift-snapshot-no-viewer-tokens': drift('snapshot', withAccount((a) => { delete a.viewerTokens; }), 'a snapshot from before format 4: run time reads it as no viewer tokens; strict refuses'),
+    'invalid-snapshot-viewer-token-secret': invalid('snapshot', withAccount((a) => { (a.viewerTokens as Record<string, unknown>[])[0].token = VIEWER_TOKEN_VECTOR; }), 'a viewer token with the token itself: never in a snapshot (only its fingerprint)'),
+    'invalid-snapshot-viewer-token-fingerprint': invalid('snapshot', withAccount((a) => { (a.viewerTokens as Record<string, unknown>[])[0].fingerprint = 'sha256:' + 'A'.repeat(64); }), 'the fingerprint is sha256: + 64 lower-case hex'),
   };
 }
 
@@ -301,5 +322,7 @@ export function camsVectors(): Record<string, unknown> {
       res(401, JSON.stringify({ error: 'clock_skew', serverTime: NOW })),
     ],
     snapshots: [{ snapshot: snap, text: jcs(snap), sig: signedSnap.sig }],
+    // Viewer tokens: fingerprint = "sha256:" + hex(SHA-256("cams-viewer-token v1\n" + token)); the link carries the token in the fragment only.
+    viewerTokens: [{ token: VIEWER_TOKEN_VECTOR, fingerprint: viewerFingerprint(VIEWER_TOKEN_VECTOR), link: viewerLink(DEFAULT_VIEWER_LINK_URL, VIEWER_TOKEN_VECTOR) }],
   };
 }

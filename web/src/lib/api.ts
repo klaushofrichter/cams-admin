@@ -34,6 +34,7 @@ export const errorText = (e: unknown): string => {
     duplicate_email: 'This email is already a user of this account.', duplicate_name: 'That name is taken.', duplicate_cams_id: 'That cams id is taken in this account.',
     duplicate_proxy_camera: 'That proxy camera id is already registered.', conflict: 'Someone changed this meanwhile: reload and try again.', confirm_mismatch: 'The typed name does not match.',
     invalid: 'Not valid', fleet_busy: "Another proxy's disruptive action is still running: wait until it reports back (at most 15 min).", rate_limited: 'Too many requests: wait a moment.', proxy_blocked: 'The proxy is blocked.', not_reported: 'The proxy does not report that camera.',
+    viewer_tokens_unconfigured: 'Tokens are off: this server has no viewer token key.', too_many_tokens: 'Too many valid tokens for an account (at most 50).', token_unreadable: "This token can't be read with the server's key: make a new one.",
   };
   if (e.code === 'fleet_limit') return `Fleet limit: at most 3 disruptive actions in 10 minutes across all proxies${e.field ? `; ${e.field}` : ''}.`;
   const message = (e.body as { message?: unknown } | undefined)?.message;

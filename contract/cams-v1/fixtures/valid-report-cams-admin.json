@@ -40,6 +40,12 @@
         "accountId": "acc_00000000000000000002",
         "detail": "camera 3: protocol"
       }
+    ],
+    "viewerTokens": [
+      {
+        "id": "vtk_00000000000000000001",
+        "lastUsedAt": 1791273540000
+      }
     ]
   }
 }

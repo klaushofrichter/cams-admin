@@ -75,6 +75,8 @@ export class StatusStore {
   private dirty = new Set<string>();
   private lastFlush: number;
   private snapshotMs: number;
+  // Other in-memory values that ride on this snapshot's transaction (viewer tokens' last use), never a write of their own.
+  onSnapshot?: { pending(): boolean; write(): void };
   constructor(private d: { db: Db; clock: Clock; registry: Registry; live: LiveHub; offlineAfterMs: number; snapshotMs?: number }) {
     this.snapshotMs = d.snapshotMs ?? 600_000;
     this.lastFlush = d.clock.now();
@@ -114,7 +116,8 @@ export class StatusStore {
     this.lastFlush = now;
     const rows = [...this.dirty].map((id) => this.mem.get(id)).filter((r): r is StatusRow => !!r && this.exists(r.proxyId));
     this.dirty.clear();
-    if (rows.length) tx(this.d.db, () => { for (const r of rows) this.persist(r); });
+    const extra = this.onSnapshot?.pending() ?? false;
+    if (rows.length || extra) tx(this.d.db, () => { for (const r of rows) this.persist(r); if (extra) this.onSnapshot?.write(); });
   }
 
   private exists(proxyId: string): boolean {

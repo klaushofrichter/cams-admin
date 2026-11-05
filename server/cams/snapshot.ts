@@ -21,7 +21,9 @@ export interface SnapCamera {
   // The attestation that this camera's move was made by cams-admin (format 3); null when none applies.
   move: SnapMove | null;
 }
-export interface SnapAccount { id: string; name: string; displayName: string; revision: number; users: SnapUser[]; proxies: SnapProxy[]; cameras: SnapCamera[] }
+// A viewer token (format 4): its fingerprint only, never the token or its ciphertext.
+export interface SnapViewerToken { id: string; name: string; fingerprint: string; expiresAt: number }
+export interface SnapAccount { id: string; name: string; displayName: string; revision: number; users: SnapUser[]; proxies: SnapProxy[]; cameras: SnapCamera[]; viewerTokens: SnapViewerToken[] }
 export interface Snapshot { v: 1; type: 'cams-config'; instance: { id: string; name: string; rotateBefore: number | null }; revision: string; generatedAt: number; accounts: SnapAccount[]; sig: string }
 export interface SnapshotDeps { db: Db; clock: Clock; signingKey: KeyObject; signingFingerprint: string }
 
@@ -34,8 +36,8 @@ type Row = Record<string, unknown>;
 // "r:" + 16 hex over the instance, its version, its served accounts' revisions and the signing key (R4-1).
 // The snapshot's format: bump it whenever the server changes what a snapshot
 // says for the same database rows, so the revision moves and every cams
-// fetches the new one instead of getting 304 on the old (2: #48; 3: cameras[].move).
-export const SNAPSHOT_FORMAT = 3;
+// fetches the new one instead of getting 304 on the old (2: #48; 3: cameras[].move; 4: accounts[].viewerTokens).
+export const SNAPSHOT_FORMAT = 4;
 // How long a move attestation holds, from the switch-over.
 export const MOVE_ATTEST_MS = 24 * 3600_000;
 // Phases in which the camera is on the target for good (a cancel puts it back).
@@ -98,7 +100,11 @@ export function buildSnapshot(d: SnapshotDeps, instanceId: string): Snapshot {
           : null,
         };
       });
-    return { id: accountId, name: a.name as string, displayName: a.display_name as string, revision: a.revision as number, users, proxies, cameras };
+    // Viewer tokens valid now (not revoked, not expired); an expiry needs no new revision: cams checks expiresAt itself.
+    const viewerTokens = (q(`SELECT t.id, t.name, t.fingerprint, t.expires_at FROM viewer_tokens t JOIN viewer_token_accounts v ON v.token_id = t.id
+      WHERE v.account_id = ? AND t.revoked_at IS NULL AND t.expires_at > ? ORDER BY t.id`).all(accountId, now) as Row[])
+      .map((t): SnapViewerToken => ({ id: t.id as string, name: t.name as string, fingerprint: t.fingerprint as string, expiresAt: t.expires_at as number }));
+    return { id: accountId, name: a.name as string, displayName: a.display_name as string, revision: a.revision as number, users, proxies, cameras, viewerTokens };
   });
   const unsigned = {
     v: 1 as const, type: 'cams-config' as const, instance: { id: inst.id as string, name: inst.name as string, rotateBefore: inst.rotate_before as number | null },

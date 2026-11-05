@@ -27,6 +27,7 @@
             "disabled": false
           }
         ],
+        "viewerTokens": [],
         "proxies": [
           {
             "id": "prx_00000000000000000003",
@@ -73,6 +74,14 @@
             "email": "viewer@example.org",
             "role": "viewer",
             "disabled": false
+          }
+        ],
+        "viewerTokens": [
+          {
+            "id": "vtk_00000000000000000001",
+            "name": "Kitchen tablet",
+            "fingerprint": "sha256:b52c1d2ea773eb3f8e6c89ffe85a793d0e6f283216c84b751a2cc452de29eb15",
+            "expiresAt": 1791878400000
           }
         ],
         "proxies": [
@@ -154,6 +163,6 @@
         ]
       }
     ],
-    "sig": "57IUOiz2lFQBaMopG8BdMByqgnDUSW7v6Cv5Ux0s0eDMZj+A21UV2pd5+gm6MN85Uvr26sEG6C5NbK0VRt0VCw=="
+    "sig": "KAbso3874JQ2Gm2i6FH7c477KCcp9X9CJW+NyKVmfQY3deANksLoHNxedzrCeMjUO774nr6tm6FhQ1CNAhEHDg=="
   }
 }

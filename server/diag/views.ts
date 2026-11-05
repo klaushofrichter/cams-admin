@@ -137,6 +137,17 @@ export function diagTokens(d: ApiDeps) {
 
 // The operations tokens: name, scopes, state and age. Only the 8-hex hash
 // prefix, never the token; e-mail addresses are masked like the audit's.
+// Viewer tokens: never the token, its fingerprint or its ciphertext; e-mails masked.
+export function diagViewerTokens(d: ApiDeps) {
+  return {
+    configured: d.viewerTokens.configured(),
+    items: d.viewerTokens.list().items.map((t) => ({
+      id: t.id, name: mask(t.name), accountIds: t.accounts.map((a) => a.id), state: t.state, days: t.days, fingerprintPrefix: t.fingerprintPrefix,
+      createdAt: t.createdAt, createdBy: mask(t.createdBy), expiresAt: t.expiresAt, revokedAt: t.revokedAt, revokedBy: t.revokedBy === null ? null : mask(t.revokedBy), lastUsedAt: t.lastUsedAt,
+    })),
+  };
+}
+
 export function diagOpsTokens(d: ApiDeps) {
   return {
     items: d.ops.list().items.map((t) => ({

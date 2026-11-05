@@ -1,7 +1,7 @@
 // Prepares a fresh data folder and a signing key, then runs the built server
 // (playwright.config.ts webServer).
-import { mkdirSync, rmSync, writeFileSync } from 'fs';
-import { generateKeyPairSync } from 'crypto';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'fs';
+import { generateKeyPairSync, randomBytes } from 'crypto';
 import { spawn } from 'child_process';
 import { join } from 'path';
 import { DATA, ENV } from './env';
@@ -13,8 +13,11 @@ const dir = process.argv.includes('--data') ? process.argv[process.argv.indexOf(
 mkdirSync(dir, { recursive: true });
 const key = join(dir, 'signing.pem');
 writeFileSync(key, generateKeyPairSync('ed25519').privateKey.export({ type: 'pkcs8', format: 'pem' }), { mode: 0o600 });
+// The viewer tokens' encryption key (design 2026-11-05), kept across restarts of the same data folder.
+const viewerKey = join(dir, 'viewer-token.key');
+if (!existsSync(viewerKey)) writeFileSync(viewerKey, randomBytes(32).toString('base64'), { mode: 0o600 });
 const port = process.argv.includes('--port') ? process.argv[process.argv.indexOf('--port') + 1] : ENV.PORT;
-const env = { ...process.env, ...ENV, PORT: port, PUBLIC_URL: `http://localhost:${port}`, DB_FILE: join(dir, 'cams-admin.db'), SERVER_SIGNING_KEY_FILE: key };
+const env = { ...process.env, ...ENV, PORT: port, PUBLIC_URL: `http://localhost:${port}`, DB_FILE: join(dir, 'cams-admin.db'), SERVER_SIGNING_KEY_FILE: key, VIEWER_TOKEN_KEY_FILE: viewerKey };
 const child = spawn(process.execPath, [join(__dirname, '../dist/server/server.js')], { env, stdio: 'inherit' });
 const stop = () => child.kill('SIGTERM');
 process.on('SIGTERM', stop);

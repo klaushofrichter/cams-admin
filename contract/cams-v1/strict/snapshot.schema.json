@@ -403,6 +403,38 @@
               "additionalProperties": false
             },
             "maxItems": 256
+          },
+          "viewerTokens": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^vtk_[0-9A-HJKMNP-TV-Z]{20}$"
+                },
+                "name": {
+                  "type": "string",
+                  "maxLength": 64
+                },
+                "fingerprint": {
+                  "type": "string",
+                  "pattern": "^sha256:[0-9a-f]{64}$"
+                },
+                "expiresAt": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "fingerprint",
+                "expiresAt"
+              ],
+              "additionalProperties": false
+            },
+            "maxItems": 64
           }
         },
         "required": [
@@ -412,7 +444,8 @@
           "revision",
           "users",
           "proxies",
-          "cameras"
+          "cameras",
+          "viewerTokens"
         ],
         "additionalProperties": false
       },

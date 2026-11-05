@@ -1,4 +1,7 @@
 import { afterAll, describe, expect, it } from 'vitest';
+import { chmodSync, writeFileSync } from 'fs';
+import { randomBytes } from 'crypto';
+import { join } from 'path';
 import { tmpDir } from './helpers/tmp';
 import { testApp } from './helpers/app';
 import { makeProxyInfo, makeSummary } from '../test-client/summaries';
@@ -10,7 +13,11 @@ const P3_ALLOW = ['config.get', 'config.set', 'config.unset', 'config.rollback',
 // lists every write route; a write route missing from it fails the test.
 describe('audit completeness', () => {
   const dir = tmpDir();
-  const a = testApp(dir);
+  // A viewer token key, for the viewer token rows.
+  const keyFile = join(dir, 'viewer.key');
+  writeFileSync(keyFile, randomBytes(32).toString('base64'));
+  chmodSync(keyFile, 0o600);
+  const a = testApp(dir, { VIEWER_TOKEN_KEY_FILE: keyFile });
   afterAll(() => a.close());
   const count = () => (a.db.prepare('SELECT count(*) n FROM audit_log').get() as { n: number }).n;
   const ids: Record<string, string> = {};
@@ -82,6 +89,13 @@ describe('audit completeness', () => {
     // Operations tokens.
     ['post', '/ops-tokens', () => '/ops-tokens', () => ({ name: 'script', scopes: ['moves'], days: 1 }), 'ops-token-issue'],
     ['post', '/ops-tokens/:tokenId/revoke', () => `/ops-tokens/${ids.opt}/revoke`, () => ({}), 'ops-token-revoke'],
+    // Viewer tokens (design 2026-11-05).
+    ['post', '/viewer-tokens', () => '/viewer-tokens', () => ({ name: 'tablet', accountIds: [ids.acc] }), 'viewer-token-create'],
+    ['post', '/viewer-tokens/:tokenId/copy', () => `/viewer-tokens/${ids.vtk}/copy`, () => ({ what: 'link' }), 'viewer-token-copy'],
+    ['post', '/viewer-tokens/:tokenId/validity', () => `/viewer-tokens/${ids.vtk}/validity`, () => ({ days: 30 }), 'viewer-token-validity'],
+    ['put', '/viewer-tokens/:tokenId/accounts', () => `/viewer-tokens/${ids.vtk}/accounts`, () => ({ accountIds: [ids.acc], version: 2 }), 'viewer-token-accounts'],
+    ['post', '/viewer-tokens/:tokenId/revoke', () => `/viewer-tokens/${ids.vtk}/revoke`, () => ({}), 'viewer-token-revoke'],
+    ['delete', '/viewer-tokens/:tokenId', () => `/viewer-tokens/${ids.vtk}`, () => ({}), 'viewer-token-delete'],
     ['post', '/backup/now', () => '/backup/now', () => ({}), 'backup-now'],
     ['delete', '/accounts/:accountId', () => `/accounts/${ids.acc}`, () => ({ confirmName: 'home' }), 'account-delete'],
     // Last: it ends every session, this test's too.
@@ -100,6 +114,7 @@ describe('audit completeness', () => {
     // Ids for the next rows.
     if (action === 'account-create') ids.acc = r.body.id;
     if (action === 'user-create') ids.usr = r.body.id;
+    if (action === 'viewer-token-create') ids.vtk = r.body.item.id;
     if (action === 'proxy-create') {
       ids.prx = r.body.id;
     }

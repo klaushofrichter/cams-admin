@@ -78,9 +78,16 @@ describe('cams-v1 contract', () => {
   });
   it('no fixture or vector holds anything that looks like a token, a hash of one, or a password field', () => {
     // Only the token-hash requests may carry a hash, and only the "secret field" fixture a password.
-    const rest = fixtures.filter((f) => !/tokens-request|invalid-snapshot-secret-field/.test(f.name));
-    const all = JSON.stringify({ fixtures: rest, vectors: { ...vectors, requests: vectors.requests.filter((r) => !r.pathAndQuery.startsWith('/cams/v1/tokens')) } });
-    expect(all).not.toMatch(/"password"|"token"\s*:|sha256:[0-9a-f]{64}/);
+    // A viewer token's fingerprint is the one hash a snapshot carries, only as accounts[].viewerTokens[].fingerprint (design 2026-11-05).
+    const rest = fixtures.filter((f) => !/tokens-request|invalid-snapshot-secret-field|invalid-snapshot-viewer-token-secret/.test(f.name));
+    const { viewerTokens: viewerVectors, ...otherVectors } = vectors as typeof vectors & { viewerTokens: { fingerprint: string }[] };
+    const fp = viewerVectors[0].fingerprint;
+    const raw = JSON.stringify({ fixtures: rest, vectors: { ...otherVectors, requests: vectors.requests.filter((r) => !r.pathAndQuery.startsWith('/cams/v1/tokens')) } });
+    // Every place it appears is a viewerTokens entry's "fingerprint" (also inside the signed texts).
+    expect(raw.split(fp).length - 1).toBe(raw.split(`fingerprint\\":\\"${fp}`).length - 1 + raw.split(`"fingerprint":"${fp}`).length - 1);
+    const all = raw.split(fp).join('viewer-fingerprint');
+    expect(all).toContain('viewer-fingerprint');
+    expect(all).not.toMatch(/"password"|"token"\s*:|sha256:[0-9a-f]{64}|cav_/);
   });
   it('the vendored README carries the check order and the signed texts', () => {
     const md = readFileSync(join(ROOT, 'README.md'), 'utf8');

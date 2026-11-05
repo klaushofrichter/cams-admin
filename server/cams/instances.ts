@@ -94,6 +94,8 @@ function urlOrNull(v: unknown, field: string): string | null {
 
 export class CamsInstances {
   private liveState = new Map<string, CamsLive>();
+  // A report's viewer token uses (set by buildServer: ViewerTokens.noteUse for the accounts the instance serves).
+  onViewerTokenUse?: (instanceId: string, used: { id: string; lastUsedAt: number }[]) => void;
   constructor(private d: CamsInstancesDeps) {}
 
   private q(sql: string) {
@@ -491,7 +493,9 @@ export class CamsInstances {
   report(instanceId: string, report: unknown, now: number): { changed: boolean; revision: string } {
     const v = validateCams('report-request', report);
     if (!v.ok) throw new ApiError(400, 'invalid', fieldOf(v.detail));
-    const r = report as CamsReport;
+    // Viewer tokens' last use goes to memory (the write budget), never into the stored report.
+    const { viewerTokens: used, ...r } = report as CamsReport & { viewerTokens?: { id: string; lastUsedAt: number }[] };
+    if (used?.length) this.onViewerTokenUse?.(instanceId, used);
     const prev = this.live(instanceId);
     this.storeReport(instanceId, r, now);
     const zero = r.mode === 'shadow' && !!r.shadow && r.shadow.differences === 0;

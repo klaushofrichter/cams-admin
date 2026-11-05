@@ -33,6 +33,8 @@ export const AUDIT_ACTIONS = [
   'diag-token-issue', 'diag-token-revoke', 'diag-auth-refused',
   // Operations tokens: issued, revoked, a bearer token refused, and a valid one used outside its scopes (both throttled).
   'ops-token-issue', 'ops-token-revoke', 'ops-auth-refused', 'ops-scope-refused',
+  // Viewer tokens (design 2026-11-05): never the token, its full fingerprint or its ciphertext.
+  'viewer-token-create', 'viewer-token-validity', 'viewer-token-revoke', 'viewer-token-accounts', 'viewer-token-delete', 'viewer-token-copy',
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 const KNOWN = new Set<string>(AUDIT_ACTIONS);

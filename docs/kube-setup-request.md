@@ -108,6 +108,11 @@ Order as always: **commit, push, then apply.**
   - `cams-admin-oauth`: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`,
     `GOOGLE_REDIRECT_URI`, `ALLOWED_EMAILS`;
   - `cams-admin-signing`: `signing-key.pem` (Ed25519), mounted as a file;
+  - `cams-admin-viewer-token-key`: `key` (viewer tokens, design
+    `2026-11-05-viewer-tokens-design.md`), optional: an init container copies
+    it into the memory emptyDir `/etc/cams-admin/viewer`, and
+    `VIEWER_TOKEN_KEY_FILE=/etc/cams-admin/viewer/key`; a missing file turns
+    viewer tokens off;
   - `cams-admin-backup`: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
     `AWS_REGION`, `BACKUP_S3_BUCKET`, `BACKUP_S3_PREFIX` (used by both the app
     and the Litestream containers).
