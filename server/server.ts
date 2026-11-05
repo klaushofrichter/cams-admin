@@ -111,6 +111,7 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
       else camsInstances.replay(r, (t) => tokens.revokeReplayed(t));
     } catch (e) { log.error({ err: e }, 'cams_revocation_replay_failed'); }
   }
+  status.onSnapshot = { pending: () => viewerTokens.lastUsedPending(), write: () => viewerTokens.flushLastUsed() };
   camsInstances.onViewerTokenUse = (instanceId, used) => viewerTokens.noteUse(
     (db.prepare('SELECT account_id FROM cams_instance_accounts WHERE instance_id = ?').all(instanceId) as { account_id: string }[]).map((x) => x.account_id), used);
   try { viewerTokens.replay(viewerEntries); } catch (e) { log.error({ err: e }, 'viewer_token_replay_failed'); }

@@ -103,3 +103,42 @@ describe('viewer tokens in the snapshot', () => {
     await s.api('DELETE', `/viewer-tokens/${c.item.id}`);
   });
 });
+
+describe('last used survives a restart (saved with the 10-minute status snapshot only)', () => {
+  const dir = tmpDir();
+  it('a report sets it in memory; the snapshot (here: the shutdown flush) saves it without a new revision; the restarted server shows it', async () => {
+    const keyFile = join(dir, 'viewer.key');
+    writeFileSync(keyFile, randomBytes(32).toString('base64'));
+    chmodSync(keyFile, 0o600);
+    let s = await startServer(dir, { VIEWER_TOKEN_KEY_FILE: keyFile });
+    try {
+      const home = await s.api('POST', '/accounts', { name: 'home', displayName: 'Home' });
+      const pi = await s.api('POST', '/cams-instances', { name: 'pi', displayName: 'Pi', accounts: [home.id] });
+      const c = await s.api('POST', '/viewer-tokens', { name: 'kept', accountIds: [home.id] });
+      const fp = s.built.signing.fingerprint;
+      const rev = snapshotRevision(s.built.db, pi.id, fp);
+      const now = s.built.clock.now();
+      const base = { v: 1, mode: 'cams-admin', version: 't', appliedRevision: null, cacheVerifiedAt: null, lastPullAt: null, held: [], keptOld: [], shadow: null, tokens: { managed: 0, pending: 0, legacy: 0 }, problems: [] };
+      s.built.camsInstances.report(pi.id, { ...base, viewerTokens: [{ id: c.item.id, lastUsedAt: now - 5000 }] }, now);
+      const col = () => (s.built.db.prepare('SELECT last_used_at FROM viewer_tokens WHERE id = ?').get(c.item.id) as { last_used_at: number | null }).last_used_at;
+      // Not written by the report, nor by a status flush before the 10 minutes are up.
+      s.built.status.flush();
+      expect(col()).toBeNull();
+      // The snapshot writes it, in its own transaction, and moves no snapshot revision (no viewer pulls for it).
+      const epoch = (s.built.db.prepare('SELECT write_epoch FROM meta').get() as { write_epoch: number }).write_epoch;
+      s.built.status.flush(true);
+      expect(col()).toBe(now - 5000);
+      expect((s.built.db.prepare('SELECT write_epoch FROM meta').get() as { write_epoch: number }).write_epoch).toBe(epoch + 1);
+      expect(snapshotRevision(s.built.db, pi.id, fp)).toBe(rev);
+      // Nothing new: the next snapshot writes nothing for it.
+      s.built.status.flush(true);
+      expect((s.built.db.prepare('SELECT write_epoch FROM meta').get() as { write_epoch: number }).write_epoch).toBe(epoch + 1);
+      // A newer use, saved by the shutdown flush; the restarted server reads it back.
+      s.built.camsInstances.report(pi.id, { ...base, viewerTokens: [{ id: c.item.id, lastUsedAt: now }] }, now);
+      s = await s.restart();
+      expect((await s.api('GET', `/viewer-tokens?account=${home.id}`)).items[0].lastUsedAt).toBe(now);
+    } finally {
+      await s.stop();
+    }
+  });
+});

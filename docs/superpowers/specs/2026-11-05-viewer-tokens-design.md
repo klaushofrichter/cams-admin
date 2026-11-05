@@ -3,27 +3,20 @@
 Status: design 2026-11-05. cams-admin part built in the PR that adds this
 file; the cams part is specified in §9 and comes next.
 
-## Open for Klaus
+## Klaus's answers to the open questions (2026-11-05)
 
-1. **Who manages tokens.** cams-admin has no account-admin sign-in today:
-   only the system admins (`ALLOWED_EMAILS`) sign in, and "admin" / "viewer"
-   are roles inside the cams viewer. So today only the system admin creates
-   and manages tokens. Your rule ("account admins for their own accounts,
-   only the system admin across other people's accounts") is in the code as
-   one check (`canManage`) that a later account-admin sign-in plugs into.
-   Should account admins get that later, either through a cams-admin sign-in
-   or from the cams viewer's admin page (a signed cams → cams-admin call)?
-   *My default: system admin only for now; the cams-page route later.*
-2. **A viewer that has lost cams-admin.** A viewer keeps its last snapshot
-   while it can't reach cams-admin, so a revoke can't reach it. *My
-   default:* cams stops accepting cams-admin viewer tokens (new sign-ins and
-   existing sessions) when its last good pull is older than **1 hour**; the
-   Pi's `CAMS_LOGIN_TOKEN` keeps working offline (demo kit). Shorter, longer,
-   or "keep working until the token expires"?
-3. **Last used** comes from the viewers (cams reports it, §9.6). cams-admin
-   keeps it in memory (the write budget), so after a cams-admin restart the
-   list shows "–" until a viewer reports again (within a minute of the next
-   use). Fine, or should it be persisted with the 10-minute snapshot?
+1. **Who manages tokens: the system admin only, for now.** cams-admin has no
+   account-admin sign-in today (only `ALLOWED_EMAILS` sign in; "admin" and
+   "viewer" are roles inside the cams viewer). The `canManage` check stays
+   in the code as the hook for a later account-admin sign-in, which would
+   then enforce "account admins for their own accounts, only the system
+   admin across other people's accounts".
+2. **A viewer that has lost cams-admin** stops accepting cams-admin viewer
+   tokens (new sign-ins and existing sessions) once its last good pull is
+   older than **24 hours** (cams side, §9.4). The Pi's `CAMS_LOGIN_TOKEN`
+   keeps working offline (demo kit).
+3. **Last used is saved**, with the existing 10-minute status snapshot, so it
+   survives a restart; no write of its own (§ Storage).
 
 ## Intent
 
@@ -53,7 +46,8 @@ account's users.
     (Klaus, 2026-11-05: no viewer picker). Tokens still work on every viewer
     of their accounts by paste.
 - **Who**: account admins for their own accounts; only the system admin may
-  give one token accounts another person administers (see Open 1).
+  give one token accounts another person administers (system admin only for
+  now: answer 1).
 - **Audit**: create, validity change, revoke, account change, delete and copy;
   never the token itself.
 - **Storage**: the token is kept readable (copy any time), encrypted at rest.
@@ -97,10 +91,16 @@ account's users.
 
 - Tables (migration 20): `viewer_tokens` (id `vtk_…`, name, `fingerprint`
   UNIQUE, `secret` (ciphertext), `days`, created by and at, updated at,
-  `expires_at` NOT NULL, `revoked_at/by`, `version`) and
+  `expires_at` NOT NULL, `revoked_at/by`, `last_used_at`, `version`) and
   `viewer_token_accounts (token_id, account_id)`, both ON DELETE CASCADE.
-  Triggers bump each linked account's `config_revision` on every change, so
+  Triggers bump each linked account's `config_revision` on every change of
+  what a snapshot says (name, fingerprint, expiry, revoke, accounts), so
   every viewer serving it pulls a new snapshot.
+- **Last used** (answer 3): the viewers' reports update it in memory; the
+  status store's 10-minute snapshot writes the changed ones in its own
+  transaction (`StatusStore.onSnapshot`), and the shutdown flush does too,
+  so it survives a restart without a write of its own and without moving a
+  snapshot revision (`test/cams-snapshot-viewer-tokens.test.ts`).
 - **Encryption at rest**: AES-256-GCM. The repo has no symmetric key yet (the
   Ed25519 signing key only signs), so a new one: `VIEWER_TOKEN_KEY_FILE`, a
   file holding 32 random bytes as base64 (mode 600, refused when readable by
@@ -109,7 +109,7 @@ account's users.
   over the key, so a wrong key reads as "unavailable", never as garbage);
   the token id is the GCM additional data, so a ciphertext can't be moved to
   another row.
-- Without the key file the server starts and existing tokens keep working on
+- Without the key (not set, or the file missing) the server starts and existing tokens keep working on
   the viewers (they need only the fingerprint), but **create**, **Copy** and
   **QR code** answer `503 viewer_tokens_unconfigured`; the page says so.
 - The key never goes into the database, the backup or the export. The
@@ -164,7 +164,8 @@ Measured (cams `server/admin/puller.ts`, default options as
 within "a few minutes"; no change proposed. Natural expiry needs no pull:
 cams compares `expiresAt` with its own clock (plus the offset it measures
 against cams-admin). A viewer that can't reach cams-admin backs off to 5
-minutes and keeps its last snapshot: Open 2.
+minutes and keeps its last snapshot; after 24 hours without a good pull it
+stops accepting cams-admin tokens (answer 2).
 
 Measurement (2026-11-05, the real `Puller` class with default options, six
 pulls, a pull that always succeeds): gaps 58.8, 57.0, 58.3, 55.5, 64.9 s,
@@ -262,8 +263,9 @@ the audit log for them).
    'viewer-token'`, `vt: <id>`, `tf: <16 hex of the fingerprint>`, JWT
    `exp` = the token's `expiresAt` (cookie `maxAge` the same). `authState`
    looks the token up in the current fleet on every request: id present,
-   fingerprint prefix equal, `expiresAt > now`, and (Open 2) last good pull
-   within 1 h; memberships = its accounts with role **viewer**; one account
+   fingerprint prefix equal, `expiresAt > now`, and (answer 2) last good pull
+   within 24 h (else the session ends and a new sign-in is refused with the
+   one `invalid_token` answer; the Pi's `CAMS_LOGIN_TOKEN` is not affected); memberships = its accounts with role **viewer**; one account
    → in, several → the existing account picker (`acc` in the cookie). No
    ALLOWED_EMAILS. MCP tokens can't be made from it (viewer).
 5. **Pi fixed token**: `via: 'token'` (CAMS_LOGIN_TOKEN) unchanged; the
@@ -307,14 +309,23 @@ accounts, delete.
    don't sign anyone in.
 3. Deployment (below) before the first token is created in production.
 
-## Deployment (request for Klaus and the kube-setup session)
+## Deployment (agreed with the kube-setup session, 2026-11-05)
 
-- New Secret `cams-admin-viewer-token-key`, key `key`: 32 random bytes as
-  base64 (`openssl rand -base64 32`), made from Klaus's `.env` by
-  `scripts/create-secrets.sh` (a new line there in a follow-up), mounted
-  read-only into the cams-admin pod the way `cams-admin-signing` is (the
-  same check: no group or other permission bits, so mode 0400 or 0600), and
-  the env `VIEWER_TOKEN_KEY_FILE=<mount path>/key`. Keep a copy where the other
-  cams-admin Secrets are kept: without it, existing tokens can't be copied.
+- **Secret** `cams-admin-viewer-token-key`, key `key`: 32 random bytes as
+  base64. Klaus makes it with `scripts/create-secrets.sh --only viewer-key`
+  (also part of `--only all`) from the file named by
+  `VIEWER_TOKEN_KEY_FILE_LOCAL` in his `.env` (mode 600). When that file is
+  missing, the script makes it (`openssl rand -base64 32`, mode 600) and
+  prints its path, never the key: that file is Klaus's copy; without it,
+  existing tokens can't be copied after a Secret loss.
+- **Mount**: `/etc/cams-admin/viewer` (a memory emptyDir, filled by an init
+  container from the optional Secret), file `/etc/cams-admin/viewer/key`,
+  env `VIEWER_TOKEN_KEY_FILE=/etc/cams-admin/viewer/key`. The file must have
+  no group or other permission bits (0600 or 0400; the pod's uid 1000 may
+  own it).
+- **Before the Secret exists** the file is missing: cams-admin starts, logs
+  `viewer_token_key_missing` once, and tokens are off (create, Copy and QR
+  answer 503). An empty or malformed file, or one readable by group or
+  others, stops the start.
 - `VIEWER_LINK_URL` needs no setting (the default is the cluster viewer).
 - No network exposure changes.

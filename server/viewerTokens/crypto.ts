@@ -1,5 +1,6 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'crypto';
 import { readFileSync, statSync } from 'fs';
+import { log } from '../log';
 
 // Viewer tokens (design 2026-11-05-viewer-tokens-design.md): the token, the
 // fingerprint the viewers get, the sign-in link, and the encryption at rest.
@@ -46,10 +47,23 @@ export const viewerLink = (base: string, token: string): string => `${base}/toke
 
 export interface ViewerKey { key: Buffer; keyId: string }
 
-// VIEWER_TOKEN_KEY_FILE: 32 random bytes as base64, mode 600 (like the signing key). No file: null (the feature is off).
-export function loadViewerKey(file: string | null): ViewerKey | null {
+// VIEWER_TOKEN_KEY_FILE: 32 random bytes as base64, mode 600 (like the signing key). Not set, or set to a
+// file that doesn't exist (the cluster fills it from an optional Secret): null, the feature is off, one
+// warning. An empty or malformed file, or one readable by group or others, stops the start.
+let warnedMissing = false;
+export function loadViewerKey(file: string | null, warn: (msg: string) => void = (m) => log.warn(m)): ViewerKey | null {
   if (!file) return null;
-  const st = statSync(file);
+  let st;
+  try {
+    st = statSync(file);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+    if (!warnedMissing) {
+      warnedMissing = true;
+      warn('viewer_token_key_missing');
+    }
+    return null;
+  }
   if ((st.mode & 0o077) !== 0) throw new Error(`viewer token key ${file} is readable by group or others (chmod 600)`);
   const text = readFileSync(file, 'utf8').trim();
   const key = /^[A-Za-z0-9+/]+={0,2}$/.test(text) ? Buffer.from(text, 'base64') : Buffer.alloc(0);

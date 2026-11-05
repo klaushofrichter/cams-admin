@@ -80,6 +80,24 @@ describe('encryption at rest', () => {
     expect(loadViewerKey(null)).toBeNull();
   });
 
+  it('a set path whose file does not exist (yet): no key and one warning; the cluster fills it from an optional Secret', () => {
+    const warnings: string[] = [];
+    const warn = (m: string) => void warnings.push(m);
+    expect(loadViewerKey(join(dir, 'missing.key'), warn)).toBeNull();
+    expect(loadViewerKey(join(dir, 'missing.key'), warn)).toBeNull();
+    expect(warnings).toEqual(['viewer_token_key_missing']);
+  });
+
+  it('an empty file is an error at start, not "off"', () => {
+    expect(() => loadViewerKey(keyFile('empty', ''))).toThrow(/32 bytes/);
+  });
+
+  it('a 0600 file passes whoever owns it (the pod runs as uid 1000)', () => {
+    const f = keyFile('k600', randomBytes(32).toString('base64'), 0o600);
+    expect(loadViewerKey(f)?.keyId).toMatch(/^[0-9a-f]{8}$/);
+    expect(loadViewerKey(keyFile('k400', randomBytes(32).toString('base64'), 0o400))?.keyId).toMatch(/^[0-9a-f]{8}$/);
+  });
+
   it('refuses a file readable by others, and a key that is not 32 bytes', () => {
     expect(() => loadViewerKey(keyFile('k3', randomBytes(32).toString('base64'), 0o644))).toThrow(/chmod 600/);
     expect(() => loadViewerKey(keyFile('k4', randomBytes(16).toString('base64')))).toThrow(/32 bytes/);

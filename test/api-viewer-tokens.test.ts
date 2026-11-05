@@ -14,7 +14,8 @@ const keyFile = join(dir, 'viewer.key');
 writeFileSync(keyFile, randomBytes(32).toString('base64'));
 chmodSync(keyFile, 0o600);
 const a = testApp(dir, { VIEWER_TOKEN_KEY_FILE: keyFile });
-const off = testApp(dir);
+// The cluster sets VIEWER_TOKEN_KEY_FILE always; until the optional Secret exists the file is missing: the server starts, tokens are off.
+const off = testApp(dir, { VIEWER_TOKEN_KEY_FILE: join(dir, 'not-there-yet.key') });
 afterAll(() => { a.close(); off.close(); });
 const ACTOR = 'admin@example.com';
 const home = a.registry.createAccount(ACTOR, { name: 'home', displayName: 'Home' }).id;
@@ -77,7 +78,7 @@ describe('viewer token routes', () => {
     expect(rec.actor).toMatch(/^ops-token:[0-9a-f]{8}$/);
   });
 
-  it('without VIEWER_TOKEN_KEY_FILE: the list says so; create and copy answer 503', async () => {
+  it('with VIEWER_TOKEN_KEY_FILE naming a missing file: the server runs, the list says so; create and copy answer 503', async () => {
     const acc = off.registry.createAccount(ACTOR, { name: 'home', displayName: 'Home' }).id;
     expect((await off.api('get', `/viewer-tokens?account=${acc}`)).body).toMatchObject({ configured: false, items: [] });
     expect((await off.api('post', '/viewer-tokens', { name: 'x', accountIds: [acc] })).body).toEqual({ error: 'viewer_tokens_unconfigured' });

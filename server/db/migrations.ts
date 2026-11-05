@@ -566,7 +566,8 @@ ALTER TABLE ops_tokens_m19 RENAME TO ops_tokens;
 `),
   // 20: viewer tokens (design 2026-11-05-viewer-tokens-design.md): kept readable for "Copy"
   // (secret = AES-256-GCM ciphertext; the key is never in the database), the viewers get the
-  // fingerprint. Every change bumps the linked accounts' config_revision, so their viewers pull.
+  // fingerprint. Every change of what a snapshot says bumps the linked accounts' config_revision, so
+  // their viewers pull; last_used_at is not in a snapshot and moves no revision.
   (db) => db.exec(`
 CREATE TABLE viewer_tokens (
   id TEXT PRIMARY KEY,
@@ -578,6 +579,8 @@ CREATE TABLE viewer_tokens (
   updated_at INTEGER NOT NULL,
   expires_at INTEGER NOT NULL,
   revoked_at INTEGER, revoked_by TEXT,
+  -- The newest use a viewer reported: written only with the 10-minute status snapshot (the write budget).
+  last_used_at INTEGER,
   version INTEGER NOT NULL DEFAULT 1
 ) STRICT;
 CREATE TABLE viewer_token_accounts (
@@ -588,7 +591,7 @@ CREATE TABLE viewer_token_accounts (
 CREATE INDEX viewer_token_accounts_account ON viewer_token_accounts(account_id);
 CREATE TRIGGER rev_vta_ins AFTER INSERT ON viewer_token_accounts BEGIN UPDATE config_revision SET revision = revision + 1 WHERE account_id = NEW.account_id; END;
 CREATE TRIGGER rev_vta_del AFTER DELETE ON viewer_token_accounts BEGIN UPDATE config_revision SET revision = revision + 1 WHERE account_id = OLD.account_id; END;
-CREATE TRIGGER rev_vt_upd AFTER UPDATE ON viewer_tokens BEGIN
+CREATE TRIGGER rev_vt_upd AFTER UPDATE OF name, fingerprint, expires_at, revoked_at ON viewer_tokens BEGIN
   UPDATE config_revision SET revision = revision + 1 WHERE account_id IN (SELECT account_id FROM viewer_token_accounts WHERE token_id = NEW.id);
 END;
 `),

@@ -54,9 +54,24 @@ function accountIdsOf(v: unknown): string[] {
 export const canManage = (_actor: string, _accountIds: string[]): boolean => true;
 
 export class ViewerTokens {
-  // tokenId → the newest use a viewer reported (memory only: the write budget).
+  // tokenId → the newest use a viewer reported. In memory; written only with the
+  // status store's 10-minute snapshot (flushLastUsed), read back at start.
   private lastUsed = new Map<string, number>();
-  constructor(private d: ViewerTokenDeps) {}
+  private usedDirty = new Set<string>();
+  constructor(private d: ViewerTokenDeps) {
+    for (const r of d.db.prepare('SELECT id, last_used_at FROM viewer_tokens WHERE last_used_at IS NOT NULL').all() as Row[]) this.lastUsed.set(r.id as string, r.last_used_at as number);
+  }
+
+  // The status snapshot's part: is there a new use to save, and save it (inside the snapshot's transaction).
+  lastUsedPending(): boolean { return this.usedDirty.size > 0; }
+  flushLastUsed(): void {
+    const up = this.d.db.prepare('UPDATE viewer_tokens SET last_used_at = ? WHERE id = ? AND (last_used_at IS NULL OR last_used_at < ?)');
+    for (const id of this.usedDirty) {
+      const at = this.lastUsed.get(id);
+      if (at !== undefined) up.run(at, id, at);
+    }
+    this.usedDirty.clear();
+  }
 
   configured(): boolean { return this.d.key !== null; }
 
@@ -216,6 +231,7 @@ export class ViewerTokens {
       this.log(actor, 'viewer-token-delete', r, accountIds, {});
     });
     this.lastUsed.delete(id);
+    this.usedDirty.delete(id);
     this.d.journal?.({ kind: 'viewer-token', tokenId: id, change: 'deleted' });
   }
 
@@ -228,7 +244,7 @@ export class ViewerTokens {
       if (typeof e?.id !== 'string' || !Number.isSafeInteger(e.lastUsedAt)) continue;
       if (!this.d.db.prepare(`SELECT 1 FROM viewer_token_accounts WHERE token_id = ? AND account_id IN (${marks})`).get(e.id, ...servedAccountIds)) continue;
       const at = Math.min(e.lastUsedAt, now);
-      if (at > (this.lastUsed.get(e.id) ?? 0)) this.lastUsed.set(e.id, at);
+      if (at > (this.lastUsed.get(e.id) ?? 0)) { this.lastUsed.set(e.id, at); this.usedDirty.add(e.id); }
     }
   }
 
