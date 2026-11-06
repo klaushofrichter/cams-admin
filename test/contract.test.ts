@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { existsSync, readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
 import Ajv2020 from 'ajv/dist/2020';
-import { ALLOW_ENTRIES, ONBOARDING_CAMERAS_MAX, ONBOARDING_COMMANDS, ONBOARDING_REQUIRED, ONBOARDING_STEPS, ONBOARDING_STEP_LEN, WIRE_COMMANDS, FILE_KINDS, MOVE_KINDS, MOVE_LEFTOVERS_MAX, MOVE_LEFTOVER_ITEMS_MAX, MOVE_LEFTOVER_ITEM_LEN, JOURNAL_BUDGET_ACTIONS, buildSchemas, DISRUPTIVE_ACTIONS, LOCAL_ONLY, NEVER_REMOTE_ACTIONS, P3_COMMANDS, PATH_PATTERN, REMOTE_ACTIONS, REMOTE_SETTABLE, SECRET_KEY_PATTERN, CAMERA_NAME_PATTERN } from '../contract/build';
+import { ABOVE_LOCAL_CEILING, ALLOW_ENTRIES, ANALYTICS_COMMANDS, NARROW_KINDS, ONBOARDING_CAMERAS_MAX, ONBOARDING_COMMANDS, ONBOARDING_REQUIRED, ONBOARDING_STEPS, ONBOARDING_STEP_LEN, WIRE_COMMANDS, FILE_KINDS, MOVE_KINDS, MOVE_LEFTOVERS_MAX, MOVE_LEFTOVER_ITEMS_MAX, MOVE_LEFTOVER_ITEM_LEN, JOURNAL_BUDGET_ACTIONS, buildSchemas, DISRUPTIVE_ACTIONS, LOCAL_ONLY, NEVER_REMOTE_ACTIONS, P3_COMMANDS, PATH_PATTERN, REMOTE_ACTIONS, REMOTE_SETTABLE, SECRET_KEY_PATTERN, CAMERA_NAME_PATTERN } from '../contract/build';
 import { fixtures } from '../contract/make';
 import { validateCommandArgs, validateEnroll, validateMessage, validateResultPayload, validateSummary } from '../server/contract';
 import { publicFromB64, verifyEnvelope } from '../server/crypto/ed25519';
@@ -95,7 +95,7 @@ describe('the v1 contract', () => {
   it('every proxy-receiver fixture has a $context and a runtime code from the nack list', () => {
     const NACKS = ['bad_signature', 'wrong_target', 'expired', 'replayed', 'not_allowed', 'paused', 'rate_limited', 'invalid_args', 'unsupported_version', 'busy'];
     const proxyFixtures = allFixtures().filter((x) => x.$expect?.receiver === 'proxy');
-    expect(proxyFixtures.length).toBe(37);
+    expect(proxyFixtures.length).toBe(39);
     for (const f of proxyFixtures) {
       expect(f.$context, f.name).toMatchObject({ now: expect.any(Number), proxyId: expect.stringMatching(/^prx_/), connId: expect.stringMatching(/^con_/), serverKeys: [vectors.keys.server.publicKey] });
       expect(NACKS, f.name).toContain(f.$expect.runtime);
@@ -397,14 +397,27 @@ describe('the v1 contract', () => {
     for (const p of r.remote) expect(r.denied.some((d: string) => under(p, d)), p).toBe(false);
     for (const p of Object.keys(r.narrow)) expect(r.remote, p).toContain(p);
     for (const p of r.remote) expect(p).toMatch(new RegExp(PATH_PATTERN.replace('[a-z0-9][A-Za-z0-9-]{0,31}', '(\\*|[a-z0-9][A-Za-z0-9-]{0,31})')));
-    expect(r.remote).toHaveLength(37);
+    expect(r.remote).toHaveLength(38);
     // The coordinator's ruling: no remote write may make a proxy delete data.
     for (const p of ['retention.stillsDays', 'retention.previewsDays', 'retention.clipsDays', 'retention.eventsDays', 'retention.auditDays', 'retention.streamLogDays', 'stills.maxGB', 'previews.maxGB', 'ftp.maxGB']) expect(r.narrow[p], p).toBe('more');
-    for (const p of ['analytics.googleVision.monthlyLimit', 'analytics.googleVision.dailyCap', 'analytics.googleVision.checksPerDay', 'analytics.googleVision.perCameraDailyCap']) expect(r.narrow[p], p).toBe('less');
-    expect(Object.keys(r.narrow)).toHaveLength(13);
+    for (const p of ['analytics.googleVision.dailyCap', 'analytics.googleVision.checksPerDay', 'analytics.googleVision.perCameraDailyCap']) expect(r.narrow[p], p).toBe('less');
+    // Vision management: the monthly limit only up to the proxy's local ceiling; the switch on only with a ceiling above 0.
+    expect(r.narrow['analytics.googleVision.monthlyLimit']).toBe('ceiling');
+    expect(r.narrow['analytics.googleVision.enabled']).toBe('ceilingGated');
+    expect(Object.keys(r.narrow)).toHaveLength(14);
+    for (const k of Object.values(r.narrow)) expect(NARROW_KINDS as readonly string[]).toContain(k);
+    // Every ceiling kind names its ceiling; a ceiling path is local only (denied, never remote) and is not itself narrow.
+    const ceilingKinds = Object.keys(r.narrow).filter((p) => ['ceiling', 'ceilingGated'].includes(r.narrow[p]));
+    expect(Object.keys(r.ceilings).sort()).toEqual(ceilingKinds.sort());
+    for (const c of Object.values(r.ceilings) as string[]) {
+      expect(r.remote, c).not.toContain(c);
+      expect(r.denied, c).toContain(c);
+      expect(r.narrow[c], c).toBeUndefined();
+    }
+    expect(r.ceilings).toEqual({ 'analytics.googleVision.enabled': 'analytics.googleVision.remoteMaxMonthly', 'analytics.googleVision.monthlyLimit': 'analytics.googleVision.remoteMaxMonthly' });
     // Coordinator ruling (security review I4): capture and listener switches and health thresholds are local only in P3.
     const localOnly = ['stills.enabled', 'events.poll.enabled', 'ftp.enabled', 'ftp.stalledHours', 'archive.enabled', 'archive.warnPercent', 'health.diskPercent', 'health.tempC', 'host.stats',
-      'analytics.kinds.person', 'analytics.kinds.vehicle', 'analytics.kinds.pet', 'analytics.googleVision.enabled',
+      'analytics.kinds.person', 'analytics.kinds.vehicle', 'analytics.kinds.pet',
       'cameras.*.stills.enabled', 'cameras.*.ftp.enabled', 'cameras.*.events.poll.enabled', 'cameras.*.analytics.kinds.person', 'cameras.*.analytics.kinds.vehicle', 'cameras.*.analytics.kinds.pet'];
     expect([...LOCAL_ONLY].sort()).toEqual([...localOnly].sort());
     for (const p of localOnly) {
@@ -421,7 +434,8 @@ describe('the v1 contract', () => {
     // The proxy profile is set on the proxy only (proxy profile design §0): never remote.
     expect(r.denied).toContain('profile');
     for (const p of ['profile.cameras', 'profile.storageGB', 'profile.name', 'profile.firewall']) expect(r.denied.some((d: string) => under(p, d)), p).toBe(true);
-    for (const p of r.remote) expect(p.endsWith('.enabled'), p).toBe(false);
+    // No on/off switch is remote, except a ceilingGated one (on only within the proxy's local ceiling).
+    for (const p of r.remote) expect(p.endsWith('.enabled') && r.narrow[p] !== 'ceilingGated', p).toBe(false);
     // No remote path looks secret; the secret pattern catches the usual names.
     const secret = new RegExp(SECRET_KEY_PATTERN, 'i');
     for (const p of r.remote) expect(secret.test(p), p).toBe(false);
@@ -459,6 +473,42 @@ describe('the v1 contract', () => {
       expect(f.message.body).toMatchObject({ status: 'failed', code: 'not_remote_settable', result: { paths: [{ path, code: 'not_remote_settable' }] } });
       expect(strictValidator('commands/config.set.result')(f.message.body.result)).toBe(true);
     }
+  });
+  it('Vision management: analytics.usage.get (command, allow entry, fixtures), the ceiling refusals, never a key', () => {
+    expect([...ANALYTICS_COMMANDS]).toEqual(['analytics.usage.get']);
+    expect(WIRE_COMMANDS as readonly string[]).toContain('analytics.usage.get');
+    expect(ALLOW_ENTRIES).toContain('analytics.usage.get');
+    expect(ABOVE_LOCAL_CEILING).toBe('above_local_ceiling');
+    for (const n of ['valid-command-analytics-usage-get', 'refused-analytics-usage-get-not-allowed', 'refused-analytics-usage-get-extra-arg']) expect(fixture(n).$context.feature, n).toBe('vision');
+    expect(fixture('refused-analytics-usage-get-not-allowed').$expect.runtime).toBe('not_allowed');
+    expect(fixture('refused-analytics-usage-get-extra-arg').$expect.runtime).toBe('invalid_args');
+    for (const n of ['valid-result-analytics-usage-get', 'valid-result-analytics-usage-get-paused', 'valid-result-config-get-vision', 'valid-result-config-set-above-ceiling', 'valid-result-config-set-enable-no-ceiling', 'valid-result-config-set-failed-ceiling']) {
+      const f = fixture(n);
+      expect(strictValidator(`commands/${f.$command}.result`)(f.message.body.result), `${n} ${JSON.stringify(ajv.errors)}`).toBe(true);
+      expect(validateResultPayload(f.$command, f.message.body.result), n).toBe(true);
+      expect(verifyEnvelope(publicFromB64(vectors.keys.proxy.publicKey), f.message), n).toBe(true);
+    }
+    const usage = fixture('valid-result-analytics-usage-get').message.body.result;
+    expect(usage).toMatchObject({ v: 1, providers: [{ id: 'google-vision', name: 'Google Vision', enabled: true, key: 'env', monthlyLimit: 1000, remoteMaxMonthly: 1000, dailyCap: 0, month: { calls: 84 }, today: { calls: 9 }, paused: null, lastError: null }] });
+    expect(fixture('valid-result-analytics-usage-get-paused').message.body.result.providers[0]).toMatchObject({ key: 'manual', paused: { reason: 'invalid_key', until: null }, lastError: { message: expect.any(String) } });
+    // The key (or its mask) never travels: strict refuses an extra field; key is only where it comes from.
+    const masked = structuredClone(usage);
+    masked.providers[0].keyMask = 'AIza…abcd';
+    expect(strictValidator('commands/analytics.usage.get.result')(masked)).toBe(false);
+    expect(validateResultPayload('analytics.usage.get', masked)).toBe(true);
+    expect(strictValidator('commands/analytics.usage.get.result')({ ...usage, providers: [{ ...usage.providers[0], key: 'AIzaSyEXAMPLE' }] })).toBe(false);
+    expect(strictValidator('commands/analytics.usage.get.result')({ ...usage, providers: [] })).toBe(true);
+    expect(strictValidator('commands/analytics.usage.get.args')({ v: 1 })).toBe(true);
+    expect(strictValidator('commands/analytics.usage.get.args')({ v: 1, provider: 'google-vision' })).toBe(false);
+    expect(validateCommandArgs('analytics.usage.get', { v: 1 })).toEqual({ ok: true });
+    expect(validateCommandArgs('analytics.usage.get', { v: 1, x: 1 })).toMatchObject({ ok: false });
+    // The refusals name the ceiling.
+    expect(fixture('valid-result-config-set-above-ceiling').message.body).toMatchObject({ status: 'failed', code: 'above_local_ceiling', result: { paths: [{ path: 'analytics.googleVision.monthlyLimit', code: 'above_local_ceiling', detail: expect.stringContaining('remoteMaxMonthly') }] } });
+    expect(fixture('valid-result-config-get-vision').message.body.result.settable).toMatchObject({ 'analytics.googleVision.enabled': { dir: 'ceilingGated' }, 'analytics.googleVision.monthlyLimit': { dir: 'ceiling' } });
+    const readme = readFileSync(join(__dirname, '../contract/README.md'), 'utf8');
+    expect(readme).toMatch(/`config.set`, `config.unset` \| [^|]+\| [^|]+\| [^|]*`above_local_ceiling`/);
+    expect(readme).toMatch(/`config.rollback` \| [^|]+\| [^|]+\| [^|]*`above_local_ceiling`/);
+    expect(readme).toContain('`analytics.usage.get`');
   });
   it('validateCommandArgs: what cams-admin sends for every P3 command', () => {
     const REV = `sha256:${'a'.repeat(64)}`;

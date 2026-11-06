@@ -105,11 +105,41 @@ It will run at `cams-admin.skylar.technology`. Phase 1 is specified in
   stored or shown, whatever the proxy sent.
 - **Threat model:** a compromised cams-admin can only change remote-settable
   settings and run allowed actions. It can never touch addresses, trust,
-  users or `camsAdmin.*`. It can never raise Google Vision spending, shorten
+  users or `camsAdmin.*`. It can raise Google Vision spending only up to the
+  ceiling set locally at each proxy (default 0: not at all), and never shorten
   a retention period, lower a size cap or touch `storage.*`, so it can't make
   a proxy delete stills, clips, events or audit records. Every change is in
   the proxy's audit log and on its card with Undo, and a local pause on the
   proxy stops all of it.
+
+## Vision management
+
+The Account page's **Vision** tab (system admins only; the server checks it
+too) shows each proxy's vision providers (Google Vision today) and sets their
+monthly limit. Design:
+[`docs/superpowers/specs/2026-11-05-vision-management-design.md`](docs/superpowers/specs/2026-11-05-vision-management-design.md).
+
+- **Refresh** asks every online proxy of the account for its use
+  (`analytics.usage.get`) and returns at once; the page reads the stored
+  answers every 2 s for up to 30 s. The latest answer per proxy is kept
+  (`proxy_analytics`); a proxy that didn't answer shows its old figures with
+  their age ("As of …"). One request per proxy at a time.
+- **One state word per row**, the first that applies: *Offline*, *Proxy too
+  old*, *Not allowed at the proxy* (it needs `admin-commands allow
+  analytics.usage.get` once), *Paused: …*, *Off*, *On, no key*, *Limit
+  reached this month*, *On*. Beside it the raw values (enabled, limit,
+  ceiling, where the key comes from) and this month's and today's calls, per
+  camera on request. The key itself never reaches cams-admin.
+- **Monthly limit:** 0 switches Vision off. Save sends `enabled` and
+  `monthlyLimit` together as a dry run, then applies it (the same preview +
+  apply as the Settings card, run by the server). cams-admin may switch Vision
+  on or raise the limit only up to the **ceiling set locally at the proxy**
+  (`remoteMaxMonthly`, default 0); lowering and switching off are always
+  allowed. A refusal shows at the row; a saved change re-reads that proxy.
+- **API:** `GET /api/v1/accounts/:a/vision`, `POST …/vision/refresh` (202),
+  `PUT …/vision/proxies/:p/providers/:provider` `{monthlyLimit}` (202 with
+  the dry run's command id). The diagnostics API shows the stored figures in
+  `/diag/proxies` (`vision`).
 
 ## cams instances and the service API (migration phase 4)
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { EFFECT, nameError, waitCommand, widens, groupPaths, isRemoteSettable, narrowNote, narrowOk, parseValue, rollbackable, stateLine, valueText, type ConfigView } from './config';
+import { ceilingOf, EFFECT, nameError, waitCommand, widens, groupPaths, isRemoteSettable, narrowNote, narrowOk, parseValue, rollbackable, stateLine, valueText, type ConfigView } from './config';
 
 const view: ConfigView = {
   revision: `sha256:${'a'.repeat(64)}`, schema: 1, cameras: ['cam1'], omittedCameras: [], fetchedAt: 1, cmdId: 'cmd_0123456789ABCDEFGHJK',
@@ -36,7 +36,7 @@ describe('config (Settings UI)', () => {
     expect(row('cameras.cam1.host')).toMatchObject({ editable: false, why: 'never remote (addresses, ports, files, trust, users)' });
     expect(row('storage.maxPercent')).toMatchObject({ editable: false, why: 'storage settings are local only' });
     expect(row('retention.clipsDays')).toMatchObject({ editable: true, why: 'only higher from cams-admin' });
-    expect(row('analytics.googleVision.monthlyLimit')).toMatchObject({ editable: true, why: 'only lower from cams-admin' });
+    expect(row('analytics.googleVision.monthlyLimit')).toMatchObject({ editable: true, why: "only up to the proxy's local ceiling from cams-admin" });
     expect(row('cameras.cam1.name')).toMatchObject({ editable: true });
   });
   it('isRemoteSettable is remote-settable.json ∩ the proxy\'s settable', () => {
@@ -71,13 +71,25 @@ describe('config (Settings UI)', () => {
     expect(narrowNote('sse.pingS')).toBeNull();
     expect(narrowOk('retention.clipsDays', 90, 30)).toBe(false);
     expect(narrowOk('retention.clipsDays', 90, 120)).toBe(true);
-    expect(narrowOk('analytics.googleVision.monthlyLimit', 1000, 5000)).toBe(false);
+    // Vision (ceiling): lower always; higher only within the proxy's local ceiling; an unknown ceiling → the proxy decides.
+    expect(narrowNote('analytics.googleVision.monthlyLimit')).toBe("only up to the proxy's local ceiling from cams-admin");
+    expect(narrowNote('analytics.googleVision.enabled')).toBe('on from cams-admin only when the proxy sets a ceiling');
+    expect(narrowOk('analytics.googleVision.monthlyLimit', 1000, 5000, 1000)).toBe(false);
+    expect(narrowOk('analytics.googleVision.monthlyLimit', 5000, 3000, 1000)).toBe(true);
+    expect(narrowOk('analytics.googleVision.monthlyLimit', 0, 800, 1000)).toBe(true);
+    expect(narrowOk('analytics.googleVision.monthlyLimit', 1000, 5000)).toBe(true);
+    expect(narrowOk('analytics.googleVision.monthlyLimit', 1000, true, 1000)).toBe(false);
+    expect(narrowOk('analytics.googleVision.enabled', false, true, 0)).toBe(false);
+    expect(narrowOk('analytics.googleVision.enabled', false, true, 1000)).toBe(true);
+    expect(narrowOk('analytics.googleVision.enabled', true, false, 0)).toBe(true);
+    expect(ceilingOf({ paths: { 'analytics.googleVision.remoteMaxMonthly': { v: 1000, s: 'file' } } }, 'analytics.googleVision.monthlyLimit')).toBe(1000);
+    expect(ceilingOf({ paths: {} }, 'sse.pingS')).toBeUndefined();
     expect(narrowOk('analytics.googleVision.dailyCap', 0, 10)).toBe(true);
     expect(narrowOk('ftp.maxGB', undefined, 10)).toBe(false);
     expect(narrowOk('sse.pingS', 30, 5)).toBe(true);
     expect(narrowOk('retention.clipsDays', 30, true)).toBe(false); // M1
     expect(widens({ path: 'retention.clipsDays', from: 120, to: 90, sourceFrom: 'override', sourceTo: 'override' })).toBe('restores the local value: keeps less data'); // M6
-    expect(widens({ path: 'analytics.googleVision.monthlyLimit', from: 500, to: 1000, sourceFrom: 'override', sourceTo: 'default' })).toBe('restores the local value: more spending');
+    expect(widens({ path: 'analytics.googleVision.dailyCap', from: 50, to: 100, sourceFrom: 'override', sourceTo: 'default' })).toBe('restores the local value: more spending');
     expect(widens({ path: 'retention.clipsDays', from: 90, to: 120, sourceFrom: 'override', sourceTo: 'override' })).toBeNull();
   });
   it('stateLine and rollbackable', () => {
@@ -89,6 +101,7 @@ describe('config (Settings UI)', () => {
     expect(stateLine({ state: 'refused', outcomeCode: 'rate_limited', retryAfterS: 3000 })).toBe("the proxy's limit: try again in 50 min");
     expect(stateLine({ state: 'refused', outcomeCode: 'rate_limited', retryAfterS: 20 })).toBe("the proxy's limit: try again in 1 min");
     expect(stateLine({ state: 'failed', outcomeCode: 'widening_local_only' })).toBe('refused by the proxy: it would lower a raise-only value, raise spending or change a local-only setting');
+    expect(stateLine({ state: 'failed', outcomeCode: 'above_local_ceiling' })).toBe('refused by the proxy: above the limit its local admin allows cams-admin to set');
     const real = { command: 'config.set', dryRun: false, state: 'done', result: { changes: [{ path: 'sse.pingS' }] } };
     expect(rollbackable(real)).toBe(true);
     expect(rollbackable({ ...real, dryRun: true })).toBe(false);

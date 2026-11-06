@@ -595,4 +595,13 @@ CREATE TRIGGER rev_vt_upd AFTER UPDATE OF name, fingerprint, expires_at, revoked
   UPDATE config_revision SET revision = revision + 1 WHERE account_id IN (SELECT account_id FROM viewer_token_accounts WHERE token_id = NEW.id);
 END;
 `),
+  // 21: Vision management (design 2026-11-05-vision-management-design.md): the latest analytics.usage.get
+  // answer per proxy (cleaned field by field; never a key). Written only when a refresh's answer arrives.
+  (db) => db.exec(`
+CREATE TABLE proxy_analytics (
+  proxy_id TEXT PRIMARY KEY REFERENCES proxies(id) ON DELETE CASCADE,
+  fetched_at INTEGER NOT NULL,
+  result TEXT NOT NULL CHECK (json_valid(result) AND length(result) <= 65536)
+) STRICT;
+`),
 ];

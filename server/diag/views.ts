@@ -51,6 +51,8 @@ export function diagProxies(d: ApiDeps) {
           // Each camera's compact onboarding status (server/status/onboarding.ts); null when the proxy sends none.
           onboarding: rep.onboarding ?? null,
         },
+        // Vision management: the stored analytics.usage.get answer (cleaned field by field; never a key).
+        vision: d.vision.stored(px.id),
         reconcile: reconcile(px, accCams.filter((c) => c.proxyId === px.id), new Set(accCams.map((c) => c.camsId)), row),
       };
     }),

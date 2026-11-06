@@ -9,7 +9,7 @@ import type { CommandRow, Commands, WireCommand } from '../commands/service';
 import { sanitize } from '../contract';
 import { CAMERA_NAME_PATTERN, REMOTE_SETTABLE } from '../../contract/build';
 import { SECRET_RE } from './redact';
-import { isRemoteSettable, narrowingOk, narrowReason, PATH_RE, patternOf, STORAGE_LOCAL_ONLY, type Leaf, type Settable } from './narrow';
+import { ceilingPathOf, isRemoteSettable, narrowCode, narrowingOk, narrowReason, PATH_RE, patternOf, STORAGE_LOCAL_ONLY, type Leaf, type Settable } from './narrow';
 
 // A proxy's settings as cams-admin knows them (migration spec §8; P3 plan
 // Task 4): the last reported view per proxy (proxy_config), read by
@@ -109,6 +109,11 @@ export class ProxyConfig {
     return this.views.get(proxyId) ?? null;
   }
 
+  // The stored view of a proxy, without an account check (the Vision service's "too old" check).
+  peek(proxyId: string): ConfigView | null {
+    return this.view(proxyId);
+  }
+
   state(accountId: string, proxyId: string): ConfigState {
     this.d.registry.getProxy(accountId, proxyId); // 404 for another account's proxy
     const view = this.view(proxyId);
@@ -150,7 +155,10 @@ export class ProxyConfig {
     }
     for (const p of paths) {
       const to = 'set' in parsed ? parsed.set[p] : undefined;
-      if (!narrowingOk(patternOf(p), view.paths[p]?.v, to)) throw new ApiError(400, 'widening_local_only', `${p}: ${narrowReason(patternOf(p))}`);
+      const pat = patternOf(p);
+      const cp = ceilingPathOf(pat);
+      const ceiling = cp ? view.paths[cp]?.v : undefined;
+      if (!narrowingOk(pat, view.paths[p]?.v, to, ceiling)) throw new ApiError(400, narrowCode(pat), `${p}: ${narrowReason(pat, ceiling)}`);
     }
     const base = { v: 1, dryRun: true, baseRevision: view.revision };
     const row = 'set' in parsed

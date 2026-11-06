@@ -6,7 +6,7 @@
 # (docs/kube-setup-request.md). Never from tests or CI.
 #
 #   scripts/create-secrets.sh [--only check|oauth|signing|viewer-key|backup|runner|github|all]
-#                             [--dry-run] [--env-file PATH]
+#                             [--dry-run] [--env-file PATH] [--rotate-viewer-key]
 #
 #   check (default): every key present and well-formed; nothing is applied.
 #   oauth:   Secret cams-admin-oauth: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET,
@@ -18,7 +18,8 @@
 #            base64 from the file named by VIEWER_TOKEN_KEY_FILE_LOCAL (mode
 #            600). A missing file is made first (openssl rand -base64 32, mode
 #            600) and its path printed: keep that copy, the key is never
-#            printed. Replacing it makes existing viewer tokens uncopyable.
+#            printed. An existing Secret is kept: replacing it makes every
+#            viewer token uncopyable, so only --rotate-viewer-key does that.
 #   backup:  Secret cams-admin-backup: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,
 #            AWS_REGION, BACKUP_S3_BUCKET, BACKUP_S3_PREFIX (app + Litestream)
 #   runner:  Secret runner-pat (key token) in cams-admin-runner: CAMSADMIN_GITHUB_PAT
@@ -29,13 +30,15 @@ umask 077
 
 ENV_FILE="$(cd "$(dirname "$0")/.." && pwd)/.env"
 DRY=0
+ROTATE_VIEWER_KEY=0
 ONLY=check
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) DRY=1 ;;
+    --rotate-viewer-key) ROTATE_VIEWER_KEY=1 ;;
     --only) ONLY="$2"; shift ;;
     --env-file) ENV_FILE="$2"; shift ;;
-    -h|--help) sed -n '2,29p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,27p' "$0"; exit 0 ;;
     *) echo "create-secrets: unknown option $1" >&2; exit 2 ;;
   esac
   shift
@@ -135,7 +138,15 @@ if want signing; then
     kubectl --context "$CONTEXT" -n cams-admin create secret generic cams-admin-signing --from-file=signing-key.pem="$pem" --dry-run=client -o yaml | kubectl --context "$CONTEXT" apply -f - >/dev/null
   fi
 fi
-if want viewer-key; then
+viewer_key_kept=0
+if want viewer-key && [ "$ROTATE_VIEWER_KEY" = 0 ]; then
+  [ -n "$CONTEXT" ] || die "set KUBE_CONTEXT in $ENV_FILE"
+  if kubectl --context "$CONTEXT" -n cams-admin get secret cams-admin-viewer-token-key >/dev/null 2>&1; then
+    say "secret cams-admin-viewer-token-key already exists: kept. Replacing it makes every viewer token uncopyable; only --rotate-viewer-key does that."
+    viewer_key_kept=1
+  fi
+fi
+if want viewer-key && [ "$viewer_key_kept" = 0 ]; then
   need VIEWER_TOKEN_KEY_FILE_LOCAL
   vk=$(get VIEWER_TOKEN_KEY_FILE_LOCAL)
   [ -n "$CONTEXT" ] || die "set KUBE_CONTEXT in $ENV_FILE"

@@ -8,6 +8,7 @@ import { startHub } from './helpers/channel';
 import { until } from './helpers/server';
 import { backoffDelay, enroll, ProxyClient, type KeyFile } from '../test-client/client';
 import { RefProxyConfig } from '../test-client/config';
+import { strictValid } from './helpers/contractV1';
 import { readKeyFile, writeKeyFile } from '../test-client/keyfile';
 import { makeSummary } from '../test-client/summaries';
 import { Enrollment } from '../server/enroll/codes';
@@ -250,7 +251,10 @@ describe('RefProxyConfig: the reference proxy for the P3 commands', () => {
     expect(v.paths['cameras.cam1.host']).toEqual({ v: '192.0.2.10', s: 'file' });
     expect(v.settable['sse.pingS']).toMatchObject({ type: 'integer' });
     expect(v.settable['retention.clipsDays'].dir).toBe('more');
-    expect(v.settable['analytics.googleVision.monthlyLimit'].dir).toBe('less');
+    expect(v.settable['analytics.googleVision.monthlyLimit'].dir).toBe('ceiling');
+    expect(v.settable['analytics.googleVision.enabled'].dir).toBe('ceilingGated');
+    expect(v.settable['analytics.googleVision.remoteMaxMonthly']).toBeUndefined();
+    expect(v.paths['analytics.googleVision.remoteMaxMonthly']).toEqual({ v: 0, s: 'default' });
     expect(Object.keys(v.settable)).not.toContain('cameras.*.host');
     expect(Object.keys(v.settable)).not.toContain('storage.maxPercent');
     expect(v.cameras).toEqual(['cam1']);
@@ -282,7 +286,7 @@ describe('RefProxyConfig: the reference proxy for the P3 commands', () => {
     expect(code({ 'cameras.nosuch.name': 'x' })).toEqual(['failed', 'unknown_camera']);
     expect(code({ 'ftp.publicHost': 'x.example.net' })).toEqual(['failed', 'not_remote_settable']);
     expect(code({ 'storage.maxPercent': 50 })).toEqual(['failed', 'not_remote_settable']);
-    expect(code({ 'analytics.googleVision.monthlyLimit': 5000 })).toEqual(['failed', 'widening_local_only']);
+    expect(code({ 'analytics.googleVision.monthlyLimit': 5000 })).toEqual(['failed', 'above_local_ceiling']);
     expect(code({ 'analytics.googleVision.monthlyLimit': 500 })).toEqual(['ok', undefined]);
     expect(code({ 'retention.clipsDays': 30 })).toEqual(['failed', 'widening_local_only']);
     expect(code({ 'retention.clipsDays': 120 })).toEqual(['ok', undefined]);
@@ -296,6 +300,33 @@ describe('RefProxyConfig: the reference proxy for the P3 commands', () => {
     const w = r.handle('config.unset', { v: 1, dryRun: true, baseRevision: r.revision(), paths: ['retention.clipsDays'] }, who(3));
     expect([w.status, w.code]).toEqual(['failed', 'widening_local_only']);
     expect((w.result as any).paths[0].detail).toBe('a remote change may only keep data longer');
+  });
+  it('the Vision ceiling: lower always, higher and on only within remoteMaxMonthly (local only); analytics.usage.get never names a key', () => {
+    const r = new RefProxyConfig({ cameras: ['cam1'] });
+    const L = 'analytics.googleVision.monthlyLimit';
+    const E = 'analytics.googleVision.enabled';
+    const run = (s: Record<string, unknown>, n: number) => r.handle('config.set', set(r, s), who(n));
+    // ceiling 0 (the default): no raise, no switching on; switching off and lowering stay allowed
+    expect(run({ [E]: true, [L]: 800 }, 1)).toMatchObject({ status: 'failed', code: 'above_local_ceiling' });
+    expect((run({ [E]: true }, 2).result as any).paths).toEqual([{ path: E, code: 'above_local_ceiling', detail: 'cams-admin may not switch it on: no ceiling at the proxy (analytics.googleVision.remoteMaxMonthly is 0)' }]);
+    expect(run({ [E]: false, [L]: 0 }, 3).status).toBe('ok');
+    expect(run({ 'analytics.googleVision.remoteMaxMonthly': 1000 }, 4)).toMatchObject({ status: 'failed', code: 'not_remote_settable' });
+    // a limit of 5000 with a ceiling of 1000 can go to 3000 or 0, but not to 6000
+    r.localEdit({ [L]: 5000, 'analytics.googleVision.remoteMaxMonthly': 1000 });
+    const six = run({ [L]: 6000 }, 5);
+    expect(six).toMatchObject({ status: 'failed', code: 'above_local_ceiling' });
+    expect((six.result as any).paths[0].detail).toBe('cams-admin may allow up to 1000 calls a month (analytics.googleVision.remoteMaxMonthly)');
+    expect(run({ [E]: true, [L]: 3000 }, 6).status).toBe('ok');
+    expect(r.current(L)).toBe(3000);
+    expect(r.current(E)).toBe(true);
+    // a rollback that would restore a value above the ceiling fails above_local_ceiling
+    r.localEdit({ 'analytics.googleVision.remoteMaxMonthly': 100 });
+    expect(run({ [L]: 50 }, 7).status).toBe('ok');
+    expect(r.handle('config.rollback', { v: 1, dryRun: true, cmdId: who(7).cmdId }, who(8))).toMatchObject({ status: 'failed', code: 'above_local_ceiling' });
+    const u = r.handle('analytics.usage.get', { v: 1 }, who(9));
+    expect(u).toMatchObject({ status: 'ok', result: { v: 1, providers: [{ id: 'google-vision', enabled: true, key: 'none', monthlyLimit: 50, remoteMaxMonthly: 100, cameras: [{ id: 'cam1', today: 0, month: 0 }] }] } });
+    expect(strictValid('commands/analytics.usage.get.result', u.result)).toBe(true);
+    expect(JSON.stringify(u.result)).not.toMatch(/apiKey|keyMask/);
   });
   it('an env-held remote path is held_by_env', () => {
     const r = new RefProxyConfig({ envHeld: ['sse.maxClients'] });

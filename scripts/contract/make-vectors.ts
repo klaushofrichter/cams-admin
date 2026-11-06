@@ -64,6 +64,13 @@ const envelopeCases = [
     settings: { name: 'Garage S\u00fcd', ftp: { enabled: true, stream: 'main' } } } }) },
   { kind: 'event', key: 'proxy', envelope: env('event', 16, { proxyId: PRX, connId: CON, kind: 'move.progress', moveId: 'mv_0123456789ABCDEFGHJK',
     chunks: [{ id: 'clips:2026-10-20', state: 'verified' }, { id: 'events:2026-10-20', state: 'failed' }], bytesDone: 10485760, bytesTotal: 52428800, rateBps: 1048576, etaS: 40 }) },
+  // Vision management: analytics.usage.get and its result (nulls, nested objects, an array of providers).
+  { kind: 'command', key: 'server', envelope: env('command', 17, { proxyId: PRX, connId: CON, cmdId: 'cmd_A123456789ABCDEFGHJK', exp: 1791273600017 + 60000, actor: 'admin@example.org', command: 'analytics.usage.get', args: { v: 1 } }) },
+  { kind: 'result', key: 'proxy', envelope: env('result', 18, { proxyId: PRX, connId: CON, cmdId: 'cmd_A123456789ABCDEFGHJK', phase: 'done', status: 'ok', result: {
+    v: 1, at: 1791273600000, providers: [{
+      id: 'google-vision', name: 'Google Vision', enabled: true, key: 'env', monthlyLimit: 1000, remoteMaxMonthly: 1000, dailyCap: 0,
+      month: { calls: 84 }, today: { calls: 9 }, paused: null, lastError: null, cameras: [{ id: 'cam1', today: 3, month: 40 }],
+    }] } }, { re: '01K6' + '17'.padStart(22, '0') }) },
 ].map((c) => ({ ...c, text: jcs(c.envelope), sig: signEnvelope(privateFromB64(keys[c.key].privateKey), c.envelope) }));
 const out = {
   $comment: 'Fixed Ed25519 test keys (PKCS#8 = 302e020100300506032b657004220420 + seed) and the signed strings of spec 8.2/8.3. Test keys only: never use them for a real proxy.',

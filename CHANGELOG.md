@@ -5,7 +5,6 @@ then empties it on `main`.
 
 ## [Unreleased]
 
-### Added
-
-- **Viewer tokens** on an account's Users page: a token signs a person in to the cams viewers as a viewer of one or more accounts, without a Google account, for 1 day, 1 week, 30, 90 or 365 days. Copy it any time, show its sign-in QR code (for cams.skylar.technology), change its validity (longer, shorter, revoke, or valid again with the same token), add or remove accounts, or delete it. Every step is in the audit log, never the token. The viewers start accepting tokens with their next release; until then a token signs nobody in. Needs the new viewer token key on the server (see the design).
-
+- New **Vision** tab on the Account page (system admins): see each proxy's Google Vision state, this month's and today's calls (per camera on request) and its limits; Refresh asks the proxies. Set a proxy's monthly limit there (0 = off): cams-admin may switch Vision on or raise the limit only up to the ceiling set locally at that proxy, and the proxy has the final word. The diagnostics API shows the stored figures too.
+- Groundwork for managing Google Vision from cams-admin: the proxy protocol now describes reading a proxy's Vision use (`analytics.usage.get`) and lets cams-admin switch Vision on and raise its monthly limit, but only up to a ceiling set locally at each proxy (refused as `above_local_ceiling` otherwise). Switching off and lowering stay allowed. No visible change yet; the Vision tab comes later.
+- `scripts/create-secrets.sh --only viewer-key` keeps an existing viewer-token key: replacing it makes every viewer token uncopyable, so only `--rotate-viewer-key` does that.
