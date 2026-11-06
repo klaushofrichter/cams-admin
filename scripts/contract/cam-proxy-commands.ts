@@ -57,7 +57,9 @@ const MOVE_STARTED = MOVE.filter((c) => c !== 'move.summary').some(implemented);
 const PTZ_STARTED = existsSync(file('src/moves/types.ts')) && readFileSync(file('src/moves/types.ts'), 'utf8').includes("'ptz'");
 // onboarding: the camera onboarding commands, pending until cam-proxy implements camera.onboarding.get.
 const ONBOARDING_STARTED = implemented('camera.onboarding.get');
-const FEATURE_STARTED: Record<string, boolean> = { 'move-ptz': PTZ_STARTED, onboarding: ONBOARDING_STARTED };
+// vision: Vision management (analytics.usage.get), pending until cam-proxy implements it.
+const VISION_STARTED = implemented('analytics.usage.get');
+const FEATURE_STARTED: Record<string, boolean> = { 'move-ptz': PTZ_STARTED, onboarding: ONBOARDING_STARTED, vision: VISION_STARTED };
 const DIR = join(__dirname, '../../contract/v1/fixtures');
 const ctxOf = (c: Ctx, journal: (id: string) => unknown = () => undefined) => {
   const seen = new SeenIds();

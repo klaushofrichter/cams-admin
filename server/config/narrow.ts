@@ -1,11 +1,12 @@
 // The contract's path rules for cams-admin's own pre-check (R3-16): what a
 // proxy may let cams-admin set is remote-settable.json's `remote` list
 // intersected with the proxy's reported `settable`, and the `narrow` paths
-// move one way only. The proxy re-checks everything (R2-15).
-import { PATH_PATTERN, REMOTE_SETTABLE } from '../../contract/build';
+// move one way only (or only up to the proxy's local ceiling). The proxy
+// re-checks everything (R2-15).
+import { ABOVE_LOCAL_CEILING, PATH_PATTERN, REMOTE_SETTABLE, type NarrowKind } from '../../contract/build';
 
 export type Leaf = boolean | number | string;
-export interface Settable { type: 'integer' | 'boolean' | 'string'; min?: number; max?: number; oneOf?: number[]; enum?: string[]; pattern?: string; optional?: boolean; dir?: 'less' | 'more' }
+export interface Settable { type: 'integer' | 'boolean' | 'string'; min?: number; max?: number; oneOf?: number[]; enum?: string[]; pattern?: string; optional?: boolean; dir?: NarrowKind }
 
 export const PATH_RE = new RegExp(PATH_PATTERN);
 const REMOTE = new Set(REMOTE_SETTABLE.remote);
@@ -22,12 +23,29 @@ export function isRemoteSettable(path: string, settable: Record<string, Settable
   return PATH_RE.test(path) && REMOTE.has(pat) && Object.hasOwn(settable, pat);
 }
 
+// The local ceiling path of a ceiling / ceilingGated path (remote-settable.json `ceilings`), else null.
+export const ceilingPathOf = (pattern: string): string | null => (Object.hasOwn(REMOTE_SETTABLE.ceilings, pattern) ? REMOTE_SETTABLE.ceilings[pattern] : null);
+const isCeilingKind = (dir: NarrowKind | undefined) => dir === 'ceiling' || dir === 'ceilingGated';
+
 // May a remote change move `pattern` from `from` to `to` (undefined = unset)?
-// An unknown value never passes a narrow path (cams-admin can't know what a
-// Reset restores; the proxy decides).
-export function narrowingOk(pattern: string, from: unknown, to: unknown): boolean {
+// An unknown value never passes a less/more path (cams-admin can't know what a
+// Reset restores; the proxy decides). The ceiling kinds pass a value at or
+// below the current one, or within `ceiling` (the proxy's local ceiling, from
+// the last view) when it is known; with no known ceiling (or a Reset) the
+// proxy decides (above_local_ceiling).
+export function narrowingOk(pattern: string, from: unknown, to: unknown, ceiling?: unknown): boolean {
   const dir = REMOTE_SETTABLE.narrow[pattern];
   if (!dir) return true;
+  if (isCeilingKind(dir)) {
+    if (to === undefined) return true;
+    const known = typeof ceiling === 'number' && Number.isFinite(ceiling);
+    if (dir === 'ceilingGated') {
+      if (typeof to !== 'boolean') return false;
+      return to === false || to === from || !known || (ceiling as number) > 0;
+    }
+    if (typeof to !== 'number') return false;
+    return (typeof from === 'number' && to <= from) || !known || to <= (ceiling as number);
+  }
   // M1: the boolean rule only when both sides are booleans; a mix never passes.
   if (typeof from === 'boolean' || typeof to === 'boolean') {
     if (typeof from !== 'boolean' || typeof to !== 'boolean') return false;
@@ -45,7 +63,14 @@ export function narrowingOk(pattern: string, from: unknown, to: unknown): boolea
   return dir === 'less' ? t <= f : t >= f;
 }
 
-export function narrowReason(pattern: string): string | null {
+// The error code of a narrowing refusal: above_local_ceiling for the ceiling kinds, else widening_local_only.
+export function narrowCode(pattern: string): 'widening_local_only' | typeof ABOVE_LOCAL_CEILING {
+  return isCeilingKind(REMOTE_SETTABLE.narrow[pattern]) ? ABOVE_LOCAL_CEILING : 'widening_local_only';
+}
+
+export function narrowReason(pattern: string, ceiling?: unknown): string | null {
   const dir = REMOTE_SETTABLE.narrow[pattern];
+  if (dir === 'ceilingGated') return `cams-admin may not switch it on: no ceiling at the proxy (${ceilingPathOf(pattern)} is ${typeof ceiling === 'number' ? ceiling : 0})`;
+  if (dir === 'ceiling') return `cams-admin may allow up to ${typeof ceiling === 'number' ? ceiling : 0} (${ceilingPathOf(pattern)})`;
   return dir === 'less' ? 'a remote change may only lower spending' : dir === 'more' ? 'a remote change may only keep data longer' : null;
 }

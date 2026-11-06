@@ -1,18 +1,18 @@
 // A reference proxy for the P3 commands (config.get, config.set,
 // config.unset, config.rollback, camera.action, camera.name.set,
-// proxy.restart), written from "The P3 contract" only
+// proxy.restart) and analytics.usage.get, written from "The P3 contract" only
 // (docs/superpowers/plans/2026-10-07-migration-p3-cams-admin.md). No cam-proxy
 // code: it is what cams-admin's tests and e2e run against. In memory: a base
 // layer (default or file values), the overrides (remote or local), env-held
 // values, the backups for rollback and the camera actions it was asked to run.
 import { createHash } from 'crypto';
 import { jcs } from '../server/crypto/jcs';
-import { REMOTE_SETTABLE } from '../contract/build';
+import { ABOVE_LOCAL_CEILING, REMOTE_SETTABLE, type NarrowKind } from '../contract/build';
 
 type Leaf = boolean | number | string;
 type Source = 'default' | 'file' | 'override' | 'env';
 interface Base { v: Leaf; s: 'default' | 'file' }
-interface Settable { type: 'integer' | 'boolean' | 'string'; min?: number; max?: number; optional?: boolean; dir?: 'less' | 'more' }
+interface Settable { type: 'integer' | 'boolean' | 'string'; min?: number; max?: number; optional?: boolean; dir?: NarrowKind }
 export interface RefOutcome { status: 'ok' | 'failed' | 'conflict'; code?: string; result?: Record<string, unknown> }
 // One path's override before and after a write (absent = no override).
 interface Step { before?: Leaf; after?: Leaf }
@@ -27,10 +27,20 @@ const ZERO_IS_NO_CAP = ['analytics.googleVision.dailyCap', 'analytics.googleVisi
 export const patternOf = (path: string): string => path.replace(/^cameras\.[^.]+\./, 'cameras.*.');
 const under = (p: string, d: string) => p === d || p.startsWith(`${d}.`);
 
-// The contract's narrow rule: may `from` → `to` happen remotely on this path?
-export function narrowOk(pattern: string, from: Leaf | undefined, to: Leaf | undefined): boolean {
+const isCeilingKind = (pattern: string) => ['ceiling', 'ceilingGated'].includes(REMOTE_SETTABLE.narrow[pattern] ?? '');
+const ceilingReason = (pattern: string, ceilingPath: string, ceiling: number) => (REMOTE_SETTABLE.narrow[pattern] === 'ceilingGated'
+  ? `cams-admin may not switch it on: no ceiling at the proxy (${ceilingPath} is 0)`
+  : `cams-admin may allow up to ${ceiling} calls a month (${ceilingPath})`);
+
+// The contract's narrow rule: may `from` → `to` happen remotely on this path? `ceiling`: the value of the
+// path's local ceiling (REMOTE_SETTABLE.ceilings), for the ceiling kinds.
+export function narrowOk(pattern: string, from: Leaf | undefined, to: Leaf | undefined, ceiling = 0): boolean {
   const dir = REMOTE_SETTABLE.narrow[pattern];
   if (!dir) return true;
+  // ceilingGated: off always; on only while the ceiling is above 0.
+  if (dir === 'ceilingGated') return to === false || to === from || (to === true && ceiling > 0);
+  // ceiling: at or below the current value, or at or below the ceiling.
+  if (dir === 'ceiling') return typeof to === 'number' && ((typeof from === 'number' && to <= from) || to <= ceiling);
   if (typeof from === 'boolean' || typeof to === 'boolean') return dir === 'less' ? to === false || to === from : to === true || to === from;
   const inf = (x: Leaf | undefined) => (x === undefined || (ZERO_IS_NO_CAP.includes(pattern) && x === 0) ? Infinity : Number(x));
   return dir === 'less' ? inf(to) <= inf(from) : inf(to) >= inf(from);
@@ -55,7 +65,7 @@ export class RefProxyConfig {
     const f = (p: string, v: Leaf) => this.base.set(p, { v, s: 'file' });
     d('sse.pingS', 30); d('sse.maxClients', 20); f('stills.quality', 5);
     d('retention.stillsDays', 30); d('retention.eventsDays', 30); d('retention.auditDays', 90); d('retention.clipsDays', 30);
-    d('analytics.googleVision.monthlyLimit', 1000); d('analytics.googleVision.enabled', false);
+    d('analytics.googleVision.monthlyLimit', 1000); d('analytics.googleVision.enabled', false); d('analytics.googleVision.remoteMaxMonthly', 0);
     d('storage.maxPercent', 90); f('camsAdmin.url', 'https://cams-admin.example.org');
     for (const c of this.cameras) {
       f(`cameras.${c}.name`, c === 'cam1' ? 'Front door' : c);
@@ -159,9 +169,13 @@ export class RefProxyConfig {
     if (args.baseRevision !== this.revision()) return this.conflict(target.map(([p]) => p));
     const narrow = step('widening_local_only', (p, v) => {
       const to = v === undefined ? resetTo(p)?.v : v;
+      if (isCeilingKind(patternOf(p))) return false;
       return narrowOk(patternOf(p), this.current(p), to) ? false : REMOTE_SETTABLE.narrow[patternOf(p)] === 'less' ? LESS_REASON : MORE_REASON;
     });
     if (narrow) return narrow;
+    // The ceiling kinds (Vision management): above the proxy's local ceiling → above_local_ceiling, the detail names it.
+    const above = step(ABOVE_LOCAL_CEILING, (p, v) => this.ceilingRefusal(p, v === undefined ? resetTo(p)?.v : v));
+    if (above) return above;
     if (args.set) {
       const bad = step('invalid_value', (p, v) => this.valueOk(patternOf(p), v as Leaf));
       if (bad) return bad;
@@ -183,6 +197,28 @@ export class RefProxyConfig {
     const baseRevision = this.revision();
     if (!args.dryRun && changes.length) this.apply(steps, 'after', cmd);
     return { status: 'ok', result: { dryRun: args.dryRun, baseRevision, revision: this.revision(), changes, unchanged } };
+  }
+
+  // The ceiling kinds: null when `to` is allowed, else the refusal's detail.
+  private ceilingRefusal(p: string, to: Leaf | undefined): string | null {
+    const pat = patternOf(p);
+    if (!isCeilingKind(pat)) return null;
+    const ceilingPath = REMOTE_SETTABLE.ceilings[pat];
+    const c = this.current(ceilingPath);
+    const ceiling = typeof c === 'number' ? c : 0;
+    return narrowOk(pat, this.current(p), to, ceiling) ? null : ceilingReason(pat, ceilingPath, ceiling);
+  }
+
+  // analytics.usage.get: one provider (Google Vision) from the settings; this reference proxy makes no calls.
+  private usage(): Record<string, unknown> {
+    const n = (p: string) => { const v = this.current(`analytics.googleVision.${p}`); return typeof v === 'number' ? v : 0; };
+    return {
+      v: 1, at: Date.now(), providers: [{
+        id: 'google-vision', name: 'Google Vision', enabled: this.current('analytics.googleVision.enabled') === true, key: 'none',
+        monthlyLimit: n('monthlyLimit'), remoteMaxMonthly: n('remoteMaxMonthly'), dailyCap: n('dailyCap'),
+        month: { calls: 0 }, today: { calls: 0 }, paused: null, lastError: null, cameras: this.cameras.map((id) => ({ id, today: 0, month: 0 })),
+      }],
+    };
   }
 
   private apply(steps: Record<string, Step>, side: 'before' | 'after', cmd: { cmdId: string; actor: string }): void {
@@ -208,7 +244,9 @@ export class RefProxyConfig {
     if (b.rolledBack) return { status: 'failed', code: 'already_rolled_back', result: { paths: [] } };
     const since = Object.entries(b.paths).filter(([p, s]) => this.overrides.get(p) !== s.after).map(([p]) => p);
     if (since.length) return this.conflict(since);
-    const widening = Object.entries(b.paths).filter(([p, st]) => !narrowOk(patternOf(p), this.current(p), st.before ?? this.base.get(p)?.v));
+    const widening = Object.entries(b.paths).filter(([p, st]) => !isCeilingKind(patternOf(p)) && !narrowOk(patternOf(p), this.current(p), st.before ?? this.base.get(p)?.v));
+    const aboveCeiling = Object.entries(b.paths).flatMap(([p, st]) => { const d = this.ceilingRefusal(p, st.before ?? this.base.get(p)?.v); return d ? [{ path: p, code: ABOVE_LOCAL_CEILING, detail: d }] : []; });
+    if (!widening.length && aboveCeiling.length) return { status: 'failed', code: ABOVE_LOCAL_CEILING, result: { paths: aboveCeiling } };
     if (widening.length) return { status: 'failed', code: 'widening_local_only', result: { paths: widening.map(([p]) => ({ path: p, code: 'widening_local_only', detail: REMOTE_SETTABLE.narrow[patternOf(p)] === 'less' ? LESS_REASON : MORE_REASON })) } };
     const baseRevision = this.revision();
     const changes = Object.entries(b.paths).map(([p, s]) => {
@@ -248,6 +286,8 @@ export class RefProxyConfig {
       }
       case 'proxy.restart':
         return { status: 'ok', result: { restartAt: Date.now() + 1000 } };
+      case 'analytics.usage.get':
+        return { status: 'ok', result: this.usage() };
     }
     return { status: 'failed', code: 'not_implemented' };
   }

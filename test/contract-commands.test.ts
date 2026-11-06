@@ -21,7 +21,7 @@ const resign = (m: Record<string, any>) => { const { sig: _s, ...rest } = m; ret
 
 describe('the reference proxy check agrees with every proxy fixture', () => {
   const cases = all.filter((x) => x.$expect?.receiver === 'proxy' || (x.schema === 'command' && x.name.startsWith('valid-')));
-  it('covers 66 fixtures (P2 17, P3 24, moves 22, onboarding 3)', () => expect(cases).toHaveLength(66));
+  it('covers 70 fixtures (P2 17, P3 24, moves 22, onboarding 3, vision 4)', () => expect(cases).toHaveLength(70));
   for (const f of cases) {
     it(f.name, () => {
       const c = f.$context;

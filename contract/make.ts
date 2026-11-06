@@ -271,6 +271,51 @@ export function fixtures(): Record<string, unknown> {
     }),
   };
 
+  // --- Vision management (docs/superpowers/specs/2026-11-05-vision-management-design.md). $context.feature: the cross-check
+  // treats the command fixtures as pending while cam-proxy does not implement analytics.usage.get.
+  const vis = (f: { $context: object }) => ({ ...f, $context: { ...f.$context, feature: 'vision' } });
+  const VISION = 'analytics.googleVision';
+  const usage = {
+    v: 1, at: NOW, providers: [{
+      id: 'google-vision', name: 'Google Vision', enabled: true, key: 'env', monthlyLimit: 1000, remoteMaxMonthly: 1000, dailyCap: 0,
+      month: { calls: 84 }, today: { calls: 9 }, paused: null, lastError: null,
+      cameras: [{ id: 'cam1', today: 3, month: 40 }, { id: 'cam2', today: 6, month: 44 }],
+    }],
+  };
+  const pausedUsage = {
+    v: 1, at: NOW, providers: [{
+      ...usage.providers[0], enabled: true, key: 'manual', remoteMaxMonthly: 0, dailyCap: 50,
+      paused: { reason: 'invalid_key', until: null }, lastError: { at: NOW - 3_600_000, message: 'API key not valid. Please pass a valid API key.' }, cameras: [],
+    }],
+  };
+  const ceilingDetail = 'cams-admin may allow up to 1000 calls a month (analytics.googleVision.remoteMaxMonthly)';
+  const visionView = {
+    revision: REV, schema: 1, cameras: ['cam1'], omittedCameras: [],
+    paths: {
+      [`${VISION}.enabled`]: { v: true, s: 'file' }, [`${VISION}.monthlyLimit`]: { v: 500, s: 'file' }, [`${VISION}.remoteMaxMonthly`]: { v: 1000, s: 'file' },
+    },
+    settable: {
+      [`${VISION}.enabled`]: { type: 'boolean', dir: 'ceilingGated' },
+      [`${VISION}.monthlyLimit`]: { type: 'integer', min: 0, max: 100000, dir: 'ceiling' },
+    },
+  };
+  const vision = {
+    'valid-command-analytics-usage-get': vis(p3Valid("read the proxy's analytics providers: settings, use, pause, last error, per camera (read only)", ['analytics.usage.get'], 'analytics.usage.get', { v: 1 })),
+    'refused-analytics-usage-get-not-allowed': vis(p3Refused('not_allowed', 'analytics.usage.get', { v: 1 }, ['config.get'], 'analytics.usage.get needs its own entry (a proxy with a saved policy adds it once)')),
+    'refused-analytics-usage-get-extra-arg': vis(p3Refused('invalid_args', 'analytics.usage.get', { v: 1, provider: 'google-vision' }, ['analytics.usage.get'], 'args are {v} only (strict args refuse)')),
+    'valid-result-analytics-usage-get': p3Result('analytics.usage.get', 'Google Vision on, key from the environment, ceiling 1000, two cameras', { status: 'ok', result: usage }),
+    'valid-result-analytics-usage-get-paused': p3Result('analytics.usage.get', 'paused (invalid key, no end), the last error, no ceiling, no camera counts yet', { status: 'ok', result: pausedUsage }),
+    'valid-command-config-set-vision': p3Valid('Vision limit and switch together (enabled = limit > 0), a dry run', ['config.set'], 'config.set', setArgs({ [`${VISION}.enabled`]: true, [`${VISION}.monthlyLimit`]: 800 })),
+    'valid-result-config-get-vision': p3Result('config.get', 'the Vision paths: the ceiling (local only) in paths, enabled ceilingGated and monthlyLimit ceiling in settable', { status: 'ok', result: visionView }),
+    'valid-result-config-set-above-ceiling': p3Result('config.set', 'a monthly limit above the local ceiling', {
+      status: 'failed', code: 'above_local_ceiling', result: { paths: [{ path: `${VISION}.monthlyLimit`, code: 'above_local_ceiling', detail: ceilingDetail }] },
+    }),
+    'valid-result-config-set-enable-no-ceiling': p3Result('config.set', 'switching Vision on with no ceiling at the proxy (0)', {
+      status: 'failed', code: 'above_local_ceiling', result: { paths: [{ path: `${VISION}.enabled`, code: 'above_local_ceiling', detail: 'cams-admin may not switch it on: no ceiling at the proxy (analytics.googleVision.remoteMaxMonthly is 0)' }] },
+    }),
+    'valid-result-config-set-failed-ceiling': p3Result('config.set', 'the ceiling itself is local only', { status: 'failed', code: 'not_remote_settable', result: { paths: [{ path: `${VISION}.remoteMaxMonthly`, code: 'not_remote_settable' }] } }),
+  };
+
   return {
     'valid-heartbeat-4cam': valid('heartbeat', hb(four, false, makeProxyInfo({ now: NOW, site: 'garage', publicUrl: 'https://proxy.example.net' })), 'four cameras, site CA, cam3 offline'),
     'valid-heartbeat-1cam-pi': valid('heartbeat', hb(pi), 'the Pi: one camera, host stats'),
@@ -360,6 +405,7 @@ export function fixtures(): Record<string, unknown> {
     ...p3,
     ...moves,
     ...onboarding,
+    ...vision,
   };
 }
 

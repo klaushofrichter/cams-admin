@@ -9,7 +9,7 @@ import { enrolled, makeClient, resetAccounts, startServer, until, type Running }
 import { readEpoch } from '../server/db/open';
 import { RefProxyConfig } from '../test-client/config';
 import type { ProxyClient } from '../test-client/client';
-import { isRemoteSettable, narrowingOk, narrowReason, patternOf } from '../server/config/narrow';
+import { ceilingPathOf, isRemoteSettable, narrowCode, narrowingOk, narrowReason, patternOf } from '../server/config/narrow';
 
 const ACTOR = 'admin@example.com';
 const ACTOR2 = 'other@example.com';
@@ -67,12 +67,11 @@ describe('narrow.ts: the contract rules for the pre-check', () => {
   });
   it('narrowingOk: spending only down (0 = no cap for the two caps), data kept only longer (unset size cap = no cap)', () => {
     expect(narrowingOk('analytics.googleVision.monthlyLimit', 1000, 500)).toBe(true);
-    expect(narrowingOk('analytics.googleVision.monthlyLimit', 1000, 5000)).toBe(false);
     expect(narrowingOk('analytics.googleVision.dailyCap', 0, 50)).toBe(true);
     expect(narrowingOk('analytics.googleVision.dailyCap', 50, 0)).toBe(false);
     // M1: a boolean never passes a numeric narrow path
     expect(narrowingOk('retention.clipsDays', 30, true)).toBe(false);
-    expect(narrowingOk('analytics.googleVision.monthlyLimit', 100, false)).toBe(false);
+    expect(narrowingOk('analytics.googleVision.monthlyLimit', 100, false, 1000)).toBe(false);
     expect(narrowingOk('retention.clipsDays', 90, 120)).toBe(true);
     expect(narrowingOk('retention.clipsDays', 90, 30)).toBe(false);
     expect(narrowingOk('retention.clipsDays', 90, undefined)).toBe(false); // Reset: cams-admin can't know the value it restores
@@ -82,6 +81,34 @@ describe('narrow.ts: the contract rules for the pre-check', () => {
     expect(narrowingOk('sse.pingS', 30, 5)).toBe(true);
     expect(narrowReason('retention.auditDays')).toBe('a remote change may only keep data longer');
     expect(narrowReason('analytics.googleVision.checksPerDay')).toBe('a remote change may only lower spending');
+    expect(narrowCode('retention.clipsDays')).toBe('widening_local_only');
+  });
+  it('the Vision ceiling (ceiling, ceilingGated): lower always, higher within the known ceiling, an unknown ceiling left to the proxy', () => {
+    const L = 'analytics.googleVision.monthlyLimit';
+    const E = 'analytics.googleVision.enabled';
+    expect(ceilingPathOf(L)).toBe('analytics.googleVision.remoteMaxMonthly');
+    expect(ceilingPathOf(E)).toBe('analytics.googleVision.remoteMaxMonthly');
+    expect(ceilingPathOf('sse.pingS')).toBeNull();
+    // a limit of 5000 with a ceiling of 1000 can go to 3000 or 0, but not to 6000
+    expect(narrowingOk(L, 5000, 3000, 1000)).toBe(true);
+    expect(narrowingOk(L, 5000, 0, 1000)).toBe(true);
+    expect(narrowingOk(L, 5000, 6000, 1000)).toBe(false);
+    expect(narrowingOk(L, 0, 1000, 1000)).toBe(true);
+    expect(narrowingOk(L, 0, 1001, 1000)).toBe(false);
+    expect(narrowingOk(L, 0, 1, 0)).toBe(false);
+    expect(narrowingOk(L, 0, 1)).toBe(true); // no known ceiling: the proxy decides
+    expect(narrowingOk(L, 0, undefined, 0)).toBe(true); // a Reset: the proxy decides
+    expect(narrowingOk(L, 0, true, 1000)).toBe(false);
+    expect(narrowingOk(E, false, true, 0)).toBe(false);
+    expect(narrowingOk(E, false, true, 1)).toBe(true);
+    expect(narrowingOk(E, true, false, 0)).toBe(true);
+    expect(narrowingOk(E, true, true, 0)).toBe(true);
+    expect(narrowingOk(E, false, true)).toBe(true);
+    expect(narrowingOk(E, false, 1, 1000)).toBe(false);
+    expect(narrowCode(L)).toBe('above_local_ceiling');
+    expect(narrowCode(E)).toBe('above_local_ceiling');
+    expect(narrowReason(L, 1000)).toBe('cams-admin may allow up to 1000 (analytics.googleVision.remoteMaxMonthly)');
+    expect(narrowReason(E, 0)).toBe('cams-admin may not switch it on: no ceiling at the proxy (analytics.googleVision.remoteMaxMonthly is 0)');
   });
 });
 
@@ -198,7 +225,10 @@ describe('ProxyConfig', () => {
     const before = countCommands();
     for (const set of [{ 'cameras.cam1.host': '192.0.2.9' }, { 'camsAdmin.url': 'https://x.example' }, { 'server.port': 1 }, { 'nosuch.x': 1 }, { Sse: 1 }])
       expect(() => C().preview(ACTOR, p.acc, p.prx, { set }), JSON.stringify(set)).toThrow(/not_remote_settable/);
-    expect(() => C().preview(ACTOR, p.acc, p.prx, { set: { 'analytics.googleVision.monthlyLimit': 5000 } })).toThrow(/widening_local_only/);
+    // The Vision ceiling: the reference proxy reports remoteMaxMonthly 0 → above_local_ceiling (raising and switching on).
+    expect(() => C().preview(ACTOR, p.acc, p.prx, { set: { 'analytics.googleVision.monthlyLimit': 5000 } })).toThrow(/above_local_ceiling/);
+    expect(() => C().preview(ACTOR, p.acc, p.prx, { set: { 'analytics.googleVision.enabled': true } })).toThrow(/above_local_ceiling/);
+    expect(() => C().preview(ACTOR, p.acc, p.prx, { set: { 'analytics.googleVision.remoteMaxMonthly': 1000 } })).toThrow(/not_remote_settable/);
     // coordinator ruling: no remote write may make the proxy delete data
     for (const path of ['retention.clipsDays', 'retention.stillsDays', 'retention.eventsDays', 'retention.auditDays', 'ftp.maxGB'])
       expect(() => C().preview(ACTOR, p.acc, p.prx, { set: { [path]: 1 } }), path).toThrow(/widening_local_only/);
