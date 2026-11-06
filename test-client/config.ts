@@ -70,6 +70,7 @@ export class RefProxyConfig {
     for (const c of this.cameras) {
       f(`cameras.${c}.name`, c === 'cam1' ? 'Front door' : c);
       f(`cameras.${c}.host`, '192.0.2.10');
+      d(`cameras.${c}.statusPollS`, 30);
       d(`cameras.${c}.storage.sharePercent`, 100);
     }
     for (const [p, v] of Object.entries(o.settings ?? {})) f(p, v);

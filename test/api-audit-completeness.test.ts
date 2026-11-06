@@ -19,6 +19,9 @@ describe('audit completeness', () => {
   chmodSync(keyFile, 0o600);
   const a = testApp(dir, { VIEWER_TOKEN_KEY_FILE: keyFile });
   afterAll(() => a.close());
+  // A rename needs the proxy on the live channel (no queued renames); the fake proxy here only reports.
+  const realConnected = a.hub.connected.bind(a.hub);
+  a.hub.connected = (proxyId: string) => proxyId === ids.prx || realConnected(proxyId);
   const count = () => (a.db.prepare('SELECT count(*) n FROM audit_log').get() as { n: number }).n;
   const ids: Record<string, string> = {};
 

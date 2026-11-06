@@ -8,7 +8,8 @@ import type { Profile } from './profile';
 import type { MoveLeftover } from './leftovers';
 import type { CameraOnboarding } from './onboarding';
 
-export interface ReportedCamera { ref: string; online: boolean; name?: string; model?: string | null }
+// nameSource (camera name sync, 2026-11-06): 'camera' when the proxy read the name from the camera, 'config' when it shows its config's initial name.
+export interface ReportedCamera { ref: string; online: boolean; name?: string; nameSource?: 'camera' | 'config'; model?: string | null }
 export interface CommandsInfo { enabled: boolean; paused: boolean; pauseReason: string | null; allow: string[]; seenWindow: number }
 export interface TokensInfo { revision: number; client: number; admin: number; blocked: string[] }
 export interface Reported {

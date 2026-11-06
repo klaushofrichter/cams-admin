@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ceilingOf, EFFECT, nameError, waitCommand, widens, groupPaths, isRemoteSettable, narrowNote, narrowOk, parseValue, rollbackable, stateLine, valueText, type ConfigView } from './config';
+import { ceilingOf, EFFECT, nameError, renameError, renameOutcome, waitCommand, widens, groupPaths, isRemoteSettable, narrowNote, narrowOk, parseValue, rollbackable, stateLine, valueText, type ConfigView } from './config';
 
 const view: ConfigView = {
   revision: `sha256:${'a'.repeat(64)}`, schema: 1, cameras: ['cam1'], omittedCameras: [], fetchedAt: 1, cmdId: 'cmd_0123456789ABCDEFGHJK',
@@ -15,7 +15,7 @@ const view: ConfigView = {
   },
   settable: {
     'sse.pingS': { type: 'integer', min: 5, max: 300 }, 'sse.maxClients': { type: 'integer' }, 'retention.clipsDays': { type: 'integer', dir: 'more' },
-    'analytics.googleVision.monthlyLimit': { type: 'integer', dir: 'less' }, 'cameras.*.name': { type: 'string', pattern: '^[^\\u0000-\\u001f]{1,64}$' },
+    'analytics.googleVision.monthlyLimit': { type: 'integer', dir: 'less' },
     'storage.maxPercent': { type: 'integer' }, 'camsAdmin.url': { type: 'string' },
   },
 };
@@ -37,7 +37,7 @@ describe('config (Settings UI)', () => {
     expect(row('storage.maxPercent')).toMatchObject({ editable: false, why: 'storage settings are local only' });
     expect(row('retention.clipsDays')).toMatchObject({ editable: true, why: 'only higher from cams-admin' });
     expect(row('analytics.googleVision.monthlyLimit')).toMatchObject({ editable: true, why: "only up to the proxy's local ceiling from cams-admin" });
-    expect(row('cameras.cam1.name')).toMatchObject({ editable: true });
+    expect(row('cameras.cam1.name')).toMatchObject({ editable: false, why: 'never remote (addresses, ports, files, trust, users)' });
   });
   it('isRemoteSettable is remote-settable.json ∩ the proxy\'s settable', () => {
     expect(isRemoteSettable('sse.pingS', view.settable)).toBe(true);
@@ -58,8 +58,6 @@ describe('config (Settings UI)', () => {
     expect(parseValue({ type: 'string', enum: ['main', 'sub'] }, 'x')).toEqual({ ok: false, error: 'one of main, sub' });
     // M4: a proxy-supplied regex never runs in the browser (ReDoS); the proxy checks it.
     expect(parseValue({ type: 'string', pattern: '^(a+)+$' }, 'a'.repeat(40) + '!')).toEqual({ ok: true, value: 'a'.repeat(40) + '!' });
-    // M3: a camera name follows the contract's name rule
-    expect(parseValue({ type: 'string' }, 'evil\u202Egnp', 'cameras.cam1.name')).toEqual({ ok: false, error: '1–64 characters; no control, format, bidi or zero-width characters' });
     expect(parseValue({ type: 'string' }, 'x'.repeat(513))).toEqual({ ok: false, error: 'at most 512 characters' });
   });
   it('narrowNote and narrowOk: the input refuses a lowered retention period, a raised Vision limit and any storage edit', () => {
@@ -116,9 +114,26 @@ describe('config (Settings UI)', () => {
     expect(valueText('<b>x</b>')).toBe('<b>x</b>');
     expect(valueText(7)).toBe('7');
   });
-  it('nameError: the contract\'s camera-name rule, before anything is sent', () => {
-    expect(nameError('Garage Süd – Einfahrt')).toBeNull();
-    for (const bad of ['', 'evil\u061Cname', 'tag\u{E0041}x', 'lone\uD800x', 'a\u202Eb', 'x'.repeat(65)]) expect(nameError(bad), JSON.stringify(bad)).toBe('1–64 characters; no control, format, bidi or zero-width characters');
+  it('nameError: the camera\'s own name rules, before anything is sent', () => {
+    expect(nameError('Back yard (left) [1]')).toBeNull();
+    expect(nameError('x'.repeat(32))).toBe('too long: 32 characters, at most 31');
+    expect(nameError('Back_yard')).toBe('not allowed: _');
+    expect(nameError(' Garage')).toBe('no leading or trailing space');
+    expect(nameError('Garage Süd')).toBe('not allowed: ü');
+    for (const bad of ['', 'evil\u061Cname', 'a\u202Eb']) expect(nameError(bad), JSON.stringify(bad)).not.toBeNull();
+  });
+  it('renameOutcome: what a rename command did, in words', () => {
+    const row = (state: string, outcomeCode: string | null = null, result: unknown = null) => ({ state, outcomeCode, result });
+    expect(renameOutcome(row('done', null, { name: 'Garage door', verified: true }), 'Garage door')).toBe('The camera is now "Garage door"; cams-admin follows at its proxy\'s next report (about 30 s).');
+    expect(renameOutcome(row('done', null, { name: 'Garage', verified: false }), 'Garage door')).toBe('The camera holds "Garage" (asked for "Garage door"); cams-admin follows at its proxy\'s next report.');
+    expect(renameOutcome(row('failed', 'camera_offline'), 'X')).toBe('The camera is offline; try again when it is online.');
+    expect(renameOutcome(row('failed', 'invalid_name'), 'X')).toBe('The camera refused the name.');
+    expect(renameOutcome(row('refused', 'not_allowed'), 'X')).toBe('Rename refused: not_allowed.');
+    expect(renameOutcome(null, 'X')).toBe('No answer from the proxy within 30 s; check the command on the proxy page.');
+  });
+  it('renameError: a rename that failed after other fields were saved says so', () => {
+    expect(renameError(false, 'The camera is offline; try again when it is online.')).toBe('The camera is offline; try again when it is online.');
+    expect(renameError(true, 'The camera is offline; try again when it is online.')).toBe('Other changes saved; the camera is offline; try again when it is online.');
   });
   it('waitCommand polls until the row is final, or gives up', async () => {
     const states = ['queued', 'sent', 'received', 'done'];

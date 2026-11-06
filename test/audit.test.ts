@@ -35,7 +35,9 @@ describe('audit log', () => {
     // Viewer tokens (design 2026-11-05).
     const VIEWER = ['viewer-token-create', 'viewer-token-validity', 'viewer-token-revoke', 'viewer-token-accounts', 'viewer-token-delete', 'viewer-token-copy'];
     for (const a of VIEWER) expect(AUDIT_ACTIONS).toContain(a);
-    expect(AUDIT_ACTIONS).toHaveLength(37 + P4.length + OVERRIDES.length + 1 + 3 + 2 + 4 + 3 + 4 + 2 + 5 + 1 + VIEWER.length);
+    // Camera name sync (design 2026-11-06).
+    expect(AUDIT_ACTIONS).toContain('camera-name-synced');
+    expect(AUDIT_ACTIONS).toHaveLength(37 + P4.length + OVERRIDES.length + 1 + 3 + 2 + 4 + 3 + 4 + 2 + 5 + 1 + VIEWER.length + 1);
     expect(new Set(AUDIT_ACTIONS).size).toBe(AUDIT_ACTIONS.length);
   });
 

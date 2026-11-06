@@ -41,6 +41,7 @@ import { bodyErrors } from '../bodyErrors';
 import type { DiagTokens } from '../diag/tokens';
 import type { OpsTokens } from '../ops/tokens';
 import type { CopyWhat, ViewerTokens } from '../viewerTokens/service';
+import { adoptedName } from '../cameraName';
 
 export interface ManualBackup { at: number; ok: boolean; litestream: { ok: boolean; status?: string; error?: string }; snapshot: { ok: boolean; key?: string; bytes?: number; error?: string } }
 export interface BackupState {
@@ -97,7 +98,7 @@ export function apiRouter(d: ApiDeps): express.Router {
         else res.status(res.locals.status ?? (req.method === 'POST' && res.locals.created ? 201 : 200)).json(out);
       }
     } catch (e) {
-      if (e instanceof ApiError) return void res.status(e.status).json({ error: e.code, ...(e.field ? { field: e.field } : {}) });
+      if (e instanceof ApiError) return void res.status(e.status).json({ error: e.code, ...(e.field ? { field: e.field } : {}), ...(e.hint ? { message: e.hint } : {}) });
       if (e instanceof FieldError) return void res.status(400).json({ error: 'invalid', field: e.field, ...(e.hint ? { message: e.hint } : {}) });
       throw e;
     }
@@ -356,7 +357,7 @@ export function apiRouter(d: ApiDeps): express.Router {
     if (!rep) throw new ApiError(400, 'not_reported', 'proxyCameraId');
     const reported = detail.reported?.cameras.find((c) => c.ref === ref);
     const cam = d.registry.createCamera(actor(res), accountId, {
-      camsId: req.body?.camsId ?? rep.proposedCamsId, name: req.body?.name ?? reported?.name ?? ref, kind: req.body?.kind ?? 'camera',
+      camsId: req.body?.camsId ?? rep.proposedCamsId, name: req.body?.name ?? adoptedName(reported?.name, ref), kind: req.body?.kind ?? 'camera',
       proxyId: px.id, proxyCameraId: ref, model: reported?.model ?? null, host: 'from-proxy',
     }, 'camera-adopt');
     // A manual adopt lifts what auto-adopt was blocked from (a camera deleted or moved off this proxy).

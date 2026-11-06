@@ -55,9 +55,10 @@ describe('narrow.ts: the contract rules for the pre-check', () => {
   it('patternOf, isRemoteSettable = remote-settable.json ∩ the proxy\'s settable', () => {
     expect(patternOf('cameras.cam1.stills.enabled')).toBe('cameras.*.stills.enabled');
     expect(patternOf('sse.pingS')).toBe('sse.pingS');
-    const settable = { 'sse.pingS': { type: 'integer' as const }, 'camsAdmin.url': { type: 'string' as const }, 'cameras.*.name': { type: 'string' as const } };
+    const settable = { 'sse.pingS': { type: 'integer' as const }, 'camsAdmin.url': { type: 'string' as const }, 'cameras.*.statusPollS': { type: 'integer' as const } };
     expect(isRemoteSettable('sse.pingS', settable)).toBe(true);
-    expect(isRemoteSettable('cameras.cam1.name', settable)).toBe(true);
+    expect(isRemoteSettable('cameras.cam1.statusPollS', settable)).toBe(true);
+    expect(isRemoteSettable('cameras.cam1.name', { ...settable, 'cameras.*.name': { type: 'string' as const } })).toBe(false);
     expect(isRemoteSettable('camsAdmin.url', settable)).toBe(false);
     expect(isRemoteSettable('sse.maxClients', settable)).toBe(false);
   });
@@ -423,15 +424,23 @@ describe('ProxyConfig', () => {
     expect(results().find((d) => d.cmdId === ra.commandId)).toMatchObject({ changes: [{ path: 'sse.pingS', from: 7, to: 30 }] });
   });
 
-  it('M1/M2/M3: a leaf of the wrong type, an unknown camera and a bidi camera name are 400 before any command', async () => {
+  it('config.set refuses cameras.*.name: the camera holds its name (camera.name.set renames)', async () => {
+    const p = await proxy();
+    await viewed(p.acc, p.prx);
+    const before = countCommands();
+    expect(() => C().preview(ACTOR, p.acc, p.prx, { set: { 'cameras.cam1.name': 'Porch' } })).toThrow(/not_remote_settable/);
+    expect(() => C().preview(ACTOR, p.acc, p.prx, { unset: ['cameras.cam1.name'] })).toThrow(/not_remote_settable/);
+    expect(countCommands()).toBe(before);
+  });
+
+  it('M1/M2: a leaf of the wrong type, and an unknown camera are 400 before any command', async () => {
     const p = await proxy();
     await viewed(p.acc, p.prx);
     const before = countCommands();
     expect(() => C().preview(ACTOR, p.acc, p.prx, { set: { 'sse.pingS': 'often' } })).toThrow(/invalid/);
     expect(() => C().preview(ACTOR, p.acc, p.prx, { set: { 'retention.clipsDays': true } })).toThrow(/invalid/);
-    expect(() => C().preview(ACTOR, p.acc, p.prx, { set: { 'cameras.nosuch.name': 'x' } })).toThrow(/unknown_camera/);
-    expect(() => C().preview(ACTOR, p.acc, p.prx, { set: { 'cameras.constructor.name': 'x' } })).toThrow(/unknown_camera/);
-    expect(() => C().preview(ACTOR, p.acc, p.prx, { set: { 'cameras.cam1.name': 'evil‮gnp' } })).toThrow(/invalid/);
+    expect(() => C().preview(ACTOR, p.acc, p.prx, { set: { 'cameras.nosuch.statusPollS': 5 } })).toThrow(/unknown_camera/);
+    expect(() => C().preview(ACTOR, p.acc, p.prx, { set: { 'cameras.constructor.statusPollS': 5 } })).toThrow(/unknown_camera/);
     expect(countCommands()).toBe(before);
   });
 

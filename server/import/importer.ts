@@ -10,8 +10,14 @@ import { randomBytes } from 'crypto';
 import { newId } from '../ids';
 import { groupKey, parseCamsExport, trimUrl, type ExportCamera, type ExportProxy } from './export-format';
 import { checkCameraHost, FieldError } from '../validate';
+import { adoptedName, cameraNameProblem } from '../cameraName';
 const hostOr400 = (v: string, field: string) => {
   try { checkCameraHost(v, field); } catch (e) { if (e instanceof FieldError) throw new ApiError(400, 'invalid', e.field); throw e; }
+};
+// A record-held name (a camera without a proxy) that breaks the camera's rules is refused at the dry run, not at Apply.
+const nameOr400 = (v: unknown, field: string) => {
+  const problem = cameraNameProblem(v);
+  if (problem) throw new ApiError(400, 'invalid', field, problem);
 };
 export { parseCamsExport } from './export-format';
 
@@ -289,6 +295,10 @@ export class Importer {
       const f = fieldsOf(c);
       const old = registry.get(c.id);
       if (!old) {
+        // Behind a proxy the file's name is a placeholder (the camera's own replaces it at the first report),
+        // made to pass the camera's rules as an adopt does; without a proxy it is the record's and must pass them.
+        if (f.proxyCameraId) f.name = adoptedName(f.name, f.proxyCameraId);
+        else nameOr400(f.name, `cameras[${idx}].name`);
         changes.push({ kind: 'camera-new', camsId: c.id, fields: f });
         return;
       }
@@ -311,6 +321,9 @@ export class Importer {
           }
         }
         if (was === v) continue;
+        // Behind a proxy the camera holds its name (camera name sync design 2026-11-06): the record follows its proxy's report.
+        if (k === 'name' && old.proxyId && old.proxyCameraId) continue;
+        if (k === 'name') nameOr400(v, `cameras[${idx}].name`);
         if (st.length && k !== 'host' && k !== 'cameraUser') {
           // Another instance uses this camera: an absent value keeps the shared one;
           // a different one changes it for that instance too (a mismatch to accept),

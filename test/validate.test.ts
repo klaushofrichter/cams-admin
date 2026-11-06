@@ -76,6 +76,26 @@ describe('cameras and sims', () => {
     [{ proxyId: 'prx_' + 'A'.repeat(20), proxyCameraId: undefined }, 'proxyCameraId'],
     [{ proxyId: 'prx_X' }, 'proxyId'],
   ])('refuse %j', (patch, f) => expect(field(() => cameraInput({ ...ok, ...patch }, false))).toBe(f));
+  // The camera's name rules (camera name sync, Task 5): the reason travels as the hint.
+  const hint = (fn: () => unknown): string | undefined => { try { fn(); } catch (e) { if (e instanceof FieldError) return e.hint; throw e; } return undefined; };
+  it.each([
+    ['x'.repeat(32), 'too long: 32 characters, at most 31'],
+    ['Back_yard', 'not allowed: _'],
+    [' Garage', 'no leading or trailing space'],
+  ])('refuse the name %j on create and update, with the reason', (name, reason) => {
+    expect(field(() => cameraInput({ ...ok, name }, false))).toBe('name');
+    expect(hint(() => cameraInput({ ...ok, name }, false))).toBe(reason);
+    expect(field(() => cameraInput({ name }, true))).toBe('name');
+    expect(hint(() => cameraInput({ name }, true))).toBe(reason);
+  });
+  it('a name of 31 allowed characters passes as typed', () => {
+    const name = 'Back yard (left) [1]+{2}=3-' + 'abcd';
+    expect(name).toHaveLength(31);
+    expect(cameraInput({ ...ok, name }, false).name).toBe(name);
+    expect(cameraInput({ name }, true).name).toBe(name);
+  });
+  it('a partial update without a name keeps it out', () => expect(cameraInput({ host: 'h.example.net' }, true)).not.toHaveProperty('name'));
+  it('a null name is refused on update', () => expect(field(() => cameraInput({ name: null }, true))).toBe('name'));
   it('sims need a known runsOn', () => {
     expect(simInput({ runsOn: 'mac' })).toMatchObject({ runsOn: 'mac' });
     expect(field(() => simInput({ runsOn: 'phone' }))).toBe('runsOn');

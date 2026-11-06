@@ -203,10 +203,10 @@ test('camera overrides on the instance page; the camera\'s registry fields on th
   await page.getByTestId(`ov-clear-${t}`).click();
   await expect(page.getByTestId(`ov-state-${t}`)).toHaveCount(0);
   await expect(page.getByTestId(`ov-host-${t}`)).toHaveValue('');
-  // The registry name (what cams shows), edited on the account's Cameras tab.
+  // The registry name (what cams shows), edited on the account's Cameras tab: no proxy, so the record's own.
   await page.goto(`/#/accounts/${acc.id}/cameras`);
   await page.getByTestId('camera-edit-cam1').click();
-  await expect(page.getByTestId('camera-edit-form')).toContainText('not the camera\'s own (OSD) name');
+  await expect(page.getByTestId('camera-edit-name-note')).toContainText('the name is only cams-admin\'s record');
   await page.getByTestId('camera-edit-name').fill('Backyard Left');
   await page.getByTestId('camera-edit-save').click();
   await expect(page.getByTestId('camera-edit-form')).toHaveCount(0);

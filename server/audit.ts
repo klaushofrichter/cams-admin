@@ -35,6 +35,8 @@ export const AUDIT_ACTIONS = [
   'ops-token-issue', 'ops-token-revoke', 'ops-auth-refused', 'ops-scope-refused',
   // Viewer tokens (design 2026-11-05): never the token, its full fingerprint or its ciphertext.
   'viewer-token-create', 'viewer-token-validity', 'viewer-token-revoke', 'viewer-token-accounts', 'viewer-token-delete', 'viewer-token-copy',
+  // Camera name sync (design 2026-11-06): a camera record took the name its camera reported through its proxy.
+  'camera-name-synced',
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 const KNOWN = new Set<string>(AUDIT_ACTIONS);
