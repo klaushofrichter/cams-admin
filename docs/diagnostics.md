@@ -51,6 +51,7 @@ A signed-in sysadmin's browser session works on the same routes.
 | `/diag/proxies/:proxyId/profile` | the proxy's latest reported profile, as `GET /api/v1/proxies/:proxyId/profile` answers it (see "Proxy profile" below) |
 | `/diag/cams-instances` | state, accounts, routes, the last report: mode, applied vs current revision, held changes and held proxies, kept-old, shadow, token counts, problems (code, account, detail) |
 | `/diag/cameras` | registry fields (cams id, model, proxy, proxy camera id, host, protocol, TLS name), move id, online |
+| `/diag/cameras/:cameraId` | one camera by its registry id (`cam_…`): `{id, name, model, proxyId, proxyCameraId, camsId, online}`; `name` is what the camera holds (see "Camera names" below), `online` comes from the proxy's last report (null without a proxy); 404 `not_found` for an unknown id |
 | `/diag/cameras/:camsId/onboarding?accountId=` | one camera's onboarding: `{camera, proxy, proxyCameraId, online, reported, detail, viewers, ready, missing, optional}`; `:camsId` is a cams id or a registry id (`cam_…`); a cams id in several accounts is 409 `ambiguous` unless `accountId` names one; 409 `no_proxy` for a camera without a proxy (see below) |
 | `/diag/tokens` | per proxy, its managed tokens: holder (cams instance id and name, or `manual`), label, kind, state, on proxy, created, retire/revoke times, last token command; no hash |
 | `/diag/viewer-tokens` | viewer tokens (design 2026-11-05): name, account ids, state, days, valid until, last used, fingerprint prefix; never the token, its fingerprint or its ciphertext; e-mails masked |
@@ -454,6 +455,45 @@ The source must run a cam-proxy that knows `move.begin`: an older one allows
 command (429 `rate_limited`, 400 `invalid_args`, 409 `paused_on_proxy` or
 `not_allowed_on_proxy`) also undo the fixes; the token's limit of 60 writes a
 minute applies.
+
+## Camera names
+
+The camera holds its name; the registry follows it.
+
+- **How a name syncs:** cam-proxy reads the name from the camera on every
+  status poll (about 30 s) and reports it with its heartbeat. A camera
+  record whose name differs takes the reported name (only when the proxy read
+  it from the camera, not from its own config). A rename through cams-admin or
+  cams reaches the record within about 30 s, a rename in the Reolink app within
+  about a minute; after an outage the first report catches up. No schedule, no
+  queue.
+- **Two audit entries:** cam-proxy audits the rename where it happens
+  (`camera-name`; source `camera` for an outside rename, user `cams-admin` for
+  one cams-admin sent), cams-admin audits that the record followed
+  (`camera-name-synced`, actor type `proxy`, detail `{from, to,
+  proxyCameraId}`). No entry when the name is unchanged.
+- **The camera's name rules:** 1 to 31 characters; ASCII letters, digits, space
+  and `- ( ) + = [ ] { }`; no leading or trailing space (so no `_`). They apply
+  to every name entered in cams-admin (create, edit, adopt, import). A reported
+  name that breaks them leaves the record as it is and is logged once
+  (`camera_name_not_synced`).
+- **Renaming:** `PATCH` of a camera mapped to a proxy that changes `name` is
+  409 `rename_at_camera`; the `message` is the rename endpoint,
+  `POST /api/v1/accounts/:accountId/proxies/:proxyId/cameras/:camera/name`
+  (body `{name}`, scope `actions`). It sends `camera.name.set` and the record
+  changes when the camera confirms through the next report. It is refused with
+  409 `proxy_offline` when the proxy is not on the live channel now (nothing is
+  queued) and 409 `not_allowed_on_proxy` when the proxy does not allow
+  `camera.name.set`. A camera without a proxy keeps its name editable.
+- **Adopt and import:** a camera reported with a name the rules refuse is
+  adopted under its proxy camera id instead (cut to 31 characters); its next
+  report with the camera's own name replaces that. An import row naming an
+  unmapped camera with an invalid name is refused at the dry run.
+- **Remote settings:** `cameras.*.name` is no longer remote-settable
+  (`contract/v1/remote-settable.json`); the camera holds the name.
+- **Lookup:** `GET /diag/cameras/:cameraId` answers the current name by
+  registry id (table above); signed-in users have
+  `GET /api/v1/accounts/:accountId/cameras/:cameraId`.
 
 ## A camera's onboarding
 

@@ -34,6 +34,30 @@ beforeAll(() => {
   a.registry.createCamera('admin@example.com', acc, { camsId: 'porch', name: 'Porch', kind: 'camera', proxyId: px, proxyCameraId: 'cam1', host: '192.0.2.10', protocol: 'https' });
 });
 
+describe('diag camera lookup by id', () => {
+  let token: string, tokenId: string;
+  beforeAll(async () => { const t = await issue('lookup', 1); token = t.token; tokenId = t.item.id; });
+  afterAll(async () => { await a.api('post', `/diag-tokens/${tokenId}/revoke`); });
+
+  it('diag camera lookup answers the current name, after a sync', async () => {
+    const cam = a.registry.listCameras(acc).find((c) => c.camsId === 'porch')!;
+    const before = await bearer(`/diag/cameras/${cam.id}`, token);
+    expect(before.status).toBe(200);
+    expect(before.body).toEqual({ id: cam.id, name: 'Porch', model: cam.model, proxyId: px, proxyCameraId: 'cam1', camsId: 'porch', online: before.body.online });
+    a.registry.syncCameraNames(px, [{ ref: 'cam1', name: 'Front porch', nameSource: 'camera' }]);
+    const after = await bearer(`/diag/cameras/${cam.id}`, token);
+    expect(after.body).toMatchObject({ id: cam.id, name: 'Front porch', camsId: 'porch' });
+    expect([true, false, null]).toContain(after.body.online);
+    expect((await bearer('/diag', token)).body.routes).toContain('/diag/cameras/:cameraId');
+  });
+
+  it('unknown id answers 404', async () => {
+    const r = await bearer('/diag/cameras/cam_doesnotexist', token);
+    expect(r.status).toBe(404);
+    expect(r.body).toEqual({ error: 'not_found' });
+  });
+});
+
 describe('diagnostics tokens', () => {
   it('a token is shown once: the list and the audit carry only an 8-hex prefix of its hash', async () => {
     const { token, item } = await issue('mac');
