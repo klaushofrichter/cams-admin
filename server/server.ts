@@ -87,7 +87,7 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
     for (const c of registry.syncCameraNames(proxyId, cams, log)) live.publishRegistry('camera', c.id);
   };
   const vision = new Vision({ db, clock, registry, status, commands, config, live, log });
-  const actions = new RemoteActions({ db, audit, registry, commands, status, clock, config });
+  const actions = new RemoteActions({ db, audit, registry, commands, status, clock, config, connected: (proxyId) => hub.connected(proxyId) });
   // Onboarding (cam-proxy onboarding design §5): after each heartbeat, the reported site-CA pins.
   const pins = new ReportedPins({ registry, status, live, log });
   const autoAdopt = new AutoAdopt({ db, registry, status, audit, live, log });

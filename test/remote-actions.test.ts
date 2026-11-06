@@ -263,6 +263,20 @@ describe('RemoteActions', () => {
     expect(countCommands()).toBe(before);
   });
 
+  // After a cams-admin restart the stored status row can still say connected while the proxy is down: the live channel decides.
+  it('a rename while the status row says connected but the live channel has no proxy → 409 proxy_offline, no command', async () => {
+    const p = await proxy(['camera.name.set']);
+    const hub = s.built.hub;
+    const real = hub.connected;
+    hub.connected = (id: string) => (id === p.prx ? false : real.call(hub, id));
+    try {
+      expect(s.built.status.row(p.prx)?.connected).toBe(true);
+      const before = countCommands();
+      expect(code(() => A().rename(ACTOR, p.acc, p.prx, 'cam1', { name: 'Porch' }))).toEqual([409, 'proxy_offline', undefined]);
+      expect(countCommands()).toBe(before);
+    } finally { hub.connected = real; }
+  });
+
   it('another account\'s proxy → 404 on every call', async () => {
     const p = await proxy(['camera.action:camera-test', 'camera.name.set', 'proxy.restart']);
     const q = await proxy(['camera.action:camera-test'], 'other');

@@ -28,7 +28,9 @@ const isObj = (x: unknown): x is Record<string, unknown> => typeof x === 'object
 const only = (o: Record<string, unknown>, keys: string[]) => Object.keys(o).every((k) => keys.includes(k));
 const isDisruptive = (a: string) => (DISRUPTIVE_ACTIONS as readonly string[]).includes(a);
 
-export interface ActionsDeps { db: Db; audit: Audit; registry: Registry; commands: Commands; status: StatusStore; clock: Clock; config?: ProxyConfig }
+// connected: the live channel (Hub.connected), not the status row: that row is the last stored state and can
+// still say connected after a cams-admin restart while the proxy is down.
+export interface ActionsDeps { db: Db; audit: Audit; registry: Registry; commands: Commands; status: StatusStore; clock: Clock; config?: ProxyConfig; connected: (proxyId: string) => boolean }
 export interface Available {
   actions: { action: string; disruptive: boolean; allowed: boolean }[]; rename: boolean; restart: boolean; cameras: string[];
   // The onboarding entries on the proxy: camera.onboarding.get, camera.action:camera-ftp-setup, camera.action:camera-time-set.
@@ -97,7 +99,7 @@ export class RemoteActions {
     // No queued renames (camera name sync design 2026-11-06): a name the camera never took is the stale state
     // the design removes, so a rename needs the proxy connected now. A proxy without camera.name.set in its
     // allow list is refused by commands.create (409 not_allowed_on_proxy); neither creates a command.
-    if (!this.d.status.row(proxyId)?.connected) throw new ApiError(409, 'proxy_offline');
+    if (!this.d.connected(proxyId)) throw new ApiError(409, 'proxy_offline');
     return { commandId: this.d.commands.create(actor, accountId, proxyId, 'camera.name.set', { v: 1, camera, name: body.name as string }).id };
   }
 
