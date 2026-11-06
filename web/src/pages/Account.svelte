@@ -10,6 +10,7 @@
   import Confirm from '../components/Confirm.svelte';
   import ImportPanel from '../components/ImportPanel.svelte';
   import ViewerTokens from '../components/ViewerTokens.svelte';
+  import VisionTab from '../components/VisionTab.svelte';
 
   let { accountId, tab }: { accountId: string; tab: string } = $props();
 
@@ -23,10 +24,14 @@
   let error = $state('');
   let notFound = $state(false);
   let confirmDelete = $state(false);
+  // The Vision tab is for system admins only (the server checks it too).
+  let systemAdmin = $state(false);
+  const TABS = $derived(['overview', 'users', 'proxies', 'cameras', 'sims', 'import', ...(systemAdmin ? ['vision'] : [])]);
 
   async function load() {
     try {
       account = await api('GET', `/accounts/${accountId}`);
+      api('GET', '/me').then((m) => (systemAdmin = m?.systemAdmin === true)).catch(() => (systemAdmin = false));
       [users, proxies, cameras] = await Promise.all([
         api('GET', `/accounts/${accountId}/users`).then((r) => r.items),
         api('GET', `/accounts/${accountId}/proxies`).then((r) => r.items),
@@ -167,7 +172,7 @@
     <div class="row"><a href="#/accounts" class="muted">Accounts</a><span class="muted">/</span><h2 data-testid="account-title">{account.displayName}</h2><span class="mono muted">{account.name}</span></div>
     {#if admins === 0}<p class="badge warn" data-testid="no-admin-warning">This account has no admin user.</p>{/if}
     <nav class="tabs row">
-      {#each ['overview', 'users', 'proxies', 'cameras', 'sims', 'import'] as t}
+      {#each TABS as t}
         <button class="btn" class:on={tab === t} data-testid="tab-{t}" onclick={() => go(t)}>{t[0].toUpperCase() + t.slice(1)}</button>
       {/each}
     </nav>
@@ -296,6 +301,8 @@
       {#if cError}<p class="error" data-testid="camera-error">{cError}</p>{/if}
     {:else if tab === 'import'}
       <ImportPanel accountId={accountId} accountName={account.name} />
+    {:else if tab === 'vision' && systemAdmin}
+      <VisionTab {accountId} />
     {/if}
   </section>
   {#if confirmDelete}

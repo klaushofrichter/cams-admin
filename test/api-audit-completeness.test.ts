@@ -63,6 +63,9 @@ describe('audit completeness', () => {
     ['post', '/accounts/:accountId/proxies/:proxyId/config/apply', () => `/accounts/${ids.acc}/proxies/${ids.prx}/config/apply`, () => ({ previewId: ids.preview }), 'command-create'],
     ['post', '/accounts/:accountId/proxies/:proxyId/config/rollback/preview', () => `/accounts/${ids.acc}/proxies/${ids.prx}/config/rollback/preview`, () => ({ cmdId: ids.applied }), 'command-create'],
     ['post', '/accounts/:accountId/proxies/:proxyId/config/rollback/apply', () => `/accounts/${ids.acc}/proxies/${ids.prx}/config/rollback/apply`, () => ({ previewId: ids.rbPreview }), 'command-create'],
+    // Vision management: a refresh is one command-create per proxy it asks (one here); a limit change its dry run.
+    ['post', '/accounts/:accountId/vision/refresh', () => `/accounts/${ids.acc}/vision/refresh`, () => ({}), 'command-create'],
+    ['put', '/accounts/:accountId/vision/proxies/:proxyId/providers/:provider', () => `/accounts/${ids.acc}/vision/proxies/${ids.prx}/providers/google-vision`, () => ({ monthlyLimit: 0 }), 'command-create'],
     ['post', '/accounts/:accountId/proxies/:proxyId/actions', () => `/accounts/${ids.acc}/proxies/${ids.prx}/actions`, () => ({ camera: 'cam1', action: 'camera-test' }), 'command-create'],
     ['post', '/accounts/:accountId/proxies/:proxyId/cameras/:camera/name', () => `/accounts/${ids.acc}/proxies/${ids.prx}/cameras/cam1/name`, () => ({ name: 'Porch' }), 'command-create'],
     ['post', '/accounts/:accountId/proxies/:proxyId/cameras/:camera/onboarding/refresh', () => `/accounts/${ids.acc}/proxies/${ids.prx}/cameras/cam1/onboarding/refresh`, () => ({}), 'command-create'],
@@ -136,13 +139,18 @@ describe('audit completeness', () => {
       // A pin that differs from the reported one (set without an audit), for the pins/from-report row.
       a.db.prepare(`UPDATE proxies SET ca_fingerprints = ? WHERE id = ?`).run(JSON.stringify([`SHA256:${'AA'.repeat(32)}`]), ids.prx);
       a.status.hello(ids.prx, 'v2', Date.now(), ['status', 'commands']);
-      a.status.heartbeat(ids.prx, { summary: makeSummary({ cameras: 2, now: Date.now() }), proxy: { ...makeProxyInfo({ now: Date.now(), site: 'home' }), commands: { enabled: true, paused: false, pauseReason: null, allow: ['tokens.apply', ...P3_ALLOW, 'camera.onboarding.get'], seenWindow: 1000 } }, truncated: false }, Date.now());
+      a.status.heartbeat(ids.prx, { summary: makeSummary({ cameras: 2, now: Date.now() }), proxy: { ...makeProxyInfo({ now: Date.now(), site: 'home' }), commands: { enabled: true, paused: false, pauseReason: null, allow: ['tokens.apply', ...P3_ALLOW, 'camera.onboarding.get', 'analytics.usage.get'], seenWindow: 1000 } }, truncated: false }, Date.now());
     }
     // The proxy isn't connected: finish the P3 commands by hand, as the proxy would.
     const finish = (id: string, result: object) => a.db.prepare(`UPDATE commands SET state = 'done', finished_at = ?, result = ? WHERE id = ?`).run(Date.now(), JSON.stringify({ body: { phase: 'done', status: 'ok', result } }), id);
     const change = { dryRun: false, baseRevision: REV, revision: REV, changes: [{ path: 'sse.pingS', from: 30, to: 7, sourceFrom: 'default', sourceTo: 'override' }], unchanged: [] };
     if (pattern.endsWith('/config/preview')) finish(ids.preview = r.body.commandId, { ...change, dryRun: true });
     if (pattern.endsWith('/config/apply')) finish(ids.applied = r.body.commandId, change);
+    // An active key again (the key-revoke row revoked the first): Refresh asks online proxies only.
+    if (pattern.endsWith('/config/rollback/apply')) a.db.prepare(`INSERT INTO proxy_keys (id, proxy_id, public_key, fingerprint, created_at, confirmed_at) VALUES ('key_00000000000000000002', ?, 'pk2', 'fp2', 1, 1)`).run(ids.prx);
+    // The Vision paths in the stored view, for the limit change's dry run.
+    if (pattern.endsWith('/vision/refresh')) a.config.storeView(ids.prx, 'cmd_0123456789ABCDEFGHJK', { revision: REV, cameras: ['cam1'], omittedCameras: [], settable: { 'sse.pingS': { type: 'integer' }, 'analytics.googleVision.enabled': { type: 'boolean' }, 'analytics.googleVision.monthlyLimit': { type: 'integer' } },
+      paths: { 'sse.pingS': { v: 30, s: 'default' }, 'analytics.googleVision.enabled': { v: true, s: 'file' }, 'analytics.googleVision.monthlyLimit': { v: 1000, s: 'default' }, 'analytics.googleVision.remoteMaxMonthly': { v: 0, s: 'default' } } });
     if (pattern.endsWith('/config/rollback/preview')) finish(ids.rbPreview = r.body.commandId, { ...change, dryRun: true, of: ids.applied });
     if (actions[0] === 'token-revoke') a.tokens.onHeartbeat(ids.prx, { revision: 99 }); // a proxy ahead (restored cams-admin), for the confirm-restore row
     if (actions[0] === 'token-issue') {
