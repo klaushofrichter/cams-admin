@@ -171,6 +171,21 @@ describe('status: the proxy\'s command policy and token revision (P2)', () => {
     s.hb(undefined, p2(s.clock.now(), 'garbage'));
     expect(s.store.view(s.prx.id).commands).toBe('unsupported');
   });
+
+  // Camera name sync (2026-11-06): only a name the camera reported (nameSource 'camera') moves a record.
+  it('nameSource from the summary reaches onCameras', () => {
+    const s = setup(dir);
+    const got: unknown[] = [];
+    s.store.onCameras = (_p, cams) => { got.push(cams.map((c) => ({ ref: c.ref, name: c.name, nameSource: c.nameSource }))); };
+    const summary = makeSummary({ cameras: 3, now: s.clock.now() });
+    ['camera', 'config', 'something-else'].forEach((src, i) => Object.assign(summary.cameras[i].camera, { nameSource: src }));
+    s.store.heartbeat(s.prx.id, { summary, proxy: makeProxyInfo({ now: s.clock.now() }), truncated: false }, s.clock.now());
+    expect(got).toEqual([[
+      { ref: 'cam1', name: 'Camera 1', nameSource: 'camera' },
+      { ref: 'cam2', name: 'Camera 2', nameSource: 'config' },
+      { ref: 'cam3', name: 'Camera 3', nameSource: undefined },
+    ]]);
+  });
 });
 
 describe('live hub', () => {

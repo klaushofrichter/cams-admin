@@ -70,7 +70,7 @@ export class StatusStore {
   // P2: a heartbeat's token revision (Tokens confirms a set whose done was lost).
   onTokens?: (proxyId: string, tokens: TokensInfo | null) => void;
   onConfig?: (proxyId: string) => void; // P3: the heartbeat's configRevision (ProxyConfig.onHeartbeat)
-  onCameras?: (proxyId: string, cameras: Reported['cameras']) => void; // the reported cameras (Registry.fillCameraModels)
+  onCameras?: (proxyId: string, cameras: Reported['cameras']) => void; // the reported cameras (Registry.fillCameraModels, Registry.syncCameraNames)
   onHeartbeat?: (proxyId: string) => void; // after the hooks above (onboarding: reported pins, then auto-adopt)
   private dirty = new Set<string>();
   private lastFlush: number;
@@ -181,13 +181,16 @@ export class StatusStore {
       const pin = pinState(proxy.caFingerprints, reportedFps);
       let summary: unknown, ok: boolean, problemCount: number, version: string | null = null, summaryAt: number | null = null, cams: Reported['cameras'] = [];
       if (v.ok) {
-        const s = v.summary as { ok: boolean; problemCount: number; version: string; generatedAt: number; cameras?: { camera: { id: string; online: boolean; name?: string; model?: string | null } }[] };
+        const s = v.summary as { ok: boolean; problemCount: number; version: string; generatedAt: number; cameras?: { camera: { id: string; online: boolean; name?: string; nameSource?: unknown; model?: string | null } }[] };
         summary = { ...s, $truncated: body.truncated === true };
         ok = s.ok;
         problemCount = s.problemCount;
         version = s.version;
         summaryAt = s.generatedAt;
-        cams = (s.cameras ?? []).map((c) => ({ ref: c.camera.id, online: c.camera.online, name: c.camera.name, model: c.camera.model ?? null }));
+        cams = (s.cameras ?? []).map((c) => ({
+          ref: c.camera.id, online: c.camera.online, name: c.camera.name, model: c.camera.model ?? null,
+          nameSource: c.camera.nameSource === 'camera' || c.camera.nameSource === 'config' ? c.camera.nameSource : undefined,
+        }));
       } else {
         summary = { unreadable: v.reason };
         ok = false;
