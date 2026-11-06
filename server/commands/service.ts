@@ -63,6 +63,21 @@ function moveStartPublic(result: unknown): boolean {
   return !redactSecrets(rest).changed;
 }
 
+// analytics.usage.get's `key` names where a provider's key comes from (env | manual | none), never the key
+// (contract "Vision management"; its name only looks secret): kept when the result is the contract's, every
+// `key` is one of the three words, and nothing else in it looks secret.
+export function usageGetPublic(result: unknown): boolean {
+  if (!validateResultPayload('analytics.usage.get', result)) return false;
+  const providers = (result as { providers?: unknown }).providers;
+  if (!Array.isArray(providers)) return false;
+  const rest = providers.map((p) => {
+    if (typeof p !== 'object' || p === null) return p;
+    const { key, ...other } = p as Record<string, unknown>;
+    return ['env', 'manual', 'none'].includes(key as string) ? other : p;
+  });
+  return !redactSecrets({ ...(result as Record<string, unknown>), providers: rest }).changed;
+}
+
 // What a person may see of a command's args: never a full hash (8 hex
 // digits), never a setting value over 200 characters (R3-19).
 export function summariseArgs(command: string, args: Record<string, unknown>): Record<string, unknown> {
@@ -378,7 +393,8 @@ export class Commands {
     let stored: Record<string, unknown> = m as unknown as Record<string, unknown>;
     // move.start's publicKey is the target's X25519 public key (public, S §9.3; its name only looks secret): kept when
     // the result is the contract's and nothing else in it looks secret.
-    const keepAsIs = r.command === 'tokens.apply' || (r.command === 'move.start' && state === 'done' && moveStartPublic(b.result));
+    const keepAsIs = r.command === 'tokens.apply' || (r.command === 'move.start' && state === 'done' && moveStartPublic(b.result))
+      || (r.command === 'analytics.usage.get' && state === 'done' && usageGetPublic(b.result));
     if (!keepAsIs && b.result !== undefined) {
       const red = redactSecrets(b.result);
       if (red.changed) {

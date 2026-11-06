@@ -17,6 +17,8 @@ import type { Importer } from '../import/importer';
 import { exportForInstance } from '../import/export';
 import { snapshotRevision } from '../cams/snapshot';
 import type { ProxyConfig } from '../config/service';
+import type { Vision } from '../vision/service';
+import { sysadminAllowed } from '../auth/session';
 import type { RemoteActions } from '../actions/service';
 import type { ReportedPins } from '../onboarding/pins';
 import { onboardingView } from '../onboarding/view';
@@ -55,7 +57,7 @@ export interface BackupService { state(): BackupState; backupNow(actor: string):
 
 export interface ApiDeps {
   db: Db; clock: Clock; cfg: Config; audit: Audit; registry: Registry; enrollment: Enrollment; hub: Hub; status: StatusStore; live: LiveHub; sessions: Sessions; backup: BackupService;
-  commands: Commands; tokens: Tokens; camsInstances: CamsInstances; serverKeyFingerprints: string[]; importer: Importer; config: ProxyConfig; actions: RemoteActions; moves: Moves; diag: DiagTokens; ops: OpsTokens; pins: ReportedPins; viewerTokens: ViewerTokens;
+  commands: Commands; tokens: Tokens; camsInstances: CamsInstances; serverKeyFingerprints: string[]; importer: Importer; config: ProxyConfig; actions: RemoteActions; moves: Moves; diag: DiagTokens; ops: OpsTokens; pins: ReportedPins; viewerTokens: ViewerTokens; vision: Vision;
 }
 
 type H = (req: Request, res: Response) => unknown;
@@ -107,7 +109,7 @@ export function apiRouter(d: ApiDeps): express.Router {
   const limit = (req: Request) => (req.query.limit === undefined ? undefined : Number(req.query.limit));
 
   // --- session and live ---------------------------------------------------------------
-  r.get('/me', h((_q, res) => { const s = session(res); return { email: s.email, expiresAt: s.expiresAt }; }));
+  r.get('/me', h((_q, res) => { const s = session(res); return { email: s.email, expiresAt: s.expiresAt, systemAdmin: sysadminAllowed(s.email) }; }));
   r.get('/live', (req, res) => {
     const cookie = req.cookies?.[SESSION_COOKIE];
     if (!res.locals.session) return void res.status(403).json({ error: 'scope' });
@@ -270,6 +272,12 @@ export function apiRouter(d: ApiDeps): express.Router {
   r.post(`${cfgBase}/apply`, h((req, res) => accepted(res, d.config.apply(actor(res), p(req, 'accountId'), p(req, 'proxyId'), req.body?.previewId))));
   r.post(`${cfgBase}/rollback/preview`, h((req, res) => accepted(res, d.config.rollbackPreview(actor(res), p(req, 'accountId'), p(req, 'proxyId'), req.body?.cmdId))));
   r.post(`${cfgBase}/rollback/apply`, h((req, res) => accepted(res, d.config.rollbackApply(actor(res), p(req, 'accountId'), p(req, 'proxyId'), req.body?.previewId))));
+  // --- Vision management (design 2026-11-05): system admin only, checked in the Vision service. The limit
+  // change is a preview + apply run server side (202 with the dry run's command id).
+  const sys = (res: Response) => ({ actor: actor(res), sysadmin: !!res.locals.session && sysadminAllowed((res.locals.session as Session).email) });
+  r.get('/accounts/:accountId/vision', h((req, res) => d.vision.get(sys(res), p(req, 'accountId'))));
+  r.post('/accounts/:accountId/vision/refresh', h((req, res) => { res.locals.status = 202; return d.vision.refresh(sys(res), p(req, 'accountId')); }));
+  r.put('/accounts/:accountId/vision/proxies/:proxyId/providers/:provider', h((req, res) => accepted(res, d.vision.setLimit(sys(res), p(req, 'accountId'), p(req, 'proxyId'), p(req, 'provider'), req.body))));
   r.get(`${proxyBase}/actions`, h((req) => d.actions.available(p(req, 'accountId'), p(req, 'proxyId'))));
   r.post(`${proxyBase}/actions`, h((req, res) => accepted(res, d.actions.cameraAction(actor(res), p(req, 'accountId'), p(req, 'proxyId'), req.body))));
   r.post(`${proxyBase}/cameras/:camera/name`, h((req, res) => accepted(res, d.actions.rename(actor(res), p(req, 'accountId'), p(req, 'proxyId'), p(req, 'camera'), req.body))));

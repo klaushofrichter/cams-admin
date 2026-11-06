@@ -109,6 +109,11 @@ export class ProxyConfig {
     return this.views.get(proxyId) ?? null;
   }
 
+  // The stored view of a proxy, without an account check (the Vision service's "too old" check).
+  peek(proxyId: string): ConfigView | null {
+    return this.view(proxyId);
+  }
+
   state(accountId: string, proxyId: string): ConfigState {
     this.d.registry.getProxy(accountId, proxyId); // 404 for another account's proxy
     const view = this.view(proxyId);
