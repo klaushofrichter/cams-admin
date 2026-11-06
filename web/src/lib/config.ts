@@ -2,12 +2,12 @@
 // settings commands. The rules mirror the contract (remote-settable.json):
 // the proxy re-checks everything; this only keeps the editor honest.
 import remoteSettable from '../../../contract/v1/remote-settable.json';
-import { CAMERA_NAME_PATTERN } from '../../../contract/build';
+import { CAMERA_NAME_PATTERN, type NarrowKind } from '../../../contract/build';
 import { cmdStateText } from './commands';
 
 export type Leaf = boolean | number | string;
 export interface ConfigPath { v?: unknown; s: 'default' | 'file' | 'override' | 'env'; r?: 'restart' | 'process'; p?: true; n?: unknown; by?: { cmdId: string; actor: string; at: number } }
-export interface Settable { type: 'integer' | 'boolean' | 'string'; min?: number; max?: number; oneOf?: number[]; enum?: string[]; pattern?: string; optional?: boolean; dir?: 'less' | 'more' }
+export interface Settable { type: 'integer' | 'boolean' | 'string'; min?: number; max?: number; oneOf?: number[]; enum?: string[]; pattern?: string; optional?: boolean; dir?: NarrowKind }
 export interface ConfigView {
   revision: string; schema: number | null; cameras: string[]; omittedCameras: string[]; paths: Record<string, ConfigPath>; settable: Record<string, Settable>;
   fetchedAt: number; cmdId: string; clampedPaths?: number;
@@ -17,7 +17,9 @@ export interface Row { path: string; label: string; p: ConfigPath; editable: boo
 export interface Group { group: string; camera?: string; rows: Row[] }
 
 const REMOTE = new Set<string>(remoteSettable.remote);
-const NARROW = remoteSettable.narrow as Record<string, 'less' | 'more'>;
+const NARROW = remoteSettable.narrow as Record<string, NarrowKind>;
+const CEILINGS = remoteSettable.ceilings as Record<string, string>;
+const isCeilingKind = (dir: NarrowKind | undefined) => dir === 'ceiling' || dir === 'ceilingGated';
 const PATH_RE = /^[a-z][A-Za-z0-9]{0,31}(\.[a-z0-9][A-Za-z0-9-]{0,31}){0,5}$/;
 const UNSET_IS_NO_CAP = new Set(['stills.maxGB', 'previews.maxGB', 'ftp.maxGB']);
 const ZERO_IS_NO_CAP = new Set(['analytics.googleVision.dailyCap', 'analytics.googleVision.perCameraDailyCap']);
@@ -30,17 +32,32 @@ export function isRemoteSettable(path: string, settable: Record<string, Settable
   return PATH_RE.test(path) && REMOTE.has(pat) && Object.hasOwn(settable, pat);
 }
 
+// The proxy's local ceiling of a ceiling / ceilingGated path, from the view (undefined: not a ceiling path, or unknown).
+export function ceilingOf(view: { paths: Record<string, ConfigPath> }, path: string): unknown {
+  const pat = patternOf(path);
+  return Object.hasOwn(CEILINGS, pat) ? view.paths[CEILINGS[pat]]?.v : undefined;
+}
+
 export function narrowNote(path: string): string | null {
   if (STORAGE.test(path)) return 'storage settings are local only';
   const dir = NARROW[patternOf(path)];
+  if (dir === 'ceiling') return "only up to the proxy's local ceiling from cams-admin";
+  if (dir === 'ceilingGated') return "on from cams-admin only when the proxy sets a ceiling";
   return dir === 'more' ? 'only higher from cams-admin (keeps data longer)' : dir === 'less' ? 'only lower from cams-admin (spending)' : null;
 }
 
-// The contract's narrow rule (same as the server's pre-check).
-export function narrowOk(path: string, from: unknown, to: unknown): boolean {
+// The contract's narrow rule (same as the server's pre-check). ceiling: the proxy's local ceiling (ceilingOf),
+// for the ceiling kinds; unknown → the proxy decides.
+export function narrowOk(path: string, from: unknown, to: unknown, ceiling?: unknown): boolean {
   const pat = patternOf(path);
   const dir = NARROW[pat];
   if (!dir) return true;
+  if (isCeilingKind(dir)) {
+    if (to === undefined) return true;
+    const known = typeof ceiling === 'number' && Number.isFinite(ceiling);
+    if (dir === 'ceilingGated') return typeof to === 'boolean' && (to === false || to === from || !known || (ceiling as number) > 0);
+    return typeof to === 'number' && ((typeof from === 'number' && to <= from) || !known || to <= (ceiling as number));
+  }
   if (typeof from === 'boolean' || typeof to === 'boolean') {
     if (typeof from !== 'boolean' || typeof to !== 'boolean') return false;
     return to === from || (dir === 'less' ? to === false : to === true);
@@ -57,6 +74,7 @@ function why(path: string, p: ConfigPath, settable: Record<string, Settable>): {
   if (STORAGE.test(path)) return { editable: false, why: 'storage settings are local only' };
   if (!isRemoteSettable(path, settable)) return { editable: false, why: 'never remote (addresses, ports, files, trust, users)' };
   const dir = NARROW[patternOf(path)];
+  if (isCeilingKind(dir)) return { editable: true, why: "only up to the proxy's local ceiling from cams-admin" };
   return dir ? { editable: true, why: dir === 'less' ? 'only lower from cams-admin' : 'only higher from cams-admin' } : { editable: true };
 }
 
@@ -115,6 +133,7 @@ export function stateLine(row: { state: string; outcomeCode: string | null; retr
   if (row.state === 'done') return row.dryRun ? 'previewed' : 'applied';
   if (row.outcomeCode === 'conflict') return 'changed on the proxy since you loaded it';
   if (row.outcomeCode === 'widening_local_only') return 'refused by the proxy: it would lower a raise-only value, raise spending or change a local-only setting';
+  if (row.outcomeCode === 'above_local_ceiling') return "refused by the proxy: above the limit its local admin allows cams-admin to set";
   if (row.state === 'refused' && row.outcomeCode === 'rate_limited' && row.retryAfterS) return `the proxy's limit: try again in ${Math.max(1, Math.ceil(row.retryAfterS / 60))} min`;
   return cmdStateText(row.state, row.outcomeCode);
 }

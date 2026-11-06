@@ -10,7 +10,7 @@ Both repositories test against it, so neither can change the payload alone.
 | `v1/*.schema.json` | JSON Schema (draft 2020-12), **lenient**: what cams-admin accepts at run time. Unknown fields are ignored; health-summary enums are plain strings |
 | `v1/strict/*.schema.json` | the same, **strict**: closed objects, every field required, enums enforced. For tests |
 | `v1/commands/*.schema.json` | per-command `args` and `result` schemas (P2: `tokens.apply`; P3: the seven remote-configuration commands), lenient and in `v1/strict/commands/` |
-| `v1/remote-settable.json` | P3: the upper bound of the settings any proxy may let cams-admin set (`remote`), the one-way paths (`narrow`) and what is never remote (`denied`) |
+| `v1/remote-settable.json` | P3: the upper bound of the settings any proxy may let cams-admin set (`remote`), the one-way and ceiling paths (`narrow`), the local ceiling of each ceiling path (`ceilings`) and what is never remote (`denied`) |
 | `v1/fixtures/*.json` | `valid-*` (both accept), `invalid-*` (strict refuses; `$expect.runtime` is the receiver's answer), `drift-*` (the receiver accepts, strict refuses: the cases that catch drift), `refused-*` (strict accepts, the receiving proxy refuses with the nack code in `$expect.runtime`) |
 | `v1/vectors.json` | fixed Ed25519 test keys, the exact signed strings with their signatures, canonical JSON (`jcs`) cases and signed envelopes (`envelopes`) |
 | `build.ts`, `make.ts` | the source of the schemas and fixtures; `npm run contract:make` rewrites `v1/` |
@@ -256,8 +256,8 @@ Changed steps of the check order:
 | command | `ok` | `conflict` | `failed` codes |
 |---|---|---|---|
 | `config.get` | the view | — | `store_error` |
-| `config.set`, `config.unset` | the change list (also for a dry run) | `baseRevision` ≠ the current `configRevision` | `not_remote_settable`, `held_by_env`, `unknown_camera`, `widening_local_only`, `invalid_value`, `store_error` |
-| `config.rollback` | the change list | a path the command changed has changed since | `no_backup`, `already_rolled_back`, `not_remote_settable`, `widening_local_only`, `invalid_value`, `store_error` |
+| `config.set`, `config.unset` | the change list (also for a dry run) | `baseRevision` ≠ the current `configRevision` | `not_remote_settable`, `held_by_env`, `unknown_camera`, `widening_local_only`, `above_local_ceiling`, `invalid_value`, `store_error` |
+| `config.rollback` | the change list | a path the command changed has changed since | `no_backup`, `already_rolled_back`, `not_remote_settable`, `widening_local_only`, `above_local_ceiling`, `invalid_value`, `store_error` |
 | `camera.action` | the action answered 2xx | — | the action's error code |
 | `camera.name.set` | the name as read back | — | `invalid_name`, `camera_offline`, `camera_error`, `unknown_camera` |
 | `proxy.restart` | `{restartAt}`; the restart follows the result | — | — |
@@ -273,6 +273,33 @@ A `config.rollback` that would lower a raise-only value, raise spending, or
 touch a local-only path fails `widening_local_only` (cam-proxy #196: no
 longer exempt from `narrow`).
 
+**Ceiling paths** (Vision management, 2026-11-05; `NARROW_KINDS` in
+`build.ts`). Two more `narrow` kinds bound a remote value by a ceiling set
+locally at the proxy; `ceilings` maps each such path to its ceiling path, which
+is local only (in `denied`):
+
+- `ceiling` (`analytics.googleVision.monthlyLimit`): a remote value is accepted
+  at or below the current value (lowering is always allowed) or at or below the
+  proxy's current ceiling (`analytics.googleVision.remoteMaxMonthly`, an integer
+  0–100000, default 0). A limit of 5,000 with a ceiling of 1,000 can go to 3,000
+  or 0, not to 6,000.
+- `ceilingGated` (`analytics.googleVision.enabled`): `false` is always accepted;
+  `true` only while the ceiling is above 0 (or the value is already `true`).
+
+Otherwise the proxy fails the command `above_local_ceiling` (`ABOVE_LOCAL_CEILING`);
+each refused path's entry has `code: above_local_ceiling` and a `detail` naming
+the ceiling (`valid-result-config-set-above-ceiling`,
+`valid-result-config-set-enable-no-ceiling`). The path checks run
+`widening_local_only` (less/more) before `above_local_ceiling`. A rollback that
+would restore a value above the ceiling fails the same way. Lowering the ceiling
+never changes the current limit; it only bounds the next remote change. config.get's
+`settable[...].dir` reports the kind (`ceiling`, `ceilingGated`), and its `paths`
+carry the ceiling's value, so cams-admin's pre-check can refuse early; with no
+ceiling in the view it lets the proxy decide. cams-admin sends `enabled` and
+`monthlyLimit` together in one `config.set` (`enabled = limit > 0`). A later
+analytics provider is more entries of the same kinds
+(`analytics.<provider>.enabled`, `.monthlyLimit`, `.remoteMaxMonthly`).
+
 **Local only in P3** (`LOCAL_ONLY` in `build.ts`, listed in `denied`). Ruling:
 capture/feature on-off switches (`ftp.enabled`, `stills.enabled`,
 `archive.enabled`, events/analytics enable flags and any other `*.enabled`
@@ -281,6 +308,9 @@ that turns capture or a listener on/off) and health thresholds
 LOCAL ONLY in P3. A compromised cams-admin must not be able to blind a proxy
 silently, and `ftp.enabled=true` opens ports (network exposure needs Klaus).
 Cost if wrong: these stay local; adding them later is a contract change.
+The one change so far: `analytics.googleVision.enabled` left `LOCAL_ONLY` for
+the `ceilingGated` rule (Vision management, Klaus 2026-11-05): cams-admin may
+switch Vision off any time, and on only within the proxy's local ceiling.
 `cameras.*.moved` and `moves` (the moved marker of a camera and the `moves.*`
 settings such as `moves.maxCameras`) are also in `denied`: cam-proxy marks them local only, and cams-admin
 refuses to set them (`not_remote_settable`) whatever a proxy reports.
@@ -318,6 +348,38 @@ differs, is reported `pending` (not a failure) by
 `scripts/contract/cam-proxy-commands.ts`, but only while cam-proxy implements
 **no** P3 command. Once one is in its `IMPLEMENTED`, every P3 fixture must
 match (nothing pending).
+## Vision management (analytics)
+
+Additive (design `docs/superpowers/specs/2026-11-05-vision-management-design.md`).
+One command, `analytics.usage.get` (`ANALYTICS_COMMANDS`; in the strict
+`command` enum; `commands/analytics.usage.get.args` and `.result`, lenient and
+strict). Allow entry `analytics.usage.get`: read only, in cam-proxy's default
+command policy like `config.get` (a proxy with a saved policy adds it once:
+`admin-commands allow analytics.usage.get`). Its own rate budget at the proxy
+(10 a minute); not in the journal budget, not audited.
+
+- Args `{v: 1}` (closed).
+- Result (strict: every field required, objects closed):
+  `{v: 1, at, providers: [provider…]}` (at most `ANALYTICS_PROVIDERS_MAX` = 8),
+  a provider being `{id, name, enabled, key, monthlyLimit, remoteMaxMonthly,
+  dailyCap, month: {calls}, today: {calls}, paused, lastError, cameras}`:
+  `id` (`ANALYTICS_PROVIDER_PATTERN`, `google-vision` first), `key` one of
+  `env | manual | none` (where the key comes from: **never the key or its
+  mask**), `paused` `null` or `{reason, until}` (`until` ms or `null`),
+  `lastError` `null` or `{at, message}`, `cameras` at most 64
+  `{id, today, month}`. Another provider is one more array entry.
+- Lenient: unknown fields ignored, `key` any short string.
+
+Fixtures (the command fixtures carry `$context.feature: 'vision'`: the
+cross-check treats them as pending until cam-proxy implements
+`analytics.usage.get`): `valid-command-analytics-usage-get`,
+`refused-analytics-usage-get-not-allowed`, `refused-analytics-usage-get-extra-arg`,
+`valid-result-analytics-usage-get`, `valid-result-analytics-usage-get-paused`,
+and for the ceiling rules `valid-command-config-set-vision`,
+`valid-result-config-get-vision`, `valid-result-config-set-above-ceiling`,
+`valid-result-config-set-enable-no-ceiling`, `valid-result-config-set-failed-ceiling`.
+`vectors.json` has the command and its result as signed envelopes.
+
 ## Camera moves
 
 Additive: the envelope stays v1, signatures and JCS unchanged. Thirteen commands

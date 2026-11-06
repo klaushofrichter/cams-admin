@@ -5,7 +5,7 @@
   import { api, ApiFailure, errorText } from '../lib/api';
   import { commandsText } from '../lib/commands';
   import { when } from '../lib/format';
-  import { groupPaths, narrowNote, narrowOk, parseValue, patternOf, stateLine, valueText, waitCommand, type Change, type ConfigView, type Leaf } from '../lib/config';
+  import { ceilingOf, groupPaths, narrowNote, narrowOk, parseValue, patternOf, stateLine, valueText, waitCommand, type Change, type ConfigView, type Leaf } from '../lib/config';
   import DiffTable from './DiffTable.svelte';
 
   let { accountId, proxyId, policy, refresh }: { accountId: string; proxyId: string; policy: string; refresh: number } = $props();
@@ -40,7 +40,7 @@
       if (!cur || !s || text === valueText(cur.v)) continue;
       const r = parseValue(s, text, path);
       if (!r.ok) out.push({ path, error: r.error });
-      else if (!narrowOk(path, cur.v, r.value)) out.push({ path, error: narrowNote(path) ?? 'not allowed from cams-admin' });
+      else if (!narrowOk(path, cur.v, r.value, ceilingOf(view, path))) out.push({ path, error: narrowNote(path) ?? 'not allowed from cams-admin' });
       else out.push({ path, value: r.value });
     }
     return out;

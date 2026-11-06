@@ -216,7 +216,7 @@ export function buildSchemas(mode: Mode): Record<string, S> {
   const pathState = obj({ v: anyValue, s: source }, ['s'], ['v']);
   const configFailed = obj({ paths: arr(obj({ path: str(200), code: str(64), detail: str() }, ['path', 'code'], ['detail']), 128) }, ['paths']);
   const configConflict = obj({ revision: rev, current: { type: 'object', propertyNames: { pattern: PATH_PATTERN }, additionalProperties: pathState, maxProperties: 128 } }, ['revision', 'current']);
-  const settable = obj({ type: en(['integer', 'boolean', 'string']), min: num, max: num, oneOf: arr(int(), 64), enum: arr(str(64), 64), pattern: str(400), optional: bool, dir: en(['less', 'more']) }, ['type'], ['min', 'max', 'oneOf', 'enum', 'pattern', 'optional', 'dir']);
+  const settable = obj({ type: en(['integer', 'boolean', 'string']), min: num, max: num, oneOf: arr(int(), 64), enum: arr(str(64), 64), pattern: str(400), optional: bool, dir: en([...NARROW_KINDS]) }, ['type'], ['min', 'max', 'oneOf', 'enum', 'pattern', 'optional', 'dir']);
   const viewPath = obj({ v: anyValue, s: source, r: restart, p: bool, n: anyValue, by: obj({ cmdId, actor: str(), at: int() }, ['cmdId', 'actor', 'at']) }, ['s'], ['v', 'r', 'p', 'n', 'by']);
   const p3Args: Record<(typeof P3_COMMANDS)[number], S> = {
     'config.get': obj({ v: { const: 1 } }, ['v']),
@@ -386,6 +386,32 @@ export function buildSchemas(mode: Mode): Record<string, S> {
     onboardingSchemas[`commands/${c}.result`] = { $id: BASE + `commands/${c}.result.schema.json`, title: `${c} result v1`, ...onboardingResults[c] };
   }
 
+  // --- analytics (Vision management design, 2026-11-05) -----------------------------------
+  // analytics.usage.get reads the proxy's analytics providers: settings, use this month and today, pause, last error and
+  // per-camera counts. One array entry per provider (Google Vision first), so another provider is one more entry. Never
+  // the key or its mask: `key` says only where it comes from.
+  const providerId: S = { type: 'string', pattern: ANALYTICS_PROVIDER_PATTERN };
+  const calls = int(0, { maximum: 100_000_000 });
+  const analyticsProvider = obj({
+    id: providerId, name: str(64, { minLength: 1 }), enabled: bool, key: en([...ANALYTICS_KEY_SOURCES]),
+    monthlyLimit: calls, remoteMaxMonthly: calls, dailyCap: calls,
+    month: obj({ calls }, ['calls']), today: obj({ calls }, ['calls']),
+    paused: nullable(obj({ reason: str(64, { minLength: 1 }), until: nullable(int()) }, ['reason', 'until'])),
+    lastError: nullable(obj({ at: int(), message: str() }, ['at', 'message'])),
+    cameras: arr(obj({ id: camId, today: calls, month: calls }, ['id', 'today', 'month']), 64),
+  }, ['id', 'name', 'enabled', 'key', 'monthlyLimit', 'remoteMaxMonthly', 'dailyCap', 'month', 'today', 'paused', 'lastError', 'cameras']);
+  const analyticsArgs: Record<(typeof ANALYTICS_COMMANDS)[number], S> = {
+    'analytics.usage.get': obj({ v: { const: 1 } }, ['v']),
+  };
+  const analyticsResults: Record<(typeof ANALYTICS_COMMANDS)[number], S> = {
+    'analytics.usage.get': obj({ v: { const: 1 }, at: int(), providers: arr(analyticsProvider, ANALYTICS_PROVIDERS_MAX) }, ['v', 'at', 'providers']),
+  };
+  const analyticsSchemas: Record<string, S> = {};
+  for (const c of ANALYTICS_COMMANDS) {
+    analyticsSchemas[`commands/${c}.args`] = { $id: BASE + `commands/${c}.args.schema.json`, title: `${c} args v1`, ...analyticsArgs[c] };
+    analyticsSchemas[`commands/${c}.result`] = { $id: BASE + `commands/${c}.result.schema.json`, title: `${c} result v1`, ...analyticsResults[c] };
+  }
+
   // --- events (proxy -> cams-admin): command.done and the move kinds ---------------
   const doneEvent = obj({ ...resultCore, kind: en(['command.done']), phase: { const: 'done' } },
     ['proxyId', 'connId', 'kind', 'cmdId', 'phase', 'status'], ['code', 'retryAfterS', 'duplicate', 'result']);
@@ -461,6 +487,7 @@ export function buildSchemas(mode: Mode): Record<string, S> {
     ...p3Schemas,
     ...moveSchemas,
     ...onboardingSchemas,
+    ...analyticsSchemas,
   };
   if (strict) for (const s of Object.values(schemas)) s.$id = (s.$id as string).replace(BASE, BASE + 'strict/');
   return Object.fromEntries(Object.entries(schemas).map(([k, v]) => [k, { $schema: 'https://json-schema.org/draft/2020-12/schema', ...v }]));
@@ -517,8 +544,16 @@ export const ONBOARDING_STEP_LEN = 32;
 // camera actions: camera-ftp-setup (as before) and camera-time-set (disruptive, off by default).
 export const ONBOARDING_COMMANDS = ['camera.onboarding.get'] as const;
 
+// --- analytics (Vision management design, 2026-11-05) -----------------------------
+// The read command (allow entry: its own name; read only, in cam-proxy's default policy like config.get; not audited).
+export const ANALYTICS_COMMANDS = ['analytics.usage.get'] as const;
+// A provider's id in analytics.usage.get (google-vision first) and where its key comes from (never the key or its mask).
+export const ANALYTICS_PROVIDER_PATTERN = '^[a-z][a-z0-9-]{0,31}$';
+export const ANALYTICS_KEY_SOURCES = ['env', 'manual', 'none'] as const;
+export const ANALYTICS_PROVIDERS_MAX = 8;
+
 // The command names on the wire (strict enum). P2 implements tokens.apply.
-export const WIRE_COMMANDS = ['tokens.apply', 'config.get', 'config.set', 'config.unset', 'config.rollback', 'camera.action', 'camera.name.set', 'proxy.restart', ...MOVE_COMMANDS, ...ONBOARDING_COMMANDS] as const;
+export const WIRE_COMMANDS = ['tokens.apply', 'config.get', 'config.set', 'config.unset', 'config.rollback', 'camera.action', 'camera.name.set', 'proxy.restart', ...MOVE_COMMANDS, ...ONBOARDING_COMMANDS, ...ANALYTICS_COMMANDS] as const;
 // The camera actions a proxy may allow for remote use (camera.action:<a>).
 export const REMOTE_ACTIONS = [
   'camera-test', 'onvif-resubscribe', 'camera-ftp-test', 'poe-switch-read', 'inventory', 'inventory-cancel', 'retention-run', 'restart',
@@ -533,6 +568,8 @@ export const ALLOW_ENTRIES: readonly string[] = [
   'move.send', 'move.receive',
   // Camera onboarding: camera.onboarding.get, on by default on cam-proxy.
   ...ONBOARDING_COMMANDS,
+  // Analytics: analytics.usage.get, read only (on by default on cam-proxy, like config.get).
+  ...ANALYTICS_COMMANDS,
   ...REMOTE_ACTIONS.map((a) => `camera.action:${a}`),
 ];
 
@@ -558,7 +595,7 @@ export const PATH_PATTERN = '^[a-z][A-Za-z0-9]{0,31}(\\.[a-z0-9][A-Za-z0-9-]{0,3
 // (network exposure needs Klaus). In `denied`, never in `remote`.
 export const LOCAL_ONLY = [
   'stills.enabled', 'events.poll.enabled', 'ftp.enabled', 'ftp.stalledHours', 'archive.enabled', 'archive.warnPercent', 'health.diskPercent', 'health.tempC', 'host.stats',
-  'analytics.kinds.person', 'analytics.kinds.vehicle', 'analytics.kinds.pet', 'analytics.googleVision.enabled',
+  'analytics.kinds.person', 'analytics.kinds.vehicle', 'analytics.kinds.pet',
   'cameras.*.stills.enabled', 'cameras.*.ftp.enabled', 'cameras.*.events.poll.enabled', 'cameras.*.analytics.kinds.person', 'cameras.*.analytics.kinds.vehicle', 'cameras.*.analytics.kinds.pet',
 ] as const;
 // A key or dotted path that looks secret: cams-admin drops such paths from a
@@ -570,10 +607,27 @@ export const LOCAL_ONLY = [
 // paragraph separator (Zl, Zp). From cam-proxy #196's security fixes.
 export const CAMERA_NAME_PATTERN = '^(?:(?![\\p{Cc}\\p{Cf}\\p{Cs}\\p{Co}\\p{Zl}\\p{Zp}])\\P{Cn}){1,64}$';
 export const SECRET_KEY_PATTERN = 'pem|key|password|passwd|secret|token|cookie';
+// The narrow kinds (remote-settable.json `narrow`, and config.get's settable `dir`):
+//   less          a remote value only lowers (spending);
+//   more          a remote value only raises (data kept);
+//   ceiling       a remote value is accepted at or below the current value, or at or
+//                 below the proxy's local ceiling (`ceilings[path]`, a local-only path);
+//                 else the proxy refuses above_local_ceiling;
+//   ceilingGated  a boolean switch: false always; true only while the ceiling
+//                 (`ceilings[path]`) is above 0, else above_local_ceiling.
+export const NARROW_KINDS = ['less', 'more', 'ceiling', 'ceilingGated'] as const;
+export type NarrowKind = (typeof NARROW_KINDS)[number];
+// The refusal code (config.set / config.unset / config.rollback `failed`) for a value
+// above the proxy's local ceiling; its path entry's detail names the ceiling.
+export const ABOVE_LOCAL_CEILING = 'above_local_ceiling';
 // contract/v1/remote-settable.json: `remote` is the upper bound of what any
 // proxy may let cams-admin set; `narrow` the paths that may only move one way
-// (less spending, more data kept); `denied` documents what is never remote.
-export const REMOTE_SETTABLE: { v: 1; remote: string[]; narrow: Record<string, 'less' | 'more'>; denied: string[] } = {
+// (less spending, more data kept) or only up to a local ceiling; `ceilings`
+// names the local-only ceiling path of every ceiling / ceilingGated path;
+// `denied` documents what is never remote. A later analytics provider is more
+// entries of the same kinds (analytics.<provider>.enabled / .monthlyLimit /
+// .remoteMaxMonthly).
+export const REMOTE_SETTABLE: { v: 1; remote: string[]; narrow: Record<string, NarrowKind>; ceilings: Record<string, string>; denied: string[] } = {
   v: 1,
   remote: [
     'stills.stream', 'stills.intervalS', 'stills.size', 'stills.quality', 'stills.maxGB',
@@ -582,16 +636,20 @@ export const REMOTE_SETTABLE: { v: 1; remote: string[]; narrow: Record<string, '
     'retention.stillsDays', 'retention.previewsDays', 'retention.clipsDays', 'retention.eventsDays', 'retention.auditDays', 'retention.streamLogDays', 'retention.intervalMin',
     'composition.concurrent', 'sse.maxClients', 'sse.queuePerClient', 'sse.pingS', 'recordings.cacheMB',
     'ftp.stream', 'ftp.maxGB',
-    'analytics.googleVision.monthlyLimit', 'analytics.googleVision.dailyCap', 'analytics.googleVision.checksPerDay', 'analytics.googleVision.perCameraDailyCap',
+    'analytics.googleVision.enabled', 'analytics.googleVision.monthlyLimit', 'analytics.googleVision.dailyCap', 'analytics.googleVision.checksPerDay', 'analytics.googleVision.perCameraDailyCap',
     'cameras.*.name', 'cameras.*.statusPollS', 'cameras.*.stills.stream', 'cameras.*.stills.intervalS',
     'cameras.*.ftp.stream',
   ],
   narrow: {
-    'analytics.googleVision.monthlyLimit': 'less', 'analytics.googleVision.dailyCap': 'less',
+    'analytics.googleVision.enabled': 'ceilingGated', 'analytics.googleVision.monthlyLimit': 'ceiling', 'analytics.googleVision.dailyCap': 'less',
     'analytics.googleVision.checksPerDay': 'less', 'analytics.googleVision.perCameraDailyCap': 'less',
     'retention.stillsDays': 'more', 'retention.previewsDays': 'more', 'retention.clipsDays': 'more', 'retention.eventsDays': 'more',
     'retention.auditDays': 'more', 'retention.streamLogDays': 'more',
     'stills.maxGB': 'more', 'previews.maxGB': 'more', 'ftp.maxGB': 'more',
+  },
+  ceilings: {
+    'analytics.googleVision.enabled': 'analytics.googleVision.remoteMaxMonthly',
+    'analytics.googleVision.monthlyLimit': 'analytics.googleVision.remoteMaxMonthly',
   },
   denied: [
     'server', 'go2rtc', 'storage', 'ftp.port', 'ftp.passive', 'ftp.tls', 'ftp.publicHost', 'ftp.sourceSubnet', 'ftp.certFile', 'ftp.keyFile', 'tls', 'composition.font', 'ntp.server',
@@ -605,5 +663,7 @@ export const REMOTE_SETTABLE: { v: 1; remote: string[]; narrow: Record<string, '
     'profile',
     // The proxy's time zone for camera-time-set (camera onboarding): set on the proxy only.
     'time.zone',
+    // The Vision ceiling (Vision management design): the most monthly calls cams-admin may allow; set at the proxy only.
+    'analytics.googleVision.remoteMaxMonthly',
   ],
 };
