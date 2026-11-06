@@ -70,6 +70,18 @@ describe('the API', () => {
     expect((await a.api('get', `/accounts/${acc.id}/cameras/${cam.id}`)).body.proxyId).toBeNull();
   });
 
+  it("manual adopt: a reported name the camera's rules refuse is not taken, the camera gets its proxy camera id (Task 5)", async () => {
+    const a = app();
+    const acc = (await a.api('post', '/accounts', { name: 'home', displayName: 'Home' })).body;
+    const p = (await a.api('post', `/accounts/${acc.id}/proxies`, { name: 'pi', displayName: 'Pi', runsOn: 'local-host' })).body;
+    a.db.prepare(`UPDATE proxies SET state='enrolled' WHERE id=?`).run(p.id);
+    const summary = makeSummary({ cameras: 2, now: Date.now() });
+    summary.cameras[1].camera.name = 'Camera_2';
+    a.status.heartbeat(p.id, { summary, proxy: makeProxyInfo({ now: Date.now() }), truncated: false }, Date.now());
+    const adopted = await a.api('post', `/accounts/${acc.id}/proxies/${p.id}/adopt`, { proxyCameraId: 'cam2', kind: 'camera' });
+    expect([adopted.status, adopted.body.name]).toEqual([201, 'cam2']);
+  });
+
   it('the dashboard lists accounts, proxies with state and cameras, and the backup card', async () => {
     const a = app();
     const acc = (await a.api('post', '/accounts', { name: 'home', displayName: 'Home' })).body;

@@ -38,5 +38,7 @@ describe('api', () => {
     expect(errorText(new ApiFailure(400, 'invalid', 'name', { error: 'invalid', field: 'name' }))).toBe('Not valid: name');
     expect(errorText(new ApiFailure(400, 'invalid', 'name', { error: 'invalid', field: 'name', message: 'not allowed: _' }))).toBe('Not valid: not allowed: _.');
     expect(errorText(new ApiFailure(409, 'rename_at_camera', 'name'))).toBe('This camera is behind a proxy: a new name goes to the camera. Reload, and edit it again.');
+    expect(errorText(new ApiFailure(409, 'proxy_offline'))).toBe('The proxy is offline: a rename needs it connected. Try again when it is online.');
+    expect(errorText(new ApiFailure(409, 'not_allowed_on_proxy'))).toBe('The proxy does not allow this (its allow list).');
   });
 });

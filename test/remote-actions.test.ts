@@ -251,6 +251,18 @@ describe('RemoteActions', () => {
     });
   });
 
+  // No queued renames (camera name sync design 2026-11-06, Task 5): refused, and no command created.
+  it('a rename for a disconnected proxy → 409 proxy_offline; for a proxy without camera.name.set → 409 not_allowed_on_proxy; no command either way', async () => {
+    const p = await proxy(['camera.name.set']);
+    await p.client.stop();
+    await until(() => s.built.status.row(p.prx)?.connected === false, 5000, 'disconnected');
+    const before = countCommands();
+    expect(code(() => A().rename(ACTOR, p.acc, p.prx, 'cam1', { name: 'Porch' }))).toEqual([409, 'proxy_offline', undefined]);
+    const q = await proxy(['camera.action:camera-test']);
+    expect(code(() => A().rename(ACTOR, q.acc, q.prx, 'cam1', { name: 'Porch' }))).toEqual([409, 'not_allowed_on_proxy', undefined]);
+    expect(countCommands()).toBe(before);
+  });
+
   it('another account\'s proxy → 404 on every call', async () => {
     const p = await proxy(['camera.action:camera-test', 'camera.name.set', 'proxy.restart']);
     const q = await proxy(['camera.action:camera-test'], 'other');

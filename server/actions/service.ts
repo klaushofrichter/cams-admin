@@ -94,6 +94,10 @@ export class RemoteActions {
     // The camera's own rules (camera name sync design 2026-11-06), the reason with the 400.
     const problem = cameraNameProblem(body.name);
     if (problem) throw new ApiError(400, 'invalid', 'name', problem);
+    // No queued renames (camera name sync design 2026-11-06): a name the camera never took is the stale state
+    // the design removes, so a rename needs the proxy connected now. A proxy without camera.name.set in its
+    // allow list is refused by commands.create (409 not_allowed_on_proxy); neither creates a command.
+    if (!this.d.status.row(proxyId)?.connected) throw new ApiError(409, 'proxy_offline');
     return { commandId: this.d.commands.create(actor, accountId, proxyId, 'camera.name.set', { v: 1, camera, name: body.name as string }).id };
   }
 

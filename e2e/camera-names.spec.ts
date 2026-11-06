@@ -44,6 +44,15 @@ test('a camera behind a proxy is renamed at the camera; the record follows the r
     await expect(page.getByTestId('camera-name-placeholder')).toHaveCount(0);
     await page.getByTestId('camera-proxy').selectOption(px.id);
     await expect(page.getByTestId('camera-name-placeholder')).toHaveText("The camera's own name replaces this when its proxy reports it.");
+    // No queued renames: with the proxy gone the rename is refused, and the form keeps the typed name.
+    await c.stop();
+    await page.getByTestId('camera-edit-garage').click();
+    await page.getByTestId('camera-edit-name').fill('Side door');
+    await expect(async () => {
+      await page.getByTestId('camera-edit-save').click();
+      await expect(page.getByTestId('camera-error')).toHaveText('The proxy is offline: a rename needs it connected. Try again when it is online.', { timeout: 1000 });
+    }).toPass({ timeout: 10_000 });
+    await expect(page.getByTestId('camera-edit-name')).toHaveValue('Side door');
   } finally {
     await c.stop();
   }

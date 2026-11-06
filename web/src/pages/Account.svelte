@@ -155,8 +155,8 @@
         const r = await api('POST', `${base}/cameras/${encodeURIComponent(cur.proxyCameraId)}/name`, { name: newName });
         const row = await waitCommand(() => api('GET', `${base}/commands/${r.commandId}`));
         const text = renameOutcome(row, newName);
-        // A rename the camera did not take keeps the form open, the typed name in it.
-        if (row && row.state !== 'done') { cError = text; await load(); return; }
+        // A rename the camera did not take (or no answer yet) keeps the form open, the typed name in it.
+        if (!row || row.state !== 'done') { cError = text; await load(); return; }
         renameDone = text;
       }
       camEdit = null;

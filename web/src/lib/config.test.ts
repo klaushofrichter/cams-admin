@@ -129,7 +129,7 @@ describe('config (Settings UI)', () => {
     expect(renameOutcome(row('failed', 'camera_offline'), 'X')).toBe('The camera is offline; try again when it is online.');
     expect(renameOutcome(row('failed', 'invalid_name'), 'X')).toBe('The camera refused the name.');
     expect(renameOutcome(row('refused', 'not_allowed'), 'X')).toBe('Rename refused: not_allowed.');
-    expect(renameOutcome(null, 'X')).toBe('No answer from the proxy yet: cams-admin follows once the camera has taken the name.');
+    expect(renameOutcome(null, 'X')).toBe('No answer from the proxy within 30 s; check the command on the proxy page.');
   });
   it('waitCommand polls until the row is final, or gives up', async () => {
     const states = ['queued', 'sent', 'received', 'done'];

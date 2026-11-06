@@ -126,6 +126,26 @@ describe('the importer (M §11.2)', () => {
     expect(r.reg.listCameras(home.id).find((c) => c.camsId === 'cam2')).toMatchObject({ name: 'Driveway', host: '192.0.2.32' });
   });
 
+  it('names (Task 5): a new camera behind a proxy whose name breaks the camera rules gets its proxy camera id; one without a proxy is refused at the dry run', () => {
+    const f = structuredClone(CLUSTER);
+    f.cameras[1].name = 'Drive_way';
+    const res = applyRun(home.id, cluster.id, f, APPLY);
+    expect(kinds(res, 'camera-new').map((c) => [c.camsId, c.fields.name])).toEqual([['cam1', 'Backyard'], ['cam2', 'cam2']]);
+    expect(r.reg.listCameras(home.id).find((c) => c.camsId === 'cam2')!.name).toBe('cam2');
+    // A camera without a proxy: its name is the record's, checked at the dry run (not a failed Apply).
+    const g = structuredClone(CLUSTER);
+    const direct: any = { ...structuredClone(g.cameras[1]), id: 'porch', name: 'x'.repeat(32) };
+    delete direct.proxy;
+    g.cameras.push(direct);
+    expect(() => imp.run(ACTOR, home.id, cluster.id, g, DRY)).toThrow(expect.objectContaining({ status: 400, code: 'invalid', field: 'cameras[2].name', hint: 'too long: 32 characters, at most 31' }));
+    direct.name = 'Porch';
+    expect(applyRun(home.id, cluster.id, g, APPLY).applied).toBe(true);
+    // A changed name of a camera without a proxy: also refused at the dry run.
+    direct.name = 'Porch_1';
+    expect(() => imp.run(ACTOR, home.id, cluster.id, g, DRY)).toThrow(expect.objectContaining({ status: 400, field: 'cameras[2].name', hint: 'not allowed: _' }));
+    expect(r.reg.listCameras(home.id).find((c) => c.camsId === 'porch')!.name).toBe('Porch');
+  });
+
   it('proxy groups follow cams\'s rule: same url + token hash = one proxy; one url with two tokens is two groups', () => {
     const f = structuredClone(CLUSTER);
     f.cameras.push({ ...structuredClone(f.cameras[1]), id: 'cam3', proxy: { ...f.cameras[1].proxy, camera: 'cam3' } });

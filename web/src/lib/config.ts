@@ -99,7 +99,7 @@ export const nameError = (text: string): string | null => cameraNameProblem(text
 // What a camera.name.set command did, for the person who asked (null: no final answer yet).
 // The record in cams-admin follows the proxy's next report, never the command's result.
 export function renameOutcome(row: { state: string; outcomeCode: string | null; result?: unknown } | null, name: string): string {
-  if (!row) return 'No answer from the proxy yet: cams-admin follows once the camera has taken the name.';
+  if (!row) return 'No answer from the proxy within 30 s; check the command on the proxy page.';
   if (row.state === 'done') {
     const r = (row.result ?? {}) as { name?: unknown; verified?: unknown };
     if (r.verified === false && typeof r.name === 'string') return `The camera holds "${r.name}" (asked for "${name}"); cams-admin follows at its proxy's next report.`;
