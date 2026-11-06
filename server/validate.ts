@@ -1,6 +1,8 @@
 // The column rules of spec §4, in one place. Inputs are API bodies
 // (camelCase); outputs are normalised values. Errors name the field.
 
+import { cameraNameProblem } from './cameraName';
+
 export class FieldError extends Error {
   // hint: a sentence for the person, sent with the 400 as `message` (opt-in).
   constructor(public field: string, reason = 'invalid', public hint?: string) {
@@ -168,7 +170,7 @@ export function cameraInput(raw: unknown, partial: boolean): Partial<CameraField
     proxyId: str(b, 'proxyId', { max: 40, re: /^prx_[0-9A-Z]{20}$/ }),
     camsId: str(b, 'camsId', { max: 32, re: CAMS_ID_RE, required: !partial }),
     proxyCameraId: str(b, 'proxyCameraId', { max: 32, re: CAMS_ID_RE }),
-    name: str(b, 'name', { min: 1, max: 80, required: !partial }),
+    name: cameraNameOf(b, !partial),
     kind: oneOf(b, 'kind', CAMERA_KINDS, !partial),
     model: str(b, 'model', { max: 80 }),
     host: str(b, 'host', { max: 253 }),
@@ -181,6 +183,19 @@ export function cameraInput(raw: unknown, partial: boolean): Partial<CameraField
   }, partial, {}) as Partial<CameraFields>;
   if (!partial) checkCameraProxy(out as CameraFields);
   return out;
+}
+// A camera name follows the camera's own rules (camera name sync design
+// 2026-11-06): taken as typed (a leading or trailing space is refused, not
+// trimmed), the reason sent with the 400.
+function cameraNameOf(b: Obj, required: boolean): string | undefined {
+  const v = b.name;
+  if (v === undefined) {
+    if (required) throw new FieldError('name', 'required');
+    return undefined;
+  }
+  const problem = cameraNameProblem(v);
+  if (problem) throw new FieldError('name', 'invalid', problem);
+  return v as string;
 }
 // The camera user: ≤ 64 characters, no control or format characters (NUL,
 // newlines, bidi overrides): it is a login name, and shown in the audit log.

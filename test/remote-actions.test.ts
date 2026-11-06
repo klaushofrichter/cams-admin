@@ -114,6 +114,12 @@ describe('RemoteActions', () => {
     expect(await final(p.acc, p.prx, r.commandId)).toMatchObject({ state: 'done', result: { camera: 'cam2', name: 'Back yard', verified: true } });
     for (const body of [{ name: '' }, { name: 'a\nb' }, { name: 'x'.repeat(65) }, {}, { name: 'ok', extra: 1 }]) expect(code(() => A().rename(ACTOR, p.acc, p.prx, 'cam2', body))[1], JSON.stringify(body)).toBe('invalid');
     expect(code(() => A().rename(ACTOR, p.acc, p.prx, 'Bad Cam', { name: 'x' }))).toEqual([400, 'invalid', 'camera']);
+    // The camera's rules (Task 5), the reason with the 400.
+    const hint = (fn: () => unknown) => { try { fn(); } catch (e) { return (e as { hint?: string }).hint; } return 'no error'; };
+    expect(code(() => A().rename(ACTOR, p.acc, p.prx, 'cam2', { name: 'x'.repeat(32) }))).toEqual([400, 'invalid', 'name']);
+    expect(hint(() => A().rename(ACTOR, p.acc, p.prx, 'cam2', { name: 'x'.repeat(32) }))).toBe('too long: 32 characters, at most 31');
+    expect(hint(() => A().rename(ACTOR, p.acc, p.prx, 'cam2', { name: 'Back_yard' }))).toBe('not allowed: _');
+    expect(hint(() => A().rename(ACTOR, p.acc, p.prx, 'cam2', { name: ' Back' }))).toBe('no leading or trailing space');
     expect(code(() => A().restart(ACTOR, p.acc, p.prx, {}))).toEqual([400, 'confirm_required', 'confirm']);
     expect(code(() => A().restart(ACTOR, p.acc, p.prx, { confirm: 'restart' }))).toEqual([400, 'confirm_required', 'confirm']);
     const rs = A().restart(ACTOR, p.acc, p.prx, { confirm: 'proxy.restart' });
@@ -243,6 +249,32 @@ describe('RemoteActions', () => {
       expect(cmds().latest(p.prx, 'camera.onboarding.get', 'cam2')).toMatchObject({ id: b1.commandId });
       expect(cmds().latest(p.prx, 'camera.onboarding.get', 'cam3')).toBeNull();
     });
+  });
+
+  // No queued renames (camera name sync design 2026-11-06, Task 5): refused, and no command created.
+  it('a rename for a disconnected proxy → 409 proxy_offline; for a proxy without camera.name.set → 409 not_allowed_on_proxy; no command either way', async () => {
+    const p = await proxy(['camera.name.set']);
+    await p.client.stop();
+    await until(() => s.built.status.row(p.prx)?.connected === false, 5000, 'disconnected');
+    const before = countCommands();
+    expect(code(() => A().rename(ACTOR, p.acc, p.prx, 'cam1', { name: 'Porch' }))).toEqual([409, 'proxy_offline', undefined]);
+    const q = await proxy(['camera.action:camera-test']);
+    expect(code(() => A().rename(ACTOR, q.acc, q.prx, 'cam1', { name: 'Porch' }))).toEqual([409, 'not_allowed_on_proxy', undefined]);
+    expect(countCommands()).toBe(before);
+  });
+
+  // After a cams-admin restart the stored status row can still say connected while the proxy is down: the live channel decides.
+  it('a rename while the status row says connected but the live channel has no proxy → 409 proxy_offline, no command', async () => {
+    const p = await proxy(['camera.name.set']);
+    const hub = s.built.hub;
+    const real = hub.connected;
+    hub.connected = (id: string) => (id === p.prx ? false : real.call(hub, id));
+    try {
+      expect(s.built.status.row(p.prx)?.connected).toBe(true);
+      const before = countCommands();
+      expect(code(() => A().rename(ACTOR, p.acc, p.prx, 'cam1', { name: 'Porch' }))).toEqual([409, 'proxy_offline', undefined]);
+      expect(countCommands()).toBe(before);
+    } finally { hub.connected = real; }
   });
 
   it('another account\'s proxy → 404 on every call', async () => {

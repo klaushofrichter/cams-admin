@@ -15,6 +15,7 @@ import type { LiveHub } from '../live';
 import type { Logger } from '../log';
 import { reconcile } from '../status/derive';
 import { FieldError } from '../validate';
+import { adoptedName } from '../cameraName';
 
 export const AUTO_ADOPT_ACTOR = 'system:auto-adopt';
 
@@ -59,7 +60,7 @@ export class AutoAdopt {
       if (refused?.get(c.ref) === tried) continue;
       try {
         const cam = this.d.registry.createCamera(AUTO_ADOPT_ACTOR, px.accountId, {
-          camsId: c.proposedCamsId, name: rep?.name ?? c.ref, kind: 'camera', proxyId, proxyCameraId: c.ref, model: rep?.model ?? null, host: 'from-proxy',
+          camsId: c.proposedCamsId, name: adoptedName(rep?.name, c.ref), kind: 'camera', proxyId, proxyCameraId: c.ref, model: rep?.model ?? null, host: 'from-proxy',
         }, 'camera-adopt', 'system');
         this.d.live.publishRegistry('camera', cam.id);
         out.push(cam);

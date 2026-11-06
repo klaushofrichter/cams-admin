@@ -117,6 +117,16 @@ export function diagCameras(d: ApiDeps) {
   };
 }
 
+// One camera by its registry id (cam_…): the current name and where it runs.
+// `online` is from the proxy's last report, null without a proxy or a report.
+export function diagCamera(d: ApiDeps, cameraId: string) {
+  const c = d.registry.listCameras().find((x) => x.id === cameraId);
+  if (!c) throw new ApiError(404, 'not_found');
+  const px = c.proxyId ? d.registry.listProxies().find((x) => x.id === c.proxyId) : undefined;
+  const online = px ? (d.status.viewOf(px).cameras.find((x) => x.ref === c.proxyCameraId)?.online ?? null) : null;
+  return { id: c.id, name: c.name, model: c.model, proxyId: c.proxyId, proxyCameraId: c.proxyCameraId, camsId: c.camsId, online };
+}
+
 // Every proxy's managed tokens: who holds each (a cams instance by name, or
 // "manual"), its state and age. No hash, not even a prefix; the creator's
 // e-mail is masked like the audit's.

@@ -2,7 +2,8 @@
 // settings commands. The rules mirror the contract (remote-settable.json):
 // the proxy re-checks everything; this only keeps the editor honest.
 import remoteSettable from '../../../contract/v1/remote-settable.json';
-import { CAMERA_NAME_PATTERN, type NarrowKind } from '../../../contract/build';
+import { type NarrowKind } from '../../../contract/build';
+import { cameraNameProblem } from '../../../server/cameraName';
 import { cmdStateText } from './commands';
 
 export type Leaf = boolean | number | string;
@@ -92,14 +93,31 @@ export function groupPaths(view: ConfigView): Group[] {
   return [...groups.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([, g]) => g);
 }
 
-const NAME_RE = new RegExp(CAMERA_NAME_PATTERN, 'u');
-const NAME_ERROR = '1–64 characters; no control, format, bidi or zero-width characters';
-// The contract's camera-name rule, checked before anything is sent (null: fine).
-export const nameError = (text: string): string | null => (NAME_RE.test(text) ? null : NAME_ERROR);
+// The camera's own name rules (camera name sync design 2026-11-06), checked before anything is sent (null: fine).
+export const nameError = (text: string): string | null => cameraNameProblem(text);
 
-// path: for the camera-name rule. A proxy's `pattern` is never run here (M4:
+// What a camera.name.set command did, for the person who asked (null: no final answer yet).
+// The record in cams-admin follows the proxy's next report, never the command's result.
+export function renameOutcome(row: { state: string; outcomeCode: string | null; result?: unknown } | null, name: string): string {
+  if (!row) return 'No answer from the proxy within 30 s; check the command on the proxy page.';
+  if (row.state === 'done') {
+    const r = (row.result ?? {}) as { name?: unknown; verified?: unknown };
+    if (r.verified === false && typeof r.name === 'string') return `The camera holds "${r.name}" (asked for "${name}"); cams-admin follows at its proxy's next report.`;
+    return `The camera is now "${name}"; cams-admin follows at its proxy's next report (about 30 s).`;
+  }
+  if (row.outcomeCode === 'camera_offline') return 'The camera is offline; try again when it is online.';
+  if (row.outcomeCode === 'invalid_name') return 'The camera refused the name.';
+  return `Rename ${stateLine(row)}.`;
+}
+
+// A rename that failed after the same save stored the other fields: say those are kept.
+export function renameError(otherSaved: boolean, text: string): string {
+  return otherSaved && text ? `Other changes saved; ${text[0].toLowerCase()}${text.slice(1)}` : text;
+}
+
+// A proxy's `pattern` is never run here (M4:
 // a hostile regex would freeze the tab); the proxy checks it.
-export function parseValue(s: Settable, text: string, path = ''): { ok: true; value: Leaf } | { ok: false; error: string } {
+export function parseValue(s: Settable, text: string): { ok: true; value: Leaf } | { ok: false; error: string } {
   if (s.type === 'boolean') return text === 'true' ? { ok: true, value: true } : text === 'false' ? { ok: true, value: false } : { ok: false, error: 'true or false' };
   if (s.type === 'integer') {
     if (!/^-?\d+$/.test(text.trim())) return { ok: false, error: 'a whole number' };
@@ -112,7 +130,6 @@ export function parseValue(s: Settable, text: string, path = ''): { ok: true; va
   }
   if (text.length > 512) return { ok: false, error: 'at most 512 characters' };
   if (s.enum && !s.enum.includes(text)) return { ok: false, error: `one of ${s.enum.join(', ')}` };
-  if (patternOf(path) === 'cameras.*.name' && !NAME_RE.test(text)) return { ok: false, error: NAME_ERROR };
   return { ok: true, value: text };
 }
 

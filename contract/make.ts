@@ -29,6 +29,8 @@ export function fixtures(): Record<string, unknown> {
   const hb = (summary: unknown, truncated = false, info = makeProxyInfo({ now: NOW })) => env('heartbeat', 2, { summary, proxy: info, truncated });
   const four = makeSummary({ cameras: 4, now: NOW, site: true, offline: ['cam3'] });
   const pi = makeSummary({ cameras: 1, now: NOW, pi: true });
+  // Camera name sync (2026-11-06): names read from the cameras; cam3 (offline, never read) still has its initial name.
+  for (const c of four.cameras) Object.assign(c.camera, { nameSource: c.camera.online ? 'camera' : 'config' });
   const code = 'CAE1-7Q2M-K9XD-4HPA-W3ZT-RN6B';
   const valid = (schema: string, message: unknown, note: string) => ({ $note: note, schema, message });
   const invalid = (schema: string, runtime: string, message: unknown, note: string) => ({ $note: note, schema, $expect: { runtime, strict: 'invalid' }, message });
@@ -96,7 +98,6 @@ export function fixtures(): Record<string, unknown> {
       'stills.quality': { type: 'integer', oneOf: [1, 2, 3, 4, 5, 6] },
       'retention.clipsDays': { type: 'integer', min: 1, max: 3650, dir: 'more' },
       'stills.maxGB': { type: 'integer', min: 1, max: 10000, optional: true, dir: 'more' },
-      'cameras.*.name': { type: 'string', pattern: '^[^\\u0000-\\u001f]{1,64}$' },
     },
   };
   const sixtyFive = Object.fromEntries(Array.from({ length: 65 }, (_, i) => [`sse.p${i}`, 1]));

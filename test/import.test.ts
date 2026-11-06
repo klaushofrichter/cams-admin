@@ -121,8 +121,29 @@ describe('the importer (M §11.2)', () => {
     f.cameras[1].name = 'Front';
     f.cameras[1].host = '192.0.2.32';
     const res = applyRun(home.id, cluster.id, f, APPLY);
-    expect(kinds(res, 'camera-change')).toEqual([{ kind: 'camera-change', cameraId: expect.stringMatching(/^cam_/), camsId: 'cam2', fields: { name: { from: 'Driveway', to: 'Front' }, host: { from: '192.0.2.31', to: '192.0.2.32' } } }]);
-    expect(r.reg.listCameras(home.id).find((c) => c.camsId === 'cam2')).toMatchObject({ name: 'Front', host: '192.0.2.32' });
+    // cam2 is behind a proxy: the camera holds its name, so the import leaves the name alone (Task 5).
+    expect(kinds(res, 'camera-change')).toEqual([{ kind: 'camera-change', cameraId: expect.stringMatching(/^cam_/), camsId: 'cam2', fields: { host: { from: '192.0.2.31', to: '192.0.2.32' } } }]);
+    expect(r.reg.listCameras(home.id).find((c) => c.camsId === 'cam2')).toMatchObject({ name: 'Driveway', host: '192.0.2.32' });
+  });
+
+  it('names (Task 5): a new camera behind a proxy whose name breaks the camera rules gets its proxy camera id; one without a proxy is refused at the dry run', () => {
+    const f = structuredClone(CLUSTER);
+    f.cameras[1].name = 'Drive_way';
+    const res = applyRun(home.id, cluster.id, f, APPLY);
+    expect(kinds(res, 'camera-new').map((c) => [c.camsId, c.fields.name])).toEqual([['cam1', 'Backyard'], ['cam2', 'cam2']]);
+    expect(r.reg.listCameras(home.id).find((c) => c.camsId === 'cam2')!.name).toBe('cam2');
+    // A camera without a proxy: its name is the record's, checked at the dry run (not a failed Apply).
+    const g = structuredClone(CLUSTER);
+    const direct: any = { ...structuredClone(g.cameras[1]), id: 'porch', name: 'x'.repeat(32) };
+    delete direct.proxy;
+    g.cameras.push(direct);
+    expect(() => imp.run(ACTOR, home.id, cluster.id, g, DRY)).toThrow(expect.objectContaining({ status: 400, code: 'invalid', field: 'cameras[2].name', hint: 'too long: 32 characters, at most 31' }));
+    direct.name = 'Porch';
+    expect(applyRun(home.id, cluster.id, g, APPLY).applied).toBe(true);
+    // A changed name of a camera without a proxy: also refused at the dry run.
+    direct.name = 'Porch_1';
+    expect(() => imp.run(ACTOR, home.id, cluster.id, g, DRY)).toThrow(expect.objectContaining({ status: 400, field: 'cameras[2].name', hint: 'not allowed: _' }));
+    expect(r.reg.listCameras(home.id).find((c) => c.camsId === 'porch')!.name).toBe('Porch');
   });
 
   it('proxy groups follow cams\'s rule: same url + token hash = one proxy; one url with two tokens is two groups', () => {
@@ -354,17 +375,26 @@ describe('the importer (M §11.2)', () => {
     describe('shared fields of a camera another instance serves (review I1)', () => {
       beforeEach(() => { applyRun(home.id, cluster.id, CUT_CLUSTER, APPLY); });
 
-      it('a changed shared field (the name) is a shared-change mismatch naming the other instance; Apply waits for it', () => {
+      it('a changed shared field (the web UI note) is a shared-change mismatch naming the other instance; Apply waits for it', () => {
         const f = structuredClone(CUT_PI);
-        f.cameras[0].name = 'Garden';
+        f.cameras[0].webUiNote = 'Garden side';
         const res = applyRun(home.id, pi.id, f, APPLY);
         expect(res).toMatchObject({ applied: false, blocked: true });
         expect(res.mismatches.map((m) => [m.what, m.camsId])).toEqual([['shared-change', 'cam1']]);
-        expect(res.mismatches[0].detail).toBe('cam1: name "Backyard Left" → "Garden" changes the camera also for cams instance cluster');
-        expect(cam('cam1').name).toBe('Backyard Left');
+        expect(res.mismatches[0].detail).toBe('cam1: webUiNote "LAN only" → "Garden side" changes the camera also for cams instance cluster');
+        expect(cam('cam1').webUiNote).toBe('LAN only');
         const ok = applyRun(home.id, pi.id, f, { ...APPLY, acceptMismatch: res.mismatches.map((m) => m.id) });
         expect(ok.applied).toBe(true);
-        expect(cam('cam1').name).toBe('Garden');
+        expect(cam('cam1').webUiNote).toBe('Garden side');
+      });
+
+      it('a changed name of a camera behind a proxy is left out: the camera holds its name (Task 5)', () => {
+        const f = structuredClone(CUT_PI);
+        f.cameras[0].name = 'Garden';
+        const res = applyRun(home.id, pi.id, f, APPLY);
+        expect(res.mismatches).toEqual([]);
+        expect(kinds(res, 'camera-change')).toEqual([]);
+        expect(cam('cam1').name).toBe('Backyard Left');
       });
 
       it('an unregistered Pi token with "create proxies" never moves a camera the cluster serves to a new proxy (a blocker accepting cannot lift)', () => {
@@ -381,10 +411,10 @@ describe('the importer (M §11.2)', () => {
 
       it('a new camera, or one no other instance serves, changes as before (no mismatch)', () => {
         const f = structuredClone(CUT_CLUSTER);
-        f.cameras[1].name = 'Sim 2';
+        f.cameras[1].webUiNote = 'Sim';
         const res = imp.run(ACTOR, home.id, cluster.id, f, DRY);
         expect(res.mismatches).toEqual([]);
-        expect(kinds(res, 'camera-change').map((c) => c.fields)).toEqual([{ name: { from: 'Simulator', to: 'Sim 2' } }]);
+        expect(kinds(res, 'camera-change').map((c) => c.fields)).toEqual([{ webUiNote: { from: null, to: 'Sim' } }]);
       });
     });
 

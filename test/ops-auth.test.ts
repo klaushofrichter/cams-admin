@@ -299,11 +299,15 @@ describe('scoped writes', () => {
   });
 
   // An enrolled proxy that takes commands, with the allow-list given (the commands service checks it).
+  const fakeLive = new Set<string>();
+  const realConnected = a.hub.connected.bind(a.hub);
+  a.hub.connected = (proxyId: string) => fakeLive.has(proxyId) || realConnected(proxyId);
   const commandProxy = (name: string, allow: string[]) => {
     const acct = a.registry.createAccount('admin@example.com', { name: `${name}acc`, displayName: name }).id;
     const p = a.registry.createProxy('admin@example.com', acct, { name, displayName: name, runsOn: 'local-host' }).id;
     a.db.prepare(`UPDATE proxies SET state = 'enrolled' WHERE id = ?`).run(p);
     a.status.hello(p, 'v2', Date.now(), ['status', 'commands']);
+    fakeLive.add(p); // a rename needs the proxy on the live channel (no queued renames)
     a.status.heartbeat(p, { summary: makeSummary({ cameras: 1, now: Date.now() }), proxy: { ...makeProxyInfo({ now: Date.now() }), commands: { enabled: true, paused: false, pauseReason: null, allow, seenWindow: 1000 } }, truncated: false }, Date.now());
     return { acct, p, base: `/accounts/${acct}/proxies/${p}` };
   };

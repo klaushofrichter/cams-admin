@@ -3,6 +3,7 @@ import type { Audit, AuditAction } from './audit';
 import { nameChanges } from './audit';
 import { tx, type Db } from './db/open';
 import { newId } from './ids';
+import { cameraNameProblem } from './cameraName';
 import {
   accountInput, cameraInput, checkCameraHost, checkCameraProxy, FieldError, normaliseEmail, normaliseFingerprint, proxyInput, simInput, userInput,
   type CameraFields, type ProxyFields, type SimFields,
@@ -12,7 +13,8 @@ import {
 // Every write is one transaction with exactly one audit record.
 
 export class ApiError extends Error {
-  constructor(public status: number, public code: string, public field?: string) {
+  // hint: a sentence for the person, sent as `message` (as FieldError's).
+  constructor(public status: number, public code: string, public field?: string, public hint?: string) {
     super(code);
   }
 }
@@ -83,7 +85,7 @@ function guard<T>(fn: () => T): T {
     return fn();
   } catch (e) {
     if (e instanceof ApiError) throw e;
-    if (e instanceof FieldError) throw new ApiError(400, 'invalid', e.field);
+    if (e instanceof FieldError) throw new ApiError(400, 'invalid', e.field, e.hint);
     return mapConstraint(e);
   }
 }
@@ -95,6 +97,9 @@ function versionOf(patch: Row): number {
 }
 
 export class Registry {
+  // Reported names the camera rules refuse, already warned about (proxy, camera, name; syncCameraNames).
+  private unsyncedNames = new Set<string>();
+
   constructor(private db: Db, private clock: Clock, private audit: Audit) {}
 
   // --- generic helpers ---------------------------------------------------------
@@ -418,6 +423,11 @@ export class Registry {
     return guard(() => tx(this.db, () => {
       const f = cameraInput(patch, true);
       const old = this.getCamera(accountId, id);
+      // Behind a proxy the camera holds its name (camera name sync design 2026-11-06): a new name is
+      // the rename command's, and the record follows the proxy's next report. Nothing else is applied.
+      if (f.name !== undefined && f.name !== old.name && old.proxyId && old.proxyCameraId) {
+        throw new ApiError(409, 'rename_at_camera', 'name', `POST /api/v1/accounts/${accountId}/proxies/${old.proxyId}/cameras/${old.proxyCameraId}/name`);
+      }
       checkCameraProxy({ proxyId: f.proxyId !== undefined ? f.proxyId : old.proxyId, proxyCameraId: f.proxyCameraId !== undefined ? f.proxyCameraId : old.proxyCameraId });
       // A changed host is checked like an override host; an old free-form one doesn't block other edits.
       if (f.host && f.host !== old.host) checkCameraHost(f.host);
@@ -444,6 +454,38 @@ export class Registry {
       this.audit.write({
         actorType: 'proxy', actor: proxyId, action: 'camera-update', accountId: r.account_id as string, targetType: 'camera', targetId: r.id as string, targetLabel: r.cams_id as string, outcome: 'ok',
         detail: { fields: ['model'], model, from: 'proxy-report' },
+      });
+      return this.getCamera(r.account_id as string, r.id as string);
+    }));
+  }
+
+  // Camera name sync (design 2026-11-06): the camera holds its name. A record
+  // follows the name its proxy read from the camera (nameSource 'camera'; a
+  // proxy showing its config's initial name says 'config' and is ignored). A
+  // name the camera rules refuse leaves the record and is warned once per
+  // proxy, camera and name. Returns the cameras it changed.
+  syncCameraNames(proxyId: string, reported: { ref: string; name?: string; nameSource?: 'camera' | 'config' }[], log?: { warn: (obj: Record<string, unknown>, msg: string) => void }): Camera[] {
+    const names = new Map<string, string>();
+    for (const c of reported) {
+      if (c.nameSource !== 'camera' || typeof c.name !== 'string') continue;
+      const problem = cameraNameProblem(c.name);
+      if (problem === null) { names.set(c.ref, c.name); continue; }
+      const key = JSON.stringify([proxyId, c.ref, c.name]);
+      if (this.unsyncedNames.has(key)) continue;
+      this.unsyncedNames.add(key);
+      log?.warn({ proxyId, proxyCameraId: c.ref, name: c.name, problem }, 'camera_name_not_synced');
+    }
+    if (!names.size) return [];
+    const todo = (this.db.prepare('SELECT id, account_id, cams_id, proxy_camera_id, name FROM cameras WHERE proxy_id = ?').all(proxyId) as Row[])
+      .filter((r) => names.has(r.proxy_camera_id as string) && names.get(r.proxy_camera_id as string) !== r.name);
+    if (!todo.length) return [];
+    return tx(this.db, () => todo.map((r) => {
+      const ref = r.proxy_camera_id as string;
+      const to = names.get(ref)!;
+      this.db.prepare('UPDATE cameras SET name = ?, updated_at = ?, version = version + 1 WHERE id = ?').run(to, this.clock.now(), r.id as string);
+      this.audit.write({
+        actorType: 'proxy', actor: proxyId, action: 'camera-name-synced', accountId: r.account_id as string, targetType: 'camera', targetId: r.id as string, targetLabel: r.cams_id as string, outcome: 'ok',
+        detail: { from: r.name as string, to, proxyCameraId: ref },
       });
       return this.getCamera(r.account_id as string, r.id as string);
     }));

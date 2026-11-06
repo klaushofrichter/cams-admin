@@ -5,6 +5,7 @@
   import { live } from '../lib/live';
   import { camClass } from '../lib/format';
   import { hostLabel } from '../lib/proxy';
+  import { nameError, renameError, renameOutcome, waitCommand } from '../lib/config';
   import StateChip from '../components/StateChip.svelte';
   import ProxyGui from '../components/ProxyGui.svelte';
   import Confirm from '../components/Confirm.svelte';
@@ -127,18 +128,44 @@
   const EDIT_FIELDS = ['name', 'host', 'protocol', 'tlsServername', 'cameraUser', 'webUiUrl', 'webUiNote', 'proxyCameraId'] as const;
   let camEdit = $state<{ cam: any; f: Record<string, string> } | null>(null);
   const editCamera = (c: any) => { cError = ''; camEdit = { cam: c, f: Object.fromEntries(EDIT_FIELDS.map((k) => [k, c[k] ?? ''])) }; };
+  // Behind a proxy the camera holds its name (camera name sync design 2026-11-06): a new name is sent to the camera
+  // (the proxy's rename command) and the record follows the proxy's next report. Without a proxy it is the record's.
+  const mappedCam = (c: any) => !!(c?.proxyId && c?.proxyCameraId);
+  let renaming = $state(false);
+  let renameDone = $state('');
   async function saveCameraEdit() {
     if (!camEdit) return;
     const { cam, f } = camEdit;
     const patch: Record<string, unknown> = { version: cam.version };
     // Only what changed; an emptied optional field is cleared (null).
     for (const k of EDIT_FIELDS) if ((f[k] ?? '').trim() !== (cam[k] ?? '')) patch[k] = f[k].trim() || null;
-    if (Object.keys(patch).length === 1) { camEdit = null; return; }
+    const newName = mappedCam(cam) && 'name' in patch ? String(patch.name ?? '') : null;
+    if (newName !== null) delete patch.name;
+    if (Object.keys(patch).length === 1 && newName === null) { camEdit = null; return; }
+    cError = renameDone = '';
+    let otherSaved = false;
     try {
-      await api('PATCH', `/accounts/${accountId}/cameras/${cam.id}`, patch);
+      let cur = cam;
+      if (Object.keys(patch).length > 1) {
+        cur = await api('PATCH', `/accounts/${accountId}/cameras/${cam.id}`, patch);
+        otherSaved = true;
+        if (camEdit) camEdit = { cam: cur, f };
+      }
+      if (newName !== null) {
+        renaming = true;
+        const base = `/accounts/${accountId}/proxies/${cur.proxyId}`;
+        const r = await api('POST', `${base}/cameras/${encodeURIComponent(cur.proxyCameraId)}/name`, { name: newName });
+        const row = await waitCommand(() => api('GET', `${base}/commands/${r.commandId}`));
+        const text = renameOutcome(row, newName);
+        // A rename the camera did not take (or no answer yet) keeps the form open, the typed name in it.
+        if (!row || row.state !== 'done') { cError = renameError(otherSaved, text); await load(); return; }
+        renameDone = text;
+      }
       camEdit = null;
       await load();
-    } catch (e: any) { cError = e?.status === 409 ? 'Someone changed this camera meanwhile: cancel, and edit it again.' : errorText(e); }
+    } catch (e: any) {
+      cError = renameError(otherSaved, e?.status === 409 && e?.code === 'conflict' ? 'Someone changed this camera meanwhile: cancel, and edit it again.' : errorText(e));
+    } finally { renaming = false; }
   }
   async function deleteCamera(c: any) {
     try { await api('DELETE', `/accounts/${accountId}/cameras/${c.id}`); await load(); } catch (e) { cError = errorText(e); }
@@ -276,9 +303,14 @@
         {@const f = camEdit.f}
         <div class="card grid" data-testid="camera-edit-form">
           <b>Camera {camEdit.cam.camsId}</b>
-          <p class="muted">The registry's values: what cams shows and how it reaches the camera. The name here is the name in cams, not the camera's own (OSD) name: that is the proxy page's Rename, a command to the camera. A cams instance can override host and camera user for itself (its page, Camera overrides).</p>
+          <p class="muted">The registry's values: what cams shows and how it reaches the camera. A cams instance can override host and camera user for itself (its page, Camera overrides).</p>
+          {#if mappedCam(camEdit.cam)}
+            <p class="muted" data-testid="camera-edit-name-note">The name is the camera's own: a new one is sent to the camera through its proxy, and cams-admin takes it from the proxy's next report.</p>
+          {:else}
+            <p class="muted" data-testid="camera-edit-name-note">This camera has no proxy: the name is only cams-admin's record.</p>
+          {/if}
           <div class="grid two">
-            <label>Name (in cams)<input bind:value={f.name} data-testid="camera-edit-name" /></label>
+            <label>Name<input bind:value={f.name} maxlength="31" data-testid="camera-edit-name" /></label>
             <label>Host<input class="mono" bind:value={f.host} placeholder="192.0.2.10 or from-proxy" data-testid="camera-edit-host" /></label>
             <label>Protocol<select bind:value={f.protocol} data-testid="camera-edit-protocol"><option value="">—</option><option>https</option><option>http</option></select></label>
             <label>TLS name<input class="mono" bind:value={f.tlsServername} /></label>
@@ -287,17 +319,21 @@
             <label>Web UI URL<input class="mono" bind:value={f.webUiUrl} /></label>
             <label>Web UI note<input bind:value={f.webUiNote} /></label>
           </div>
-          <div class="row"><button class="btn primary" data-testid="camera-edit-save" onclick={saveCameraEdit}>Save</button><button class="btn" data-testid="camera-edit-cancel" onclick={() => (camEdit = null)}>Cancel</button></div>
+          {#if f.name.trim() !== camEdit.cam.name && nameError(f.name.trim())}<p class="error small" data-testid="camera-edit-name-error">{nameError(f.name.trim())}</p>{/if}
+          <div class="row"><button class="btn primary" data-testid="camera-edit-save" disabled={renaming || (f.name.trim() !== camEdit.cam.name && !!nameError(f.name.trim()))} onclick={saveCameraEdit}>{renaming ? 'Renaming the camera…' : 'Save'}</button><button class="btn" data-testid="camera-edit-cancel" onclick={() => (camEdit = null)}>Cancel</button></div>
         </div>
       {/if}
       <form class="row" onsubmit={addCamera}>
         <label>cams id<input data-testid="camera-cams-id" bind:value={cCamsId} required /></label>
-        <label>Name<input data-testid="camera-name" bind:value={cName} required /></label>
+        <label>Name<input data-testid="camera-name" bind:value={cName} maxlength="31" required /></label>
         <label>Kind<select data-testid="camera-kind" bind:value={cKind}><option>camera</option><option>sim</option></select></label>
-        <label>Proxy<select bind:value={cProxy}><option value="">— none —</option>{#each proxies as p}<option value={p.id}>{p.name}</option>{/each}</select></label>
+        <label>Proxy<select bind:value={cProxy} data-testid="camera-proxy"><option value="">— none —</option>{#each proxies as p}<option value={p.id}>{p.name}</option>{/each}</select></label>
         <label>Proxy's camera id<input bind:value={cProxyCam} placeholder="cam1" /></label>
-        <button class="btn primary" data-testid="camera-add">Add camera</button>
+        <button class="btn primary" data-testid="camera-add" disabled={!!cName && !!nameError(cName)}>Add camera</button>
       </form>
+      {#if cName && nameError(cName)}<p class="error small" data-testid="camera-name-error">{nameError(cName)}</p>{/if}
+      {#if cProxy}<p class="muted small" data-testid="camera-name-placeholder">The camera's own name replaces this when its proxy reports it.</p>{/if}
+      {#if renameDone}<p class="mono small" data-testid="camera-rename-result">{renameDone}</p>{/if}
       {#if cError}<p class="error" data-testid="camera-error">{cError}</p>{/if}
     {:else if tab === 'import'}
       <ImportPanel accountId={accountId} accountName={account.name} />
@@ -322,4 +358,5 @@
   form { align-items: end; }
   .simedit { display: flex; gap: 4px; flex-wrap: wrap; }
   .simedit input { width: 11rem; }
+  .small { font-size: 12px; margin: 0; }
 </style>

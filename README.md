@@ -41,6 +41,18 @@ It will run at `cams-admin.skylar.technology`. Phase 1 is specified in
   **Backup now** for before a major change. The restore is tested on every
   PR ([docs/restore.md](docs/restore.md)).
 
+## Camera names
+
+The camera holds its name. cam-proxy reads it on every status poll and
+reports it; cams-admin's camera record follows within about 30 s (a rename in
+the Reolink app within about a minute) and audits it as `camera-name-synced`.
+A name must follow the camera's rules (1 to 31 characters: ASCII letters,
+digits, space and `- ( ) + = [ ] { }`). To rename a camera that runs on a proxy,
+use the rename action (`POST /api/v1/accounts/:accountId/proxies/:proxyId/cameras/:camera/name`);
+editing the name in the registry is 409 `rename_at_camera`, and the rename is
+409 `proxy_offline` or `not_allowed_on_proxy` when the proxy can't take it now.
+Details: [docs/diagnostics.md](docs/diagnostics.md#camera-names).
+
 ## Commands and managed tokens (migration phase 2)
 
 - **Signed commands:** cams-admin sends a proxy signed, versioned,

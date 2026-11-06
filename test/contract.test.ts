@@ -251,6 +251,9 @@ describe('the v1 contract', () => {
     expect(JOURNAL_BUDGET_ACTIONS as readonly string[]).toContain('camera-time-set');
     expect(REMOTE_SETTABLE.denied).toContain('time.zone');
     expect(REMOTE_SETTABLE.remote).not.toContain('time.zone');
+    // The camera holds its name: renames go through camera.name.set, so cameras.*.name is denied, not remote.
+    expect(REMOTE_SETTABLE.remote).not.toContain('cameras.*.name');
+    expect(REMOTE_SETTABLE.denied).toContain('cameras.*.name');
     const s = buildSchemas('strict');
     expect((s['commands/camera.action.args'] as any).properties.action.enum).toContain('camera-time-set');
     expect((s.command as any).properties.body.properties.command.enum).toContain('camera.onboarding.get');
@@ -397,7 +400,7 @@ describe('the v1 contract', () => {
     for (const p of r.remote) expect(r.denied.some((d: string) => under(p, d)), p).toBe(false);
     for (const p of Object.keys(r.narrow)) expect(r.remote, p).toContain(p);
     for (const p of r.remote) expect(p).toMatch(new RegExp(PATH_PATTERN.replace('[a-z0-9][A-Za-z0-9-]{0,31}', '(\\*|[a-z0-9][A-Za-z0-9-]{0,31})')));
-    expect(r.remote).toHaveLength(38);
+    expect(r.remote).toHaveLength(37);
     // The coordinator's ruling: no remote write may make a proxy delete data.
     for (const p of ['retention.stillsDays', 'retention.previewsDays', 'retention.clipsDays', 'retention.eventsDays', 'retention.auditDays', 'retention.streamLogDays', 'stills.maxGB', 'previews.maxGB', 'ftp.maxGB']) expect(r.narrow[p], p).toBe('more');
     for (const p of ['analytics.googleVision.dailyCap', 'analytics.googleVision.checksPerDay', 'analytics.googleVision.perCameraDailyCap']) expect(r.narrow[p], p).toBe('less');

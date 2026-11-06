@@ -57,6 +57,14 @@ describe('auto-adopt', () => {
     expect(s.auto.onHeartbeat(s.px)).toEqual([]);
   });
 
+  it("a reported name the camera's rules refuse is not taken: the camera is adopted under its ref (Task 5)", () => {
+    const s = setup({ autoAdopt: true });
+    const summary = makeSummary({ cameras: 1, now: s.clock.now() });
+    summary.cameras[0].camera.name = 'Back_yard';
+    s.status.heartbeat(s.px, { summary, proxy: makeProxyInfo({ now: s.clock.now() }), truncated: false, onboarding: { cam1: ready } }, s.clock.now());
+    expect(s.cams().map((c) => [c.camsId, c.name])).toEqual([['cam1', 'cam1']]);
+  });
+
   it('a camera that is not ready, or a proxy that sends no onboarding, is not adopted', () => {
     const s = setup({ autoAdopt: true });
     s.hb(s.px, { cam1: { ready: false, missing: ['events'] } });
@@ -176,7 +184,7 @@ describe('auto-adopt', () => {
     s.hb(s.px, { cam1: ready }, 1);
     expect(s.cams()).toHaveLength(1);
     // An edit that keeps the proxy writes no block.
-    s.reg.updateCamera(ACTOR, s.acc, cam.id, { name: 'Renamed', version: s.reg.getCamera(s.acc, cam.id).version });
+    s.reg.updateCamera(ACTOR, s.acc, cam.id, { notes: 'edited', version: s.reg.getCamera(s.acc, cam.id).version });
     expect(s.reg.isAdoptBlocked(other, 'cam1')).toBe(false);
   });
 

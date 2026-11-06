@@ -136,8 +136,8 @@ describe('the P3 API', () => {
     expect((await call('GET', `${p.base}/config?set=1&previewId=x`)).status).toBe(200);
     expect((s.built.db.prepare('SELECT count(*) n FROM commands').get() as { n: number }).n).toBe(before);
     const long = 'N'.repeat(300);
-    // The pre-check refuses a 300-character name (the camera-name rule); a dry run made directly still never shows more than 200.
-    expect((await call('POST', `${p.base}/config/preview`, { set: { 'cameras.cam1.name': long } })).body).toEqual({ error: 'invalid', field: 'cameras.cam1.name' });
+    // The pre-check refuses a camera name (the camera holds it); a dry run made directly still never shows more than 200.
+    expect((await call('POST', `${p.base}/config/preview`, { set: { 'cameras.cam1.name': long } })).body).toMatchObject({ error: 'not_remote_settable' });
     s.built.commands.create('admin@example.com', p.accountId, p.proxyId, 'config.set', { v: 1, dryRun: true, baseRevision: `sha256:${'a'.repeat(64)}`, set: { 'cameras.cam1.name': long } });
     const audit = JSON.stringify((await call('GET', '/audit?limit=50')).body);
     expect(audit).toContain('cameras.cam1.name');
