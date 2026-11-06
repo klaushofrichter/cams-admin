@@ -110,6 +110,11 @@ export function renameOutcome(row: { state: string; outcomeCode: string | null; 
   return `Rename ${stateLine(row)}.`;
 }
 
+// A rename that failed after the same save stored the other fields: say those are kept.
+export function renameError(otherSaved: boolean, text: string): string {
+  return otherSaved && text ? `Other changes saved; ${text[0].toLowerCase()}${text.slice(1)}` : text;
+}
+
 // A proxy's `pattern` is never run here (M4:
 // a hostile regex would freeze the tab); the proxy checks it.
 export function parseValue(s: Settable, text: string): { ok: true; value: Leaf } | { ok: false; error: string } {

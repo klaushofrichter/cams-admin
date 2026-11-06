@@ -47,6 +47,8 @@ describe('diag camera lookup by id', () => {
     a.registry.syncCameraNames(px, [{ ref: 'cam1', name: 'Front porch', nameSource: 'camera' }]);
     const after = await bearer(`/diag/cameras/${cam.id}`, token);
     expect(after.body).toMatchObject({ id: cam.id, name: 'Front porch', camsId: 'porch' });
+    // Exactly these fields: no host, credentials or other registry columns.
+    for (const body of [before.body, after.body]) expect(Object.keys(body).sort()).toEqual(['camsId', 'id', 'model', 'name', 'online', 'proxyCameraId', 'proxyId']);
     expect([true, false, null]).toContain(after.body.online);
     expect((await bearer('/diag', token)).body.routes).toContain('/diag/cameras/:cameraId');
   });

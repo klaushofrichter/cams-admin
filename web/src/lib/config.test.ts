@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ceilingOf, EFFECT, nameError, renameOutcome, waitCommand, widens, groupPaths, isRemoteSettable, narrowNote, narrowOk, parseValue, rollbackable, stateLine, valueText, type ConfigView } from './config';
+import { ceilingOf, EFFECT, nameError, renameError, renameOutcome, waitCommand, widens, groupPaths, isRemoteSettable, narrowNote, narrowOk, parseValue, rollbackable, stateLine, valueText, type ConfigView } from './config';
 
 const view: ConfigView = {
   revision: `sha256:${'a'.repeat(64)}`, schema: 1, cameras: ['cam1'], omittedCameras: [], fetchedAt: 1, cmdId: 'cmd_0123456789ABCDEFGHJK',
@@ -130,6 +130,10 @@ describe('config (Settings UI)', () => {
     expect(renameOutcome(row('failed', 'invalid_name'), 'X')).toBe('The camera refused the name.');
     expect(renameOutcome(row('refused', 'not_allowed'), 'X')).toBe('Rename refused: not_allowed.');
     expect(renameOutcome(null, 'X')).toBe('No answer from the proxy within 30 s; check the command on the proxy page.');
+  });
+  it('renameError: a rename that failed after other fields were saved says so', () => {
+    expect(renameError(false, 'The camera is offline; try again when it is online.')).toBe('The camera is offline; try again when it is online.');
+    expect(renameError(true, 'The camera is offline; try again when it is online.')).toBe('Other changes saved; the camera is offline; try again when it is online.');
   });
   it('waitCommand polls until the row is final, or gives up', async () => {
     const states = ['queued', 'sent', 'received', 'done'];

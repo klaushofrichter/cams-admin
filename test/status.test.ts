@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'fs';
+import { join } from 'path';
 import { makeRegistry, ACTOR } from './helpers/registry';
 import { tmpDir } from './helpers/tmp';
 import { FakeRes } from './helpers/live';
@@ -185,6 +187,26 @@ describe('status: the proxy\'s command policy and token revision (P2)', () => {
       { ref: 'cam2', name: 'Camera 2', nameSource: 'config' },
       { ref: 'cam3', name: 'Camera 3', nameSource: undefined },
     ]]);
+  });
+
+  // The contract's own heartbeat (not a hand-patched summary): the field cam-proxy sends reaches the name sync.
+  it('the contract heartbeat fixture carries nameSource through to syncCameraNames', () => {
+    const s = setup(dir);
+    const fixture = JSON.parse(readFileSync(join(__dirname, '../contract/v1/fixtures/valid-heartbeat-4cam.json'), 'utf8'));
+    const cam = s.reg.createCamera(ACTOR, s.acc.id, { camsId: 'garage', name: 'Garage', kind: 'camera', proxyId: s.prx.id, proxyCameraId: 'cam1' });
+    const got: unknown[] = [];
+    s.store.onCameras = (p, cams) => {
+      got.push(cams.map((c) => ({ ref: c.ref, nameSource: c.nameSource })));
+      s.reg.syncCameraNames(p, cams);
+    };
+    s.store.heartbeat(s.prx.id, fixture.message.body, s.clock.now());
+    expect(got).toEqual([[
+      { ref: 'cam1', nameSource: 'camera' },
+      { ref: 'cam2', nameSource: 'camera' },
+      { ref: 'cam3', nameSource: 'config' },
+      { ref: 'cam4', nameSource: 'camera' },
+    ]]);
+    expect(s.reg.getCamera(s.acc.id, cam.id).name).toBe('Camera 1');
   });
 });
 

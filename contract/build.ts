@@ -52,7 +52,9 @@ export function buildSchemas(mode: Mode): Record<string, S> {
       mounted: bool, formatted: bool, capacityMB: nullable(num), freeMB: nullable(num), overwrite: nullable(bool), recordingEnabled: nullable(bool),
       checkedAt: int(), lastRecordingAt: nullable(int()), stalled: bool,
     }, [])),
-  }, ['id', 'online'], ['sd']);
+    // Camera name sync (2026-11-06): 'camera' once the name was read from the camera, 'config' before (the initial name).
+    nameSource: en(['camera', 'config']),
+  }, ['id', 'online'], ['sd', 'nameSource']);
   const stream = obj({ enabled: bool, up: bool, lastFrameAt: nullable(int()) }, []);
   const events = obj({ onvif: en(['subscribed', 'connecting', 'down']), source: en(['onvif', 'poll', 'none']), since: int(), resubscribes: int() }, []);
   const ftp = obj({

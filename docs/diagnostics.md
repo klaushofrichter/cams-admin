@@ -481,7 +481,9 @@ The camera holds its name; the registry follows it.
   409 `rename_at_camera`; the `message` is the rename endpoint,
   `POST /api/v1/accounts/:accountId/proxies/:proxyId/cameras/:camera/name`
   (body `{name}`, scope `actions`). It sends `camera.name.set` and the record
-  changes when the camera confirms through the next report. It is refused with
+  changes when the camera confirms through the next report. A name the rules
+  refuse is 400 `invalid` (field `name`, the reason as `message`, e.g.
+  `not allowed: _`). It is refused with
   409 `proxy_offline` when the proxy is not on the live channel now (nothing is
   queued) and 409 `not_allowed_on_proxy` when the proxy does not allow
   `camera.name.set`. A camera without a proxy keeps its name editable.

@@ -29,6 +29,8 @@ export function fixtures(): Record<string, unknown> {
   const hb = (summary: unknown, truncated = false, info = makeProxyInfo({ now: NOW })) => env('heartbeat', 2, { summary, proxy: info, truncated });
   const four = makeSummary({ cameras: 4, now: NOW, site: true, offline: ['cam3'] });
   const pi = makeSummary({ cameras: 1, now: NOW, pi: true });
+  // Camera name sync (2026-11-06): names read from the cameras; cam3 (offline, never read) still has its initial name.
+  for (const c of four.cameras) Object.assign(c.camera, { nameSource: c.camera.online ? 'camera' : 'config' });
   const code = 'CAE1-7Q2M-K9XD-4HPA-W3ZT-RN6B';
   const valid = (schema: string, message: unknown, note: string) => ({ $note: note, schema, message });
   const invalid = (schema: string, runtime: string, message: unknown, note: string) => ({ $note: note, schema, $expect: { runtime, strict: 'invalid' }, message });

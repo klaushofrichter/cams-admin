@@ -5,7 +5,7 @@
   import { live } from '../lib/live';
   import { camClass } from '../lib/format';
   import { hostLabel } from '../lib/proxy';
-  import { nameError, renameOutcome, waitCommand } from '../lib/config';
+  import { nameError, renameError, renameOutcome, waitCommand } from '../lib/config';
   import StateChip from '../components/StateChip.svelte';
   import ProxyGui from '../components/ProxyGui.svelte';
   import Confirm from '../components/Confirm.svelte';
@@ -143,10 +143,12 @@
     if (newName !== null) delete patch.name;
     if (Object.keys(patch).length === 1 && newName === null) { camEdit = null; return; }
     cError = renameDone = '';
+    let otherSaved = false;
     try {
       let cur = cam;
       if (Object.keys(patch).length > 1) {
         cur = await api('PATCH', `/accounts/${accountId}/cameras/${cam.id}`, patch);
+        otherSaved = true;
         if (camEdit) camEdit = { cam: cur, f };
       }
       if (newName !== null) {
@@ -156,13 +158,13 @@
         const row = await waitCommand(() => api('GET', `${base}/commands/${r.commandId}`));
         const text = renameOutcome(row, newName);
         // A rename the camera did not take (or no answer yet) keeps the form open, the typed name in it.
-        if (!row || row.state !== 'done') { cError = text; await load(); return; }
+        if (!row || row.state !== 'done') { cError = renameError(otherSaved, text); await load(); return; }
         renameDone = text;
       }
       camEdit = null;
       await load();
     } catch (e: any) {
-      cError = e?.status === 409 && e?.code === 'conflict' ? 'Someone changed this camera meanwhile: cancel, and edit it again.' : errorText(e);
+      cError = renameError(otherSaved, e?.status === 409 && e?.code === 'conflict' ? 'Someone changed this camera meanwhile: cancel, and edit it again.' : errorText(e));
     } finally { renaming = false; }
   }
   async function deleteCamera(c: any) {
