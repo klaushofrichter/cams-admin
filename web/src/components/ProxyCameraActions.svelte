@@ -91,7 +91,7 @@
           {/each}
         </div>
         <div class="row">
-          <input data-testid="rename-{cam}" placeholder="new name" maxlength="64" bind:value={names[cam]} disabled={!av.rename} />
+          <input data-testid="rename-{cam}" placeholder="new name" maxlength="31" bind:value={names[cam]} disabled={!av.rename} />
           <button class="btn" data-testid="rename-save-{cam}" disabled={!av.rename || !names[cam] || !!nameError(names[cam]) || busy[cam]} title={av.rename ? '' : 'not allowed on the proxy'} onclick={() => rename(cam)}>Rename</button>
         </div>
         {#if names[cam] && nameError(names[cam])}<p class="error small" data-testid="rename-error-{cam}">{nameError(names[cam])}</p>{/if}

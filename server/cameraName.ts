@@ -28,3 +28,9 @@ export function cameraNameProblem(name: unknown): string | null {
   if (name.startsWith(' ') || name.endsWith(' ')) return 'no leading or trailing space';
   return CAMERA_NAME_RE.test(name) ? null : 'not allowed';
 }
+
+// The placeholder name of a camera adopted from its proxy's report: the
+// reported name when the camera's rules take it, else the proxy's camera id
+// (its next report with the camera's own name replaces it).
+export const adoptedName = (reported: unknown, ref: string): string =>
+  typeof reported === 'string' && !cameraNameProblem(reported) ? reported : ref.slice(0, CAMERA_NAME_MAX);

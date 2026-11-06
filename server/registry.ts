@@ -13,7 +13,8 @@ import {
 // Every write is one transaction with exactly one audit record.
 
 export class ApiError extends Error {
-  constructor(public status: number, public code: string, public field?: string) {
+  // hint: a sentence for the person, sent as `message` (as FieldError's).
+  constructor(public status: number, public code: string, public field?: string, public hint?: string) {
     super(code);
   }
 }
@@ -84,7 +85,7 @@ function guard<T>(fn: () => T): T {
     return fn();
   } catch (e) {
     if (e instanceof ApiError) throw e;
-    if (e instanceof FieldError) throw new ApiError(400, 'invalid', e.field);
+    if (e instanceof FieldError) throw new ApiError(400, 'invalid', e.field, e.hint);
     return mapConstraint(e);
   }
 }
@@ -422,6 +423,11 @@ export class Registry {
     return guard(() => tx(this.db, () => {
       const f = cameraInput(patch, true);
       const old = this.getCamera(accountId, id);
+      // Behind a proxy the camera holds its name (camera name sync design 2026-11-06): a new name is
+      // the rename command's, and the record follows the proxy's next report. Nothing else is applied.
+      if (f.name !== undefined && f.name !== old.name && old.proxyId && old.proxyCameraId) {
+        throw new ApiError(409, 'rename_at_camera', 'name', `POST /api/v1/accounts/${accountId}/proxies/${old.proxyId}/cameras/${old.proxyCameraId}/name`);
+      }
       checkCameraProxy({ proxyId: f.proxyId !== undefined ? f.proxyId : old.proxyId, proxyCameraId: f.proxyCameraId !== undefined ? f.proxyCameraId : old.proxyCameraId });
       // A changed host is checked like an override host; an old free-form one doesn't block other edits.
       if (f.host && f.host !== old.host) checkCameraHost(f.host);

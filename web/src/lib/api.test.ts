@@ -36,5 +36,7 @@ describe('api', () => {
     expect(errorText(new ApiFailure(400, 'invalid', 'days', { error: 'invalid', field: 'days', message: 'days must be a whole number from 1 to 180, or 0 for a token that never expires' })))
       .toBe('Not valid: days must be a whole number from 1 to 180, or 0 for a token that never expires.');
     expect(errorText(new ApiFailure(400, 'invalid', 'name', { error: 'invalid', field: 'name' }))).toBe('Not valid: name');
+    expect(errorText(new ApiFailure(400, 'invalid', 'name', { error: 'invalid', field: 'name', message: 'not allowed: _' }))).toBe('Not valid: not allowed: _.');
+    expect(errorText(new ApiFailure(409, 'rename_at_camera', 'name'))).toBe('This camera is behind a proxy: a new name goes to the camera. Reload, and edit it again.');
   });
 });

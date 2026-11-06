@@ -114,6 +114,12 @@ describe('RemoteActions', () => {
     expect(await final(p.acc, p.prx, r.commandId)).toMatchObject({ state: 'done', result: { camera: 'cam2', name: 'Back yard', verified: true } });
     for (const body of [{ name: '' }, { name: 'a\nb' }, { name: 'x'.repeat(65) }, {}, { name: 'ok', extra: 1 }]) expect(code(() => A().rename(ACTOR, p.acc, p.prx, 'cam2', body))[1], JSON.stringify(body)).toBe('invalid');
     expect(code(() => A().rename(ACTOR, p.acc, p.prx, 'Bad Cam', { name: 'x' }))).toEqual([400, 'invalid', 'camera']);
+    // The camera's rules (Task 5), the reason with the 400.
+    const hint = (fn: () => unknown) => { try { fn(); } catch (e) { return (e as { hint?: string }).hint; } return 'no error'; };
+    expect(code(() => A().rename(ACTOR, p.acc, p.prx, 'cam2', { name: 'x'.repeat(32) }))).toEqual([400, 'invalid', 'name']);
+    expect(hint(() => A().rename(ACTOR, p.acc, p.prx, 'cam2', { name: 'x'.repeat(32) }))).toBe('too long: 32 characters, at most 31');
+    expect(hint(() => A().rename(ACTOR, p.acc, p.prx, 'cam2', { name: 'Back_yard' }))).toBe('not allowed: _');
+    expect(hint(() => A().rename(ACTOR, p.acc, p.prx, 'cam2', { name: ' Back' }))).toBe('no leading or trailing space');
     expect(code(() => A().restart(ACTOR, p.acc, p.prx, {}))).toEqual([400, 'confirm_required', 'confirm']);
     expect(code(() => A().restart(ACTOR, p.acc, p.prx, { confirm: 'restart' }))).toEqual([400, 'confirm_required', 'confirm']);
     const rs = A().restart(ACTOR, p.acc, p.prx, { confirm: 'proxy.restart' });

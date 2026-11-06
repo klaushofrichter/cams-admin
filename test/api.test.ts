@@ -50,6 +50,12 @@ describe('the API', () => {
     const cam = (await a.api('post', `/accounts/${acc.id}/cameras`, { camsId: 'sim1', name: 'Sim 1', kind: 'sim', proxyId: p.id, proxyCameraId: 'cam1' })).body;
     expect((await a.api('put', `/accounts/${acc.id}/cameras/${cam.id}/sim`, { runsOn: 'mac', controlUrl: 'http://127.0.0.1:29502' })).body).toMatchObject({ runsOn: 'mac' });
     expect((await a.api('get', `/accounts/${acc.id}/cameras`)).body.items[0].sim).toMatchObject({ runsOn: 'mac' });
+    // The camera's name rules, the reason as message; a mapped camera's name is renamed at the camera (Task 5).
+    expect((await a.api('post', `/accounts/${acc.id}/cameras`, { camsId: 'x', name: 'x'.repeat(32), kind: 'camera' })).body).toEqual({ error: 'invalid', field: 'name', message: 'too long: 32 characters, at most 31' });
+    const ren = await a.api('patch', `/accounts/${acc.id}/cameras/${cam.id}`, { name: 'Sim one', version: cam.version });
+    expect([ren.status, ren.body]).toEqual([409, { error: 'rename_at_camera', field: 'name', message: `POST /api/v1/accounts/${acc.id}/proxies/${p.id}/cameras/cam1/name` }]);
+    const rn = await a.api('post', `/accounts/${acc.id}/proxies/${p.id}/cameras/cam1/name`, { name: 'Sim_1' });
+    expect([rn.status, rn.body]).toEqual([400, { error: 'invalid', field: 'name', message: 'not allowed: _' }]);
     // A reported camera, adopted.
     a.db.prepare(`UPDATE proxies SET state='enrolled' WHERE id=?`).run(p.id);
     a.status.heartbeat(p.id, { summary: makeSummary({ cameras: 2, now: Date.now() }), proxy: makeProxyInfo({ now: Date.now() }), truncated: false }, Date.now());

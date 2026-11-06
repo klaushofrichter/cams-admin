@@ -2,10 +2,11 @@ import type { Clock } from '../clock';
 import type { Db } from '../db/open';
 import type { Audit } from '../audit';
 import { ApiError, type Registry } from '../registry';
+import { cameraNameProblem } from '../cameraName';
 import type { StatusStore } from '../status/store';
 import type { Commands } from '../commands/service';
 import type { ProxyConfig } from '../config/service';
-import { CAMERA_NAME_PATTERN, DISRUPTIVE_ACTIONS, JOURNAL_BUDGET_ACTIONS, REMOTE_ACTIONS } from '../../contract/build';
+import { DISRUPTIVE_ACTIONS, JOURNAL_BUDGET_ACTIONS, REMOTE_ACTIONS } from '../../contract/build';
 
 // Remote camera actions, camera renames and proxy restarts (migration spec
 // §8.6, P3 plan Task 5, R3-18): signed commands with closed args; the
@@ -15,7 +16,6 @@ import { CAMERA_NAME_PATTERN, DISRUPTIVE_ACTIONS, JOURNAL_BUDGET_ACTIONS, REMOTE
 // bounds the disruptive ones with its journal budget.
 
 const CAM_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
-const NAME_RE = new RegExp(CAMERA_NAME_PATTERN, 'u');
 export const BUSY_MS = 10_000;
 // I3: the fleet budget for disruptive actions and proxy restarts, counted from
 // the commands table (so a restart of cams-admin keeps it): one proxy at a
@@ -90,8 +90,11 @@ export class RemoteActions {
   rename(actor: string, accountId: string, proxyId: string, camera: string, body: unknown): { commandId: string } {
     this.d.registry.getProxy(accountId, proxyId);
     if (!CAM_RE.test(camera)) throw new ApiError(400, 'invalid', 'camera');
-    if (!isObj(body) || !only(body, ['name']) || typeof body.name !== 'string' || !NAME_RE.test(body.name)) throw new ApiError(400, 'invalid', 'name');
-    return { commandId: this.d.commands.create(actor, accountId, proxyId, 'camera.name.set', { v: 1, camera, name: body.name }).id };
+    if (!isObj(body) || !only(body, ['name'])) throw new ApiError(400, 'invalid', 'name');
+    // The camera's own rules (camera name sync design 2026-11-06), the reason with the 400.
+    const problem = cameraNameProblem(body.name);
+    if (problem) throw new ApiError(400, 'invalid', 'name', problem);
+    return { commandId: this.d.commands.create(actor, accountId, proxyId, 'camera.name.set', { v: 1, camera, name: body.name as string }).id };
   }
 
   restart(actor: string, accountId: string, proxyId: string, body: unknown): { commandId: string } {

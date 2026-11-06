@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { ApiError } from '../server/registry';
 import { tmpDir } from './helpers/tmp';
 import { ACTOR, makeRegistry } from './helpers/registry';
 
@@ -91,5 +92,57 @@ describe('registry: camera records follow the reported name', () => {
     expect(s.reg.getCamera(s.acc.id, direct.id)).toMatchObject({ name: 'Porch', version: 1 });
     expect(s.reg.getCamera(s.acc.id, s.cam.id)).toMatchObject({ name: 'Garage', version: 1 });
     expect(s.synced()).toEqual([]);
+  });
+});
+
+// Task 5: the camera's name rules; a name edit of a camera behind a proxy goes to the camera.
+describe('registry: camera name rules and renames at the camera', () => {
+  const dir = tmpDir();
+  const code = (fn: () => unknown) => { try { fn(); return null; } catch (e) { return e instanceof ApiError ? [e.status, e.code, e.field, e.hint] : String(e); } };
+
+  function setup() {
+    const r = makeRegistry(dir);
+    const acc = r.reg.createAccount(ACTOR, { name: 'home', displayName: 'Home' });
+    const prx = r.reg.createProxy(ACTOR, acc.id, { name: 'pi', displayName: 'Pi', runsOn: 'local-host' });
+    const mapped = r.reg.createCamera(ACTOR, acc.id, { camsId: 'garage', name: 'Garage', kind: 'camera', proxyId: prx.id, proxyCameraId: 'cam1' });
+    const direct = r.reg.createCamera(ACTOR, acc.id, { camsId: 'porch', name: 'Porch', kind: 'camera', host: 'porch.example.net' });
+    return { ...r, acc, prx, mapped, direct };
+  }
+
+  it.each([
+    ['x'.repeat(32), 'too long: 32 characters, at most 31'],
+    ['Back_yard', 'not allowed: _'],
+    [' Garage', 'no leading or trailing space'],
+  ])('a name that breaks the rules (%j) is refused on create and update with the reason', (name, reason) => {
+    const s = setup();
+    expect(code(() => s.reg.createCamera(ACTOR, s.acc.id, { camsId: 'yard', name, kind: 'camera' }))).toEqual([400, 'invalid', 'name', reason]);
+    expect(code(() => s.reg.updateCamera(ACTOR, s.acc.id, s.direct.id, { name, version: 1 }))).toEqual([400, 'invalid', 'name', reason]);
+    expect(s.reg.getCamera(s.acc.id, s.direct.id)).toMatchObject({ name: 'Porch', version: 1 });
+  });
+
+  it('PATCH name of a mapped camera answers 409 rename_at_camera and changes nothing', () => {
+    const s = setup();
+    const before = s.audit.list({}).items.length;
+    expect(code(() => s.reg.updateCamera(ACTOR, s.acc.id, s.mapped.id, { name: 'Garage door', host: 'g.example.net', notes: 'n', version: 1 }))).toEqual([
+      409, 'rename_at_camera', 'name', `POST /api/v1/accounts/${s.acc.id}/proxies/${s.prx.id}/cameras/cam1/name`,
+    ]);
+    expect(s.reg.getCamera(s.acc.id, s.mapped.id)).toMatchObject({ name: 'Garage', host: null, notes: null, version: 1 });
+    expect(s.audit.list({}).items).toHaveLength(before);
+  });
+
+  it('PATCH of a mapped camera with its current name, or without a name, works', () => {
+    const s = setup();
+    expect(s.reg.updateCamera(ACTOR, s.acc.id, s.mapped.id, { name: 'Garage', notes: 'n', version: 1 })).toMatchObject({ name: 'Garage', notes: 'n', version: 2 });
+    expect(s.reg.updateCamera(ACTOR, s.acc.id, s.mapped.id, { notes: 'm', version: 2 })).toMatchObject({ notes: 'm', version: 3 });
+  });
+
+  it('PATCH name of an unmapped camera works (record only)', () => {
+    const s = setup();
+    expect(s.reg.updateCamera(ACTOR, s.acc.id, s.direct.id, { name: 'Front porch', version: 1 })).toMatchObject({ name: 'Front porch', version: 2 });
+  });
+
+  it('create with a mapping takes the typed name as a placeholder', () => {
+    const s = setup();
+    expect(s.reg.createCamera(ACTOR, s.acc.id, { camsId: 'yard', name: 'Yard', kind: 'camera', proxyId: s.prx.id, proxyCameraId: 'cam2' })).toMatchObject({ name: 'Yard', proxyCameraId: 'cam2' });
   });
 });

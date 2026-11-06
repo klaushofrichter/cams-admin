@@ -311,6 +311,8 @@ export class Importer {
           }
         }
         if (was === v) continue;
+        // Behind a proxy the camera holds its name (camera name sync design 2026-11-06): the record follows its proxy's report.
+        if (k === 'name' && old.proxyId && old.proxyCameraId) continue;
         if (st.length && k !== 'host' && k !== 'cameraUser') {
           // Another instance uses this camera: an absent value keeps the shared one;
           // a different one changes it for that instance too (a mismatch to accept),

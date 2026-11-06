@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ceilingOf, EFFECT, nameError, waitCommand, widens, groupPaths, isRemoteSettable, narrowNote, narrowOk, parseValue, rollbackable, stateLine, valueText, type ConfigView } from './config';
+import { ceilingOf, EFFECT, nameError, renameOutcome, waitCommand, widens, groupPaths, isRemoteSettable, narrowNote, narrowOk, parseValue, rollbackable, stateLine, valueText, type ConfigView } from './config';
 
 const view: ConfigView = {
   revision: `sha256:${'a'.repeat(64)}`, schema: 1, cameras: ['cam1'], omittedCameras: [], fetchedAt: 1, cmdId: 'cmd_0123456789ABCDEFGHJK',
@@ -114,9 +114,22 @@ describe('config (Settings UI)', () => {
     expect(valueText('<b>x</b>')).toBe('<b>x</b>');
     expect(valueText(7)).toBe('7');
   });
-  it('nameError: the contract\'s camera-name rule, before anything is sent', () => {
-    expect(nameError('Garage Süd – Einfahrt')).toBeNull();
-    for (const bad of ['', 'evil\u061Cname', 'tag\u{E0041}x', 'lone\uD800x', 'a\u202Eb', 'x'.repeat(65)]) expect(nameError(bad), JSON.stringify(bad)).toBe('1–64 characters; no control, format, bidi or zero-width characters');
+  it('nameError: the camera\'s own name rules, before anything is sent', () => {
+    expect(nameError('Back yard (left) [1]')).toBeNull();
+    expect(nameError('x'.repeat(32))).toBe('too long: 32 characters, at most 31');
+    expect(nameError('Back_yard')).toBe('not allowed: _');
+    expect(nameError(' Garage')).toBe('no leading or trailing space');
+    expect(nameError('Garage Süd')).toBe('not allowed: ü');
+    for (const bad of ['', 'evil\u061Cname', 'a\u202Eb']) expect(nameError(bad), JSON.stringify(bad)).not.toBeNull();
+  });
+  it('renameOutcome: what a rename command did, in words', () => {
+    const row = (state: string, outcomeCode: string | null = null, result: unknown = null) => ({ state, outcomeCode, result });
+    expect(renameOutcome(row('done', null, { name: 'Garage door', verified: true }), 'Garage door')).toBe('The camera is now "Garage door"; cams-admin follows at its proxy\'s next report (about 30 s).');
+    expect(renameOutcome(row('done', null, { name: 'Garage', verified: false }), 'Garage door')).toBe('The camera holds "Garage" (asked for "Garage door"); cams-admin follows at its proxy\'s next report.');
+    expect(renameOutcome(row('failed', 'camera_offline'), 'X')).toBe('The camera is offline; try again when it is online.');
+    expect(renameOutcome(row('failed', 'invalid_name'), 'X')).toBe('The camera refused the name.');
+    expect(renameOutcome(row('refused', 'not_allowed'), 'X')).toBe('Rename refused: not_allowed.');
+    expect(renameOutcome(null, 'X')).toBe('No answer from the proxy yet: cams-admin follows once the camera has taken the name.');
   });
   it('waitCommand polls until the row is final, or gives up', async () => {
     const states = ['queued', 'sent', 'received', 'done'];

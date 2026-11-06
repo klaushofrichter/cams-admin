@@ -46,7 +46,8 @@ describe('registry', () => {
     expect(r.detail).toEqual({ fields: ['name'], nameFrom: 'pi', nameTo: 'pi2' });
     reg.updateProxy(ACTOR, a.id, p.id, { name: 'pi2', displayName: 'Pi 2', dnsName: 'pi.example.net', version: 3 });
     expect(audit.list({ action: 'proxy-update' }).items[0].detail).toEqual({ fields: ['name', 'displayName', 'dnsName'] });
-    const c = reg.createCamera(ACTOR, a.id, { camsId: 'garage', name: 'Garage', kind: 'camera', proxyId: p.id, proxyCameraId: 'cam1' });
+    // A camera without a proxy: its record holds the name (one behind a proxy is renamed at the camera).
+    const c = reg.createCamera(ACTOR, a.id, { camsId: 'garage', name: 'Garage', kind: 'camera', host: 'garage.example.net' });
     reg.updateCamera(ACTOR, a.id, c.id, { name: 'Shed', version: 1 });
     r = audit.list({ action: 'camera-update' }).items[0];
     expect(r.targetLabel).toBe('garage');
