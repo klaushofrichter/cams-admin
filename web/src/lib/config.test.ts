@@ -15,7 +15,7 @@ const view: ConfigView = {
   },
   settable: {
     'sse.pingS': { type: 'integer', min: 5, max: 300 }, 'sse.maxClients': { type: 'integer' }, 'retention.clipsDays': { type: 'integer', dir: 'more' },
-    'analytics.googleVision.monthlyLimit': { type: 'integer', dir: 'less' }, 'cameras.*.name': { type: 'string', pattern: '^[^\\u0000-\\u001f]{1,64}$' },
+    'analytics.googleVision.monthlyLimit': { type: 'integer', dir: 'less' },
     'storage.maxPercent': { type: 'integer' }, 'camsAdmin.url': { type: 'string' },
   },
 };
@@ -37,7 +37,7 @@ describe('config (Settings UI)', () => {
     expect(row('storage.maxPercent')).toMatchObject({ editable: false, why: 'storage settings are local only' });
     expect(row('retention.clipsDays')).toMatchObject({ editable: true, why: 'only higher from cams-admin' });
     expect(row('analytics.googleVision.monthlyLimit')).toMatchObject({ editable: true, why: "only up to the proxy's local ceiling from cams-admin" });
-    expect(row('cameras.cam1.name')).toMatchObject({ editable: true });
+    expect(row('cameras.cam1.name')).toMatchObject({ editable: false, why: 'never remote (addresses, ports, files, trust, users)' });
   });
   it('isRemoteSettable is remote-settable.json ∩ the proxy\'s settable', () => {
     expect(isRemoteSettable('sse.pingS', view.settable)).toBe(true);
@@ -58,8 +58,6 @@ describe('config (Settings UI)', () => {
     expect(parseValue({ type: 'string', enum: ['main', 'sub'] }, 'x')).toEqual({ ok: false, error: 'one of main, sub' });
     // M4: a proxy-supplied regex never runs in the browser (ReDoS); the proxy checks it.
     expect(parseValue({ type: 'string', pattern: '^(a+)+$' }, 'a'.repeat(40) + '!')).toEqual({ ok: true, value: 'a'.repeat(40) + '!' });
-    // M3: a camera name follows the contract's name rule
-    expect(parseValue({ type: 'string' }, 'evil\u202Egnp', 'cameras.cam1.name')).toEqual({ ok: false, error: '1–64 characters; no control, format, bidi or zero-width characters' });
     expect(parseValue({ type: 'string' }, 'x'.repeat(513))).toEqual({ ok: false, error: 'at most 512 characters' });
   });
   it('narrowNote and narrowOk: the input refuses a lowered retention period, a raised Vision limit and any storage edit', () => {

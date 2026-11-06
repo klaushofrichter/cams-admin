@@ -7,7 +7,7 @@ import type { LiveHub } from '../live';
 import type { Logger } from '../log';
 import type { CommandRow, Commands, WireCommand } from '../commands/service';
 import { sanitize } from '../contract';
-import { CAMERA_NAME_PATTERN, REMOTE_SETTABLE } from '../../contract/build';
+import { REMOTE_SETTABLE } from '../../contract/build';
 import { SECRET_RE } from './redact';
 import { ceilingPathOf, isRemoteSettable, narrowCode, narrowingOk, narrowReason, PATH_RE, patternOf, STORAGE_LOCAL_ONLY, type Leaf, type Settable } from './narrow';
 
@@ -36,7 +36,6 @@ const MAX_PATHS = 4096;
 const REV_RE = /^sha256:[0-9a-f]{64}$/;
 const CAM_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const CMD_RE = /^cmd_[0-9A-HJKMNP-TV-Z]{20}$/;
-const NAME_RE = new RegExp(CAMERA_NAME_PATTERN, 'u');
 const SOURCES = ['default', 'file', 'override', 'env'];
 const WRITES = ['config.set', 'config.unset', 'config.rollback'];
 const REMOTE = new Set(REMOTE_SETTABLE.remote);
@@ -147,11 +146,10 @@ export class ProxyConfig {
       const cam = /^cameras\.([^.]+)\./.exec(p)?.[1];
       if (cam !== undefined && !view.cameras.includes(cam)) throw new ApiError(400, 'unknown_camera', p);
     }
-    // M1, M3: each value has the type the proxy reports; a camera name follows the contract's name rule.
+    // M1, M3: each value has the type the proxy reports.
     if ('set' in parsed) for (const [p, v] of Object.entries(parsed.set)) {
       const t = view.settable[patternOf(p)].type;
       if (t === 'boolean' ? typeof v !== 'boolean' : t === 'integer' ? !Number.isSafeInteger(v) : typeof v !== 'string') throw new ApiError(400, 'invalid', p);
-      if (patternOf(p) === 'cameras.*.name' && !NAME_RE.test(v as string)) throw new ApiError(400, 'invalid', p);
     }
     for (const p of paths) {
       const to = 'set' in parsed ? parsed.set[p] : undefined;

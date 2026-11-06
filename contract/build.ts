@@ -600,7 +600,7 @@ export const LOCAL_ONLY = [
 ] as const;
 // A key or dotted path that looks secret: cams-admin drops such paths from a
 // stored view and such keys from an action's answer (the proxy scrubs too).
-// A camera name (camera.name.set, and cameras.*.name from cams-admin), a `u`
+// A camera name (camera.name.set; cameras.*.name is not remote-settable, the camera holds its name), a `u`
 // regex: 1–64 assigned characters, none of them a control (Cc), a format
 // character (Cf: bidi controls, U+061C, zero-width, tag characters), a
 // surrogate (Cs: a lone one), a private-use character (Co) or a line or
@@ -637,7 +637,7 @@ export const REMOTE_SETTABLE: { v: 1; remote: string[]; narrow: Record<string, N
     'composition.concurrent', 'sse.maxClients', 'sse.queuePerClient', 'sse.pingS', 'recordings.cacheMB',
     'ftp.stream', 'ftp.maxGB',
     'analytics.googleVision.enabled', 'analytics.googleVision.monthlyLimit', 'analytics.googleVision.dailyCap', 'analytics.googleVision.checksPerDay', 'analytics.googleVision.perCameraDailyCap',
-    'cameras.*.name', 'cameras.*.statusPollS', 'cameras.*.stills.stream', 'cameras.*.stills.intervalS',
+    'cameras.*.statusPollS', 'cameras.*.stills.stream', 'cameras.*.stills.intervalS',
     'cameras.*.ftp.stream',
   ],
   narrow: {
@@ -654,7 +654,7 @@ export const REMOTE_SETTABLE: { v: 1; remote: string[]; narrow: Record<string, N
   denied: [
     'server', 'go2rtc', 'storage', 'ftp.port', 'ftp.passive', 'ftp.tls', 'ftp.publicHost', 'ftp.sourceSubnet', 'ftp.certFile', 'ftp.keyFile', 'tls', 'composition.font', 'ntp.server',
     'poeSwitch', 'camsAdmin', 'cameras.*.id', 'cameras.*.host', 'cameras.*.protocol', 'cameras.*.tlsName', 'cameras.*.user', 'cameras.*.onvifPort', 'cameras.*.rtspPort',
-    'cameras.*.baichuanPort', 'cameras.*.poeSwitch', 'cameras.*.ftp.user', 'cameras.*.webUiUrl', 'cameras.*.storage',
+    'cameras.*.baichuanPort', 'cameras.*.poeSwitch', 'cameras.*.name', 'cameras.*.ftp.user', 'cameras.*.webUiUrl', 'cameras.*.storage',
     // Local only in P3 (coordinator ruling, security review I4): capture and listener switches, health thresholds.
     ...LOCAL_ONLY,
     // cam-proxy marks these local only: the moved marker of a camera and the moves.* settings such as moves.maxCameras.

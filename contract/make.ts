@@ -96,7 +96,6 @@ export function fixtures(): Record<string, unknown> {
       'stills.quality': { type: 'integer', oneOf: [1, 2, 3, 4, 5, 6] },
       'retention.clipsDays': { type: 'integer', min: 1, max: 3650, dir: 'more' },
       'stills.maxGB': { type: 'integer', min: 1, max: 10000, optional: true, dir: 'more' },
-      'cameras.*.name': { type: 'string', pattern: '^[^\\u0000-\\u001f]{1,64}$' },
     },
   };
   const sixtyFive = Object.fromEntries(Array.from({ length: 65 }, (_, i) => [`sse.p${i}`, 1]));

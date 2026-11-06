@@ -322,8 +322,9 @@ set on the proxy only.
 character (`Cf`: bidi controls, U+061C, zero-width and tag characters), a
 surrogate (`Cs`, so no lone one), a private-use character (`Co`) or a line or
 paragraph separator (`Zl`, `Zp`). It applies to `camera.name.set` (args
-schema) and, on the proxy, to `config.set` of `cameras.*.name`
-(`invalid_value`).
+schema). `cameras.*.name` is not remote-settable (it is in `denied`): the
+camera holds its name and cam-proxy's config value is only the initial one, so
+a rename goes through `camera.name.set`.
 
 **`camera-ftp-off` is never remote** (cam-proxy #196): it is in
 `NEVER_REMOTE_ACTIONS`, not in `REMOTE_ACTIONS`, and so not an allow entry or

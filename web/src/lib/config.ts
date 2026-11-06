@@ -97,9 +97,9 @@ const NAME_ERROR = '1–64 characters; no control, format, bidi or zero-width ch
 // The contract's camera-name rule, checked before anything is sent (null: fine).
 export const nameError = (text: string): string | null => (NAME_RE.test(text) ? null : NAME_ERROR);
 
-// path: for the camera-name rule. A proxy's `pattern` is never run here (M4:
+// A proxy's `pattern` is never run here (M4:
 // a hostile regex would freeze the tab); the proxy checks it.
-export function parseValue(s: Settable, text: string, path = ''): { ok: true; value: Leaf } | { ok: false; error: string } {
+export function parseValue(s: Settable, text: string): { ok: true; value: Leaf } | { ok: false; error: string } {
   if (s.type === 'boolean') return text === 'true' ? { ok: true, value: true } : text === 'false' ? { ok: true, value: false } : { ok: false, error: 'true or false' };
   if (s.type === 'integer') {
     if (!/^-?\d+$/.test(text.trim())) return { ok: false, error: 'a whole number' };
@@ -112,7 +112,6 @@ export function parseValue(s: Settable, text: string, path = ''): { ok: true; va
   }
   if (text.length > 512) return { ok: false, error: 'at most 512 characters' };
   if (s.enum && !s.enum.includes(text)) return { ok: false, error: `one of ${s.enum.join(', ')}` };
-  if (patternOf(path) === 'cameras.*.name' && !NAME_RE.test(text)) return { ok: false, error: NAME_ERROR };
   return { ok: true, value: text };
 }
 
