@@ -114,6 +114,22 @@ describe('the v1 contract', () => {
     expect(strictValidator('command')({ ...m, body: { ...m.body, revocationOnly: 'yes' } })).toBe(false);
     expect(fixture('valid-command-revocation-while-paused').$context).toMatchObject({ paused: true, allow: [], tokens: expect.any(Array) });
   });
+  it('heartbeat commands.allow takes up to 64 entries: 40 valid, 65 refused (strict and runtime)', () => {
+    const base = fixture('valid-heartbeat-p2').message;
+    const withAllow = (allow: string[]) => {
+      const m = structuredClone(base);
+      m.body.proxy.commands.allow = allow;
+      return m;
+    };
+    // Repeats are fine (the list has no uniqueItems); the strict enum still checks each entry.
+    const entries = (n: number) => Array.from({ length: n }, (_, i) => ALLOW_ENTRIES[i % ALLOW_ENTRIES.length]);
+    const hb = strictValidator('heartbeat');
+    expect(hb(withAllow(entries(40))), JSON.stringify(ajv.errors)).toBe(true);
+    expect(hb(withAllow(entries(64))), JSON.stringify(ajv.errors)).toBe(true);
+    expect(hb(withAllow(entries(65)))).toBe(false);
+    expect(runtimeVerdict('heartbeat', withAllow(entries(40)))).toBe('accepted');
+    expect(runtimeVerdict('heartbeat', withAllow(entries(65)))).not.toBe('accepted');
+  });
   it('the heartbeat profile (proxy profile design §2): optional, closed in strict, a lenient object', () => {
     const full = fixture('valid-heartbeat-profile').message;
     const unset = fixture('valid-heartbeat-profile-unset').message;

@@ -46,7 +46,7 @@ export function parseCommandsInfo(x: unknown): CommandsInfo | null {
   if (!isRecord(x)) return null;
   return {
     enabled: x.enabled === true, paused: x.paused === true, pauseReason: typeof x.pauseReason === 'string' ? x.pauseReason.slice(0, 200) : null,
-    allow: strList(x.allow, 32, 64), seenWindow: safeInt(x.seenWindow) ?? 0,
+    allow: strList(x.allow, 64, 64), seenWindow: safeInt(x.seenWindow) ?? 0,
   };
 }
 export function parseTokensInfo(x: unknown): TokensInfo | null {

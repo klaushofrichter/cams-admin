@@ -141,7 +141,7 @@ export function buildSchemas(mode: Mode): Record<string, S> {
   }, ['v', 'revision', 'tokens']);
   const tokensResult = obj({ revision: int(), applied: bool, stale: bool, client: int(), admin: int(), blocked: arr(tokId, 64) }, ['revision', 'applied', 'stale']);
   const commandsInfo = obj({
-    enabled: bool, paused: bool, pauseReason: nullable(str()), allow: arr(strict ? { type: 'string', enum: [...ALLOW_ENTRIES] } : str(64), 32), seenWindow: int(),
+    enabled: bool, paused: bool, pauseReason: nullable(str()), allow: arr(strict ? { type: 'string', enum: [...ALLOW_ENTRIES] } : str(64), 64), seenWindow: int(),
   }, ['enabled', 'paused', 'allow']);
   const tokensInfo = obj({ revision: int(), client: int(), admin: int(), blocked: arr(tokId, 64) }, ['revision']);
 
