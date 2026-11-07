@@ -112,7 +112,7 @@ describe('power-cycle requests from proxies', () => {
   it('a failed cycle → ok:false with the reason; a refusal up front (power unknown) → ok:false with its reason', async () => {
     const p = await proxy();
     const { cam } = await poeCamera(p);
-    p.client.switchResults['switch.cycle'] = { status: 'failed', code: 'switch_auth' };
+    p.client.switchResults.set('switch.cycle', { status: 'failed', code: 'switch_auth' });
     ask(p, cam.proxyCameraId, 'rq-f');
     await until(() => results(p).length > 0, 5000, 'result');
     expect(results(p)).toEqual([{ v: 1, camera: cam.proxyCameraId, requestId: 'rq-f', ok: false, reason: 'the switch refused the password' }]);

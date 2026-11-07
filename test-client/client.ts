@@ -371,9 +371,9 @@ export class ProxyClient extends EventEmitter {
 
   // The switch commands: switchResults per command (a DoneBody, or a function of the args: per switch, per host),
   // else the canned healthy switch of ./commands.ts.
-  switchResults: Record<string, DoneBody | ((args: Record<string, any>) => DoneBody)> = {};
+  switchResults = new Map<string, DoneBody | ((args: Record<string, any>) => DoneBody)>();
   private runSwitch(b: Record<string, any>): DoneBody {
-    const o = this.switchResults[b.command];
+    const o = this.switchResults.get(b.command);
     if (o) return typeof o === 'function' ? o(b.args) : o;
     return { status: 'ok', result: switchResultOf(b.command, b.args, this.now() + this.serverOffset) };
   }

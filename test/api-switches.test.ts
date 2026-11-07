@@ -53,7 +53,7 @@ const sent = (p: P, command: string) => p.client.receivedCommands.filter((m) => 
 const audits = (action: string) => (s.built.db.prepare('SELECT outcome, detail FROM audit_log WHERE action = ? ORDER BY id').all(action) as { outcome: string; detail: string }[])
   .map((x) => ({ outcome: x.outcome, ...JSON.parse(x.detail ?? '{}') }));
 const idle = (id: string) => until(async () => (await get(id)).pending.length === 0, 5000, `idle ${id}`);
-const readAs = (p: P, sn: string | null) => (p.client.switchResults['switch.read'] = { status: 'ok', result: { sn, firmware: 'V2.1', ports: [] } });
+const readAs = (p: P, sn: string | null) => (p.client.switchResults.set('switch.read', { status: 'ok', result: { sn, firmware: 'V2.1', ports: [] } }));
 async function activate(p: P, sn = 'GPS208X') {
   const sw = await add(p);
   readAs(p, sn);
@@ -110,7 +110,7 @@ describe('switch lifecycle API', () => {
   it('test: a failed read changes nothing and is audited', async () => {
     const p = await proxy();
     const sw = await add(p);
-    p.client.switchResults['switch.read'] = { status: 'failed', code: 'password_unset' };
+    p.client.switchResults.set('switch.read', { status: 'failed', code: 'password_unset' });
     await call('POST', `/switches/${sw.id}/test`);
     await idle(sw.id);
     expect(await get(sw.id)).toMatchObject({ state: 'pending', sn: null, last: { op: 'test', outcome: 'failed', code: 'password_unset' } });
@@ -164,10 +164,10 @@ describe('switch lifecycle API', () => {
     expect((await call('PATCH', `/switches/${sw.id}`, { host: '192.168.1.99', name: other.name })).body).toEqual({ error: 'duplicate_name', field: 'name' });
     expect(sent(p, 'switch.read')).toHaveLength(reads);
     // The proxy answers after another switch took the name.
-    p.client.switchResults['switch.read'] = () => {
+    p.client.switchResults.set('switch.read', () => {
       s.built.switches.store.updateSwitch(ACTOR, p.acc, other.id, { name: 'Garage' });
       return { status: 'ok', result: { sn: 'GPS208X', firmware: 'V2.1', ports: [] } };
-    };
+    });
     expect((await call('PATCH', `/switches/${sw.id}`, { host: '192.168.1.99', name: 'Garage' })).status).toBe(202);
     await idle(sw.id);
     expect(await get(sw.id)).toMatchObject({ name: sw.name, host: '192.168.1.217', last: { op: 'update', outcome: 'failed', code: 'save_failed' } });
@@ -252,7 +252,7 @@ describe('switch lifecycle API', () => {
     st.setPower(c1.id, { kind: 'poe', switchId: sw.id, port: 3, watts: 4 } as CameraPower, ACTOR, 'sysadmin', 't');
     st.setPower(c2.id, { kind: 'poe', switchId: sw.id, port: 5, watts: 4 } as CameraPower, ACTOR, 'sysadmin', 't');
     st.setPower(c3.id, { kind: 'data-only', switchId: sw.id, port: 6 } as CameraPower, ACTOR, 'sysadmin', 't');
-    p.client.switchResults['switch.poeOn'] = (a) => (a.port === 5 ? { status: 'failed', code: 'switch_unreachable' } : { status: 'ok', result: { port: a.port, poe: true, watts: 0, link: true, tx: 0, rx: 0, wasOn: false } });
+    p.client.switchResults.set('switch.poeOn', (a) => (a.port === 5 ? { status: 'failed', code: 'switch_unreachable' } : { status: 'ok', result: { port: a.port, poe: true, watts: 0, link: true, tx: 0, rx: 0, wasOn: false } }));
     const r = await call('DELETE', `/switches/${sw.id}`);
     expect(r.status).toBe(202);
     expect(r.body.commandIds).toHaveLength(3);
@@ -272,7 +272,7 @@ describe('switch lifecycle API', () => {
     const sw = await activate(p);
     const c1 = s.built.registry.createCamera(ACTOR, p.acc, { camsId: 'c1', name: 'c1', kind: 'camera', host: 'from-proxy' });
     s.built.switches.store.setPower(c1.id, { kind: 'poe', switchId: sw.id, port: 2, watts: 4 } as CameraPower, ACTOR, 'sysadmin', 't');
-    p.client.switchResults['switch.read'] = { status: 'ok', result: { sn: 'GPS208X', firmware: 'V2.1', ports: [{ port: 2, poe: true, watts: 4.1, link: true, tx: 1, rx: 2 }] } };
+    p.client.switchResults.set('switch.read', { status: 'ok', result: { sn: 'GPS208X', firmware: 'V2.1', ports: [{ port: 2, poe: true, watts: 4.1, link: true, tx: 1, rx: 2 }] } });
     const r = await call('POST', `/switches/${sw.id}/read`);
     expect(r.status).toBe(200);
     expect(r.body).toMatchObject({ commandId: expect.stringMatching(/^cmd_/), state: 'done', live: { sn: 'GPS208X', firmware: 'V2.1' } });

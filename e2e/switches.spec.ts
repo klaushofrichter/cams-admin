@@ -18,11 +18,11 @@ test('add a switch, test it, survey it, see the camera on its port, and force a 
   // A serial number is unique across accounts: one per run (desktop and phone run side by side).
   const sn = `E2E${Math.random().toString(36).slice(2, 10).toUpperCase()}`;
   const read = { status: 'ok', result: { sn, firmware: 'V1.0', ports: Array.from({ length: 8 }, (_, i) => ({ port: i + 1, poe: true, watts: 0, link: false, tx: 0, rx: 0 })) } } as const;
-  c.switchResults['switch.read'] = read;
+  c.switchResults.set('switch.read', read);
   const cycles: Record<string, any>[] = [];
   // Every camera of the survey is on port 3, 4.2 W.
-  c.switchResults['switch.survey'] = (a) => ({ status: 'ok', result: { sn, results: a.cameras.map((x: { camera: string }) => ({ camera: x.camera, found: true, port: 3, poe: true, watts: 4.2, link: true })) } });
-  c.switchResults['switch.cycle'] = (a) => { cycles.push(a); return { status: 'ok', result: { verified: !a.force, offAt: Date.now(), onAt: Date.now() + 1000, watts: 0 } }; };
+  c.switchResults.set('switch.survey', (a) => ({ status: 'ok', result: { sn, results: a.cameras.map((x: { camera: string }) => ({ camera: x.camera, found: true, port: 3, poe: true, watts: 4.2, link: true })) } }));
+  c.switchResults.set('switch.cycle', (a) => { cycles.push(a); return { status: 'ok', result: { verified: !a.force, offAt: Date.now(), onAt: Date.now() + 1000, watts: 0 } }; });
   c.start();
   try {
     await page.goto(`/#/accounts/${acc.id}/switches`);
@@ -94,9 +94,9 @@ test('a chained switch: two cameras behind one port are a configuration issue on
   const key = await enroll(BASE, (await api(page, 'POST', `/accounts/${acc.id}/proxies/${px.id}/enrollment-codes`, {})).code);
   const c = client(key, () => makeSummary({ cameras: 2, now: Date.now() }), { commands: { allow: [...SWITCH_COMMANDS, ...POWER_COMMANDS], config: new RefProxyConfig({ cameras: ['cam1', 'cam2'] }) } });
   const sn = `E2E${Math.random().toString(36).slice(2, 10).toUpperCase()}`;
-  c.switchResults['switch.read'] = { status: 'ok', result: { sn, firmware: 'V1.0', ports: [] } };
+  c.switchResults.set('switch.read', { status: 'ok', result: { sn, firmware: 'V1.0', ports: [] } });
   // Both cameras on port 8: another switch hangs there.
-  c.switchResults['switch.survey'] = (a) => ({ status: 'ok', result: { sn, results: a.cameras.map((x: { camera: string }) => ({ camera: x.camera, found: true, port: 8, poe: true, watts: 0, link: true })) } });
+  c.switchResults.set('switch.survey', (a) => ({ status: 'ok', result: { sn, results: a.cameras.map((x: { camera: string }) => ({ camera: x.camera, found: true, port: 8, poe: true, watts: 0, link: true })) } }));
   c.start();
   try {
     await page.goto(`/#/accounts/${acc.id}/switches`);
