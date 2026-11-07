@@ -311,7 +311,7 @@ export function apiRouter(d: ApiDeps): express.Router {
   }));
   r.post(`${camPower}/verify`, h((req, res) => started(res, d.power.verify(sys(res), p(req, 'cameraId')))));
   r.post(`${camPower}/cycle`, h((req, res) => started(res, d.power.cycle(sys(res), p(req, 'cameraId'), req.body))));
-  r.get('/switches/:switchId/survey', h((req) => d.power.lastSurvey(p(req, 'switchId')) ?? { switchId: p(req, 'switchId'), state: 'none', results: [] }));
+  r.get('/switches/:switchId/survey', h((req) => d.power.lastSurvey(p(req, 'switchId')) ?? { switchId: p(req, 'switchId'), state: 'none', results: [], trunks: [], problems: [] }));
   r.post('/switches/:switchId/survey', h((req, res) => { res.locals.status = 202; return d.power.survey(sys(res), p(req, 'switchId')); }));
   r.post('/accounts/:accountId/switches/survey', h((req, res) => { res.locals.status = 202; return d.power.surveyAccount(sys(res), p(req, 'accountId')); }));
   r.get(`${proxyBase}/actions`, h((req) => d.actions.available(p(req, 'accountId'), p(req, 'proxyId'))));
@@ -557,6 +557,8 @@ export function dashboard(d: ApiDeps) {
   // Three queries in all, grouped here (not one per account).
   const proxiesOf = groupBy(d.registry.listProxies(), (px) => px.accountId);
   const camerasOf = groupBy(d.registry.listCameras(), (c) => c.accountId);
+  // PoE switches with a configuration problem (a chained switch, from their latest survey).
+  const switchProblemsOf = groupBy(d.switches.store.listAllWithProblems(), (sw) => sw.accountId);
   let proxies = 0, proxiesOnline = 0, cameras = 0, camerasOnline = 0, problems = 0;
   const out = accounts.map((a) => {
     const accCams = camerasOf.get(a.id) ?? [];
@@ -578,7 +580,9 @@ export function dashboard(d: ApiDeps) {
       if (online) camerasOnline++;
       return { id: c.id, camsId: c.camsId, name: c.name, kind: c.kind, proxyId: c.proxyId, proxyCameraId: c.proxyCameraId, online };
     });
-    return { id: a.id, name: a.name, displayName: a.displayName, users: a.users, proxies: pxs, cameras: camRows, warnings: a.admins === 0 ? ['no-admin'] : [] };
+    const switchProblems = (switchProblemsOf.get(a.id) ?? []).flatMap((sw) => sw.problems.map((x) => ({ switchId: sw.id, switch: sw.name, ...x })));
+    const warnings = [...(a.admins === 0 ? ['no-admin'] : []), ...(switchProblems.length ? ['chained-switch'] : [])];
+    return { id: a.id, name: a.name, displayName: a.displayName, users: a.users, proxies: pxs, cameras: camRows, warnings, switchProblems };
   });
   // P4: one row per cams instance (its pulls and reports live in memory).
   const fp = d.serverKeyFingerprints[0] ?? '';

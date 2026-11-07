@@ -247,9 +247,13 @@ export class SwitchService {
   }
 
   // One flow per switch: refused while one of ours is open, or any open switch command names it (a survey, a cycle).
+  // A switch.forget to a proxy that no longer operates it (after a move) doesn't count: the old operator may be away
+  // for a long time, and its forget touches only its own copy of the password.
   private notBusy(switchId: string): void {
     if ([...this.pending.values()].some((p) => p.switchId === switchId && !p.abort)) throw new ApiError(409, 'switch_busy');
-    const open = this.d.db.prepare(`SELECT 1 FROM commands WHERE command LIKE 'switch.%' AND state IN ${OPEN} AND (json_extract(args, '$.switch.id') = ? OR json_extract(args, '$.switchId') = ?) LIMIT 1`).get(switchId, switchId);
+    const operator = this.store.findById(switchId)?.proxyId ?? null;
+    const open = this.d.db.prepare(`SELECT 1 FROM commands WHERE command LIKE 'switch.%' AND state IN ${OPEN} AND (json_extract(args, '$.switch.id') = ? OR json_extract(args, '$.switchId') = ?)
+      AND NOT (command = 'switch.forget' AND proxy_id IS NOT ?) LIMIT 1`).get(switchId, switchId, operator);
     if (open) throw new ApiError(409, 'switch_busy');
   }
 

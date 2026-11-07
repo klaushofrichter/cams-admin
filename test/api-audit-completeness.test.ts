@@ -78,13 +78,14 @@ describe('audit completeness', () => {
     ['put', '/accounts/:accountId/cameras/:cameraId/sim', () => `/accounts/${ids.acc}/cameras/${ids.cam}/sim`, () => ({ runsOn: 'mac' }), 'sim-update'],
     ['delete', '/accounts/:accountId/cameras/:cameraId/sim', () => `/accounts/${ids.acc}/cameras/${ids.cam}/sim`, () => ({}), 'sim-delete'],
     ['delete', '/accounts/:accountId/cameras/:cameraId', () => `/accounts/${ids.acc}/cameras/${ids.cam}`, () => ({}), 'camera-delete'],
-    // Camera power: a declaration is its power record; a check, a power-cycle and a survey are their first command
-    // (the camera.power.* notices go to the camera's proxy only, and these cameras have none). Switches and cameras by hand.
+    // Camera power: a declaration is its power record; a check, a power-cycle and a survey are their own start record
+    // (camera-power-verify, camera-power-cycle, switch-survey per switch) and their first command (the camera.power.*
+    // notices go to the camera's proxy only, and these cameras have none). Switches and cameras by hand.
     ['put', '/cameras/:cameraId/power', () => `/cameras/${ids.camA}/power`, () => ({ kind: 'adapter' }), 'camera-power-set'],
-    ['post', '/cameras/:cameraId/power/verify', () => `/cameras/${ids.camV}/power/verify`, () => ({}), 'command-create'],
-    ['post', '/cameras/:cameraId/power/cycle', () => `/cameras/${ids.camC}/power/cycle`, () => ({}), 'command-create'],
-    ['post', '/accounts/:accountId/switches/survey', () => `/accounts/${ids.acc}/switches/survey`, () => ({}), 'command-create'],
-    ['post', '/switches/:switchId/survey', () => `/switches/${ids.swP2}/survey`, () => ({}), 'command-create'],
+    ['post', '/cameras/:cameraId/power/verify', () => `/cameras/${ids.camV}/power/verify`, () => ({}), ['camera-power-verify', 'command-create']],
+    ['post', '/cameras/:cameraId/power/cycle', () => `/cameras/${ids.camC}/power/cycle`, () => ({}), ['camera-power-cycle', 'command-create']],
+    ['post', '/accounts/:accountId/switches/survey', () => `/accounts/${ids.acc}/switches/survey`, () => ({}), ['switch-survey', 'command-create']],
+    ['post', '/switches/:switchId/survey', () => `/switches/${ids.swP2}/survey`, () => ({}), ['switch-survey', 'command-create']],
     // PoE switches: the record's own writes; a step through the operator is its command (the answer comes later).
     // Each step on a switch of its own (an open command makes a switch busy); the rows go before the proxy's delete.
     ['post', '/accounts/:accountId/switches', () => `/accounts/${ids.acc}/switches`, () => ({ name: 'GPS-208', host: '192.168.1.217', proxyId: ids.prx }), 'switch-create'],

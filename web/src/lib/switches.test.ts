@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { codeText } from './api';
-import { flowDone, flowText, forceCycleText, lastText, passwordHint, poll, powerLine, powerManaged, removeText } from './switches';
+import { flowDone, flowText, forceCycleText, lastText, passwordHint, poll, powerLine, powerManaged, removeText, chainedText, trunkText } from './switches';
 
 const NOW = 1_000_000_000;
 
@@ -109,5 +109,12 @@ describe('confirm flow and last flows', () => {
     expect(flowLine(fl({ force: true, state: 'ok', code: null }), NOW)).toBe('Last forced power-cycle 2 min ago: Power-cycled.');
     expect(flowLine(fl({ op: 'verify', state: 'running' }), NOW)).toBe('Last check 2 min ago: Running…');
     expect(flowLine(null, NOW)).toBe('');
+  });
+});
+
+describe('chained switches (a configuration issue)', () => {
+  it('the warning names the port and the cameras behind it; the port cell says trunk', () => {
+    expect(chainedText({ code: 'chained_switch', port: 8, cameras: 3 })).toBe('Configuration issue: another switch is chained on port 8 (3 cameras behind it). Connect each PoE switch directly to its proxy\'s network instead of through another PoE switch.');
+    expect(trunkText(3)).toBe('trunk (3 cameras)');
   });
 });

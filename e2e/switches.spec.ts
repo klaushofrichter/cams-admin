@@ -86,3 +86,33 @@ test('add a switch, test it, survey it, see the camera on its port, and force a 
     await c.stop();
   }
 });
+
+test('a chained switch: two cameras behind one port are a configuration issue on the switch, its port and the dashboard', async ({ page }, info) => {
+  const acc = await api(page, 'POST', '/accounts', { name: uniq(info, 'ch'), displayName: 'Chained' });
+  const px = await api(page, 'POST', `/accounts/${acc.id}/proxies`, { name: 'p1', displayName: 'P1', runsOn: 'local-host' });
+  for (const [id, ref, host] of [['garage', 'cam1', '192.0.2.41'], ['porch', 'cam2', '192.0.2.42']]) await api(page, 'POST', `/accounts/${acc.id}/cameras`, { camsId: id, name: id, kind: 'camera', proxyId: px.id, proxyCameraId: ref, host });
+  const key = await enroll(BASE, (await api(page, 'POST', `/accounts/${acc.id}/proxies/${px.id}/enrollment-codes`, {})).code);
+  const c = client(key, () => makeSummary({ cameras: 2, now: Date.now() }), { commands: { allow: [...SWITCH_COMMANDS, ...POWER_COMMANDS], config: new RefProxyConfig({ cameras: ['cam1', 'cam2'] }) } });
+  const sn = `E2E${Math.random().toString(36).slice(2, 10).toUpperCase()}`;
+  c.switchResults['switch.read'] = { status: 'ok', result: { sn, firmware: 'V1.0', ports: [] } };
+  // Both cameras on port 8: another switch hangs there.
+  c.switchResults['switch.survey'] = (a) => ({ status: 'ok', result: { sn, results: a.cameras.map((x: { camera: string }) => ({ camera: x.camera, found: true, port: 8, poe: true, watts: 0, link: true })) } });
+  c.start();
+  try {
+    await page.goto(`/#/accounts/${acc.id}/switches`);
+    await page.getByTestId('switch-name').fill('GPS-208');
+    await page.getByTestId('switch-host').fill('192.0.2.51');
+    await page.getByTestId('switch-add').click();
+    await page.getByTestId('switch-test-GPS-208').click();
+    await expect(page.getByTestId('switch-state-GPS-208')).toHaveText('active', { timeout: 15_000 });
+    await page.getByTestId('switch-survey-GPS-208').click();
+    await expect(page.getByTestId('switch-problem-GPS-208-8')).toHaveText('Configuration issue: another switch is chained on port 8 (2 cameras behind it). Connect each PoE switch directly to its proxy\'s network instead of through another PoE switch.', { timeout: 20_000 });
+    await expect(page.getByTestId('switch-config-GPS-208')).toHaveText('configuration issue');
+    await page.getByTestId('switch-ports-GPS-208').click();
+    await expect(page.getByTestId('switch-port-trunk-GPS-208-8')).toHaveText('trunk (2 cameras)');
+    await page.goto('/#/');
+    await expect(page.getByTestId(`warn-chained-switch-${acc.name}`)).toHaveText('GPS-208: another switch chained on port 8');
+  } finally {
+    await c.stop();
+  }
+});

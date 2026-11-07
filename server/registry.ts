@@ -104,6 +104,18 @@ export class Registry {
 
   constructor(private db: Db, private clock: Clock, private audit: Audit) {}
 
+  // A camera's proxy changed (an edit, a move's switch-over, an adopt): called after the change, outside its
+  // transaction (PowerService.proxyChanged: camera.power.set to the new proxy). A rolled-back change only resends
+  // the record to the camera's current proxy.
+  onCameraProxy: (cameraId: string) => void = () => {};
+  private cameraProxyChanged(cameraId: string): void {
+    queueMicrotask(() => {
+      try {
+        this.onCameraProxy(cameraId);
+      } catch { /* the hook logs its own failures */ }
+    });
+  }
+
   // --- generic helpers ---------------------------------------------------------
 
   private one(sql: string, ...args: (string | number | null)[]): Row {
@@ -398,6 +410,8 @@ export class Registry {
         created_at: now, updated_at: now,
       });
       this.audit.write({ actorType, actor, action, accountId, targetType: 'camera', targetId: id, targetLabel: f.camsId, outcome: 'ok', detail: { kind: f.kind, ...(f.proxyId ? { proxyId: f.proxyId, proxyCameraId: f.proxyCameraId } : {}) } });
+      // An adopted camera's proxy hears its power record (unknown) as on any other proxy change.
+      if (action === 'camera-adopt' && f.proxyId && f.proxyCameraId) this.cameraProxyChanged(id);
       return this.getCamera(accountId, id);
     }));
   }
@@ -438,7 +452,7 @@ export class Registry {
       if (f.host && f.host !== old.host) checkCameraHost(f.host);
       const keys = this.updateRow('cameras', { id, accountId }, f, versionOf(patch as Row));
       const c = this.getCamera(accountId, id);
-      this.relocated(old, c);
+      this.relocated(id, old, c);
       this.log(actor, 'camera-update', accountId, 'camera', id, old.camsId, { fields: keys, ...nameChanges(old, c, ['name', 'camsId']) });
       return c;
     }));
@@ -509,7 +523,7 @@ export class Registry {
       this.getProxy(accountId, to.proxyId); // 404 for another account's proxy
       this.db.prepare('UPDATE cameras SET proxy_id = ?, proxy_camera_id = ?, tls_servername = ?, move_id = ?, updated_at = ?, version = version + 1 WHERE id = ? AND account_id = ?')
         .run(f.proxyId!, f.proxyCameraId!, f.tlsServername ?? null, to.moveId, this.clock.now(), cameraId, accountId);
-      this.relocated(old, { proxyId: f.proxyId ?? null, proxyCameraId: f.proxyCameraId ?? null });
+      this.relocated(cameraId, old, { proxyId: f.proxyId ?? null, proxyCameraId: f.proxyCameraId ?? null });
       // The forward switch (onto the move's target) stamps the move for the cams attestation; the way back at a cancel does not.
       this.db.prepare('UPDATE moves SET switched_at = ? WHERE id = ? AND target_proxy_id = ?').run(this.clock.now(), to.moveId, f.proxyId!);
       this.audit.write({
@@ -538,8 +552,9 @@ export class Registry {
   // --- adopt blocks: what auto-adopt must not bring back (deleted, or moved off that proxy) ---------------------
   // A camera that left a (proxy, proxy camera id) is never auto-adopted there again; one that arrives
   // (a cancelled move's way back, a PATCH back) lifts that place's block.
-  private relocated(old: { proxyId: string | null; proxyCameraId: string | null }, now: { proxyId: string | null; proxyCameraId: string | null }): void {
+  private relocated(cameraId: string, old: { proxyId: string | null; proxyCameraId: string | null }, now: { proxyId: string | null; proxyCameraId: string | null }): void {
     if (old.proxyId === now.proxyId && old.proxyCameraId === now.proxyCameraId) return;
+    if (now.proxyId && now.proxyCameraId) this.cameraProxyChanged(cameraId);
     if (old.proxyId && old.proxyCameraId) this.blockAdopt(old.proxyId, old.proxyCameraId, 'moved');
     if (now.proxyId && now.proxyCameraId) this.liftAdoptBlock(now.proxyId, now.proxyCameraId);
   }

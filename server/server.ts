@@ -98,6 +98,8 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
   // in the backup's zone (the tick below).
   const power = new PowerService({ db, clock, audit, registry, commands, status, switches, live, log });
   switches.onActive = (id) => power.switchActive(id);
+  // A camera on another proxy (edit, move, adopt): its power record to that proxy.
+  registry.onCameraProxy = (id) => power.proxyChanged(id);
   // A camera's own proxy asks for a power-cycle (its Maintenance page): answered with camera.power.cycle.result.
   hub.deps.onProxyPowerEvent = (proxyId, accountId, ev) => power.requestFromProxy(proxyId, accountId, ev);
   const surveys = new SurveySchedule({ clock, tz: merged.TZ || 'America/Chicago', run: () => power.surveyDaily() });
@@ -154,7 +156,7 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
     } });
   });
   app.use(enrollRouter(enrollment));
-  app.use(camsRouter({ globalPerMin: cfg.limits.camsGlobalPerMin, enrollment: camsEnrollment, auth: camsAuth, signingKey: signing.key, testRoutes: cfg.nodeEnv === 'test', instances: camsInstances, tokens, fleet: { db, clock, instances: camsInstances, registry, status, moves }, snapshot: { db, clock, signingKey: signing.key, signingFingerprint: signing.fingerprint } }));
+  app.use(camsRouter({ globalPerMin: cfg.limits.camsGlobalPerMin, enrollment: camsEnrollment, auth: camsAuth, signingKey: signing.key, testRoutes: cfg.nodeEnv === 'test', instances: camsInstances, tokens, fleet: { db, clock, instances: camsInstances, registry, status, moves, switches: switches.store, power }, snapshot: { db, clock, signingKey: signing.key, signingFingerprint: signing.fingerprint } }));
   app.use(cookieParser());
   app.use(authRoutes({ cfg, sessions, audit, clock, live }));
   const apiDeps = { db, clock, cfg, audit, registry, enrollment, hub, status, live, sessions, backup, commands, tokens, config, actions, moves, camsInstances, serverKeyFingerprints: [signing.fingerprint], importer, diag, ops, pins, viewerTokens, vision, switches, power };

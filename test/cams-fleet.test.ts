@@ -20,6 +20,7 @@ describe('GET /cams/v1/accounts/:id/fleet', () => {
   let s: Running;
   let home: any, beta: any, pi: any, spare: any, hidden: any, betaPx: any, both: any, onlyHome: any, onlyBeta: any, cam1: any;
   let bothKey: CamsKeyT, homeKey: CamsKeyT, betaKey: CamsKeyT;
+  let switchReadAt = 0;
   const fleetPath = (id: string) => `/cams/v1/accounts/${id}/fleet`;
   const get = (key: CamsKeyT, id: string) => signedFetch(s, key, 'GET', fleetPath(id));
   const fleet = async (key: CamsKeyT, id: string) => {
@@ -66,6 +67,11 @@ describe('GET /cams/v1/accounts/:id/fleet', () => {
     s.built.status.heartbeat(pi.id, { summary, proxy: makeProxyInfo({ now }), truncated: false }, now);
     const store = new MoveStore(s.built.db, s.built.clock);
     store.create({ accountId: home.id, cameraId: cam1.id, sourceProxyId: pi.id, targetProxyId: spare.id, requestId: 'rq-marker', tokenHash: HASH, targetIp: '198.51.100.77', actor: 'actor-marker@example.org', detail: 'DETAIL-MARKER' });
+    // A PoE switch operated by pi, and what powers cam1 (switch_list / camera_power in the cams MCP).
+    const sw = await s.api('POST', `/accounts/${home.id}/switches`, { name: 'GPS-208', host: '192.168.1.217', proxyId: pi.id });
+    s.built.switches.store.updateSwitch('admin@example.org', home.id, sw.id, { state: 'active', sn: 'SN-MARKER-1', firmware: 'FW-MARKER', readAt: now });
+    s.built.switches.store.setPower(cam1.id, { kind: 'poe', switchId: sw.id, port: 3, watts: 4.2, verifiedAt: now }, 'admin@example.org', 'sysadmin', 'test');
+    switchReadAt = now;
     await signedFetch(s, bothKey, 'POST', '/cams/v1/report', REPORT(
       [{ accountId: home.id, camsId: 'cam1', fields: ['host'] }, { accountId: beta.id, camsId: 'bcam', fields: ['protocol'] }],
       [{ accountId: home.id, proxyId: spare.id, fields: ['proxyUrl'] }, { accountId: beta.id, proxyId: betaPx.id, fields: ['caFingerprints'] }],
@@ -116,6 +122,19 @@ describe('GET /cams/v1/accounts/:id/fleet', () => {
     expect(b.moves[0]).toMatchObject({ camera: 'cam1', cameraName: 'Yard', source: 'Pi', target: 'Spare', phase: 'requested', bytesDone: null, endedAt: null, chunks: { pending: 0 } });
     expect(b.moves[0].createdAt).toEqual(expect.any(Number));
     expect((await fleet(bothKey, beta.id)).moves).toEqual([]);
+  });
+
+  it('switch_list and camera_power data: the switches by name with their LAN address, each shown camera\'s power; no id, serial or firmware', async () => {
+    const b = await fleet(bothKey, home.id);
+    expect(b.switches).toEqual([{
+      name: 'GPS-208', model: 'sscpoe-web', address: { url: 'http://192.168.1.217/', scope: 'private', note: 'Local network address: only reachable from inside that network.' },
+      proxy: 'Pi', state: 'active', readAt: switchReadAt, ports: 8, problems: [],
+    }]);
+    // cam2 runs on a hidden proxy: not shown, as in proxies[].cameras.
+    expect(b.cameraPower).toEqual([{ camera: 'cam1', cameraName: 'Yard', kind: 'poe', switch: 'GPS-208', port: 3, watts: 4.2, verifiedAt: switchReadAt, notSeen: false, lastCycle: null }]);
+    expect((await fleet(bothKey, beta.id))).toMatchObject({ switches: [], cameraPower: [{ camera: 'cam1', kind: 'unknown', switch: null, port: null, watts: null, verifiedAt: null }] });
+    const raw = JSON.stringify(b);
+    for (const leak of ['sw_', 'SN-MARKER', 'FW-MARKER', 'switchId', 'commandIds']) expect(raw, leak).not.toContain(leak);
   });
 
   it('scan: one account never shows another, and nothing secret or internal in the JSON', async () => {

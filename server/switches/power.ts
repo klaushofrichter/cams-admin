@@ -9,7 +9,7 @@ import type { Logger } from '../log';
 import { FieldError } from '../validate';
 import { tx } from '../db/open';
 import { SWITCH_SURVEY_MAX } from '../../contract/build';
-import type { CameraPower, PowerActorType, Switch } from './store';
+import type { CameraPower, PowerActorType, Switch, SwitchProblem } from './store';
 import type { SwitchService } from './service';
 
 // Camera power (design 2026-11-07-poe-switches-design.md, "Verify", "Power-cycle", "Survey"): what powers a
@@ -47,8 +47,11 @@ export interface PowerView {
   cameraId: string; camsId: string; accountId: string; power: CameraPower; switch: { id: string; name: string; state: Switch['state'] } | null;
   lastCheck: PowerFlow | null; lastCycle: PowerFlow | null;
 }
-export interface SurveyResultView { cameraId: string; camsId: string; found: boolean; port?: number; kind?: CameraPower['kind']; reason?: string }
-export interface SurveyView { switchId: string; at: number; state: 'running' | 'done'; commandIds: string[]; results: SurveyResultView[] }
+// trunk: found on a port where the survey found two or more cameras (not mapped from there).
+export interface SurveyResultView { cameraId: string; camsId: string; found: boolean; port?: number; kind?: CameraPower['kind']; reason?: string; trunk?: boolean }
+export interface TrunkView { port: number; cameras: { cameraId: string; camsId: string }[] }
+// trunks and problems: what this survey saw (problems: the configuration problems it found, chained_switch per trunk port).
+export interface SurveyView { switchId: string; at: number; state: 'running' | 'done'; commandIds: string[]; results: SurveyResultView[]; trunks: TrunkView[]; problems: SwitchProblem[] }
 export interface SurveyStart { commandIds: string[]; queued: boolean }
 
 export interface PowerDeps {
@@ -56,6 +59,7 @@ export interface PowerDeps {
 }
 
 interface Hit { sw: Switch; port: number; watts: number; poe: boolean }
+interface SurveyHit { c: Camera; port: number; watts: number; poe: boolean }
 type Occupying = Extract<CameraPower, { switchId: string }>;
 
 const occupies = (p: CameraPower): p is Occupying => p.kind === 'poe' || p.kind === 'data-only';
@@ -79,6 +83,9 @@ const CYCLE_TEXT: Record<string, string> = {
   unknown: 'no final answer from the operator',
   expired: 'the operator was offline: the command was never sent',
 };
+// The configuration problem in plain words (audit, UI).
+export const chainedText = (p: SwitchProblem): string =>
+  `Configuration issue: another switch is chained on port ${p.port} (${p.cameras} cameras behind it). Connect each PoE switch directly to its proxy's network instead of through another PoE switch.`;
 const errCode = (e: unknown) => (e instanceof ApiError ? e.code : e instanceof FieldError ? 'invalid' : 'error');
 const isObj = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x);
 
@@ -224,6 +231,8 @@ export class PowerService {
     try {
       const id = this.sendCycle(who, c, sw, p.port, force, false, flow);
       this.saveCycle(c.id, flow, id, req);
+      // A proxy's request has its own record (requestFromProxy); a forced cycle camera-power-cycle-forced below.
+      if (!force && !who.proxy) this.auditCamera(who, c, 'camera-power-cycle', 'ok', { step: 'start', switchId: sw.id, switchName: sw.name, port: p.port, cmdId: id, force: false });
       if (force) {
         this.d.audit.write({ actorType: this.type(who), actor: who.actor, action: 'camera-power-cycle-forced', accountId: c.accountId, targetType: 'camera', targetId: c.id, targetLabel: c.camsId, outcome: 'ok',
           detail: { switchId: sw.id, switchName: sw.name, port: p.port, cmdId: id } });
@@ -291,12 +300,13 @@ export class PowerService {
     const flow = this.flow(op);
     const notes: string[] = [];
     const id = this.locateChain(who, c, host, this.searchOrder(c), 0, notes, flow, (hit) => {
-      if (!hit) return this.finish(flow, 'failed', 'not_found', `found on no switch: ${notes.join('; ')}`);
-      this.applyHit(who, c.id, hit, op === 'verify' ? 'verify' : 'search');
-      this.finish(flow, 'ok', null, null);
+      if (!hit) return this.checkFailed(who, c, flow, 'not_found', clamp(`found on no switch: ${notes.join('; ')}`));
+      const stored = this.applyHit(who, c.id, hit, op === 'verify' ? 'verify' : 'search');
+      this.checkOk(who, c, flow, hit, stored);
     });
     if (!id) return this.refuse('no_switch', notes.length ? notes.join('; ') : 'the account has no active switch');
     this.lastCheck.set(c.id, flow);
+    this.auditCamera(who, c, 'camera-power-verify', 'ok', { step: 'start', op, cmdId: id });
     return { ok: true, commandId: id };
   }
 
@@ -308,14 +318,25 @@ export class PowerService {
     const flow = this.flow('propose');
     const notes: string[] = [];
     const id = this.locateChain(who, c, host, [sw], 0, notes, flow, (hit) => {
-      if (!hit) return this.finish(flow, 'failed', 'not_found', notes.join('; '));
-      if (hit.port !== port) return this.finish(flow, 'failed', 'not_on_port', `the camera's traffic is on port ${hit.port}, not ${port}`);
-      this.applyHit(who, c.id, hit, 'proposed and verified');
-      this.finish(flow, 'ok', null, null);
+      if (!hit) return this.checkFailed(who, c, flow, 'not_found', clamp(notes.join('; ')));
+      if (hit.port !== port) return this.checkFailed(who, c, flow, 'not_on_port', `the camera's traffic is on port ${hit.port}, not ${port}`);
+      const stored = this.applyHit(who, c.id, hit, 'proposed and verified');
+      this.checkOk(who, c, flow, hit, stored);
     });
     if (!id) return this.refuse('no_switch', notes.join('; '));
     this.lastCheck.set(c.id, flow);
+    this.auditCamera(who, c, 'camera-power-verify', 'ok', { step: 'start', op: 'propose', switchId: sw.id, port, cmdId: id });
     return { ok: true, commandId: id };
+  }
+
+  // The result of a verify, search or proposal: the flow and its camera-power-verify record.
+  private checkOk(who: Who, c: Camera, flow: PowerFlow, hit: Hit, stored: CameraPower): void {
+    this.finish(flow, 'ok', null, null);
+    this.auditCamera(who, c, 'camera-power-verify', 'ok', { step: 'result', op: flow.op, switchId: hit.sw.id, switchName: hit.sw.name, port: hit.port, kind: stored.kind, cmdIds: [...flow.commandIds] });
+  }
+  private checkFailed(who: Who, c: Camera, flow: PowerFlow, code: string, reason: string): void {
+    this.finish(flow, 'failed', code, reason);
+    this.auditCamera(who, c, 'camera-power-verify', 'failed', { step: 'result', op: flow.op, code, reason, cmdIds: [...flow.commandIds] });
   }
 
   // The mapped switch first (if active), then the account's other active switches by name.
@@ -333,10 +354,12 @@ export class PowerService {
       try {
         return this.send(who, c.accountId, sw.proxyId, 'switch.locate', { v: 1, switch: ref(sw), host }, flow, (r) => {
           const res = r.state === 'done' ? r.result : null;
-          if (res && res.found === true && Number.isSafeInteger(res.port)) {
+          // Found on a port the switch's last survey saw as a trunk (a chained switch): not found on this switch.
+          const trunk = res && res.found === true ? this.trunkOf(sw.id, res.port) : null;
+          if (res && res.found === true && Number.isSafeInteger(res.port) && !trunk) {
             return done({ sw, port: res.port as number, watts: typeof res.watts === 'number' ? res.watts : 0, poe: res.poe !== false });
           }
-          notes.push(`${sw.name}: ${res ? LOCATE_TEXT[String(res.reason)] ?? 'not found' : r.outcomeCode ? CYCLE_TEXT[r.outcomeCode] ?? r.outcomeCode : r.state}`);
+          notes.push(`${sw.name}: ${trunk ? `trunk port ${trunk.port} (${trunk.cameras} cameras)` : res ? LOCATE_TEXT[String(res.reason)] ?? 'not found' : r.outcomeCode ? CYCLE_TEXT[r.outcomeCode] ?? r.outcomeCode : r.state}`);
           if (this.locateChain(who, c, host, list, k + 1, notes, flow, done) === null) done(null);
         });
       } catch (e) {
@@ -346,8 +369,9 @@ export class PowerService {
     return null;
   }
 
-  // poe vs data-only by watts > 0. The same mapping again: verifiedAt/watts only (not audited); a new one is
-  // setPower (audited, one camera per port) and camera.power.set to the camera's proxy (and to a displaced one's).
+  // poe vs data-only by watts > 0. The same mapping again: verifiedAt/watts only (not audited), and camera.power.set
+  // to the camera's proxy again; a new one is setPower (audited, one camera per port) and camera.power.set to the
+  // camera's proxy (and to a displaced one's).
   private applyHit(who: Who, cameraId: string, hit: Hit, why: string): CameraPower {
     const now = this.d.clock.now();
     const next: CameraPower = hit.poe && hit.watts > 0
@@ -357,7 +381,8 @@ export class PowerService {
     const cur = c.power;
     if (occupies(cur) && cur.kind === next.kind && cur.switchId === next.switchId && cur.port === next.port && !cur.notSeen) {
       this.d.switches.store.touchPower(c.id, next);
-      this.d.live.publishRegistry('camera', c.id);
+      // Sent again: a proxy that missed it (moved camera, allow entry added later, file lost) learns it now.
+      this.notify(who, this.camera(c.id));
       return next;
     }
     const displaced = this.d.switches.store.camerasOnSwitch(hit.sw.id).filter((o) => o.id !== c.id && occupies(o.power) && o.power.port === hit.port).map((o) => o.id);
@@ -393,6 +418,7 @@ export class PowerService {
         try {
           const retry = this.sendCycle(who, this.camera(c.id), hit.sw, hit.port, false, true, flow);
           this.saveCycle(c.id, flow, retry);
+          this.auditCamera(who, c, 'camera-power-cycle', 'ok', { step: 'retry', switchId: hit.sw.id, switchName: hit.sw.name, port: hit.port, cmdId: retry });
         } catch (e) {
           this.finishCycle(who, c, flow, 'failed', errCode(e), errCode(e));
         }
@@ -406,6 +432,7 @@ export class PowerService {
     this.finish(flow, state, code, state === 'ok' ? null : message);
     // The open request is taken (cleared) before its answer goes out: at most once, also across a crash.
     const req = this.saveCycle(c.id, flow, null);
+    this.auditCamera(who, c, 'camera-power-cycle', state, { step: 'final', force: !!flow.force, code, reason: state === 'ok' ? null : clamp(message), cmdIds: [...flow.commandIds], ...(req ? { requestId: req.requestId } : {}) });
     this.own(who, c, 'camera.power.cycled', { v: 1, camera: c.proxyCameraId, ok: state === 'ok', message: clamp(message) });
     if (req) this.answer(c.accountId, req, state === 'ok', message);
   }
@@ -488,11 +515,19 @@ export class PowerService {
     const cams = this.d.registry.listCameras(sw.accountId).filter((c) => c.power.kind !== 'adapter');
     const withHost = cams.filter((c) => this.hostOf(c));
     const view: SurveyView = {
-      switchId: sw.id, at: this.d.clock.now(), state: 'running', commandIds: [],
+      switchId: sw.id, at: this.d.clock.now(), state: 'running', commandIds: [], trunks: [], problems: [],
       results: cams.filter((c) => !this.hostOf(c)).map((c) => ({ cameraId: c.id, camsId: c.camsId, found: false, reason: HOST_UNKNOWN })),
     };
     const open = new Set<string>();
+    // The hits of every chunk: mapped only once all are in (a trunk port can span chunks).
+    const hits: SurveyHit[] = [];
+    const st = { complete: true, answered: 0 };
     const end = () => {
+      try {
+        this.surveyEnd(who, sw, view, hits, st);
+      } catch (e) {
+        this.d.log.error({ err: e, switchId: sw.id }, 'power_survey_end_failed');
+      }
       view.state = 'done';
       this.d.live.publishRegistry('switch', sw.id);
       const next = this.queued.get(sw.id);
@@ -508,13 +543,15 @@ export class PowerService {
         id = this.send(who, sw.accountId, sw.proxyId, 'switch.survey', { v: 1, switch: ref(sw), cameras: chunk.map((c) => ({ camera: c.id, host: this.hostOf(c)! })) }, null, (r) => {
           open.delete(r.id);
           try {
-            this.surveyAnswer(who, sw, chunk, r, view);
+            if (this.surveyAnswer(who, sw, chunk, r, view, hits)) st.answered++;
+            else st.complete = false;
           } finally {
             if (!open.size) end();
           }
         });
       } catch (e) {
         if (i === 0) throw e;
+        st.complete = false;
         view.results.push(...chunk.map((c) => ({ cameraId: c.id, camsId: c.camsId, found: false, reason: `survey not sent: ${errCode(e)}` })));
         continue;
       }
@@ -522,18 +559,20 @@ export class PowerService {
       view.commandIds.push(id);
     }
     this.surveys.set(sw.id, view);
+    this.d.audit.write({ actorType: this.type(who), actor: who.actor, action: 'switch-survey', accountId: sw.accountId, targetType: 'switch', targetId: sw.id, targetLabel: sw.name, outcome: 'ok',
+      detail: { step: 'start', commandIds: [...view.commandIds], cameras: withHost.length } });
     if (!open.size) end();
     return { commandIds: [...view.commandIds], queued: false };
   }
 
-  // found → mapped (setPower when it changed); no_traffic/ambiguous for a camera mapped to this switch → notSeen;
-  // not_reachable → reported only.
-  private surveyAnswer(who: Who, sw: Switch, chunk: Camera[], r: CommandRow, view: SurveyView): void {
+  // A chunk's answer: no_traffic/ambiguous for a camera mapped to this switch → notSeen; not_reachable → reported
+  // only; found → kept in `hits` for surveyEnd. False when the chunk has no results (failed, expired).
+  private surveyAnswer(who: Who, sw: Switch, chunk: Camera[], r: CommandRow, view: SurveyView, hits: SurveyHit[]): boolean {
     const results = r.state === 'done' && Array.isArray(r.result?.results) ? (r.result!.results as Record<string, unknown>[]) : null;
     if (!results) {
       const why = `survey ${r.state}${r.outcomeCode ? `: ${CYCLE_TEXT[r.outcomeCode] ?? r.outcomeCode}` : ''}`;
       view.results.push(...chunk.map((c) => ({ cameraId: c.id, camsId: c.camsId, found: false, reason: why })));
-      return;
+      return false;
     }
     const byId = new Map(chunk.map((c) => [c.id, c]));
     for (const res of results) {
@@ -542,8 +581,7 @@ export class PowerService {
       byId.delete(c.id);
       try {
         if (res.found === true && Number.isSafeInteger(res.port)) {
-          const stored = this.applyHit(who, c.id, { sw, port: res.port as number, watts: typeof res.watts === 'number' ? res.watts : 0, poe: res.poe !== false }, 'survey');
-          view.results.push({ cameraId: c.id, camsId: c.camsId, found: true, port: res.port as number, kind: stored.kind });
+          hits.push({ c, port: res.port as number, watts: typeof res.watts === 'number' ? res.watts : 0, poe: res.poe !== false });
           continue;
         }
         const reason = typeof res.reason === 'string' ? res.reason : 'not found';
@@ -557,6 +595,63 @@ export class PowerService {
       }
     }
     for (const c of byId.values()) view.results.push({ cameraId: c.id, camsId: c.camsId, found: false, reason: 'no answer for this camera' });
+    return true;
+  }
+
+  // All chunks are in. A port with two or more cameras is a trunk port (another switch chained on it): none of them is
+  // mapped from it and their records stay as they are; a camera alone on its port is mapped (setPower when it changed).
+  // The switch's problems follow this survey (chained_switch per trunk port): a new one is audited (refused: the
+  // cameras behind it were not mapped), a gone one cleared (ok). An incomplete survey adds problems but clears none.
+  private surveyEnd(who: Who, sw: Switch, view: SurveyView, hits: SurveyHit[], st: { complete: boolean; answered: number }): void {
+    const byPort = new Map<number, SurveyHit[]>();
+    for (const h of hits) byPort.set(h.port, [...(byPort.get(h.port) ?? []), h]);
+    for (const [port, list] of [...byPort].sort((a, b) => a[0] - b[0])) {
+      if (list.length >= 2) {
+        view.trunks.push({ port, cameras: list.map((h) => ({ cameraId: h.c.id, camsId: h.c.camsId })) });
+        view.problems.push({ code: 'chained_switch', port, cameras: list.length });
+        view.results.push(...list.map((h) => ({ cameraId: h.c.id, camsId: h.c.camsId, found: true, port, trunk: true })));
+        continue;
+      }
+      const h = list[0];
+      try {
+        const stored = this.applyHit(who, h.c.id, { sw, port, watts: h.watts, poe: h.poe }, 'survey');
+        view.results.push({ cameraId: h.c.id, camsId: h.c.camsId, found: true, port, kind: stored.kind });
+      } catch (e) {
+        this.d.log.error({ err: e, cameraId: h.c.id, switchId: sw.id }, 'power_survey_result_failed');
+      }
+    }
+    const now = this.d.switches.store.findById(sw.id);
+    if (now && st.answered > 0) {
+      const before = now.problems;
+      const seen = view.problems;
+      const next = st.complete ? seen : [...seen, ...before.filter((o) => !seen.some((x) => x.port === o.port))];
+      const audit = (outcome: 'ok' | 'refused', detail: Record<string, unknown>) => this.d.audit.write({
+        actorType: this.type(who), actor: who.actor, action: 'switch-survey', accountId: sw.accountId, targetType: 'switch', targetId: sw.id, targetLabel: sw.name, outcome, detail,
+      });
+      for (const p of next) {
+        if (before.some((o) => o.code === p.code && o.port === p.port)) continue;
+        audit('refused', { step: 'problem', ...p, message: chainedText(p) });
+      }
+      for (const o of before) if (!next.some((p) => p.code === o.code && p.port === o.port)) audit('ok', { step: 'problem-cleared', ...o });
+      if (JSON.stringify(before) !== JSON.stringify(next)) this.d.switches.store.setProblems(sw.id, next);
+    }
+    this.d.audit.write({ actorType: this.type(who), actor: who.actor, action: 'switch-survey', accountId: sw.accountId, targetType: 'switch', targetId: sw.id, targetLabel: sw.name,
+      outcome: st.answered > 0 || !view.commandIds.length ? 'ok' : 'failed',
+      detail: { step: 'done', found: view.results.filter((r) => r.found).length, notFound: view.results.filter((r) => !r.found).length, trunks: view.problems.map((p) => ({ port: p.port, cameras: p.cameras })), complete: st.complete } });
+  }
+
+  // The trunk port (chained_switch) of the switch's last survey that `port` is, else null.
+  private trunkOf(switchId: string, port: unknown): SwitchProblem | null {
+    return this.d.switches.store.findById(switchId)?.problems.find((p) => p.code === 'chained_switch' && p.port === port) ?? null;
+  }
+
+  // A camera's proxy changed (an edit, a move's switch-over, an adopt): camera.power.set to its proxy now.
+  proxyChanged(cameraId: string): void {
+    try {
+      this.notify(SYSTEM, this.camera(cameraId));
+    } catch (e) {
+      if (!(e instanceof ApiError && e.status === 404)) this.d.log.warn({ err: e, cameraId }, 'power_proxy_changed_failed');
+    }
   }
 
   // --- helpers -----------------------------------------------------------------------------------
@@ -583,6 +678,10 @@ export class PowerService {
         ...(p.verifiedAt !== undefined ? { verifiedAt: p.verifiedAt } : {}), ...(p.notSeen ? { notSeen: true } : {}) }
       : { kind: p.kind };
     this.own(who, c, 'camera.power.set', { v: 1, camera: c.proxyCameraId, power });
+  }
+
+  private auditCamera(who: Who, c: Camera, action: 'camera-power-cycle' | 'camera-power-verify', outcome: 'ok' | 'failed', detail: Record<string, unknown>): void {
+    this.d.audit.write({ actorType: this.type(who), actor: who.actor, action, accountId: c.accountId, targetType: 'camera', targetId: c.id, targetLabel: c.camsId, outcome, detail });
   }
 
   // A message to the camera's own proxy: skipped (silently) without a proxy or without the allow entry.

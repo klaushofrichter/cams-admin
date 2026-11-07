@@ -12,7 +12,12 @@ type Row = Record<string, unknown>;
 export interface Switch {
   id: string; accountId: string; name: string; model: 'sscpoe-web'; host: string; ports: number; offSeconds: number; proxyId: string;
   state: 'pending' | 'active'; sn: string | null; firmware: string | null; readAt: number | null; survey: boolean; createdAt: number; updatedAt: number;
+  // From the latest complete survey (configuration problems, not errors of cams-admin).
+  problems: SwitchProblem[];
 }
+// chained_switch: two or more of the account's cameras were found behind one port in one survey: another switch hangs
+// on that port (a trunk port). None of them is mapped from it, and a single locate there counts as not found.
+export interface SwitchProblem { code: 'chained_switch'; port: number; cameras: number }
 export type CameraPower =
   | { kind: 'poe'; switchId: string; port: number; watts: number; verifiedAt?: number; notSeen?: boolean }
   | { kind: 'data-only'; switchId: string; port: number; verifiedAt?: number; notSeen?: boolean }
@@ -27,6 +32,7 @@ const toSwitch = (r: Row): Switch => ({
   id: r.id as string, accountId: r.account_id as string, name: r.name as string, model: r.model as 'sscpoe-web', host: r.host as string, ports: r.ports as number,
   offSeconds: r.off_seconds as number, proxyId: r.proxy_id as string, state: r.state as Switch['state'], sn: r.sn as string | null, firmware: r.firmware as string | null,
   readAt: r.read_at as number | null, survey: r.survey === 1, createdAt: r.created_at as number, updatedAt: r.updated_at as number,
+  problems: r.problems ? (JSON.parse(r.problems as string) as SwitchProblem[]) : [],
 });
 const toPower = (v: unknown): CameraPower => (v ? (JSON.parse(v as string) as CameraPower) : UNKNOWN);
 // Only these occupy a port.
@@ -88,6 +94,11 @@ export class SwitchStore {
     return (this.db.prepare('SELECT * FROM switches WHERE account_id = ? ORDER BY name').all(accountId) as Row[]).map(toSwitch);
   }
 
+  // Every switch with a configuration problem (the dashboard).
+  listAllWithProblems(): Switch[] {
+    return (this.db.prepare('SELECT * FROM switches WHERE problems IS NOT NULL ORDER BY account_id, name').all() as Row[]).map(toSwitch);
+  }
+
   findBySerial(sn: string): Switch | null {
     const r = this.db.prepare('SELECT * FROM switches WHERE sn = ? ORDER BY id LIMIT 1').get(sn) as Row | undefined;
     return r ? toSwitch(r) : null;
@@ -138,6 +149,11 @@ export class SwitchStore {
   private writePower(cameraId: string, accountId: string, camsId: string, from: CameraPower, to: CameraPower, actor: string, actorType: PowerActorType, why: string): void {
     this.db.prepare('UPDATE cameras SET power = ?, updated_at = ?, version = version + 1 WHERE id = ?').run(JSON.stringify(to), this.clock.now(), cameraId);
     this.audit.write({ actorType, actor, action: 'camera-power-set', accountId, targetType: 'camera', targetId: cameraId, targetLabel: camsId, outcome: 'ok', detail: { from, to, why } });
+  }
+
+  // A survey's view of the switch's configuration (audited by the caller, as part of the survey record).
+  setProblems(switchId: string, problems: SwitchProblem[]): void {
+    this.db.prepare('UPDATE switches SET problems = ? WHERE id = ?').run(problems.length ? JSON.stringify(problems) : null, switchId);
   }
 
   // The same mapping seen again (a verify, a survey): a newer verifiedAt and watts, not audited (the mapping didn't

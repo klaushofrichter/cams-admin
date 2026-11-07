@@ -209,6 +209,25 @@ describe('switch lifecycle API', () => {
     expect((await call('POST', `/switches/${sw.id}/move`, { proxyId: q.prx })).body).toMatchObject({ error: 'invalid', field: 'proxyId' });
   });
 
+  it('review triage (Task 7 #1): after a move, the old operator\'s open switch.forget does not keep the switch busy', async () => {
+    const p = await proxy();
+    const q = await proxy(ALL);
+    const sw = await activate(p, 'GPS208Y');
+    readAs(q, 'GPS208Y');
+    // The old operator is away: its forget stays queued.
+    await p.client.stop('shutdown');
+    expect((await call('POST', `/switches/${sw.id}/move`, { proxyId: q.prx })).status).toBe(202);
+    await until(async () => (await get(sw.id)).proxyId === q.prx, 5000, 'moved');
+    await until(() => !!s.built.db.prepare(`SELECT 1 FROM commands WHERE command = 'switch.forget' AND proxy_id = ? AND state = 'queued'`).get(p.prx), 5000, 'forget queued');
+    const t = await call('POST', `/switches/${sw.id}/test`);
+    expect([t.status, t.body.error]).toEqual([202, undefined]);
+    await idle(sw.id);
+    // A forget addressed to the current operator still counts.
+    q.client.dropCommands = 1;
+    s.built.commands.create(ACTOR, q.acc, q.prx, 'switch.forget', { v: 1, switchId: sw.id });
+    expect((await call('POST', `/switches/${sw.id}/test`)).body).toEqual({ error: 'switch_busy' });
+  });
+
   it('Review Focus 4: delete while a command for the switch is open → 409 switch_busy', async () => {
     const p = await proxy();
     const sw = await add(p);

@@ -118,10 +118,24 @@ export function buildCamsSchemas(mode: Mode): Record<string, S> {
     chunks: all({ pending: int(), copied: int(), verified: int(), skipped: int(), failed: int(), abandoned: int() }),
     createdAt: int(), updatedAt: int(), endedAt: nullable(int()),
   });
-  const fleetResponse = all({
+  // PoE switches (design 2026-11-07-poe-switches-design.md; the cams MCP's switch_list and camera_power): by name,
+  // never an id, serial, firmware or password. Required in strict, optional at run time (an older cams-admin).
+  const port = int(1, { maximum: 64 });
+  const fleetSwitch = all({
+    name: str(60), model: en(['sscpoe-web']), address: place, proxy: nullable(str()), state: en(['pending', 'active']), readAt: nullable(int()), ports: port,
+    problems: arr(all({ code: en(['chained_switch']), port, cameras: int(2) }), 64),
+  });
+  const fleetPower = all({
+    camera: camsId, cameraName: nullable(str()), kind: en(['poe', 'data-only', 'adapter', 'unknown']), switch: nullable(str(60)), port: nullable(port),
+    watts: nullable({ type: 'number', minimum: 0 }), verifiedAt: nullable(int()), notSeen: bool,
+    lastCycle: nullable(all({ state: en(['running', 'ok', 'failed']), requestedAt: nullable(int()), finishedAt: nullable(int()), code: nullable(str(64)), reason: nullable(str()) })),
+  });
+  const fleetProps: Record<string, S> = {
     v: { const: 1 }, type: { const: 'cams-fleet' }, accountId: id('acc'), generatedAt: int(),
     proxies: arr(fleetProxy, 64), notRouted: int(), viewers: arr(fleetViewer, 32), moves: arr(fleetMove, 50),
-  });
+    switches: arr(fleetSwitch, 64), cameraPower: arr(fleetPower, 256),
+  };
+  const fleetResponse = obj(fleetProps, Object.keys(fleetProps).filter((k) => k !== 'switches' && k !== 'cameraPower'));
 
   // --- enrollment and errors -----------------------------------------------------
   const enrollRequest = obj({ v: { const: 1 }, code: str(64), publicKey: b64(100), proof: b64(100), camsVersion: str(64) }, ['v', 'code', 'publicKey', 'proof']);
@@ -220,6 +234,14 @@ const fleet = () => ({
     id: 'mv_0123456789ABCDEFGHJK', camera: 'cam2', cameraName: 'Driveway', source: 'Pi', target: 'Cluster', phase: 'copying', reason: null,
     bytesTotal: 1000, bytesDone: 400, rateBps: 100, etaS: 6, chunks: { pending: 1, copied: 0, verified: 2, skipped: 0, failed: 0, abandoned: 0 },
     createdAt: NOW - 60_000, updatedAt: NOW, endedAt: null,
+  }],
+  switches: [{
+    name: 'GPS-208', model: 'sscpoe-web', address: { url: 'http://192.168.1.217/', scope: 'private', note: 'Local network address: only reachable from inside that network.' },
+    proxy: 'Pi', state: 'active', readAt: NOW, ports: 8, problems: [{ code: 'chained_switch', port: 8, cameras: 2 }],
+  }],
+  cameraPower: [{
+    camera: 'cam1', cameraName: 'Backyard', kind: 'poe', switch: 'GPS-208', port: 3, watts: 4.2, verifiedAt: NOW, notSeen: false,
+    lastCycle: { state: 'ok', requestedAt: NOW - 30_000, finishedAt: NOW - 10_000, code: null, reason: null },
   }],
 });
 

@@ -3,7 +3,7 @@
   // the outcome is read from the switch (`last`) every 2 s, for at most 60 s.
   import { onMount } from 'svelte';
   import { api, ApiFailure, errorText } from '../lib/api';
-  import { lastText, passwordHint, poll, removeText } from '../lib/switches';
+  import { chainedText, lastText, passwordHint, poll, removeText, trunkText } from '../lib/switches';
   import Ago from './Ago.svelte';
   import Confirm from './Confirm.svelte';
 
@@ -86,7 +86,8 @@
       else {
         const found = v.results.filter((r: any) => r.found).length;
         const missing = v.results.filter((r: any) => !r.found).map((r: any) => `${r.camsId}${r.reason ? ` (${r.reason})` : ''}`);
-        results = { ...results, [s.id]: `Survey: ${found} found${missing.length ? `; not found: ${missing.join(', ')}` : ''}` };
+        const trunks = (v.trunks ?? []).map((t: any) => `port ${t.port}: ${t.cameras.map((c: any) => c.camsId).join(', ')}`);
+        results = { ...results, [s.id]: `Survey: ${found} found${missing.length ? `; not found: ${missing.join(', ')}` : ''}${trunks.length ? `; not mapped (another switch chained on ${trunks.join('; ')})` : ''}` };
       }
     } catch (e) { results = { ...results, [s.id]: errorText(e) }; } finally {
       busy = { ...busy, [s.id]: false };
@@ -110,6 +111,7 @@
       results = { ...results, [s.id]: r.live ? '' : 'The switch did not answer: the table shows what the cameras say.' };
     } catch (e) { results = { ...results, [s.id]: errorText(e) }; }
   }
+  const trunkAt = (s: any, port: number) => (s.problems ?? []).find((p: any) => p.code === 'chained_switch' && p.port === port) ?? null;
   const camerasAt = (s: any, port: number) => cameras.filter((c) => c.power && 'switchId' in c.power && c.power.switchId === s.id && c.power.port === port);
   const liveAt = (s: any, port: number) => reads[s.id]?.ports?.find((p: any) => p.port === port)?.live ?? null;
   const mappedNames = (s: any) => cameras.filter((c) => c.power && 'switchId' in c.power && c.power.switchId === s.id).map((c) => c.name);
@@ -168,7 +170,7 @@
       <tbody>
         {#each items as s (s.id)}
           <tr data-testid="switch-row-{s.name}">
-            <td>{s.name}</td>
+            <td>{s.name}{#if s.problems?.length} <span class="badge warn" data-testid="switch-config-{s.name}" title={s.problems.map(chainedText).join(' ')}>configuration issue</span>{/if}</td>
             <td class="mono">{s.model}</td>
             <td class="mono">{s.host}</td>
             <td>{proxyName(s.proxyId)}</td>
@@ -186,6 +188,9 @@
               {/if}
             </td>
           </tr>
+          {#each s.problems ?? [] as pr (pr.port)}
+            <tr><td colspan="8" class="small"><div class="warn-text" data-testid="switch-problem-{s.name}-{pr.port}">{chainedText(pr)}</div></td></tr>
+          {/each}
           {#if results[s.id] || hints[s.id] || s.last}
             <tr><td colspan="8" class="small">
               {#if results[s.id]}<div class="mono" data-testid="switch-result-{s.name}">{results[s.id]}</div>
@@ -201,9 +206,10 @@
                   {#each Array.from({ length: s.ports }, (_, i) => i + 1) as n}
                     {@const cams = camerasAt(s, n)}
                     {@const live = liveAt(s, n)}
+                    {@const trunk = trunkAt(s, n)}
                     <tr data-testid="switch-port-{s.name}-{n}">
                       <td>{n}</td>
-                      <td data-testid="switch-port-camera-{s.name}-{n}">{#each cams as c, i}{i ? ', ' : ''}{c.name}{#if c.power.notSeen} <span class="muted">(not seen in the last survey)</span>{/if}{/each}</td>
+                      <td data-testid="switch-port-camera-{s.name}-{n}">{#if trunk}<span class="badge warn" data-testid="switch-port-trunk-{s.name}-{n}" title={chainedText(trunk)}>{trunkText(trunk.cameras)}</span>{' '}{/if}{#each cams as c, i}{i ? ', ' : ''}{c.name}{#if c.power.notSeen} <span class="muted">(not seen in the last survey)</span>{/if}{/each}</td>
                       <td>{live ? (live.poe ? 'on' : 'off') : cams.length ? (cams[0].power.kind === 'poe' ? 'on' : 'data only') : '–'}</td>
                       <td>{live && typeof live.watts === 'number' ? live.watts : cams[0]?.power.watts ?? '–'}</td>
                       <td>{live ? (live.link === true ? 'up' : live.link === false ? 'down' : '–') : '–'}</td>
@@ -270,6 +276,7 @@
 {/if}
 
 <style>
+  .warn-text { color: var(--warning); }
   .wrap { flex-wrap: wrap; gap: 4px; }
   .small { font-size: 12px; margin: 0; }
   form { align-items: end; }

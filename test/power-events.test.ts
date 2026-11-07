@@ -79,7 +79,12 @@ describe('power-cycle requests from proxies', () => {
     expect(sent(p, 'switch.cycle')).toEqual([{ v: 1, switch: expect.objectContaining({ id: a.id }), port: 3, host: cam.host, force: false, camera: cam.id }]);
     expect(results(p)).toEqual([{ v: 1, camera: cam.proxyCameraId, requestId: 'rq-1', ok: true }]);
     expect((await power(cam.id)).lastCycle).toMatchObject({ state: 'ok', force: false });
-    expect(audits('camera-power-cycle')).toEqual([expect.objectContaining({ actorType: 'proxy', actor: p.prx, outcome: 'ok', targetId: cam.id, requestId: 'rq-1', cmdId: expect.stringMatching(/^cmd_/) })]);
+    // The request (as the proxy), then the final outcome against the camera (step final, with the request id).
+    await until(() => audits('camera-power-cycle').length === 2, 5000, 'final audit');
+    expect(audits('camera-power-cycle')).toEqual([
+      expect.objectContaining({ actorType: 'proxy', actor: p.prx, outcome: 'ok', targetId: cam.id, requestId: 'rq-1', cmdId: expect.stringMatching(/^cmd_/) }),
+      expect.objectContaining({ actorType: 'proxy', actor: p.prx, outcome: 'ok', targetId: cam.id, step: 'final', requestId: 'rq-1', code: null }),
+    ]);
     const cc = s.built.db.prepare(`SELECT actor_type FROM audit_log WHERE action = 'command-create' AND detail LIKE '%switch.cycle%'`).all() as { actor_type: string }[];
     expect(cc).toEqual([{ actor_type: 'proxy' }]);
     await settle();
@@ -142,7 +147,7 @@ describe('power-cycle requests from proxies', () => {
     ask(p, cam.proxyCameraId, 'rq-3');
     await until(() => results(p).length === 4, 5000, 'result 3');
     expect(results(p)[3]).toMatchObject({ requestId: 'rq-3', ok: true });
-    expect(audits('camera-power-cycle').map((a) => [a.requestId, a.outcome])).toEqual([['rq-busy', 'refused'], ['rq-1', 'ok'], ['rq-2', 'refused'], ['rq-3', 'ok']]);
+    expect(audits('camera-power-cycle').filter((a) => a.actorType === 'proxy' && a.step !== 'final').map((a) => [a.requestId, a.outcome])).toEqual([['rq-busy', 'refused'], ['rq-1', 'ok'], ['rq-2', 'refused'], ['rq-3', 'ok']]);
   });
 
   it('a proxy without camera.power.cycle.result allowed: the cycle runs, no result is sent', async () => {
@@ -198,5 +203,47 @@ describe('power-cycle requests from proxies', () => {
     await settle();
     expect(results(own)).toHaveLength(1);
     expect((await power(cam.id)).lastCycle).toMatchObject({ state: 'ok', force: false });
+  });
+  // Review triage (Task 9 #7): the restore branches that run inside the constructor.
+  async function openCycle() {
+    const own = await proxy();
+    const op = await proxy();
+    const { cam, a } = await poeCamera(own, op);
+    op.client.dropCommands = 1; // the switch.cycle stays sent
+    ask(own, cam.proxyCameraId, 'rq-s');
+    await until(() => s.built.db.prepare(`SELECT 1 FROM commands WHERE command = 'switch.cycle' AND state = 'sent'`).get() !== undefined, 5000, 'cycle sent');
+    const cmdId = (s.built.db.prepare(`SELECT id FROM commands WHERE command = 'switch.cycle'`).get() as { id: string }).id;
+    return { own, op, cam, a, cmdId };
+  }
+  const cycleRow = (camId: string) => s.built.db.prepare('SELECT command_id, request, flow FROM camera_power_cycles WHERE camera_id = ?').get(camId) as { command_id: string | null; request: string | null; flow: string };
+
+  it('restore: the switch.cycle row is already final at the start → the cycle ends at once, the result is sent once, the row is cleaned', async () => {
+    const { own, cam, cmdId } = await openCycle();
+    // The answer landed in the database, but this run never saw it (as if it crashed right after).
+    s.built.db.prepare(`UPDATE commands SET state = 'done', finished_at = ?, result = ? WHERE id = ?`).run(clock.now(), JSON.stringify({ body: { phase: 'done', status: 'ok', result: { verified: true, offAt: 1, onAt: 2 } } }), cmdId);
+    s = await s.restart();
+    expect((await power(cam.id)).lastCycle).toMatchObject({ state: 'ok' });
+    expect(cycleRow(cam.id)).toMatchObject({ command_id: null, request: null });
+    await until(() => own.client.state === 'connected' && results(own).length > 0, 8000, 'result after restart');
+    expect(results(own)).toEqual([{ v: 1, camera: cam.proxyCameraId, requestId: 'rq-s', ok: true }]);
+    s = await s.restart();
+    await until(() => own.client.state === 'connected', 8000, 'own reconnected');
+    await settle();
+    expect(results(own)).toHaveLength(1);
+    expect(audits('camera-power-cycle').at(-1)).toMatchObject({ actorType: 'system', outcome: 'ok', step: 'final' });
+  });
+
+  it('restore: the switch.cycle row is gone at the start → the cycle fails "cams-admin restarted", the result is sent once, the row is cleaned', async () => {
+    const { own, cam, cmdId } = await openCycle();
+    s.built.db.prepare('DELETE FROM commands WHERE id = ?').run(cmdId);
+    s = await s.restart();
+    expect((await power(cam.id)).lastCycle).toMatchObject({ state: 'failed', code: 'restart', reason: 'cams-admin restarted during the power-cycle' });
+    expect(cycleRow(cam.id)).toMatchObject({ command_id: null, request: null });
+    await until(() => own.client.state === 'connected' && results(own).length > 0, 8000, 'result after restart');
+    expect(results(own)).toEqual([{ v: 1, camera: cam.proxyCameraId, requestId: 'rq-s', ok: false, reason: 'cams-admin restarted during the power-cycle' }]);
+    s = await s.restart();
+    await until(() => own.client.state === 'connected', 8000, 'own reconnected');
+    await settle();
+    expect(results(own)).toHaveLength(1);
   });
 });

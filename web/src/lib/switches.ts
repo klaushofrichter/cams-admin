@@ -9,6 +9,11 @@ export type Power =
   | { kind: 'data-only'; switchId: string; port: number; verifiedAt?: number; notSeen?: boolean }
   | { kind: 'adapter' }
   | { kind: 'unknown' };
+// A configuration problem from the switch's latest survey (chained_switch: another switch on that port).
+export interface SwitchProblem { code: 'chained_switch'; port: number; cameras: number }
+export const chainedText = (p: SwitchProblem): string =>
+  `Configuration issue: another switch is chained on port ${p.port} (${p.cameras} cameras behind it). Connect each PoE switch directly to its proxy's network instead of through another PoE switch.`;
+export const trunkText = (cameras: number): string => `trunk (${cameras} cameras)`;
 export interface Last { op: string; outcome: 'ok' | 'refused' | 'failed'; code: string | null; at: number }
 export interface Flow { op: string; state: 'running' | 'ok' | 'failed'; code: string | null; reason: string | null; requestedAt: number; commandIds: string[]; finishedAt: number | null; force?: boolean }
 

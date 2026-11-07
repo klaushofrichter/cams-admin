@@ -4,6 +4,7 @@
   import { coalesced, live } from '../lib/live';
   import { ago, camClass } from '../lib/format';
   import { commandsText } from '../lib/commands';
+  import { chainedText } from '../lib/switches';
   import StateChip from '../components/StateChip.svelte';
   import Ago from '../components/Ago.svelte';
   import ProxyGui from '../components/ProxyGui.svelte';
@@ -121,6 +122,7 @@
       <div class="row head">
         <a href="#/accounts/{a.id}"><b>{a.displayName}</b></a><span class="muted mono">{a.name}</span>
         {#if a.warnings.includes('no-admin')}<span class="badge warn" data-testid="warn-no-admin-{a.name}">no admin user</span>{/if}
+        {#each a.switchProblems ?? [] as sp (`${sp.switchId}-${sp.port}`)}<a href="#/accounts/{a.id}/switches" class="badge warn" data-testid="warn-chained-switch-{a.name}" title={chainedText(sp)}>{sp.switch}: another switch chained on port {sp.port}</a>{/each}
       </div>
       {#if !a.proxies.length}<p class="muted">No proxies yet.</p>{/if}
       {#each a.proxies as p (p.id)}

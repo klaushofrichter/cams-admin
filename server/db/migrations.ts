@@ -637,4 +637,7 @@ CREATE TABLE camera_power_cycles (
   request TEXT CHECK (request IS NULL OR json_valid(request))
 ) STRICT;
 `),
+  // 25: a switch's configuration problems from its latest complete survey (JSON array, e.g. [{code:'chained_switch',
+  // port, cameras}]; NULL = none). A later survey that no longer sees one clears it.
+  (db) => db.exec(`ALTER TABLE switches ADD COLUMN problems TEXT CHECK (problems IS NULL OR json_valid(problems));`),
 ];
