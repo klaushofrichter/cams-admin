@@ -239,3 +239,20 @@ export function refCheck(m: Record<string, any>, ctx: CheckContext): CheckVerdic
 }
 
 export const tokenHash = (token: string): string => `sha256:${createHash('sha256').update(token, 'utf8').digest('hex')}`;
+
+// The switch commands' canned results (a healthy switch, every port PoE on and idle): what the fake proxy answers
+// unless a test sets its own (ProxyClient.switchResults). Shapes per contract/v1/commands/switch.*.result.
+export const FAKE_SWITCH_SN = 'GPS208-FAKE';
+export function switchResultOf(command: string, a: Record<string, any>, now: number): Record<string, unknown> {
+  const ports = Number.isSafeInteger(a.switch?.ports) ? (a.switch.ports as number) : 8;
+  const port = (n: number) => ({ port: n, poe: true, watts: 0, link: null, tx: 0, rx: 0 });
+  switch (command) {
+    case 'switch.read': return { sn: FAKE_SWITCH_SN, firmware: 'V1.0', ports: Array.from({ length: ports }, (_, i) => port(i + 1)) };
+    case 'switch.poeOn': return { ...port(a.port as number), wasOn: true };
+    case 'switch.forget': return { forgot: true };
+    case 'switch.locate': return { sn: FAKE_SWITCH_SN, found: false };
+    case 'switch.survey': return { sn: FAKE_SWITCH_SN, results: (a.cameras as { camera: string }[]).map((c) => ({ camera: c.camera, found: false })) };
+    case 'switch.cycle': return { verified: true, offAt: now, onAt: now + 10_000, watts: 4.2 };
+  }
+  return {};
+}

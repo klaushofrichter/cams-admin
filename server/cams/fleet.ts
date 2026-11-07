@@ -6,15 +6,19 @@ import type { Moves } from '../moves/service';
 import type { Registry } from '../registry';
 import type { StatusStore } from '../status/store';
 import type { CamsInstances } from './instances';
+import type { SwitchStore } from '../switches/store';
+import type { PowerService } from '../switches/power';
 
 // One account's fleet (contract cams-v1, `fleet-response`): what the cams MCP's
 // admin tools show. Only rows of `accountId`, the caller checked the instance
 // serves it. Every field is named here, nothing is spread from a row, so a new
 // column can't reach an assistant: no token, hash, key or CA fingerprint, no
 // other account. Reads only, live values from memory.
-export interface FleetDeps { db: Db; clock: Clock; instances: CamsInstances; registry: Registry; status: StatusStore; moves: Moves }
+export interface FleetDeps { db: Db; clock: Clock; instances: CamsInstances; registry: Registry; status: StatusStore; moves: Moves; switches: SwitchStore; power: PowerService }
 
-const MAX_PROBLEMS = 20, MAX_VIEWERS = 32, MAX_HELD = 50, MAX_MOVES = 50;
+const MAX_PROBLEMS = 20, MAX_VIEWERS = 32, MAX_HELD = 50, MAX_MOVES = 50, MAX_SWITCHES = 64, MAX_POWER = 256;
+// A switch's web page: its address as an http link (an IPv6 literal in brackets).
+const switchUrl = (host: string) => `http://${host.includes(':') && !host.startsWith('[') ? `[${host}]` : host}/`;
 const cut = (v: unknown, n: number): string | null => (typeof v === 'string' ? v.slice(0, n) : null);
 
 function place(address: string | null | undefined) {
@@ -76,5 +80,23 @@ export function accountFleet(d: FleetDeps, instanceId: string, accountId: string
     };
   });
 
-  return { v: 1, type: 'cams-fleet', accountId, generatedAt: d.clock.now(), proxies: proxyRows, notRouted: proxies.length - shown.length, viewers, moves };
+  // PoE switches by name; what powers each camera shown (on a routed proxy, or on none), with its last power-cycle.
+  const switchList = d.switches.listSwitches(accountId);
+  const switchName = new Map(switchList.map((x) => [x.id, x.name]));
+  const switches = switchList.slice(0, MAX_SWITCHES).map((x) => ({
+    name: x.name, model: x.model, address: place(switchUrl(x.host)), proxy: proxyName.get(x.proxyId) ?? null, state: x.state, readAt: x.readAt, ports: x.ports,
+    problems: x.problems.map((p) => ({ code: p.code, port: p.port, cameras: p.cameras })),
+  }));
+  const cameraPower = cameras.filter((c) => !c.proxyId || routed.has(c.proxyId)).slice(0, MAX_POWER).map((c) => {
+    const p = c.power;
+    const on = p.kind === 'poe' || p.kind === 'data-only' ? p : null;
+    const last = d.power.get(c.id).lastCycle;
+    return {
+      camera: c.camsId, cameraName: c.name, kind: p.kind, switch: on ? switchName.get(on.switchId) ?? null : null, port: on ? on.port : null,
+      watts: p.kind === 'poe' ? p.watts : null, verifiedAt: on && typeof on.verifiedAt === 'number' ? on.verifiedAt : null, notSeen: !!on?.notSeen,
+      lastCycle: last ? { state: last.state, requestedAt: last.requestedAt, finishedAt: last.finishedAt, code: cut(last.code, 64), reason: cut(last.reason, 200) } : null,
+    };
+  });
+
+  return { v: 1, type: 'cams-fleet', accountId, generatedAt: d.clock.now(), proxies: proxyRows, notRouted: proxies.length - shown.length, viewers, moves, switches, cameraPower };
 }

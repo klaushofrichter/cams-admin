@@ -244,3 +244,32 @@ export function cameraOverrideInput(raw: unknown): CameraOverrideFields & { vers
   if (b.version !== undefined && !Number.isInteger(b.version)) throw new FieldError('version');
   return { host, cameraUser, version: b.version as number | undefined };
 }
+
+// A PoE switch (design 2026-11-07-poe-switches-design.md): the name ≤ 60 (unique per account: the store's
+// 409), the address as the operator dials it (a camera host's rules), the ports and the PoE-off time of a
+// power cycle as whole numbers, the operator's id (that it is a proxy of the same account is the service's check).
+export const SWITCH_MODELS = ['sscpoe-web'] as const;
+export interface SwitchFields { name: string; model: 'sscpoe-web'; host: string; ports: number; offSeconds: number; proxyId: string; survey: boolean }
+const SWITCH_KEYS = ['name', 'model', 'host', 'ports', 'offSeconds', 'proxyId', 'survey'];
+function intIn(b: Obj, key: string, min: number, max: number): number | undefined {
+  const v = b[key];
+  if (v === undefined) return undefined;
+  if (!Number.isSafeInteger(v) || (v as number) < min || (v as number) > max) throw new FieldError(key);
+  return v as number;
+}
+export function switchInput(raw: unknown, partial: boolean): Partial<SwitchFields> {
+  const b = body(raw);
+  for (const k of Object.keys(b)) if (!SWITCH_KEYS.includes(k)) throw new FieldError(k, 'unknown');
+  const name = str(b, 'name', { min: 1, max: 60, required: !partial || b.name !== undefined }) ?? undefined;
+  if (name !== undefined && CONTROL_RE.test(name)) throw new FieldError('name', 'format');
+  const host = str(b, 'host', { min: 1, max: 253, required: !partial || b.host !== undefined }) ?? undefined;
+  if (host !== undefined) checkCameraHost(host);
+  return shape({
+    name, host,
+    model: oneOf(b, 'model', SWITCH_MODELS, partial && b.model !== undefined) ?? undefined,
+    ports: intIn(b, 'ports', 1, 64),
+    offSeconds: intIn(b, 'offSeconds', 1, 120),
+    proxyId: str(b, 'proxyId', { max: 40, re: /^prx_[0-9A-Z]{20}$/, required: !partial || b.proxyId !== undefined }) ?? undefined,
+    survey: bool(b, 'survey'),
+  }, partial, { model: 'sscpoe-web', ports: 8, offSeconds: 10, survey: true }) as Partial<SwitchFields>;
+}

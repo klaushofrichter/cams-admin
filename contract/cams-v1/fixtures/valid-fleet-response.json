@@ -99,6 +99,47 @@
         "updatedAt": 1791273600000,
         "endedAt": null
       }
+    ],
+    "switches": [
+      {
+        "name": "GPS-208",
+        "model": "sscpoe-web",
+        "address": {
+          "url": "http://192.168.1.217/",
+          "scope": "private",
+          "note": "Local network address: only reachable from inside that network."
+        },
+        "proxy": "Pi",
+        "state": "active",
+        "readAt": 1791273600000,
+        "ports": 8,
+        "problems": [
+          {
+            "code": "chained_switch",
+            "port": 8,
+            "cameras": 2
+          }
+        ]
+      }
+    ],
+    "cameraPower": [
+      {
+        "camera": "cam1",
+        "cameraName": "Backyard",
+        "kind": "poe",
+        "switch": "GPS-208",
+        "port": 3,
+        "watts": 4.2,
+        "verifiedAt": 1791273600000,
+        "notSeen": false,
+        "lastCycle": {
+          "state": "ok",
+          "requestedAt": 1791273570000,
+          "finishedAt": 1791273590000,
+          "code": null,
+          "reason": null
+        }
+      }
     ]
   }
 }

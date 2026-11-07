@@ -3,7 +3,7 @@ import type { WebSocket, RawData } from 'ws';
 import type { HubDeps } from './hub';
 import { newId, ulid } from '../ids';
 import { publicFromB64, sign, signEnvelope, signedText, verify, verifyEnvelope } from '../crypto/ed25519';
-import { validateMessage, validateMoveEvent, type Envelope } from '../contract';
+import { isProxyEventKind, validateMessage, validateMoveEvent, validateProxyEvent, type Envelope } from '../contract';
 import type { MoveEvent } from '../moves/types';
 import { Buckets } from './limits';
 import { pendingExpired } from '../registry';
@@ -154,7 +154,8 @@ export class Connection {
     const moveEvent = this.state === 'live' && isCmdlessEvent(m);
     const t = moveEvent ? this.moveEvents.take('e', now) : this.msgs.take('m', now);
     if (!t.ok) return this.rateLimited(t.retryAfterS);
-    // Events without a cmdId are the proxy's camera-move events: never the command path (which would drop them as unknown commands).
+    // Events without a cmdId are the proxy's own events (camera moves, a power-cycle request): never the command path (which
+    // would drop them as unknown commands).
     if (moveEvent) return this.onMoveEvent(m as Envelope);
     const v = validateMessage(m);
     if (!v.ok) {
@@ -183,8 +184,9 @@ export class Connection {
     }
   }
 
-  // A proxy-originated move event: signed by this connection's key, bound to this proxy and connection, strictly valid. Anything else
-  // is dropped and audited (throttled per proxy); a flood of bad ones closes the connection.
+  // A proxy-originated event (a move kind, or camera.power.cycle.request routed by its kind to onProxyPowerEvent): signed by this
+  // connection's key, bound to this proxy and connection, strictly valid. Anything else is dropped and audited (throttled per
+  // proxy); a flood of bad ones closes the connection.
   private onMoveEvent(m: Envelope): void {
     const d = this.host.deps;
     const b = m.body;
@@ -198,12 +200,21 @@ export class Connection {
     };
     if (!this.proxyKey || typeof m.sig !== 'string' || !verifyEnvelope(this.proxyKey, m as unknown as Record<string, unknown>)) return refuse('bad_signature');
     if (b.proxyId !== this.proxyId || b.connId !== this.connId) return refuse('wrong_target');
-    if (!validateMoveEvent(b).ok) return refuse('invalid_event');
-    if (!d.onProxyEvent) return refuse('unsupported');
+    const power = isProxyEventKind(b.kind);
+    if (!(power ? validateProxyEvent(b) : validateMoveEvent(b)).ok) return refuse('invalid_event');
+    if (!(power ? d.onProxyPowerEvent : d.onProxyEvent)) return refuse('unsupported');
     const row = d.db.prepare('SELECT account_id FROM proxies WHERE id = ?').get(this.proxyId!) as { account_id: string } | undefined;
     if (!row) return refuse('unknown_proxy');
+    if (power) {
+      try {
+        d.onProxyPowerEvent!(this.proxyId!, row.account_id, { camera: b.camera as string, requestId: b.requestId as string });
+      } catch (e) {
+        d.log.error({ err: e, proxyId: this.proxyId }, 'power_event_handler_failed');
+      }
+      return;
+    }
     try {
-      d.onProxyEvent(this.proxyId!, row.account_id, b as unknown as MoveEvent);
+      d.onProxyEvent!(this.proxyId!, row.account_id, b as unknown as MoveEvent);
     } catch (e) {
       d.log.error({ err: e, proxyId: this.proxyId }, 'move_event_handler_failed');
     }

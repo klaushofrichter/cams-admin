@@ -37,6 +37,8 @@ export const AUDIT_ACTIONS = [
   'viewer-token-create', 'viewer-token-validity', 'viewer-token-revoke', 'viewer-token-accounts', 'viewer-token-delete', 'viewer-token-copy',
   // Camera name sync (design 2026-11-06): a camera record took the name its camera reported through its proxy.
   'camera-name-synced',
+  // PoE switches (design 2026-11-07): the switch record, and what powers a camera.
+  'switch-create', 'switch-update', 'switch-move', 'switch-delete', 'switch-test', 'camera-power-set', 'camera-power-verify', 'camera-power-cycle', 'camera-power-cycle-forced', 'switch-survey',
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 const KNOWN = new Set<string>(AUDIT_ACTIONS);

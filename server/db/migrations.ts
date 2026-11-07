@@ -604,4 +604,40 @@ CREATE TABLE proxy_analytics (
   result TEXT NOT NULL CHECK (json_valid(result) AND length(result) <= 65536)
 ) STRICT;
 `),
+  // 22: PoE switches (design 2026-11-07-poe-switches-design.md): a switch record per account, run by one proxy.
+  (db) => db.exec(`
+CREATE TABLE switches (
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  model TEXT NOT NULL CHECK (model IN ('sscpoe-web')),
+  host TEXT NOT NULL,
+  ports INTEGER NOT NULL,
+  off_seconds INTEGER NOT NULL,
+  proxy_id TEXT NOT NULL REFERENCES proxies(id),
+  state TEXT NOT NULL CHECK (state IN ('pending','active')),
+  sn TEXT,
+  firmware TEXT,
+  read_at INTEGER,
+  survey INTEGER NOT NULL DEFAULT 1,
+  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+  UNIQUE(account_id, name)
+) STRICT;
+`),
+  // 23: what powers a camera (JSON; NULL reads as unknown).
+  (db) => db.exec(`ALTER TABLE cameras ADD COLUMN power TEXT CHECK (power IS NULL OR json_valid(power));`),
+  // 24: a camera's last power-cycle (its flow as JSON), the switch.cycle whose final answer ends it while it runs, and
+  // an open request from the camera's proxy ({requestId, proxyId, proxyCameraId}; NULL once answered). A restart
+  // re-attaches a running cycle to its command row and still answers the request once.
+  (db) => db.exec(`
+CREATE TABLE camera_power_cycles (
+  camera_id TEXT PRIMARY KEY REFERENCES cameras(id) ON DELETE CASCADE,
+  flow TEXT NOT NULL CHECK (json_valid(flow)),
+  command_id TEXT,
+  request TEXT CHECK (request IS NULL OR json_valid(request))
+) STRICT;
+`),
+  // 25: a switch's configuration problems from its latest complete survey (JSON array, e.g. [{code:'chained_switch',
+  // port, cameras}]; NULL = none). A later survey that no longer sees one clears it.
+  (db) => db.exec(`ALTER TABLE switches ADD COLUMN problems TEXT CHECK (problems IS NULL OR json_valid(problems));`),
 ];

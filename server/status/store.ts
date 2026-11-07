@@ -181,7 +181,7 @@ export class StatusStore {
       const pin = pinState(proxy.caFingerprints, reportedFps);
       let summary: unknown, ok: boolean, problemCount: number, version: string | null = null, summaryAt: number | null = null, cams: Reported['cameras'] = [];
       if (v.ok) {
-        const s = v.summary as { ok: boolean; problemCount: number; version: string; generatedAt: number; cameras?: { camera: { id: string; online: boolean; name?: string; nameSource?: unknown; model?: string | null } }[] };
+        const s = v.summary as { ok: boolean; problemCount: number; version: string; generatedAt: number; cameras?: { camera: { id: string; online: boolean; name?: string; nameSource?: unknown; model?: string | null; address?: unknown } }[] };
         summary = { ...s, $truncated: body.truncated === true };
         ok = s.ok;
         problemCount = s.problemCount;
@@ -190,6 +190,7 @@ export class StatusStore {
         cams = (s.cameras ?? []).map((c) => ({
           ref: c.camera.id, online: c.camera.online, name: c.camera.name, model: c.camera.model ?? null,
           nameSource: c.camera.nameSource === 'camera' || c.camera.nameSource === 'config' ? c.camera.nameSource : undefined,
+          ...(typeof c.camera.address === 'string' && c.camera.address.trim() ? { address: c.camera.address.trim() } : {}),
         }));
       } else {
         summary = { unreadable: v.reason };
