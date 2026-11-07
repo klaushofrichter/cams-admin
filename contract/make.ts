@@ -319,7 +319,7 @@ export function fixtures(): Record<string, unknown> {
 
   // --- PoE switches as account resources (docs/superpowers/specs/2026-11-07-poe-switches-design.md). $context.feature: the
   // cross-check treats these as pending while cam-proxy does not vendor the switch and power messages.
-  const poe = (f: { $context: object }) => ({ ...f, $context: { ...f.$context, feature: 'poe' } });
+  const poe = <T extends object>(f: T) => ({ ...f, $context: { ...(f as { $context?: object }).$context, feature: 'poe' } });
   const SW = 'sw_0123456789abcdefghij';
   const CAMID = 'cam_0123456789ABCDEFGHJK';
   const swRef = { id: SW, model: 'sscpoe-web', host: '192.0.2.217', ports: 8, offSeconds: 10 };
