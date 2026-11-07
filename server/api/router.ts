@@ -277,25 +277,28 @@ export function apiRouter(d: ApiDeps): express.Router {
   r.post(`${cfgBase}/rollback/apply`, h((req, res) => accepted(res, d.config.rollbackApply(actor(res), p(req, 'accountId'), p(req, 'proxyId'), req.body?.previewId))));
   // --- Vision management (design 2026-11-05): system admin only, checked in the Vision service. The limit
   // change is a preview + apply run server side (202 with the dry run's command id).
+  // The switch and power routes also take an operations token with scope `switches`: requireAuth lets a token
+  // reach them only through OPS_ROUTES, so the token counts as allowed here (audited with its own actor).
+  const sysTok = (res: Response) => ({ actor: actor(res), sysadmin: actor(res).startsWith('ops-token:') || !!res.locals.session && sysadminAllowed((res.locals.session as Session).email) });
   const sys = (res: Response) => ({ actor: actor(res), sysadmin: !!res.locals.session && sysadminAllowed((res.locals.session as Session).email) });
   r.get('/accounts/:accountId/vision', h((req, res) => d.vision.get(sys(res), p(req, 'accountId'))));
   r.post('/accounts/:accountId/vision/refresh', h((req, res) => { res.locals.status = 202; return d.vision.refresh(sys(res), p(req, 'accountId')); }));
   r.put('/accounts/:accountId/vision/proxies/:proxyId/providers/:provider', h((req, res) => accepted(res, d.vision.setLimit(sys(res), p(req, 'accountId'), p(req, 'proxyId'), p(req, 'provider'), req.body))));
-  // --- PoE switches (design 2026-11-07, "Switch lifecycle"): writes for a signed-in system admin only (no
-  // operations-token scope). A step that depends on the switch answers 202 with its command id(s); the record
+  // --- PoE switches (design 2026-11-07, "Switch lifecycle"): writes for a signed-in system admin or an
+  // operations token with scope `switches`. A step that depends on the switch answers 202 with its command id(s); the record
   // changes when the proxy's answer arrives. POST read is a live read (a short wait), not a write.
   r.get('/accounts/:accountId/switches', h((req) => ({ items: d.switches.list(p(req, 'accountId')) })));
-  r.post('/accounts/:accountId/switches', h((req, res) => { created(res); return d.switches.add(sys(res), p(req, 'accountId'), req.body); }));
+  r.post('/accounts/:accountId/switches', h((req, res) => { created(res); return d.switches.add(sysTok(res), p(req, 'accountId'), req.body); }));
   r.get('/switches/:switchId', h((req) => d.switches.get(p(req, 'switchId'))));
   r.patch('/switches/:switchId', h((req, res) => {
-    const out = d.switches.update(sys(res), p(req, 'switchId'), req.body);
+    const out = d.switches.update(sysTok(res), p(req, 'switchId'), req.body);
     if ('commandId' in out) res.locals.status = 202;
     return out;
   }));
-  r.delete('/switches/:switchId', h((req, res) => accepted(res, d.switches.remove(sys(res), p(req, 'switchId')))));
-  r.post('/switches/:switchId/test', h((req, res) => accepted(res, d.switches.test(sys(res), p(req, 'switchId')))));
-  r.post('/switches/:switchId/move', h((req, res) => accepted(res, d.switches.move(sys(res), p(req, 'switchId'), req.body))));
-  r.post('/switches/:switchId/read', h((req, res) => d.switches.read(sys(res), p(req, 'switchId'))));
+  r.delete('/switches/:switchId', h((req, res) => accepted(res, d.switches.remove(sysTok(res), p(req, 'switchId')))));
+  r.post('/switches/:switchId/test', h((req, res) => accepted(res, d.switches.test(sysTok(res), p(req, 'switchId')))));
+  r.post('/switches/:switchId/move', h((req, res) => accepted(res, d.switches.move(sysTok(res), p(req, 'switchId'), req.body))));
+  r.post('/switches/:switchId/read', h((req, res) => d.switches.read(sysTok(res), p(req, 'switchId'))));
   // Camera power (design 2026-11-07, "Verify", "Power-cycle", "Survey"): a check or a power-cycle answers 202 with
   // its first command; the outcome shows in GET power (lastCheck, lastCycle). A refusal known at once is a 409 with
   // the reason as message (host_unknown, not_poe, power_unknown, busy, ...).
@@ -306,14 +309,14 @@ export function apiRouter(d: ApiDeps): express.Router {
   const camPower = '/cameras/:cameraId/power';
   r.get(camPower, h((req) => d.power.get(p(req, 'cameraId'))));
   r.put(camPower, h((req, res) => {
-    const out = d.power.declare(sys(res), p(req, 'cameraId'), req.body);
+    const out = d.power.declare(sysTok(res), p(req, 'cameraId'), req.body);
     return 'ok' in out ? started(res, out) : out;
   }));
-  r.post(`${camPower}/verify`, h((req, res) => started(res, d.power.verify(sys(res), p(req, 'cameraId')))));
-  r.post(`${camPower}/cycle`, h((req, res) => started(res, d.power.cycle(sys(res), p(req, 'cameraId'), req.body))));
+  r.post(`${camPower}/verify`, h((req, res) => started(res, d.power.verify(sysTok(res), p(req, 'cameraId')))));
+  r.post(`${camPower}/cycle`, h((req, res) => started(res, d.power.cycle(sysTok(res), p(req, 'cameraId'), req.body))));
   r.get('/switches/:switchId/survey', h((req) => d.power.lastSurvey(p(req, 'switchId')) ?? { switchId: p(req, 'switchId'), state: 'none', results: [], trunks: [], problems: [] }));
-  r.post('/switches/:switchId/survey', h((req, res) => { res.locals.status = 202; return d.power.survey(sys(res), p(req, 'switchId')); }));
-  r.post('/accounts/:accountId/switches/survey', h((req, res) => { res.locals.status = 202; return d.power.surveyAccount(sys(res), p(req, 'accountId')); }));
+  r.post('/switches/:switchId/survey', h((req, res) => { res.locals.status = 202; return d.power.survey(sysTok(res), p(req, 'switchId')); }));
+  r.post('/accounts/:accountId/switches/survey', h((req, res) => { res.locals.status = 202; return d.power.surveyAccount(sysTok(res), p(req, 'accountId')); }));
   r.get(`${proxyBase}/actions`, h((req) => d.actions.available(p(req, 'accountId'), p(req, 'proxyId'))));
   r.post(`${proxyBase}/actions`, h((req, res) => accepted(res, d.actions.cameraAction(actor(res), p(req, 'accountId'), p(req, 'proxyId'), req.body))));
   r.post(`${proxyBase}/cameras/:camera/name`, h((req, res) => accepted(res, d.actions.rename(actor(res), p(req, 'accountId'), p(req, 'proxyId'), p(req, 'camera'), req.body))));

@@ -281,13 +281,20 @@ describe('switch lifecycle API', () => {
     expect(r.body.ports[0]).toEqual({ port: 1, live: null, cameras: [] });
   });
 
-  it('switch writes are for a signed-in sysadmin only: an operations token gets 403 scope', async () => {
+  it('operations token: scope `switches` adds a switch (audited as the token); any other scopes get 403 scope', async () => {
     const p = await proxy();
     const sw = await add(p);
-    const tok = s.built.ops.issue(ACTOR, { name: 'script', scopes: [...OPS_SCOPES], days: 1 });
-    for (const [m, path] of [['POST', `/accounts/${p.acc}/switches`], ['PATCH', `/switches/${sw.id}`], ['DELETE', `/switches/${sw.id}`], ['POST', `/switches/${sw.id}/test`], ['POST', `/switches/${sw.id}/move`], ['POST', `/switches/${sw.id}/read`]]) {
-      const res = await fetch(`${s.url}/api/v1${path}`, { method: m, headers: { Authorization: `Bearer ${tok.token}`, 'Content-Type': 'application/json' }, body: '{}' });
+    const other = s.built.ops.issue(ACTOR, { name: 'other', scopes: OPS_SCOPES.filter((x) => x !== 'switches'), days: 1 });
+    for (const [m, path] of [['POST', `/accounts/${p.acc}/switches`], ['PATCH', `/switches/${sw.id}`], ['DELETE', `/switches/${sw.id}`], ['POST', `/switches/${sw.id}/test`], ['POST', `/switches/${sw.id}/move`], ['POST', `/switches/${sw.id}/read`], ['POST', `/switches/${sw.id}/survey`], ['POST', `/accounts/${p.acc}/switches/survey`]]) {
+      const res = await fetch(`${s.url}/api/v1${path}`, { method: m, headers: { Authorization: `Bearer ${other.token}`, 'Content-Type': 'application/json' }, body: '{}' });
       expect(res.status, `${m} ${path}`).toBe(403);
+      expect(await res.json()).toEqual({ error: 'scope' });
     }
+    const tok = s.built.ops.issue(ACTOR, { name: 'sw', scopes: ['switches'], days: 1 });
+    const res = await fetch(`${s.url}/api/v1/accounts/${p.acc}/switches`, { method: 'POST', headers: { Authorization: `Bearer ${tok.token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'by token', host: '192.168.1.218', proxyId: p.prx }) });
+    expect(res.status).toBe(201);
+    const row = s.built.db.prepare("SELECT actor_type, actor FROM audit_log WHERE action = 'switch-create' ORDER BY id DESC LIMIT 1").get() as { actor_type: string; actor: string };
+    expect(row.actor).toMatch(/^ops-token:/);
+    expect(row.actor_type).toBe('system');
   });
 });

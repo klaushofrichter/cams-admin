@@ -53,6 +53,9 @@ A signed-in sysadmin's browser session works on the same routes.
 | `/diag/cameras` | registry fields (cams id, model, proxy, proxy camera id, host, protocol, TLS name), move id, online |
 | `/diag/cameras/:cameraId` | one camera by its registry id (`cam_…`): `{id, name, model, proxyId, proxyCameraId, camsId, online}`; `name` is what the camera holds (see "Camera names" below), `online` comes from the proxy's last report (null without a proxy); 404 `not_found` for an unknown id |
 | `/diag/cameras/:camsId/onboarding?accountId=` | one camera's onboarding: `{camera, proxy, proxyCameraId, online, reported, detail, viewers, ready, missing, optional}`; `:camsId` is a cams id or a registry id (`cam_…`); a cams id in several accounts is 409 `ambiguous` unless `accountId` names one; 409 `no_proxy` for a camera without a proxy (see below) |
+| `/diag/accounts/:accountId/switches` | the account's PoE switches: `{items}` with each record (state, problems, last test/read, `pending`, `last`) and its latest `survey` summary (`{at, state, problems, trunks}` or null); 404 for an unknown account |
+| `/diag/switches/:switchId` | one switch: `{switch, ports, survey}`; `ports` lists the cameras mapped to each port, `survey` is the latest survey with `results` (incl. `not_reachable`), `trunks` and `problems` (`state: "none"` before any survey); 404 `not_found` |
+| `/diag/cameras/:cameraId/power` | one camera's power record: `{cameraId, camsId, accountId, power (incl. notSeen), switch, lastCheck, lastCycle}`; 404 `not_found` |
 | `/diag/tokens` | per proxy, its managed tokens: holder (cams instance id and name, or `manual`), label, kind, state, on proxy, created, retire/revoke times, last token command; no hash |
 | `/diag/viewer-tokens` | viewer tokens (design 2026-11-05): name, account ids, state, days, valid until, last used, fingerprint prefix; never the token, its fingerprint or its ciphertext; e-mails masked |
 | `/diag/moves?accountId=` | the newest 100 moves with chunk counts |
@@ -184,6 +187,12 @@ actor `ops-token:<8 hex>`. The list is also at `/diag/ops-tokens`.
 | `config` | `POST /accounts/:accountId/proxies/:proxyId/config/rollback/preview` |
 | `config` | `POST /accounts/:accountId/proxies/:proxyId/config/rollback/apply` |
 | `offboard` | `DELETE /accounts/:accountId/cameras/:cameraId` |
+| `switches` | `POST /accounts/:accountId/switches` |
+| `switches` | `PATCH /switches/:switchId`, `DELETE /switches/:switchId` |
+| `switches` | `POST /switches/:switchId/test`, `…/move`, `…/read`, `…/survey` |
+| `switches` | `POST /accounts/:accountId/switches/survey` |
+| `switches` | `PUT /cameras/:cameraId/power` |
+| `switches` | `POST /cameras/:cameraId/power/verify`, `…/power/cycle` |
 
 Paths must be exactly as listed (the fixed words in lower case, ids as issued, no trailing slash). Anything else,
 and every route not in the table, gets 403 `scope`. No token can issue proxy
@@ -286,6 +295,11 @@ curl -fsS -X POST -H "Authorization: Bearer $(cat ~/.config/cams-admin/ops-token
   -d '{"set":{"sse.pingS":20}}' \
   "https://cams-admin.example.net/api/v1/accounts/acc_…/proxies/prx_…/config/preview"
 ```
+
+A `switches` token manages PoE switches and camera power (the writes of the
+switch and power features, a forced power-cycle included; reads stay with the
+diagnostics token or a sign-in). Its records show the token as actor with
+actorType `system`.
 
 An `offboard` token removes a camera from its account (204; audited as
 `camera-delete`). The proxy keeps the camera until it is removed there; with

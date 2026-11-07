@@ -195,3 +195,33 @@ export function diagAudit(d: ApiDeps, f: AuditFilter) {
   const r = d.audit.list(f);
   return { items: r.items.map((i) => redact(i)), nextCursor: r.nextCursor };
 }
+
+// --- PoE switches and camera power (design 2026-11-07): the reads behind the `switches` ops scope. The same
+// records as the API's GETs; cams-admin keeps no switch credentials, so there is nothing to redact.
+export function diagSwitches(d: ApiDeps, accountId: string) {
+  d.registry.getAccount(accountId);
+  return { items: d.switches.list(accountId).map((s) => ({ ...s, survey: surveyOf(d, s.id) })) };
+}
+
+function surveyOf(d: ApiDeps, switchId: string) {
+  const v = d.power.lastSurvey(switchId);
+  return v ? { at: v.at, state: v.state, problems: v.problems, trunks: v.trunks } : null;
+}
+
+// One switch: its record (state, problems, last test/read), the cameras mapped to each port, and its last survey.
+export function diagSwitch(d: ApiDeps, switchId: string) {
+  const sw = d.switches.get(switchId);
+  const mapped = d.switches.store.camerasOnSwitch(switchId);
+  return {
+    switch: sw,
+    ports: Array.from({ length: sw.ports }, (_, i) => i + 1).map((port) => ({
+      port, cameras: mapped.filter((m) => 'port' in m.power && m.power.port === port).map((m) => ({ id: m.id, camsId: m.camsId, power: m.power })),
+    })),
+    survey: d.power.lastSurvey(switchId) ?? { switchId, state: 'none', results: [], trunks: [], problems: [] },
+  };
+}
+
+// One camera's power record: kind, switch and port, notSeen, and the last check and power-cycle.
+export function diagCameraPower(d: ApiDeps, cameraId: string) {
+  return d.power.get(cameraId);
+}

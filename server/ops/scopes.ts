@@ -51,8 +51,19 @@ export const OPS_ROUTES: readonly OpsRoute[] = [
   { method: 'POST', path: `${proxyBase}/config/rollback/apply`, scope: 'config' },
   // Removing a camera from its account (offboarding). Enrolling a proxy stays with a sign-in (§10.4).
   { method: 'DELETE', path: '/accounts/:accountId/cameras/:cameraId', scope: 'offboard' },
-  // PoE switches (design 2026-11-07): none. Adding, testing, changing, moving and removing a switch, and its
-  // live read, stay with a signed-in system admin.
+  // PoE switches and camera power (design 2026-11-07): every write, incl. a forced power-cycle. Reads stay with
+  // the diag token / a sign-in (a token is for writes only).
+  { method: 'POST', path: '/accounts/:accountId/switches', scope: 'switches' },
+  { method: 'PATCH', path: '/switches/:switchId', scope: 'switches' },
+  { method: 'DELETE', path: '/switches/:switchId', scope: 'switches' },
+  { method: 'POST', path: '/switches/:switchId/test', scope: 'switches' },
+  { method: 'POST', path: '/switches/:switchId/move', scope: 'switches' },
+  { method: 'POST', path: '/switches/:switchId/read', scope: 'switches' },
+  { method: 'POST', path: '/switches/:switchId/survey', scope: 'switches' },
+  { method: 'POST', path: '/accounts/:accountId/switches/survey', scope: 'switches' },
+  { method: 'PUT', path: '/cameras/:cameraId/power', scope: 'switches' },
+  { method: 'POST', path: '/cameras/:cameraId/power/verify', scope: 'switches' },
+  { method: 'POST', path: '/cameras/:cameraId/power/cycle', scope: 'switches' },
 ];
 
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
