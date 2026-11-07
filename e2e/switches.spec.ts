@@ -22,7 +22,7 @@ test('add a switch, test it, survey it, see the camera on its port, and force a 
   const cycles: Record<string, any>[] = [];
   // Every camera of the survey is on port 3, 4.2 W.
   c.switchResults['switch.survey'] = (a) => ({ status: 'ok', result: { sn, results: a.cameras.map((x: { camera: string }) => ({ camera: x.camera, found: true, port: 3, poe: true, watts: 4.2, link: true })) } });
-  c.switchResults['switch.cycle'] = (a) => { cycles.push(a); return { status: 'ok', result: { verified: false, offAt: Date.now(), onAt: Date.now() + 1000, watts: 0 } }; };
+  c.switchResults['switch.cycle'] = (a) => { cycles.push(a); return { status: 'ok', result: { verified: !a.force, offAt: Date.now(), onAt: Date.now() + 1000, watts: 0 } }; };
   c.start();
   try {
     await page.goto(`/#/accounts/${acc.id}/switches`);
@@ -54,6 +54,20 @@ test('add a switch, test it, survey it, see the camera on its port, and force a 
     await expect(page.getByTestId('power-result-garage')).toHaveText('Power-cycled.', { timeout: 15_000 });
     expect(cycles).toHaveLength(1);
     expect(cycles[0].force).toBe(true);
+
+    // The plain power-cycle asks too: camera, switch and port named, the word typed.
+    await page.getByTestId('power-cycle-garage').click();
+    await expect(page.getByTestId('confirm')).toContainText('Cut power on GPS-208 port 3 to restart Garage');
+    await expect(page.getByTestId('confirm-ok')).toBeDisabled();
+    await page.getByTestId('confirm-input').fill('power-cycle');
+    await page.getByTestId('confirm-ok').click();
+    await expect(page.getByTestId('power-result-garage')).toHaveText('Power-cycled.', { timeout: 15_000 });
+    expect(cycles).toHaveLength(2);
+    expect(cycles[1].force).toBe(false);
+    // The last power-cycle stays visible after a reload.
+    await page.reload();
+    await expect(page.getByTestId('power-last-cycle-garage')).toContainText('Last power-cycle', { timeout: 10_000 });
+    await expect(page.getByTestId('power-last-cycle-garage')).toContainText('Power-cycled.');
 
     // The proxy's own power-cycle action steps aside for this camera.
     await page.goto(`/#/accounts/${acc.id}/proxies/${px.id}?camera=cam1`);

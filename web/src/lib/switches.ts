@@ -60,3 +60,13 @@ export async function poll<T>(get: () => Promise<T>, done: (v: T) => boolean, o:
     await sleep(every);
   }
 }
+
+export const CYCLE_TYPED = 'power-cycle';
+export const cycleConfirmText = (camera: string, switchName: string, port: number): string =>
+  `Cut power on ${switchName} port ${port} to restart ${camera}, then turn it back on: no video for a few minutes.`;
+export const adapterConfirmNeeded = (p: Power | undefined): boolean => p?.kind === 'poe' && typeof p.verifiedAt === 'number';
+export function flowLine(f: Flow | null | undefined, now: number): string {
+  if (!f) return '';
+  const what = f.op === 'cycle' ? (f.force ? 'forced power-cycle' : 'power-cycle') : 'check';
+  return `Last ${what} ${ago(f.requestedAt, now)}: ${flowText(f)}`;
+}

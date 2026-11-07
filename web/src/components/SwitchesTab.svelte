@@ -45,22 +45,27 @@
 
   // --- a step that the switch answers later ----------------------------------------------------
   // `send` returns the HTTP answer; a 202 is followed until the switch has no pending step and `last` is new.
-  async function step(s: any, send: () => Promise<any>, after?: () => void) {
+  let formError = $state('');
+  async function step(s: any, send: () => Promise<any>, onSent?: () => void) {
+    formError = '';
+    let sent = false;
     busy = { ...busy, [s.id]: true };
     results = { ...results, [s.id]: 'Sent, waiting for the proxy…' };
     error = '';
     try {
       const prev = (await api<any>('GET', `/switches/${s.id}`)).last;
       const r = await send();
+      sent = true;
+      onSent?.();
       let text = '';
       if (r && r.commandId) {
         const v = await poll(() => api<any>('GET', `/switches/${s.id}`), (x) => x.pending.length === 0 && x.last && x.last.at !== prev?.at);
         text = v ? lastText(v.last) : 'No answer yet: look again in a minute.';
       }
       results = { ...results, [s.id]: text };
-      after?.();
     } catch (e) {
       results = { ...results, [s.id]: errorText(e) };
+      if (!sent) formError = errorText(e);
     } finally {
       busy = { ...busy, [s.id]: false };
       await load();
@@ -111,16 +116,17 @@
 
   // --- edit -------------------------------------------------------------------------------
   let edit = $state<{ s: any; f: { name: string; host: string; ports: number; offSeconds: number; survey: boolean } } | null>(null);
-  const startEdit = (s: any) => { edit = { s, f: { name: s.name, host: s.host, ports: s.ports, offSeconds: s.offSeconds, survey: s.survey } }; };
+  const startEdit = (s: any) => { formError = ''; edit = { s, f: { name: s.name, host: s.host, ports: s.ports, offSeconds: s.offSeconds, survey: s.survey } }; };
   async function saveEdit() {
     if (!edit) return;
     const { s, f } = edit;
     const patch: Record<string, unknown> = {};
     for (const k of ['name', 'host', 'ports', 'offSeconds', 'survey'] as const) if (f[k] !== s[k]) patch[k] = f[k];
-    edit = null;
-    if (!Object.keys(patch).length) return;
-    if ('host' in patch) hints = { ...hints, [s.id]: passwordHint(proxyName(s.proxyId)) };
-    await step(s, () => api('PATCH', `/switches/${s.id}`, patch));
+    if (!Object.keys(patch).length) { edit = null; return; }
+    await step(s, () => api('PATCH', `/switches/${s.id}`, patch), () => {
+      edit = null;
+      if ('host' in patch) hints = { ...hints, [s.id]: passwordHint(proxyName(s.proxyId)) };
+    });
   }
 
   // --- move -------------------------------------------------------------------------------
@@ -128,9 +134,10 @@
   async function doMove() {
     if (!move) return;
     const { s, proxyId, host } = move;
-    move = null;
-    hints = { ...hints, [s.id]: passwordHint(proxyName(proxyId)) };
-    await step(s, () => api('POST', `/switches/${s.id}/move`, { proxyId, ...(host.trim() ? { host: host.trim() } : {}) }));
+    await step(s, () => api('POST', `/switches/${s.id}/move`, { proxyId, ...(host.trim() ? { host: host.trim() } : {}) }), () => {
+      move = null;
+      hints = { ...hints, [s.id]: passwordHint(proxyName(proxyId)) };
+    });
   }
 
   // --- remove -----------------------------------------------------------------------------
@@ -174,7 +181,7 @@
                 <button class="btn" data-testid="switch-test-{s.name}" disabled={busy[s.id]} onclick={() => test(s)}>Test</button>
                 <button class="btn" data-testid="switch-survey-{s.name}" disabled={busy[s.id] || s.state !== 'active'} title={s.state === 'active' ? '' : 'Test the switch first'} onclick={() => survey(s)}>Survey now</button>
                 <button class="btn" data-testid="switch-edit-{s.name}" disabled={busy[s.id]} onclick={() => startEdit(s)}>Edit</button>
-                <button class="btn" data-testid="switch-move-{s.name}" disabled={busy[s.id]} onclick={() => (move = { s, proxyId: s.proxyId, host: '' })}>Move</button>
+                <button class="btn" data-testid="switch-move-{s.name}" disabled={busy[s.id]} onclick={() => { formError = ''; move = { s, proxyId: s.proxyId, host: '' }; }}>Move</button>
                 <button class="btn danger" data-testid="switch-remove-{s.name}" disabled={busy[s.id]} onclick={() => (removing = s)}>Remove</button>
               {/if}
             </td>
@@ -225,6 +232,7 @@
         <label><input type="checkbox" bind:checked={f.survey} /> Survey daily</label>
       </div>
       {#if f.host !== edit.s.host}<p class="muted small" data-testid="switch-edit-hint">{passwordHint(proxyName(edit.s.proxyId))} The new address is tested first.</p>{/if}
+      {#if formError}<p class="error" data-testid="switch-edit-error">{formError}</p>{/if}
       <div class="row"><button class="btn primary" data-testid="switch-edit-save" onclick={saveEdit}>Save</button><button class="btn" onclick={() => (edit = null)}>Cancel</button></div>
     </div>
   {/if}
@@ -237,6 +245,7 @@
         <label>New address (optional)<input class="mono" data-testid="switch-move-host" bind:value={move.host} /></label>
       </div>
       <p class="muted small" data-testid="switch-move-hint">{passwordHint(proxyName(move.proxyId))}</p>
+      {#if formError}<p class="error" data-testid="switch-move-error">{formError}</p>{/if}
       <div class="row"><button class="btn primary" data-testid="switch-move-go" onclick={doMove}>Move</button><button class="btn" onclick={() => (move = null)}>Cancel</button></div>
     </div>
   {/if}

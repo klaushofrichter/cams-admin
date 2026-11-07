@@ -91,3 +91,23 @@ describe('poll', () => {
     expect(slept).toBe(60_000);
   });
 });
+
+import { adapterConfirmNeeded, cycleConfirmText, CYCLE_TYPED, flowLine } from './switches';
+describe('confirm flow and last flows', () => {
+  it('the plain power-cycle names camera, switch and port, and wants the typed word', () => {
+    expect(cycleConfirmText('Garage', 'GPS-208', 3)).toBe('Cut power on GPS-208 port 3 to restart Garage, then turn it back on: no video for a few minutes.');
+    expect(CYCLE_TYPED).toBe('power-cycle');
+  });
+  it('declaring an adapter asks first only over a verified PoE record', () => {
+    expect(adapterConfirmNeeded({ kind: 'poe', switchId: 's', port: 1, watts: 1, verifiedAt: 5 })).toBe(true);
+    expect(adapterConfirmNeeded({ kind: 'poe', switchId: 's', port: 1, watts: 1 })).toBe(false);
+    expect(adapterConfirmNeeded({ kind: 'unknown' })).toBe(false);
+  });
+  const fl = (o = {}) => ({ op: 'cycle', state: 'failed', code: 'not_verified', reason: null, requestedAt: NOW - 120_000, commandIds: [], finishedAt: NOW - 100_000, ...o }) as never;
+  it('lastCycle: time, forced or not, outcome in user words', () => {
+    expect(flowLine(fl(), NOW)).toBe(`Last power-cycle 2 min ago: ${codeText('not_verified')}`);
+    expect(flowLine(fl({ force: true, state: 'ok', code: null }), NOW)).toBe('Last forced power-cycle 2 min ago: Power-cycled.');
+    expect(flowLine(fl({ op: 'verify', state: 'running' }), NOW)).toBe('Last check 2 min ago: Running…');
+    expect(flowLine(null, NOW)).toBe('');
+  });
+});
