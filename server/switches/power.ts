@@ -7,6 +7,7 @@ import type { StatusStore } from '../status/store';
 import type { LiveHub } from '../live';
 import type { Logger } from '../log';
 import { FieldError } from '../validate';
+import { tx } from '../db/open';
 import { SWITCH_SURVEY_MAX } from '../../contract/build';
 import type { CameraPower, PowerActorType, Switch } from './store';
 import type { SwitchService } from './service';
@@ -17,12 +18,24 @@ import type { SwitchService } from './service';
 // waitFinal). One step follows another only after the previous one is final: a search asks one switch after the
 // other (the mapped one first, then the account's other active switches by name; the first that finds it wins).
 // The camera's own proxy hears about each change (camera.power.set) and about a power-cycle (camera.power.cycling,
-// camera.power.cycled), each only if its allow list has the entry. The flows' state is memory (lost on a restart).
+// camera.power.cycled), each only if its allow list has the entry. The checks' and surveys' state is memory (lost on
+// a restart); a camera's last power-cycle is kept in camera_power_cycles: a cycle running at a restart is re-attached
+// to its switch.cycle row and ends when that is final (no search or retry after a restart).
+// The camera's own proxy may ask for a cycle (camera.power.cycle.request, requestFromProxy); the answer
+// (camera.power.cycle.result) goes out once, when the cycle is final, also across a restart.
 
-export interface Who { actor: string; sysadmin: boolean; system?: boolean }
+// proxy: a camera's own proxy asking for a power-cycle (actorType 'proxy').
+export interface Who { actor: string; sysadmin: boolean; system?: boolean; proxy?: boolean }
 // The scheduler and the hooks.
 export const SYSTEM: Who = { actor: 'system', sysadmin: true, system: true };
 export const HOST_UNKNOWN = 'camera host unknown in cams-admin';
+// The refusals of a proxy's request (camera.power.cycle.result reason).
+export const NOT_IN_ADMIN = 'camera not in cams-admin';
+export const CYCLE_RUNNING = 'a power-cycle is already running';
+export const TOO_SOON = 'too soon';
+// At most one request per camera in this time from proxies (memory).
+export const PROXY_REQUEST_GAP_MS = 60_000;
+interface CycleRequest { requestId: string; proxyId: string; proxyCameraId: string }
 
 export type PowerOutcome = { ok: true; commandId: string } | { ok: false; code: string; reason: string };
 export type FlowOp = 'verify' | 'search' | 'propose' | 'cycle';
@@ -63,6 +76,8 @@ const CYCLE_TEXT: Record<string, string> = {
   switch_auth: 'the switch refused the password',
   switch_unreachable: 'the switch is not reachable from the operator',
   switch_error: 'the switch answered with an error',
+  unknown: 'no final answer from the operator',
+  expired: 'the operator was offline: the command was never sent',
 };
 const errCode = (e: unknown) => (e instanceof ApiError ? e.code : e instanceof FieldError ? 'invalid' : 'error');
 const isObj = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x);
@@ -77,6 +92,8 @@ export class PowerService {
   private queued = new Map<string, Who>();
   // proxyId → camera ref → the last reported address (memory: the first report after a start is no change).
   private addresses = new Map<string, Map<string, string>>();
+  // cameraId → when a proxy's request last started a cycle attempt (the 60 s gap).
+  private lastRequest = new Map<string, number>();
 
   constructor(private d: PowerDeps) {
     d.commands.onFinal((r) => {
@@ -89,6 +106,7 @@ export class PowerService {
         d.log.error({ err: e, cmdId: r.id }, 'power_final_failed');
       }
     });
+    this.restore();
   }
 
   // --- reads -----------------------------------------------------------------------------
@@ -152,6 +170,37 @@ export class PowerService {
   // not_verified → search → found elsewhere: the mapping follows and the cycle is tried once there. Forced: a poe
   // mapping only, switch.cycle {force:true, host:null}, audited camera-power-cycle-forced.
   cycle(who: Who, cameraId: string, raw: unknown): PowerOutcome {
+    return this.startCycle(who, cameraId, raw, null);
+  }
+
+  // A camera's own proxy asks (camera.power.cycle.request): an unforced cycle as the proxy, answered with
+  // camera.power.cycle.result {ok, reason?} when it is final (refusals right away). Audited camera-power-cycle.
+  requestFromProxy(proxyId: string, accountId: string, ev: { camera: string; requestId: string }): void {
+    const req: CycleRequest = { requestId: ev.requestId, proxyId, proxyCameraId: ev.camera };
+    const who: Who = { actor: proxyId, sysadmin: true, proxy: true };
+    const audit = (c: Camera | null, out: PowerOutcome) => this.d.audit.write({
+      actorType: 'proxy', actor: proxyId, action: 'camera-power-cycle', accountId, targetType: 'camera', targetId: c?.id ?? null, targetLabel: c?.camsId ?? null,
+      outcome: out.ok ? 'ok' : 'refused', detail: { requestId: req.requestId, camera: req.proxyCameraId, ...(out.ok ? { cmdId: out.commandId } : { code: out.code, reason: out.reason }) },
+    });
+    const row = this.d.db.prepare('SELECT id FROM cameras WHERE account_id = ? AND proxy_id = ? AND proxy_camera_id = ?').get(accountId, proxyId, ev.camera) as { id: string } | undefined;
+    const c = row ? this.camera(row.id) : null;
+    let out: PowerOutcome;
+    if (!c) out = this.refuse('not_in_admin', NOT_IN_ADMIN);
+    else if (this.lastCycle.get(c.id)?.state === 'running') out = this.refuse('busy', CYCLE_RUNNING);
+    else if (this.d.clock.now() - (this.lastRequest.get(c.id) ?? -Infinity) < PROXY_REQUEST_GAP_MS) out = this.refuse('too_soon', TOO_SOON);
+    else {
+      this.lastRequest.set(c.id, this.d.clock.now());
+      try {
+        out = this.startCycle(who, c.id, {}, req);
+      } catch (e) {
+        out = this.refuse(errCode(e), e instanceof ApiError && e.hint ? e.hint : errCode(e));
+      }
+    }
+    audit(c, out);
+    if (!out.ok) this.answer(accountId, req, false, out.reason);
+  }
+
+  private startCycle(who: Who, cameraId: string, raw: unknown, req: CycleRequest | null): PowerOutcome {
     this.sysadmin(who);
     const c = this.camera(cameraId);
     if (raw !== undefined && raw !== null && !isObj(raw)) throw new FieldError('body');
@@ -174,6 +223,7 @@ export class PowerService {
     this.own(who, c, 'camera.power.cycling', { v: 1, camera: c.proxyCameraId, at: this.d.clock.now() });
     try {
       const id = this.sendCycle(who, c, sw, p.port, force, false, flow);
+      this.saveCycle(c.id, flow, id, req);
       if (force) {
         this.d.audit.write({ actorType: this.type(who), actor: who.actor, action: 'camera-power-cycle-forced', accountId: c.accountId, targetType: 'camera', targetId: c.id, targetLabel: c.camsId, outcome: 'ok',
           detail: { switchId: sw.id, switchName: sw.name, port: p.port, cmdId: id } });
@@ -341,7 +391,8 @@ export class PowerService {
         const stored = this.applyHit(who, c.id, hit, 'found by a power-cycle search');
         if (stored.kind !== 'poe') return this.finishCycle(who, c, flow, 'failed', 'not_poe', `found on ${hit.sw.name} port ${hit.port}, not PoE powered`);
         try {
-          this.sendCycle(who, this.camera(c.id), hit.sw, hit.port, false, true, flow);
+          const retry = this.sendCycle(who, this.camera(c.id), hit.sw, hit.port, false, true, flow);
+          this.saveCycle(c.id, flow, retry);
         } catch (e) {
           this.finishCycle(who, c, flow, 'failed', errCode(e), errCode(e));
         }
@@ -353,7 +404,83 @@ export class PowerService {
 
   private finishCycle(who: Who, c: Camera, flow: PowerFlow, state: 'ok' | 'failed', code: string | null, message: string): void {
     this.finish(flow, state, code, state === 'ok' ? null : message);
+    // The open request is taken (cleared) before its answer goes out: at most once, also across a crash.
+    const req = this.saveCycle(c.id, flow, null);
     this.own(who, c, 'camera.power.cycled', { v: 1, camera: c.proxyCameraId, ok: state === 'ok', message: clamp(message) });
+    if (req) this.answer(c.accountId, req, state === 'ok', message);
+  }
+
+  // --- the persisted cycle (camera_power_cycles) ----------------------------------------------------
+  // Running: the flow, its current switch.cycle and (when a proxy asked) the request. Final (commandId null): the
+  // flow only; the request is cleared and returned (the caller answers it). `req` undefined keeps the stored one.
+  private saveCycle(cameraId: string, flow: PowerFlow, commandId: string | null, req?: CycleRequest | null): CycleRequest | null {
+    try {
+      return tx(this.d.db, () => {
+        const cur = this.d.db.prepare('SELECT request FROM camera_power_cycles WHERE camera_id = ?').get(cameraId) as { request: string | null } | undefined;
+        const kept: CycleRequest | null = req !== undefined ? req : cur?.request ? JSON.parse(cur.request) : null;
+        const store = commandId ? kept : null;
+        this.d.db.prepare(`INSERT INTO camera_power_cycles (camera_id, flow, command_id, request) VALUES (?,?,?,?)
+          ON CONFLICT(camera_id) DO UPDATE SET flow = excluded.flow, command_id = excluded.command_id, request = excluded.request`)
+          .run(cameraId, JSON.stringify(flow), commandId, store ? JSON.stringify(store) : null);
+        return commandId ? null : kept;
+      });
+    } catch (e) {
+      this.d.log.error({ err: e, cameraId }, 'power_cycle_not_saved');
+      return null;
+    }
+  }
+
+  // On start: every camera's last cycle is shown again; a running one ends when its switch.cycle is final (now, if
+  // it already is, or when its answer arrives).
+  private restore(): void {
+    const rows = this.d.db.prepare('SELECT camera_id, flow, command_id FROM camera_power_cycles').all() as { camera_id: string; flow: string; command_id: string | null }[];
+    for (const r of rows) {
+      try {
+        const flow = JSON.parse(r.flow) as PowerFlow;
+        this.lastCycle.set(r.camera_id, flow);
+        if (flow.state !== 'running') continue;
+        const cmd = r.command_id ? this.commandRow(r.command_id) : null;
+        if (!cmd) {
+          this.restoredFinal(r.camera_id, null);
+          continue;
+        }
+        if (['queued', 'sent', 'received'].includes(cmd.state)) this.pending.set(cmd.id, (fin) => this.restoredFinal(r.camera_id, fin));
+        else this.restoredFinal(r.camera_id, cmd);
+      } catch (e) {
+        this.d.log.error({ err: e, cameraId: r.camera_id }, 'power_cycle_restore_failed');
+      }
+    }
+  }
+
+  // A cycle that ran across a restart ends with its switch.cycle's final row (null: none left).
+  private restoredFinal(cameraId: string, r: CommandRow | null): void {
+    const flow = this.lastCycle.get(cameraId);
+    if (!flow || flow.state !== 'running') return;
+    const c = this.camera(cameraId);
+    const args = r?.args ?? {};
+    const sw = isObj(args.switch) && typeof args.switch.id === 'string' ? this.d.switches.store.findById(args.switch.id) : null;
+    if (r?.state === 'done') return this.finishCycle(SYSTEM, c, flow, 'ok', null, `power-cycled on ${sw?.name ?? 'the switch'} port ${String(args.port)}`);
+    const code = r ? r.outcomeCode ?? r.state : 'restart';
+    this.finishCycle(SYSTEM, c, flow, 'failed', code, r ? CYCLE_TEXT[code] ?? code : 'cams-admin restarted during the power-cycle');
+  }
+
+  private commandRow(id: string): CommandRow | null {
+    const r = this.d.db.prepare('SELECT account_id, proxy_id FROM commands WHERE id = ?').get(id) as { account_id: string; proxy_id: string | null } | undefined;
+    return r?.proxy_id ? this.d.commands.get(r.account_id, r.proxy_id, id) : null;
+  }
+
+  // camera.power.cycle.result to the asking proxy: skipped (logged) when its allow list lacks the entry.
+  private answer(accountId: string, req: CycleRequest, ok: boolean, reason: string): void {
+    if (!this.allowed(req.proxyId, 'camera.power.cycle.result')) {
+      this.d.log.warn({ proxyId: req.proxyId, requestId: req.requestId }, 'power_cycle_result_not_allowed');
+      return;
+    }
+    try {
+      this.d.commands.create(SYSTEM.actor, accountId, req.proxyId, 'camera.power.cycle.result',
+        { v: 1, camera: req.proxyCameraId, requestId: req.requestId, ok, ...(ok ? {} : { reason: clamp(reason) }) }, { actorType: 'system' });
+    } catch (e) {
+      this.d.log.warn({ err: e, proxyId: req.proxyId, requestId: req.requestId }, 'power_cycle_result_not_sent');
+    }
   }
 
   // --- survey ------------------------------------------------------------------------------------
@@ -532,7 +659,7 @@ export class PowerService {
   private sysadmin(who: Who): void {
     if (!who.sysadmin) throw new ApiError(403, 'forbidden');
   }
-  private type(who: Who): Extract<PowerActorType, 'sysadmin' | 'system'> {
-    return who.system ? 'system' : 'sysadmin';
+  private type(who: Who): Extract<PowerActorType, 'sysadmin' | 'system' | 'proxy'> {
+    return who.system ? 'system' : who.proxy ? 'proxy' : 'sysadmin';
   }
 }

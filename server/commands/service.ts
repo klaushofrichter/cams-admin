@@ -216,7 +216,7 @@ export class Commands {
   // accepts it while paused and without an allow entry (never with its env
   // switch off), so the pause and allow pre-checks don't apply.
   // previewOf (R3-15): the dry run this real write was made from; each is used once.
-  create(actor: string, accountId: string, proxyId: string, command: WireCommand, args: Record<string, unknown>, meta?: { reason?: string; revocationOnly?: boolean; actorType?: 'sysadmin' | 'system' | 'cams'; previewOf?: string }): CommandRow {
+  create(actor: string, accountId: string, proxyId: string, command: WireCommand, args: Record<string, unknown>, meta?: { reason?: string; revocationOnly?: boolean; actorType?: 'sysadmin' | 'system' | 'cams' | 'proxy'; previewOf?: string }): CommandRow {
     const revocation = meta?.revocationOnly === true && command === 'tokens.apply';
     const px = this.d.registry.getProxy(accountId, proxyId); // 404 for another account's proxy
     if (px.state !== 'enrolled') throw new ApiError(409, 'not_enrolled');

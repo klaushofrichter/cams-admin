@@ -626,4 +626,15 @@ CREATE TABLE switches (
 `),
   // 23: what powers a camera (JSON; NULL reads as unknown).
   (db) => db.exec(`ALTER TABLE cameras ADD COLUMN power TEXT CHECK (power IS NULL OR json_valid(power));`),
+  // 24: a camera's last power-cycle (its flow as JSON), the switch.cycle whose final answer ends it while it runs, and
+  // an open request from the camera's proxy ({requestId, proxyId, proxyCameraId}; NULL once answered). A restart
+  // re-attaches a running cycle to its command row and still answers the request once.
+  (db) => db.exec(`
+CREATE TABLE camera_power_cycles (
+  camera_id TEXT PRIMARY KEY REFERENCES cameras(id) ON DELETE CASCADE,
+  flow TEXT NOT NULL CHECK (json_valid(flow)),
+  command_id TEXT,
+  request TEXT CHECK (request IS NULL OR json_valid(request))
+) STRICT;
+`),
 ];

@@ -98,6 +98,8 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
   // in the backup's zone (the tick below).
   const power = new PowerService({ db, clock, audit, registry, commands, status, switches, live, log });
   switches.onActive = (id) => power.switchActive(id);
+  // A camera's own proxy asks for a power-cycle (its Maintenance page): answered with camera.power.cycle.result.
+  hub.deps.onProxyPowerEvent = (proxyId, accountId, ev) => power.requestFromProxy(proxyId, accountId, ev);
   const surveys = new SurveySchedule({ clock, tz: merged.TZ || 'America/Chicago', run: () => power.surveyDaily() });
   const actions = new RemoteActions({ db, audit, registry, commands, status, clock, config, connected: (proxyId) => hub.connected(proxyId) });
   // Onboarding (cam-proxy onboarding design §5): after each heartbeat, the reported site-CA pins.

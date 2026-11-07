@@ -248,13 +248,16 @@ export function validateCams(name: CamsSchema, value: unknown): { ok: true } | {
 // passes the lenient anyOf at run time but not this is refused and audited.
 const vMoveEvent = compile(eventStrict.properties.body);
 export function validateMoveEvent(body: unknown): { ok: true } | { ok: false; detail: string } {
-  if (!isRecord(body) || body.cmdId !== undefined) return { ok: false, detail: 'not a move event' };
+  // The proxy kinds share the body schema: never a move event (the channel routes them by kind).
+  if (!isRecord(body) || body.cmdId !== undefined || isProxyEventKind(body.kind)) return { ok: false, detail: 'not a move event' };
   return vMoveEvent(body) ? { ok: true } : { ok: false, detail: errText(vMoveEvent).slice(0, TEXT_MAX) };
 }
 
+export const isProxyEventKind = (kind: unknown): kind is (typeof PROXY_EVENT_KINDS)[number] => (PROXY_EVENT_KINDS as readonly unknown[]).includes(kind);
+
 // The one proxy event that is no move event (camera.power.cycle.request, PROXY_EVENT_KINDS): the same strict event body schema,
-// and the kind must be one of the proxy kinds. Dispatch is not wired yet.
+// and the kind must be one of the proxy kinds (the channel sends it to PowerService.requestFromProxy).
 export function validateProxyEvent(body: unknown): { ok: true } | { ok: false; detail: string } {
-  if (!isRecord(body) || body.cmdId !== undefined || !(PROXY_EVENT_KINDS as readonly unknown[]).includes(body.kind)) return { ok: false, detail: 'not a proxy event' };
+  if (!isRecord(body) || body.cmdId !== undefined || !isProxyEventKind(body.kind)) return { ok: false, detail: 'not a proxy event' };
   return vMoveEvent(body) ? { ok: true } : { ok: false, detail: errText(vMoveEvent).slice(0, TEXT_MAX) };
 }
