@@ -538,7 +538,7 @@ describe('camera power: review fixes', () => {
     expect(sent(q, 'camera.power.set').find((x) => x.camera === 'cam2')).toEqual({ v: 1, camera: 'cam2', power: { kind: 'unknown' } });
   });
 
-  it('I3: two or more cameras on one port in a survey: a trunk port, none mapped from it, records kept (no notSeen), listed in the survey result', async () => {
+  it('I3: two or more cameras on one port in a survey: a trunk port, none mapped from it, an older mapping onto it removed, the others kept (no notSeen), listed in the survey result', async () => {
     const p = await proxy();
     const cams: Awaited<ReturnType<typeof camera>>[] = [];
     for (let i = 0; i < 20; i++) cams.push(await camera(p, `10.0.1.${i + 1}`));
@@ -550,7 +550,8 @@ describe('camera power: review fixes', () => {
     surveyAnswer(p, { [cams[0].id]: 8, [cams[1].id]: 8, [cams[17].id]: 8, [cams[2].id]: 4 });
     await call('POST', `/switches/${a.id}/survey`);
     await surveyDone(a.id, 2, p);
-    expect((await power(cams[0].id)).power).toEqual({ kind: 'poe', switchId: a.id, port: 8, watts: 4 });
+    // A mapping made before the port was known as a trunk is removed (a cycle there would cut the chained switch).
+    expect((await power(cams[0].id)).power).toEqual({ kind: 'unknown' });
     expect((await power(cams[1].id)).power).toEqual({ kind: 'poe', switchId: b.id, port: 2, watts: 4 });
     expect((await power(cams[17].id)).power).toEqual({ kind: 'unknown' });
     expect((await power(cams[2].id)).power).toMatchObject({ kind: 'poe', switchId: a.id, port: 4 });
@@ -559,6 +560,8 @@ describe('camera power: review fixes', () => {
     expect(view.results.find((x: { cameraId: string }) => x.cameraId === cams[17].id)).toMatchObject({ found: true, port: 8, trunk: true });
     expect(view.results.find((x: { cameraId: string }) => x.cameraId === cams[17].id).kind).toBeUndefined();
     expect(audits('camera-power-set').filter((x) => [cams[0].id, cams[1].id, cams[17].id].includes(x.targetId) && x.why === 'survey')).toEqual([]);
+    expect(audits('camera-power-set').filter((x) => x.targetId === cams[0].id).at(-1)).toMatchObject({ from: { kind: 'poe', port: 8 }, to: { kind: 'unknown' }, why: 'trunk port 8: another switch is chained on it' });
+    await until(() => sent(p, 'camera.power.set').some((x) => x.camera === cams[0].proxyCameraId && x.power.kind === 'unknown'), 5000, 'unknown sent');
     expect(audits('switch-survey').at(-1)).toMatchObject({ step: 'done', trunks: [{ port: 8, cameras: 3 }] });
   });
 
@@ -623,5 +626,25 @@ describe('camera power: review fixes', () => {
     expect(dash2.warnings).not.toContain('chained-switch');
     expect(dash2.switchProblems).toEqual([]);
     expect((await power(c.id)).power).toMatchObject({ kind: 'poe', switchId: a.id, port: 6 });
+  });
+  it('trunk port (re-review): a cycle on a mapping that is a known trunk port is refused, forced or not, also for a proxy request', async () => {
+    const p = await proxy();
+    const c = await camera(p);
+    const d = await camera(p);
+    const a = await sw(p, 'Alpha');
+    surveyAnswer(p, { [c.id]: 8, [d.id]: 8 });
+    await call('POST', `/switches/${a.id}/survey`);
+    await surveyDone(a.id, 1, p);
+    // A mapping onto the trunk port (made by hand, as one older than the survey would be).
+    setPower(c.id, { kind: 'poe', switchId: a.id, port: 8, watts: 4 });
+    const reason = 'port 8 leads to another switch (configuration issue): not power-cycling';
+    for (const body of [{}, { force: true }]) {
+      const r = await call('POST', `/cameras/${c.id}/power/cycle`, body);
+      expect([r.status, r.body], JSON.stringify(body)).toEqual([409, { error: 'trunk_port', message: reason }]);
+    }
+    expect(p.client.emitEvent({ kind: 'camera.power.cycle.request', camera: c.proxyCameraId, requestId: 'rq-trunk' })).toBe(true);
+    await until(() => sent(p, 'camera.power.cycle.result').length > 0, 5000, 'result');
+    expect(sent(p, 'camera.power.cycle.result')).toEqual([{ v: 1, camera: c.proxyCameraId, requestId: 'rq-trunk', ok: false, reason }]);
+    expect(sent(p, 'switch.cycle')).toEqual([]);
   });
 });

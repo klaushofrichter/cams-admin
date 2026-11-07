@@ -42,6 +42,7 @@ const known: Record<string, string> = {
     save_failed: 'The switch answered, but the change could not be saved: nothing was changed.',
     not_poe: 'This camera is not powered by a PoE port (data only, or a power adapter): it cannot be power-cycled from here.',
     power_unknown: 'Where this camera gets its power is not known yet: verify or find it first.',
+    trunk_port: 'That port leads to another switch (a configuration issue): cams-admin does not power-cycle it.',
     host_unknown: "The camera's address is not known to cams-admin: set its host first.",
     not_verified: 'The camera was not found on that port: nothing was cut. Verify it, or find it again.',
     password_unset: "The proxy has no password for this switch (it is tied to the address): set it again on the proxy's Proxy settings, PoE switches.",

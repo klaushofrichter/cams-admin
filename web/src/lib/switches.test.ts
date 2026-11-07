@@ -118,3 +118,9 @@ describe('chained switches (a configuration issue)', () => {
     expect(trunkText(3)).toBe('trunk (3 cameras)');
   });
 });
+
+describe('trunk_port refusal', () => {
+  it('has its own text', () => {
+    expect(codeText('trunk_port')).toBe('That port leads to another switch (a configuration issue): cams-admin does not power-cycle it.');
+  });
+});

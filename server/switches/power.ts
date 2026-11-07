@@ -220,6 +220,9 @@ export class PowerService {
     const p = c.power;
     if (p.kind === 'unknown') return this.refuse('power_unknown', 'what powers the camera is unknown: verify or search first');
     if (p.kind !== 'poe') return this.refuse('not_poe', p.kind === 'adapter' ? 'not PoE powered (adapter)' : 'not PoE powered: its port draws 0 W');
+    // A port the switch's latest survey saw as a trunk feeds another switch: cutting it cuts every camera behind it.
+    // Refused forced or not (a mapping older than that survey may still point there).
+    if (this.trunkOf(p.switchId, p.port)) return this.refuse('trunk_port', `port ${p.port} leads to another switch (configuration issue): not power-cycling`);
     if (this.busy(c.id)) return this.refuse('busy', 'a power check or power-cycle of this camera is running');
     const sw = this.d.switches.store.findById(p.switchId);
     if (!sw || sw.state !== 'active') return this.refuse('switch_unavailable', 'the switch is not active');
@@ -599,7 +602,7 @@ export class PowerService {
   }
 
   // All chunks are in. A port with two or more cameras is a trunk port (another switch chained on it): none of them is
-  // mapped from it and their records stay as they are; a camera alone on its port is mapped (setPower when it changed).
+  // mapped from it, and any camera mapped to that port of this switch becomes unknown; a camera alone on its port is mapped (setPower when it changed).
   // The switch's problems follow this survey (chained_switch per trunk port): a new one is audited (refused: the
   // cameras behind it were not mapped), a gone one cleared (ok). An incomplete survey adds problems but clears none.
   private surveyEnd(who: Who, sw: Switch, view: SurveyView, hits: SurveyHit[], st: { complete: boolean; answered: number }): void {
@@ -607,6 +610,15 @@ export class PowerService {
     for (const h of hits) byPort.set(h.port, [...(byPort.get(h.port) ?? []), h]);
     for (const [port, list] of [...byPort].sort((a, b) => a[0] - b[0])) {
       if (list.length >= 2) {
+        // A mapping onto this port (older than this survey) goes: the port feeds another switch.
+        for (const m of this.d.switches.store.camerasOnSwitch(sw.id)) {
+          if (!occupies(m.power) || m.power.port !== port) continue;
+          try {
+            this.store(who, this.camera(m.id), { kind: 'unknown' }, `trunk port ${port}: another switch is chained on it`);
+          } catch (e) {
+            this.d.log.error({ err: e, cameraId: m.id, switchId: sw.id }, 'power_trunk_unmap_failed');
+          }
+        }
         view.trunks.push({ port, cameras: list.map((h) => ({ cameraId: h.c.id, camsId: h.c.camsId })) });
         view.problems.push({ code: 'chained_switch', port, cameras: list.length });
         view.results.push(...list.map((h) => ({ cameraId: h.c.id, camsId: h.c.camsId, found: true, port, trunk: true })));
