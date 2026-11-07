@@ -624,7 +624,7 @@ export const SWITCH_CYCLE_FAILURES = ['not_verified', 'no_power', 'switch_busy',
 export const WIRE_COMMANDS = ['tokens.apply', 'config.get', 'config.set', 'config.unset', 'config.rollback', 'camera.action', 'camera.name.set', 'proxy.restart', ...MOVE_COMMANDS, ...ONBOARDING_COMMANDS, ...ANALYTICS_COMMANDS, ...SWITCH_COMMANDS, ...POWER_COMMANDS] as const;
 // The camera actions a proxy may allow for remote use (camera.action:<a>).
 export const REMOTE_ACTIONS = [
-  'camera-test', 'onvif-resubscribe', 'camera-ftp-test', 'poe-switch-read', 'inventory', 'inventory-cancel', 'retention-run', 'restart',
+  'camera-test', 'onvif-resubscribe', 'camera-ftp-test', 'inventory', 'inventory-cancel', 'retention-run', 'restart',
   'camera-reboot', 'camera-powercycle', 'camera-ftp-setup', 'camera-ntp-set', 'camera-cert-push',
   // Camera onboarding: the camera's time zone and DST rule from the proxy's time.zone (or the host's zone).
   'camera-time-set',
@@ -649,7 +649,7 @@ export const ALLOW_ENTRIES: readonly string[] = [
 export const P3_COMMANDS = ['config.get', 'config.set', 'config.unset', 'config.rollback', 'camera.action', 'camera.name.set', 'proxy.restart'] as const;
 // Actions a proxy never runs for cams-admin, whatever its allow-list says.
 export const NEVER_REMOTE_ACTIONS = [
-  'find-camera', 'camera-address', 'camera-trust-clear', 'tls-ca-rotate', 'tls-ca-drop-previous', 'archive-clear', 'inventory-repair', 'camera-poe-on', 'restart-proxy',
+  'find-camera', 'camera-address', 'camera-trust-clear', 'tls-ca-rotate', 'tls-ca-drop-previous', 'archive-clear', 'inventory-repair', 'restart-proxy',
   // cam-proxy #196 security fixes: turning the camera's FTP upload off remotely would stop clip capture silently.
   'camera-ftp-off',
 ] as const;
@@ -724,8 +724,8 @@ export const REMOTE_SETTABLE: { v: 1; remote: string[]; narrow: Record<string, N
   },
   denied: [
     'server', 'go2rtc', 'storage', 'ftp.port', 'ftp.passive', 'ftp.tls', 'ftp.publicHost', 'ftp.sourceSubnet', 'ftp.certFile', 'ftp.keyFile', 'tls', 'composition.font', 'ntp.server',
-    'poeSwitch', 'camsAdmin', 'cameras.*.id', 'cameras.*.host', 'cameras.*.protocol', 'cameras.*.tlsName', 'cameras.*.user', 'cameras.*.onvifPort', 'cameras.*.rtspPort',
-    'cameras.*.baichuanPort', 'cameras.*.poeSwitch', 'cameras.*.name', 'cameras.*.ftp.user', 'cameras.*.webUiUrl', 'cameras.*.storage',
+    'camsAdmin', 'cameras.*.id', 'cameras.*.host', 'cameras.*.protocol', 'cameras.*.tlsName', 'cameras.*.user', 'cameras.*.onvifPort', 'cameras.*.rtspPort',
+    'cameras.*.baichuanPort', 'cameras.*.name', 'cameras.*.ftp.user', 'cameras.*.webUiUrl', 'cameras.*.storage',
     // Local only in P3 (coordinator ruling, security review I4): capture and listener switches, health thresholds.
     ...LOCAL_ONLY,
     // cam-proxy marks these local only: the moved marker of a camera and the moves.* settings such as moves.maxCameras.
