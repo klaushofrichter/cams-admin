@@ -36,7 +36,9 @@ export type WireCommand = 'tokens.apply' | 'config.get' | 'config.set' | 'config
   | 'move.begin' | 'move.summary' | 'move.targets' | 'move.open' | 'move.offer' | 'move.answer' | 'move.start' | 'move.go' | 'move.release' | 'move.finish' | 'move.cancel'
   | 'move.return.open' | 'move.return.start'
   | 'camera.onboarding.get'
-  | 'analytics.usage.get';
+  | 'analytics.usage.get'
+  | 'switch.read' | 'switch.locate' | 'switch.survey' | 'switch.cycle' | 'switch.poeOn' | 'switch.forget'
+  | 'camera.power.set' | 'camera.power.cycling' | 'camera.power.cycled' | 'camera.power.cycle.result';
 export interface CommandRow {
   id: string; accountId: string; proxyId: string | null; actor: string; command: string; args: Record<string, unknown>; state: CommandState;
   outcomeCode: string | null; result: Record<string, unknown> | null; createdAt: number; sentAt: number | null; finishedAt: number | null; attempts: number;
@@ -52,6 +54,8 @@ type DbRow = Record<string, unknown>;
 
 const VALUE_MAX = 200;
 const clampValue = (x: unknown) => (typeof x === 'string' && x.length > VALUE_MAX ? x.slice(0, VALUE_MAX) : x);
+// A switch ref as a person may see it: its host clamped like any text.
+const clampSwitch = (x: unknown) => (x && typeof x === 'object' ? { ...(x as Record<string, unknown>), host: clampValue((x as Record<string, unknown>).host) } : x);
 const pick = (args: Record<string, unknown>, keys: string[]) => Object.fromEntries(keys.filter((k) => k in args).map((k) => [k, args[k]]));
 
 // Args that carry or derive from a move secret: never shown, never kept after the command is final.
@@ -91,6 +95,20 @@ export function summariseArgs(command: string, args: Record<string, unknown>): R
     case 'camera.action': return pick(args, ['v', 'camera', 'action', 'input']);
     case 'camera.name.set': return { v: args.v, camera: args.camera, name: clampValue(args.name) };
     case 'camera.onboarding.get': return pick(args, ['v', 'camera']);
+    // PoE switches: hosts and messages clamped; nothing in these args is a secret (the switch password stays on the proxy).
+    case 'switch.read': return { v: args.v, switch: clampSwitch(args.switch) };
+    case 'switch.locate': return { v: args.v, switch: clampSwitch(args.switch), host: clampValue(args.host) };
+    case 'switch.survey': return { v: args.v, switch: clampSwitch(args.switch), cameras: Array.isArray(args.cameras) ? args.cameras.slice(0, 16).map((c) => (c && typeof c === 'object' ? { camera: (c as Record<string, unknown>).camera, host: clampValue((c as Record<string, unknown>).host) } : c)) : [] };
+    case 'switch.cycle': return { v: args.v, switch: clampSwitch(args.switch), port: args.port, host: clampValue(args.host), force: args.force, camera: args.camera };
+    case 'switch.poeOn': return { v: args.v, switch: clampSwitch(args.switch), port: args.port };
+    case 'switch.forget': return pick(args, ['v', 'switchId']);
+    case 'camera.power.set': {
+      const power = args.power && typeof args.power === 'object' ? (args.power as Record<string, unknown>) : {};
+      return { v: args.v, camera: args.camera, power: { ...power, ...('switchName' in power ? { switchName: clampValue(power.switchName) } : {}) } };
+    }
+    case 'camera.power.cycling': return pick(args, ['v', 'camera', 'at']);
+    case 'camera.power.cycled': return { v: args.v, camera: args.camera, ok: args.ok, message: clampValue(args.message) };
+    case 'camera.power.cycle.result': return { v: args.v, camera: args.camera, requestId: clampValue(args.requestId), ok: args.ok, ...('reason' in args ? { reason: clampValue(args.reason) } : {}) };
   }
   if (command.startsWith('move.')) return sanitize(Object.fromEntries(Object.entries(args).filter(([k]) => !MOVE_SECRET_ARGS.includes(k)))) as Record<string, unknown>;
   if (command !== 'tokens.apply') return { v: args.v };
@@ -198,7 +216,7 @@ export class Commands {
   // accepts it while paused and without an allow entry (never with its env
   // switch off), so the pause and allow pre-checks don't apply.
   // previewOf (R3-15): the dry run this real write was made from; each is used once.
-  create(actor: string, accountId: string, proxyId: string, command: WireCommand, args: Record<string, unknown>, meta?: { reason?: string; revocationOnly?: boolean; actorType?: 'sysadmin' | 'system' | 'cams'; previewOf?: string }): CommandRow {
+  create(actor: string, accountId: string, proxyId: string, command: WireCommand, args: Record<string, unknown>, meta?: { reason?: string; revocationOnly?: boolean; actorType?: 'sysadmin' | 'system' | 'cams' | 'proxy'; previewOf?: string }): CommandRow {
     const revocation = meta?.revocationOnly === true && command === 'tokens.apply';
     const px = this.d.registry.getProxy(accountId, proxyId); // 404 for another account's proxy
     if (px.state !== 'enrolled') throw new ApiError(409, 'not_enrolled');

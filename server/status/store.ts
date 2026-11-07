@@ -46,7 +46,7 @@ export function parseCommandsInfo(x: unknown): CommandsInfo | null {
   if (!isRecord(x)) return null;
   return {
     enabled: x.enabled === true, paused: x.paused === true, pauseReason: typeof x.pauseReason === 'string' ? x.pauseReason.slice(0, 200) : null,
-    allow: strList(x.allow, 32, 64), seenWindow: safeInt(x.seenWindow) ?? 0,
+    allow: strList(x.allow, 64, 64), seenWindow: safeInt(x.seenWindow) ?? 0,
   };
 }
 export function parseTokensInfo(x: unknown): TokensInfo | null {
@@ -181,7 +181,7 @@ export class StatusStore {
       const pin = pinState(proxy.caFingerprints, reportedFps);
       let summary: unknown, ok: boolean, problemCount: number, version: string | null = null, summaryAt: number | null = null, cams: Reported['cameras'] = [];
       if (v.ok) {
-        const s = v.summary as { ok: boolean; problemCount: number; version: string; generatedAt: number; cameras?: { camera: { id: string; online: boolean; name?: string; nameSource?: unknown; model?: string | null } }[] };
+        const s = v.summary as { ok: boolean; problemCount: number; version: string; generatedAt: number; cameras?: { camera: { id: string; online: boolean; name?: string; nameSource?: unknown; model?: string | null; address?: unknown } }[] };
         summary = { ...s, $truncated: body.truncated === true };
         ok = s.ok;
         problemCount = s.problemCount;
@@ -190,6 +190,7 @@ export class StatusStore {
         cams = (s.cameras ?? []).map((c) => ({
           ref: c.camera.id, online: c.camera.online, name: c.camera.name, model: c.camera.model ?? null,
           nameSource: c.camera.nameSource === 'camera' || c.camera.nameSource === 'config' ? c.camera.nameSource : undefined,
+          ...(typeof c.camera.address === 'string' && c.camera.address.trim() ? { address: c.camera.address.trim() } : {}),
         }));
       } else {
         summary = { unreadable: v.reason };

@@ -561,6 +561,281 @@
         ]
       },
       "maxItems": 50
+    },
+    "switches": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 60
+          },
+          "model": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "address": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "url": {
+                    "type": "string",
+                    "maxLength": 512
+                  },
+                  "scope": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "note": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 120
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "url",
+                  "scope",
+                  "note"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "proxy": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "state": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "readAt": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ports": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 64
+          },
+          "problems": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string",
+                  "maxLength": 64
+                },
+                "port": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 64
+                },
+                "cameras": {
+                  "type": "integer",
+                  "minimum": 2
+                }
+              },
+              "required": [
+                "code",
+                "port",
+                "cameras"
+              ]
+            },
+            "maxItems": 64
+          }
+        },
+        "required": [
+          "name",
+          "model",
+          "address",
+          "proxy",
+          "state",
+          "readAt",
+          "ports",
+          "problems"
+        ]
+      },
+      "maxItems": 64
+    },
+    "cameraPower": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "camera": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+          },
+          "cameraName": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "kind": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "switch": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 60
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "port": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 64
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "watts": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "verifiedAt": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "notSeen": {
+            "type": "boolean"
+          },
+          "lastCycle": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "requestedAt": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "finishedAt": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "code": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 64
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "reason": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 200
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "state",
+                  "requestedAt",
+                  "finishedAt",
+                  "code",
+                  "reason"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "camera",
+          "cameraName",
+          "kind",
+          "switch",
+          "port",
+          "watts",
+          "verifiedAt",
+          "notSeen",
+          "lastCycle"
+        ]
+      },
+      "maxItems": 256
     }
   },
   "required": [

@@ -18,6 +18,8 @@ import { exportForInstance } from '../import/export';
 import { snapshotRevision } from '../cams/snapshot';
 import type { ProxyConfig } from '../config/service';
 import type { Vision } from '../vision/service';
+import type { SwitchService } from '../switches/service';
+import type { PowerOutcome, PowerService } from '../switches/power';
 import { sysadminAllowed } from '../auth/session';
 import type { RemoteActions } from '../actions/service';
 import type { ReportedPins } from '../onboarding/pins';
@@ -58,7 +60,7 @@ export interface BackupService { state(): BackupState; backupNow(actor: string):
 
 export interface ApiDeps {
   db: Db; clock: Clock; cfg: Config; audit: Audit; registry: Registry; enrollment: Enrollment; hub: Hub; status: StatusStore; live: LiveHub; sessions: Sessions; backup: BackupService;
-  commands: Commands; tokens: Tokens; camsInstances: CamsInstances; serverKeyFingerprints: string[]; importer: Importer; config: ProxyConfig; actions: RemoteActions; moves: Moves; diag: DiagTokens; ops: OpsTokens; pins: ReportedPins; viewerTokens: ViewerTokens; vision: Vision;
+  commands: Commands; tokens: Tokens; camsInstances: CamsInstances; serverKeyFingerprints: string[]; importer: Importer; config: ProxyConfig; actions: RemoteActions; moves: Moves; diag: DiagTokens; ops: OpsTokens; pins: ReportedPins; viewerTokens: ViewerTokens; vision: Vision; switches: SwitchService; power: PowerService;
 }
 
 type H = (req: Request, res: Response) => unknown;
@@ -279,6 +281,39 @@ export function apiRouter(d: ApiDeps): express.Router {
   r.get('/accounts/:accountId/vision', h((req, res) => d.vision.get(sys(res), p(req, 'accountId'))));
   r.post('/accounts/:accountId/vision/refresh', h((req, res) => { res.locals.status = 202; return d.vision.refresh(sys(res), p(req, 'accountId')); }));
   r.put('/accounts/:accountId/vision/proxies/:proxyId/providers/:provider', h((req, res) => accepted(res, d.vision.setLimit(sys(res), p(req, 'accountId'), p(req, 'proxyId'), p(req, 'provider'), req.body))));
+  // --- PoE switches (design 2026-11-07, "Switch lifecycle"): writes for a signed-in system admin only (no
+  // operations-token scope). A step that depends on the switch answers 202 with its command id(s); the record
+  // changes when the proxy's answer arrives. POST read is a live read (a short wait), not a write.
+  r.get('/accounts/:accountId/switches', h((req) => ({ items: d.switches.list(p(req, 'accountId')) })));
+  r.post('/accounts/:accountId/switches', h((req, res) => { created(res); return d.switches.add(sys(res), p(req, 'accountId'), req.body); }));
+  r.get('/switches/:switchId', h((req) => d.switches.get(p(req, 'switchId'))));
+  r.patch('/switches/:switchId', h((req, res) => {
+    const out = d.switches.update(sys(res), p(req, 'switchId'), req.body);
+    if ('commandId' in out) res.locals.status = 202;
+    return out;
+  }));
+  r.delete('/switches/:switchId', h((req, res) => accepted(res, d.switches.remove(sys(res), p(req, 'switchId')))));
+  r.post('/switches/:switchId/test', h((req, res) => accepted(res, d.switches.test(sys(res), p(req, 'switchId')))));
+  r.post('/switches/:switchId/move', h((req, res) => accepted(res, d.switches.move(sys(res), p(req, 'switchId'), req.body))));
+  r.post('/switches/:switchId/read', h((req, res) => d.switches.read(sys(res), p(req, 'switchId'))));
+  // Camera power (design 2026-11-07, "Verify", "Power-cycle", "Survey"): a check or a power-cycle answers 202 with
+  // its first command; the outcome shows in GET power (lastCheck, lastCycle). A refusal known at once is a 409 with
+  // the reason as message (host_unknown, not_poe, power_unknown, busy, ...).
+  const started = (res: Response, out: PowerOutcome) => {
+    if (!out.ok) throw new ApiError(409, out.code, undefined, out.reason);
+    return accepted(res, { commandId: out.commandId });
+  };
+  const camPower = '/cameras/:cameraId/power';
+  r.get(camPower, h((req) => d.power.get(p(req, 'cameraId'))));
+  r.put(camPower, h((req, res) => {
+    const out = d.power.declare(sys(res), p(req, 'cameraId'), req.body);
+    return 'ok' in out ? started(res, out) : out;
+  }));
+  r.post(`${camPower}/verify`, h((req, res) => started(res, d.power.verify(sys(res), p(req, 'cameraId')))));
+  r.post(`${camPower}/cycle`, h((req, res) => started(res, d.power.cycle(sys(res), p(req, 'cameraId'), req.body))));
+  r.get('/switches/:switchId/survey', h((req) => d.power.lastSurvey(p(req, 'switchId')) ?? { switchId: p(req, 'switchId'), state: 'none', results: [], trunks: [], problems: [] }));
+  r.post('/switches/:switchId/survey', h((req, res) => { res.locals.status = 202; return d.power.survey(sys(res), p(req, 'switchId')); }));
+  r.post('/accounts/:accountId/switches/survey', h((req, res) => { res.locals.status = 202; return d.power.surveyAccount(sys(res), p(req, 'accountId')); }));
   r.get(`${proxyBase}/actions`, h((req) => d.actions.available(p(req, 'accountId'), p(req, 'proxyId'))));
   r.post(`${proxyBase}/actions`, h((req, res) => accepted(res, d.actions.cameraAction(actor(res), p(req, 'accountId'), p(req, 'proxyId'), req.body))));
   r.post(`${proxyBase}/cameras/:camera/name`, h((req, res) => accepted(res, d.actions.rename(actor(res), p(req, 'accountId'), p(req, 'proxyId'), p(req, 'camera'), req.body))));
@@ -363,15 +398,23 @@ export function apiRouter(d: ApiDeps): express.Router {
     // A manual adopt lifts what auto-adopt was blocked from (a camera deleted or moved off this proxy).
     d.registry.liftAdoptBlock(px.id, ref);
     reg('camera', cam.id);
+    d.power.cameraChanged(accountId);
     return cam;
   }));
 
   // --- cameras ---------------------------------------------------------------------------
   const camBase = '/accounts/:accountId/cameras/:cameraId';
   r.get('/accounts/:accountId/cameras', h((req) => { d.registry.getAccount(p(req, 'accountId')); return { items: d.registry.listCameras(p(req, 'accountId')) }; }));
-  r.post('/accounts/:accountId/cameras', h((req, res) => { created(res); const c = d.registry.createCamera(actor(res), p(req, 'accountId'), req.body); reg('camera', c.id); return c; }));
+  // A new camera, or a changed host: a survey of the account's switches (debounced per switch).
+  r.post('/accounts/:accountId/cameras', h((req, res) => { created(res); const c = d.registry.createCamera(actor(res), p(req, 'accountId'), req.body); reg('camera', c.id); d.power.cameraChanged(c.accountId); return c; }));
   r.get(camBase, h((req) => d.registry.getCamera(p(req, 'accountId'), p(req, 'cameraId'))));
-  r.patch(camBase, h((req, res) => { const c = d.registry.updateCamera(actor(res), p(req, 'accountId'), p(req, 'cameraId'), req.body); reg('camera', c.id); return c; }));
+  r.patch(camBase, h((req, res) => {
+    const before = d.registry.getCamera(p(req, 'accountId'), p(req, 'cameraId')).host;
+    const c = d.registry.updateCamera(actor(res), p(req, 'accountId'), p(req, 'cameraId'), req.body);
+    reg('camera', c.id);
+    if (c.host !== before) d.power.cameraChanged(c.accountId);
+    return c;
+  }));
   r.delete(camBase, h((req, res) => { d.registry.deleteCamera(actor(res), p(req, 'accountId'), p(req, 'cameraId')); reg('camera', p(req, 'cameraId')); }));
   r.put(`${camBase}/sim`, h((req, res) => { const s = d.registry.setSim(actor(res), p(req, 'accountId'), p(req, 'cameraId'), req.body); reg('camera', p(req, 'cameraId')); return s; }));
   r.delete(`${camBase}/sim`, h((req, res) => { d.registry.deleteSim(actor(res), p(req, 'accountId'), p(req, 'cameraId')); reg('camera', p(req, 'cameraId')); }));
@@ -514,6 +557,8 @@ export function dashboard(d: ApiDeps) {
   // Three queries in all, grouped here (not one per account).
   const proxiesOf = groupBy(d.registry.listProxies(), (px) => px.accountId);
   const camerasOf = groupBy(d.registry.listCameras(), (c) => c.accountId);
+  // PoE switches with a configuration problem (a chained switch, from their latest survey).
+  const switchProblemsOf = groupBy(d.switches.store.listAllWithProblems(), (sw) => sw.accountId);
   let proxies = 0, proxiesOnline = 0, cameras = 0, camerasOnline = 0, problems = 0;
   const out = accounts.map((a) => {
     const accCams = camerasOf.get(a.id) ?? [];
@@ -535,7 +580,9 @@ export function dashboard(d: ApiDeps) {
       if (online) camerasOnline++;
       return { id: c.id, camsId: c.camsId, name: c.name, kind: c.kind, proxyId: c.proxyId, proxyCameraId: c.proxyCameraId, online };
     });
-    return { id: a.id, name: a.name, displayName: a.displayName, users: a.users, proxies: pxs, cameras: camRows, warnings: a.admins === 0 ? ['no-admin'] : [] };
+    const switchProblems = (switchProblemsOf.get(a.id) ?? []).flatMap((sw) => sw.problems.map((x) => ({ switchId: sw.id, switch: sw.name, ...x })));
+    const warnings = [...(a.admins === 0 ? ['no-admin'] : []), ...(switchProblems.length ? ['chained-switch'] : [])];
+    return { id: a.id, name: a.name, displayName: a.displayName, users: a.users, proxies: pxs, cameras: camRows, warnings, switchProblems };
   });
   // P4: one row per cams instance (its pulls and reports live in memory).
   const fp = d.serverKeyFingerprints[0] ?? '';

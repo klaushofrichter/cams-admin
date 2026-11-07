@@ -5,6 +5,7 @@
   // runs the action and re-reads what it wrote.
   import { api, errorText } from '../lib/api';
   import { EFFECT, nameError, stateLine, waitCommand } from '../lib/config';
+  import { powerManaged } from '../lib/switches';
   import Confirm from './Confirm.svelte';
 
   let { accountId, proxyId, refresh, camera = undefined }: { accountId: string; proxyId: string; refresh: number; camera?: string } = $props();
@@ -19,8 +20,15 @@
   let confirm = $state<{ action: string; camera: string | null } | null>(null);
   let error = $state('');
 
+  // Cameras whose power cams-admin knows (a PoE port, data only, an adapter): their power-cycle goes through the
+  // switch, from the camera's power line on the account's Cameras tab, not through the proxy's camera action.
+  let managed = $state<Set<string>>(new Set());
   async function load() {
     try { av = await api('GET', `${base}/actions`); } catch (e) { error = errorText(e); }
+    try {
+      const cams = (await api<any>('GET', `/accounts/${accountId}/cameras`)).items as any[];
+      managed = new Set(cams.filter((c) => c.proxyId === proxyId && c.proxyCameraId && powerManaged(c.power)).map((c) => c.proxyCameraId as string));
+    } catch { managed = new Set(); }
   }
   $effect(() => { void refresh; load(); });
   $effect(() => {
@@ -86,9 +94,10 @@
         </div>
         <div class="row wrap">
           <span class="muted small">Disruptive:</span>
-          {#each disruptive as a (a.action)}
+          {#each disruptive.filter((a) => !(a.action === 'camera-powercycle' && managed.has(cam))) as a (a.action)}
             <button class="btn danger" data-testid="action-{cam}-{a.action}" disabled={!a.allowed || busy[cam]} title={a.allowed ? '' : 'not allowed on the proxy'} onclick={() => (confirm = { action: a.action, camera: cam })}>{a.action}</button>
           {/each}
+          {#if managed.has(cam)}<a class="small" data-testid="power-managed-{cam}" href="#/accounts/{accountId}/cameras">Power-cycle: use the camera's power line on the Cameras tab</a>{/if}
         </div>
         <div class="row">
           <input data-testid="rename-{cam}" placeholder="new name" maxlength="31" bind:value={names[cam]} disabled={!av.rename} />

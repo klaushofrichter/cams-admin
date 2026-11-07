@@ -5,14 +5,13 @@ then empties it on `main`.
 
 ## [Unreleased]
 
-### Changed
-- Camera names: the camera holds its name. `cameras.*.name` is no longer remote-settable; a camera record follows the name its proxy reads from the camera (within about 30 s to a minute) and audits it as `camera-name-synced`.
-- Release with cam-proxy: names follow only from a cam-proxy whose heartbeat carries `nameSource` (the release containing camera name sync); until a proxy sends it, the names of its mapped cameras stay as they are (edits are 409, nothing syncs). Release cam-proxy together with this.
-- Contract v1: the health summary's camera object has an optional `nameSource` (`camera` or `config`).
-- All name inputs follow the camera's rules (1 to 31 characters, ASCII letters, digits, space and `- ( ) + = [ ] { }`).
-- Editing the name of a proxy-mapped camera is 409 `rename_at_camera` (the message names the rename endpoint). The rename is 409 `proxy_offline` when the proxy is not on the live channel and 409 `not_allowed_on_proxy` when it does not allow `camera.name.set`; renames are no longer queued.
-- Adopt and import use the proxy camera id when the reported name breaks the rules; an unmapped camera with an invalid name is refused at the import dry run.
-
 ### Added
-- Diagnostics: `GET /api/v1/diag/cameras/:cameraId` answers a camera's current name, model, proxy and online state by registry id.
+- PoE switches: register a switch per account (name, address, ports, the proxy that operates it), test it, and see which camera is on which port. The switch password stays on the proxy.
+- A Switches tab to add, test, edit, move to another proxy, survey and remove switches, with a port table (camera, PoE, watts, link). Removing a switch switches PoE back on first and says which cameras become unknown.
+- Each camera shows where its power comes from (PoE switch and port, data only, power adapter, unknown) with Verify, Find, Declare adapter, Power-cycle and Force power-cycle. A normal power-cycle checks the port first; the forced one asks first and cuts power without checking.
+- A daily survey (03:30) and a survey after a switch is tested, a camera is added or its address changes keep the port map current; a camera a survey no longer sees is marked "not seen in the last survey".
+- The proxy's own power-cycle action is no longer offered for a camera whose power cams-admin knows.
+- A chained switch (another switch on one port, so a survey finds two or more cameras behind it) is shown as a configuration issue: on the switch, as "trunk (n cameras)" in its port table, and on the dashboard. Cameras behind such a port are not mapped to it, and a check that finds a camera there keeps looking on the other switches.
+- The audit log records every power-cycle against its camera (start, the retry on another port, the outcome), each power check and its result, and each survey with its summary.
+- The cams viewer's admin assistant tools can list the switches and what powers each camera.
 

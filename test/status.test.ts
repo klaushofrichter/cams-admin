@@ -164,7 +164,7 @@ describe('status: the proxy\'s command policy and token revision (P2)', () => {
     s.hb(undefined, p2(s.clock.now(), { enabled: true, paused: false, pauseReason: 'x'.repeat(10240), allow: Array.from({ length: 100 }, (_, i) => `entry-${i}-${'y'.repeat(100)}`), seenWindow: 'many' }, { tokens: { revision: 'x' }, configRevision: 'nope' }));
     const rep = s.store.row(s.prx.id)!.reported!;
     expect(rep.commands!.pauseReason).toHaveLength(200);
-    expect(rep.commands!.allow).toHaveLength(32);
+    expect(rep.commands!.allow).toHaveLength(64);
     expect(rep.commands!.allow.every((a) => a.length <= 64)).toBe(true);
     expect(rep.commands!.seenWindow).toBe(0);
     expect(rep.tokens).toBeNull();

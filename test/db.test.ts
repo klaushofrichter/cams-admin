@@ -10,7 +10,7 @@ import { tmpDir } from './helpers/tmp';
 import { makeRegistry, ACTOR } from './helpers/registry';
 
 const TABLES = ['accounts', 'account_users', 'proxies', 'proxy_keys', 'enrollment_codes', 'cameras', 'sims', 'proxy_status', 'status_events', 'audit_log', 'sessions', 'jobs', 'meta', 'commands', 'proxy_tokens', 'proxy_token_state',
-  'cams_instances', 'cams_instance_keys', 'cams_enrollment_codes', 'cams_instance_accounts', 'cams_instance_routes', 'config_revision', 'proxy_config', 'cams_camera_overrides', 'moves', 'move_chunks', 'proxy_analytics'];
+  'cams_instances', 'cams_instance_keys', 'cams_enrollment_codes', 'cams_instance_accounts', 'cams_instance_routes', 'config_revision', 'proxy_config', 'cams_camera_overrides', 'moves', 'move_chunks', 'proxy_analytics', 'switches', 'camera_power_cycles'];
 
 function seed(db: DatabaseSync) {
   db.exec(`INSERT INTO accounts (id,name,display_name,created_at,updated_at) VALUES ('acc_a','alpha','A',1,1),('acc_b','beta','B',1,1);

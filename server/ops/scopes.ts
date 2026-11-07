@@ -51,6 +51,8 @@ export const OPS_ROUTES: readonly OpsRoute[] = [
   { method: 'POST', path: `${proxyBase}/config/rollback/apply`, scope: 'config' },
   // Removing a camera from its account (offboarding). Enrolling a proxy stays with a sign-in (§10.4).
   { method: 'DELETE', path: '/accounts/:accountId/cameras/:cameraId', scope: 'offboard' },
+  // PoE switches (design 2026-11-07): none. Adding, testing, changing, moving and removing a switch, and its
+  // live read, stay with a signed-in system admin.
 ];
 
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

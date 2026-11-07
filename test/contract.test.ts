@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { existsSync, readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
 import Ajv2020 from 'ajv/dist/2020';
-import { ABOVE_LOCAL_CEILING, ALLOW_ENTRIES, ANALYTICS_COMMANDS, NARROW_KINDS, ONBOARDING_CAMERAS_MAX, ONBOARDING_COMMANDS, ONBOARDING_REQUIRED, ONBOARDING_STEPS, ONBOARDING_STEP_LEN, WIRE_COMMANDS, FILE_KINDS, MOVE_KINDS, MOVE_LEFTOVERS_MAX, MOVE_LEFTOVER_ITEMS_MAX, MOVE_LEFTOVER_ITEM_LEN, JOURNAL_BUDGET_ACTIONS, buildSchemas, DISRUPTIVE_ACTIONS, LOCAL_ONLY, NEVER_REMOTE_ACTIONS, P3_COMMANDS, PATH_PATTERN, REMOTE_ACTIONS, REMOTE_SETTABLE, SECRET_KEY_PATTERN, CAMERA_NAME_PATTERN } from '../contract/build';
+import { POWER_COMMANDS, PROXY_EVENT_KINDS, SWITCH_COMMANDS, DISRUPTIVE_COMMANDS, ABOVE_LOCAL_CEILING, ALLOW_ENTRIES, ANALYTICS_COMMANDS, NARROW_KINDS, ONBOARDING_CAMERAS_MAX, ONBOARDING_COMMANDS, ONBOARDING_REQUIRED, ONBOARDING_STEPS, ONBOARDING_STEP_LEN, WIRE_COMMANDS, FILE_KINDS, MOVE_KINDS, MOVE_LEFTOVERS_MAX, MOVE_LEFTOVER_ITEMS_MAX, MOVE_LEFTOVER_ITEM_LEN, JOURNAL_BUDGET_ACTIONS, buildSchemas, DISRUPTIVE_ACTIONS, LOCAL_ONLY, NEVER_REMOTE_ACTIONS, P3_COMMANDS, PATH_PATTERN, REMOTE_ACTIONS, REMOTE_SETTABLE, SECRET_KEY_PATTERN, CAMERA_NAME_PATTERN } from '../contract/build';
 import { fixtures } from '../contract/make';
-import { validateCommandArgs, validateEnroll, validateMessage, validateResultPayload, validateSummary } from '../server/contract';
+import { validateProxyEvent, validateCommandArgs, validateEnroll, validateMessage, validateResultPayload, validateSummary } from '../server/contract';
 import { publicFromB64, verifyEnvelope } from '../server/crypto/ed25519';
 import vectors from '../contract/v1/vectors.json';
 
@@ -95,7 +95,7 @@ describe('the v1 contract', () => {
   it('every proxy-receiver fixture has a $context and a runtime code from the nack list', () => {
     const NACKS = ['bad_signature', 'wrong_target', 'expired', 'replayed', 'not_allowed', 'paused', 'rate_limited', 'invalid_args', 'unsupported_version', 'busy'];
     const proxyFixtures = allFixtures().filter((x) => x.$expect?.receiver === 'proxy');
-    expect(proxyFixtures.length).toBe(39);
+    expect(proxyFixtures.length).toBe(40);
     for (const f of proxyFixtures) {
       expect(f.$context, f.name).toMatchObject({ now: expect.any(Number), proxyId: expect.stringMatching(/^prx_/), connId: expect.stringMatching(/^con_/), serverKeys: [vectors.keys.server.publicKey] });
       expect(NACKS, f.name).toContain(f.$expect.runtime);
@@ -113,6 +113,22 @@ describe('the v1 contract', () => {
     expect(strictValidator('command')(m)).toBe(true);
     expect(strictValidator('command')({ ...m, body: { ...m.body, revocationOnly: 'yes' } })).toBe(false);
     expect(fixture('valid-command-revocation-while-paused').$context).toMatchObject({ paused: true, allow: [], tokens: expect.any(Array) });
+  });
+  it('heartbeat commands.allow takes up to 64 entries: 40 valid, 65 refused (strict and runtime)', () => {
+    const base = fixture('valid-heartbeat-p2').message;
+    const withAllow = (allow: string[]) => {
+      const m = structuredClone(base);
+      m.body.proxy.commands.allow = allow;
+      return m;
+    };
+    // Repeats are fine (the list has no uniqueItems); the strict enum still checks each entry.
+    const entries = (n: number) => Array.from({ length: n }, (_, i) => ALLOW_ENTRIES[i % ALLOW_ENTRIES.length]);
+    const hb = strictValidator('heartbeat');
+    expect(hb(withAllow(entries(40))), JSON.stringify(ajv.errors)).toBe(true);
+    expect(hb(withAllow(entries(64))), JSON.stringify(ajv.errors)).toBe(true);
+    expect(hb(withAllow(entries(65)))).toBe(false);
+    expect(runtimeVerdict('heartbeat', withAllow(entries(40)))).toBe('accepted');
+    expect(runtimeVerdict('heartbeat', withAllow(entries(65)))).not.toBe('accepted');
   });
   it('the heartbeat profile (proxy profile design §2): optional, closed in strict, a lenient object', () => {
     const full = fixture('valid-heartbeat-profile').message;
@@ -512,6 +528,59 @@ describe('the v1 contract', () => {
     expect(readme).toMatch(/`config.set`, `config.unset` \| [^|]+\| [^|]+\| [^|]*`above_local_ceiling`/);
     expect(readme).toMatch(/`config.rollback` \| [^|]+\| [^|]+\| [^|]*`above_local_ceiling`/);
     expect(readme).toContain('`analytics.usage.get`');
+  });
+  it('PoE switches: ten commands in the wire enum and the allow list, only switch.cycle disruptive, strict args and results, the power-cycle request event', () => {
+    const all = [...SWITCH_COMMANDS, ...POWER_COMMANDS];
+    expect(all).toHaveLength(10);
+    for (const c of all) { expect(WIRE_COMMANDS as readonly string[], c).toContain(c); expect(ALLOW_ENTRIES, c).toContain(c); }
+    expect([...DISRUPTIVE_COMMANDS]).toEqual(['switch.cycle']);
+    const sw = { id: 'sw_0123456789abcdefghij', model: 'sscpoe-web', host: '192.0.2.217', ports: 8, offSeconds: 10 };
+    const CAM = 'cam_0123456789ABCDEFGHJK';
+    const args = (c: string) => strictValidator(`commands/${c}.args`);
+    const res = (c: string) => strictValidator(`commands/${c}.result`);
+    expect(validateCommandArgs('switch.read', { v: 1, switch: sw })).toEqual({ ok: true });
+    expect(validateCommandArgs('switch.read', { v: 1, switch: { ...sw, id: 'sw_x' } })).toMatchObject({ ok: false });
+    expect(validateCommandArgs('switch.read', { v: 1, switch: { ...sw, ports: 65 } })).toMatchObject({ ok: false });
+    expect(validateCommandArgs('switch.read', { v: 1, switch: { ...sw, offSeconds: 121 } })).toMatchObject({ ok: false });
+    expect(validateCommandArgs('switch.read', { v: 1, switch: { ...sw, model: 'other' } })).toMatchObject({ ok: false });
+    expect(validateCommandArgs('switch.locate', { v: 1, switch: sw, host: '192.0.2.10' })).toEqual({ ok: true });
+    expect(validateCommandArgs('switch.survey', { v: 1, switch: sw, cameras: [] })).toMatchObject({ ok: false });
+    expect(validateCommandArgs('switch.survey', { v: 1, switch: sw, cameras: Array.from({ length: 17 }, () => ({ camera: CAM, host: 'h' })) })).toMatchObject({ ok: false });
+    expect(validateCommandArgs('switch.survey', { v: 1, switch: sw, cameras: [{ camera: CAM, host: 'h' }] })).toEqual({ ok: true });
+    expect(validateCommandArgs('switch.cycle', { v: 1, switch: sw, port: 8, host: null, force: false, camera: CAM })).toEqual({ ok: true });
+    expect(validateCommandArgs('switch.cycle', { v: 1, switch: sw, port: 8, host: null, force: false, camera: 'cam1' })).toMatchObject({ ok: false });
+    expect(validateCommandArgs('switch.cycle', { v: 1, switch: sw, port: 8, host: null, camera: CAM })).toMatchObject({ ok: false });
+    expect(validateCommandArgs('switch.poeOn', { v: 1, switch: sw, port: 0 })).toMatchObject({ ok: false });
+    expect(validateCommandArgs('switch.forget', { v: 1, switchId: sw.id })).toEqual({ ok: true });
+    expect(validateCommandArgs('camera.power.set', { v: 1, camera: 'cam1', power: { kind: 'poe', switchName: 'Switch 1', port: 8, watts: 4.2, verifiedAt: 1 } })).toEqual({ ok: true });
+    expect(validateCommandArgs('camera.power.set', { v: 1, camera: 'cam1', power: { kind: 'adapter' } })).toEqual({ ok: true });
+    expect(validateCommandArgs('camera.power.set', { v: 1, camera: 'cam1', power: { kind: 'solar' } })).toMatchObject({ ok: false });
+    expect(validateCommandArgs('camera.power.cycling', { v: 1, camera: 'cam1', at: 1 })).toEqual({ ok: true });
+    expect(validateCommandArgs('camera.power.cycled', { v: 1, camera: 'cam1', ok: true, message: 'x'.repeat(201) })).toMatchObject({ ok: false });
+    expect(validateCommandArgs('camera.power.cycle.result', { v: 1, camera: 'cam1', requestId: 'r1', ok: false, reason: 'not_verified' })).toEqual({ ok: true });
+    expect(validateCommandArgs('camera.power.cycle.result', { v: 1, camera: 'cam1', requestId: 'r'.repeat(65), ok: true })).toMatchObject({ ok: false });
+    expect(args('camera.power.cycled')({ v: 1, camera: CAM, ok: true, message: '' })).toBe(false); // a proxy camera id, not a registry id
+    const port = { port: 8, poe: true, watts: 4.2, link: true, tx: 1, rx: 2 };
+    expect(res('switch.read')({ sn: null, firmware: null, ports: [port] })).toBe(true);
+    expect(res('switch.locate')({ sn: 'S1', found: false, reason: 'no_traffic', ratio: 0.1 })).toBe(true);
+    expect(res('switch.locate')({ sn: 'S1', found: false, reason: 'other' })).toBe(false);
+    expect(res('switch.survey')({ sn: 'S1', results: [{ camera: CAM, found: true, port: 8, poe: true, watts: 4, link: true }] })).toBe(true);
+    expect(res('switch.cycle')({ verified: true, offAt: 1, onAt: 2, watts: 4 })).toBe(true);
+    expect(res('switch.poeOn')({ ...port, wasOn: false })).toBe(true);
+    expect(res('switch.forget')({ forgot: true })).toBe(true);
+    for (const c of POWER_COMMANDS) { expect(res(c)({})).toBe(true); expect(res(c)({ x: 1 })).toBe(false); }
+    // The lenient result ignores unknown fields.
+    expect(validateResultPayload('switch.forget', { forgot: true, more: 1 })).toBe(true);
+    // The request event: its own kind, strict body, no force.
+    expect([...PROXY_EVENT_KINDS]).toEqual(['camera.power.cycle.request']);
+    const ev = fixture('valid-event-camera-power-cycle-request').message.body;
+    expect(validateProxyEvent(ev)).toEqual({ ok: true });
+    expect(validateProxyEvent({ ...ev, force: true })).toMatchObject({ ok: false });
+    expect(validateProxyEvent({ ...ev, requestId: '' })).toMatchObject({ ok: false });
+    expect(validateProxyEvent({ ...ev, kind: 'move.targets' })).toMatchObject({ ok: false });
+    expect(validateProxyEvent({ ...ev, cmdId: 'cmd_0123456789ABCDEFGHJK' })).toMatchObject({ ok: false });
+    expect(fixture('refused-switch-cycle-bad-id').$expect.runtime).toBe('invalid_args');
+    expect(readFileSync(join(__dirname, '../contract/README.md'), 'utf8')).toContain('## PoE switches');
   });
   it('validateCommandArgs: what cams-admin sends for every P3 command', () => {
     const REV = `sha256:${'a'.repeat(64)}`;
