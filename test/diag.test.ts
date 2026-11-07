@@ -377,3 +377,32 @@ describe('revocation journal', () => {
     }
   });
 });
+
+describe('diag PoE switch reads', () => {
+  let token: string, tokenId: string;
+  beforeAll(async () => { const t = await issue('switch reads', 1); token = t.token; tokenId = t.item.id; });
+  afterAll(async () => { await a.api('post', `/diag-tokens/${tokenId}/revoke`); });
+
+  it('answers the switch list, one switch with its ports and survey, and a camera power record; GET only', async () => {
+    const sw = a.switches.store.createSwitch('admin@example.com', acc, { name: 'GPS', model: 'sscpoe-web', host: '192.168.1.217', ports: 8, offSeconds: 10, proxyId: px });
+    const cam = a.registry.listCameras(acc).find((c) => c.camsId === 'porch')!;
+    a.switches.store.setPower(cam.id, { kind: 'poe', switchId: sw.id, port: 3, watts: 4 } as never, 'admin@example.com', 'sysadmin', 't');
+    const list = await bearer(`/diag/accounts/${acc}/switches`, token);
+    expect(list.status).toBe(200);
+    expect(list.body.items).toEqual([expect.objectContaining({ id: sw.id, name: 'GPS', survey: null })]);
+    const one = await bearer(`/diag/switches/${sw.id}`, token);
+    expect(one.status).toBe(200);
+    expect(one.body.switch).toMatchObject({ id: sw.id, state: sw.state });
+    expect(one.body.ports).toHaveLength(8);
+    expect(one.body.ports[2].cameras).toEqual([expect.objectContaining({ id: cam.id, camsId: 'porch' })]);
+    expect(one.body.survey).toMatchObject({ state: 'none', results: [], trunks: [], problems: [] });
+    const pw = await bearer(`/diag/cameras/${cam.id}/power`, token);
+    expect(pw.status).toBe(200);
+    expect(pw.body).toMatchObject({ cameraId: cam.id, camsId: 'porch', power: { kind: 'poe', port: 3 }, switch: { id: sw.id }, lastCheck: null, lastCycle: null });
+    expect((await bearer('/diag', token)).body.routes).toEqual(expect.arrayContaining(['/diag/switches/:switchId', '/diag/cameras/:cameraId/power', '/diag/accounts/:accountId/switches']));
+    expect((await bearer(`/diag/switches/${sw.id}`, token, 'post')).status).toBe(405);
+    expect((await bearer('/diag/switches/sw_nope', token)).status).toBe(404);
+    expect((await bearer('/diag/cameras/cam_nope/power', token)).status).toBe(404);
+    expect((await request(a.app).get(`/api/v1/diag/switches/${sw.id}`)).status).toBe(401);
+  });
+});

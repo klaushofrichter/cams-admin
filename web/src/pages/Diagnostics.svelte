@@ -28,6 +28,7 @@
     { id: 'actions', text: 'Run camera actions, rename cameras, restart proxies (as each proxy allows)' },
     { id: 'config', text: 'Preview and apply proxy settings (the allowed ones)' },
     { id: 'offboard', text: 'Remove a camera from its account' },
+    { id: 'switches', text: 'PoE switches and camera power: add, test, change, survey, power-cycle' },
   ];
   const OPS_SAVE = 'mkdir -p ~/.config/cams-admin && (umask 077; pbpaste > ~/.config/cams-admin/ops-token)';
   let opsItems = $state<any[]>([]);
