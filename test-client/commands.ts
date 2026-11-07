@@ -10,7 +10,7 @@ import { createHash } from 'crypto';
 import Ajv2020 from 'ajv/dist/2020';
 import type { ValidateFunction } from 'ajv';
 import { publicFromB64, verifyEnvelope } from '../server/crypto/ed25519';
-import { buildSchemas, CAMERA_NAME_PATTERN, DISRUPTIVE_ACTIONS, JOURNAL_BUDGET_ACTIONS, MOVE_COMMANDS, NEVER_REMOTE_ACTIONS, ONBOARDING_COMMANDS, ANALYTICS_COMMANDS, ONBOARDING_REQUIRED, ONBOARDING_STEPS, P3_COMMANDS, PATH_PATTERN, REMOTE_ACTIONS } from '../contract/build';
+import { buildSchemas, CAMERA_NAME_PATTERN, DISRUPTIVE_ACTIONS, JOURNAL_BUDGET_ACTIONS, MOVE_COMMANDS, NEVER_REMOTE_ACTIONS, ONBOARDING_COMMANDS, ANALYTICS_COMMANDS, SWITCH_COMMANDS, POWER_COMMANDS, ONBOARDING_REQUIRED, ONBOARDING_STEPS, P3_COMMANDS, PATH_PATTERN, REMOTE_ACTIONS } from '../contract/build';
 
 export interface CheckContext {
   now: number; // cams-admin time: Date.now() + the offset learned from the challenge
@@ -35,8 +35,8 @@ const TOK_RE = new RegExp(`^tok_${ULID20}$`);
 const HASH_RE = /^sha256:[0-9a-f]{64}$/;
 // eslint-disable-next-line no-control-regex
 const LABEL_RE = /^[^\u0000-\u001f\u007f]{1,64}$/;
-// What this version implements: tokens.apply (P2), the P3 commands, the camera-move commands, camera.onboarding.get and analytics.usage.get.
-export const IMPLEMENTED: readonly string[] = ['tokens.apply', ...P3_COMMANDS, ...MOVE_COMMANDS, ...ONBOARDING_COMMANDS, ...ANALYTICS_COMMANDS];
+// What this version implements: tokens.apply (P2), the P3 commands, the camera-move commands, camera.onboarding.get, analytics.usage.get, the switch commands and the camera.power messages.
+export const IMPLEMENTED: readonly string[] = ['tokens.apply', ...P3_COMMANDS, ...MOVE_COMMANDS, ...ONBOARDING_COMMANDS, ...ANALYTICS_COMMANDS, ...SWITCH_COMMANDS, ...POWER_COMMANDS];
 const PATH_RE = new RegExp(PATH_PATTERN);
 const REV_RE = /^sha256:[0-9a-f]{64}$/;
 const CAM_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
@@ -112,7 +112,7 @@ const moveValidators = new Map<string, ValidateFunction>();
 export function moveArgsOk(command: string, a: unknown): boolean {
   if (moveValidators.size === 0) {
     const schemas = buildSchemas('strict');
-    for (const c of MOVE_COMMANDS) moveValidators.set(c, moveAjv.compile(schemas[`commands/${c}.args`]));
+    for (const c of [...MOVE_COMMANDS, ...SWITCH_COMMANDS, ...POWER_COMMANDS]) moveValidators.set(c, moveAjv.compile(schemas[`commands/${c}.args`]));
   }
   return moveValidators.get(command)!(a) as boolean;
 }
@@ -220,6 +220,9 @@ export function refCheck(m: Record<string, any>, ctx: CheckContext): CheckVerdic
     if (!moveArgsOk(b.command, b.args)) return nack('invalid_args');
     // 11. the entry of the side the command is for (move.finish and move.cancel: args.role)
     if (!ctx.allow.includes(moveEntryOf(b.command, b.args))) return nack('not_allowed');
+  } else if ((SWITCH_COMMANDS as readonly string[]).includes(b.command) || (POWER_COMMANDS as readonly string[]).includes(b.command)) {
+    // PoE switches: the strict args schema; the entry is the command's own name (step 8). cam-proxy's journal budget for switch.cycle is not in the reference.
+    if (!moveArgsOk(b.command, b.args)) return nack('invalid_args');
   } else {
     if (!p3ArgsOk(b.command, b.args)) return nack('invalid_args');
     // 11. the action's own entry (never a never-remote one), then the journal budget

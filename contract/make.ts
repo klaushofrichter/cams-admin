@@ -317,6 +317,23 @@ export function fixtures(): Record<string, unknown> {
     'valid-result-config-set-failed-ceiling': p3Result('config.set', 'the ceiling itself is local only', { status: 'failed', code: 'not_remote_settable', result: { paths: [{ path: `${VISION}.remoteMaxMonthly`, code: 'not_remote_settable' }] } }),
   };
 
+  // --- PoE switches as account resources (docs/superpowers/specs/2026-11-07-poe-switches-design.md). $context.feature: the
+  // cross-check treats these as pending while cam-proxy does not vendor the switch and power messages.
+  const poe = (f: { $context: object }) => ({ ...f, $context: { ...f.$context, feature: 'poe' } });
+  const SW = 'sw_0123456789abcdefghij';
+  const CAMID = 'cam_0123456789ABCDEFGHJK';
+  const swRef = { id: SW, model: 'sscpoe-web', host: '192.0.2.217', ports: 8, offSeconds: 10 };
+  const poePorts = [{ port: 8, poe: true, watts: 4.2, link: true, tx: 1200, rx: 80000 }, { port: 7, poe: false, watts: 0, link: null, tx: 0, rx: 0 }];
+  const poeFixtures = {
+    'valid-command-switch-read': poe(p3Valid('read a switch: serial, firmware and the PoE state of every port', ['switch.read'], 'switch.read', { v: 1, switch: swRef })),
+    'valid-command-switch-cycle-force': poe(p3Valid('power-cycle one port with force (a person confirmed, disruptive)', ['switch.cycle'], 'switch.cycle',
+      { v: 1, switch: swRef, port: 8, host: '192.0.2.10', force: true, camera: CAMID })),
+    'refused-switch-cycle-bad-id': poe(p3Refused('invalid_args', 'switch.cycle', { v: 1, switch: { ...swRef, id: 'sw_x' }, port: 8, host: null, force: false, camera: CAMID }, ['switch.cycle'],
+      'a switch id is sw_ and 20 letters or digits (strict args refuse)')),
+    'valid-event-camera-power-cycle-request': poe(valid('event', signed(env('event', 3, { proxyId: PRX, connId: CON, kind: 'camera.power.cycle.request', camera: 'cam1', requestId: 'req-0123456789' }), PROXY),
+      "the camera's proxy asks cams-admin to power-cycle the camera through its switch (no force from a proxy)")),
+  };
+
   return {
     'valid-heartbeat-4cam': valid('heartbeat', hb(four, false, makeProxyInfo({ now: NOW, site: 'garage', publicUrl: 'https://proxy.example.net' })), 'four cameras, site CA, cam3 offline'),
     'valid-heartbeat-1cam-pi': valid('heartbeat', hb(pi), 'the Pi: one camera, host stats'),
@@ -407,6 +424,7 @@ export function fixtures(): Record<string, unknown> {
     ...moves,
     ...onboarding,
     ...vision,
+    ...poeFixtures,
   };
 }
 

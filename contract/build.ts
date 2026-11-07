@@ -414,6 +414,49 @@ export function buildSchemas(mode: Mode): Record<string, S> {
     analyticsSchemas[`commands/${c}.result`] = { $id: BASE + `commands/${c}.result.schema.json`, title: `${c} result v1`, ...analyticsResults[c] };
   }
 
+  // --- PoE switches (design 2026-11-07-poe-switches-design.md) -------------------------------
+  const swId: S = { type: 'string', pattern: SWITCH_ID_PATTERN };
+  const portNo = int(1, { maximum: SWITCH_PORTS_MAX });
+  const hostName = str(253, { minLength: 1 });
+  const switchRef = all({ id: swId, model: en([...SWITCH_MODELS]), host: hostName, ports: portNo, offSeconds: int(1, { maximum: 120 }) });
+  const portState = all({ port: portNo, poe: bool, watts: num, link: nullable(bool), tx: num, rx: num });
+  const locateProps: Record<string, S> = { found: bool, port: portNo, poe: bool, watts: num, link: nullable(bool), reason: en([...LOCATE_REASONS]), ratio: num };
+  const locateOptional = ['port', 'poe', 'watts', 'link', 'reason', 'ratio'];
+  const sn = nullable(str(64));
+  const swCamId = id('cam');
+  const switchArgs: Record<(typeof SWITCH_COMMANDS)[number], S> = {
+    'switch.read': all({ v: { const: 1 }, switch: switchRef }),
+    'switch.locate': all({ v: { const: 1 }, switch: switchRef, host: hostName }),
+    'switch.survey': all({ v: { const: 1 }, switch: switchRef, cameras: arr(all({ camera: swCamId, host: hostName }), SWITCH_SURVEY_MAX, { minItems: 1 }) }),
+    'switch.cycle': all({ v: { const: 1 }, switch: switchRef, port: portNo, host: nullable(hostName), force: bool, camera: swCamId }),
+    'switch.poeOn': all({ v: { const: 1 }, switch: switchRef, port: portNo }),
+    'switch.forget': all({ v: { const: 1 }, switchId: swId }),
+  };
+  const switchResults: Record<(typeof SWITCH_COMMANDS)[number], S> = {
+    'switch.read': all({ sn, firmware: nullable(str(64)), ports: arr(portState, SWITCH_PORTS_MAX) }),
+    'switch.locate': obj({ sn, ...locateProps }, ['sn', 'found'], locateOptional),
+    'switch.survey': all({ sn, results: arr(obj({ camera: swCamId, ...locateProps }, ['camera', 'found'], locateOptional), SWITCH_SURVEY_MAX) }),
+    'switch.cycle': all({ verified: bool, offAt: int(), onAt: int(), watts: num }),
+    'switch.poeOn': obj({ ...(portState as { properties: Record<string, S> }).properties, wasOn: bool }, ['port', 'poe', 'watts', 'link', 'tx', 'rx', 'wasOn']),
+    'switch.forget': all({ forgot: bool }),
+  };
+  const power = obj({ kind: en([...POWER_KINDS]), switchName: str(64), port: portNo, watts: num, verifiedAt: int(), notSeen: bool }, ['kind'], ['switchName', 'port', 'watts', 'verifiedAt', 'notSeen']);
+  const powerArgs: Record<(typeof POWER_COMMANDS)[number], S> = {
+    'camera.power.set': all({ v: { const: 1 }, camera: camId, power }),
+    'camera.power.cycling': all({ v: { const: 1 }, camera: camId, at: int() }),
+    'camera.power.cycled': all({ v: { const: 1 }, camera: camId, ok: bool, message: str() }),
+    'camera.power.cycle.result': obj({ v: { const: 1 }, camera: camId, requestId: str(64, { minLength: 1 }), ok: bool, reason: str() }, ['v', 'camera', 'requestId', 'ok'], ['reason']),
+  };
+  const switchSchemas: Record<string, S> = {};
+  for (const c of SWITCH_COMMANDS) {
+    switchSchemas[`commands/${c}.args`] = { $id: BASE + `commands/${c}.args.schema.json`, title: `${c} args v1`, ...switchArgs[c] };
+    switchSchemas[`commands/${c}.result`] = { $id: BASE + `commands/${c}.result.schema.json`, title: `${c} result v1`, ...switchResults[c] };
+  }
+  for (const c of POWER_COMMANDS) {
+    switchSchemas[`commands/${c}.args`] = { $id: BASE + `commands/${c}.args.schema.json`, title: `${c} args v1`, ...powerArgs[c] };
+    switchSchemas[`commands/${c}.result`] = { $id: BASE + `commands/${c}.result.schema.json`, title: `${c} result v1`, ...obj({}, []) };
+  }
+
   // --- events (proxy -> cams-admin): command.done and the move kinds ---------------
   const doneEvent = obj({ ...resultCore, kind: en(['command.done']), phase: { const: 'done' } },
     ['proxyId', 'connId', 'kind', 'cmdId', 'phase', 'status'], ['code', 'retryAfterS', 'duplicate', 'result']);
@@ -422,9 +465,12 @@ export function buildSchemas(mode: Mode): Record<string, S> {
   const moveCheck = all({ complete: bool, missing: counts, recovered: counts, failed: counts, expired: counts });
   const moveEvent = (kind: (typeof MOVE_EVENT_KINDS)[number], props: Record<string, S>, optional: string[] = []): S =>
     obj({ proxyId: prxId, connId: id('con'), kind: { const: kind }, ...props }, ['proxyId', 'connId', 'kind', ...Object.keys(props).filter((k) => !optional.includes(k))], optional);
+  const proxyEvent = (kind: (typeof PROXY_EVENT_KINDS)[number], props: Record<string, S>): S =>
+    obj({ proxyId: prxId, connId: id('con'), kind: { const: kind }, ...props }, ['proxyId', 'connId', 'kind', ...Object.keys(props)]);
   const eventBody: S = {
     anyOf: [
       doneEvent,
+      proxyEvent('camera.power.cycle.request', { camera: camId, requestId: str(64, { minLength: 1 }) }),
       moveEvent('move.targets', { requestId, camera: camId }),
       moveEvent('move.request', {
         requestId, camera: moveCameraEvent, target: prxId, actor: all({ origin: en(['local', 'managed']), label }), summary: moveSummary, settings: moveSettings, bounds: nullable(moveBounds),
@@ -490,6 +536,7 @@ export function buildSchemas(mode: Mode): Record<string, S> {
     ...moveSchemas,
     ...onboardingSchemas,
     ...analyticsSchemas,
+    ...switchSchemas,
   };
   if (strict) for (const s of Object.values(schemas)) s.$id = (s.$id as string).replace(BASE, BASE + 'strict/');
   return Object.fromEntries(Object.entries(schemas).map(([k, v]) => [k, { $schema: 'https://json-schema.org/draft/2020-12/schema', ...v }]));
@@ -508,6 +555,8 @@ export const RESERVED_TYPES = ['key.rotate'] as const;
 // finish and cancel by `args.role`: source `move.send`, target `move.receive`; a return swaps them: move.return.open `move.receive`,
 // move.return.start `move.send`, and move.finish with `return: true` source `move.receive`, target `move.send`).
 export const MOVE_COMMANDS = ['move.begin', 'move.summary', 'move.targets', 'move.open', 'move.offer', 'move.answer', 'move.start', 'move.go', 'move.release', 'move.finish', 'move.cancel', 'move.return.open', 'move.return.start'] as const;
+// The one proxy event that is no move event: the camera's proxy asks cams-admin to power-cycle its camera (no force from a proxy).
+export const PROXY_EVENT_KINDS = ['camera.power.cycle.request'] as const;
 export const MOVE_EVENT_KINDS = ['move.targets', 'move.request', 'move.approve', 'move.cancel', 'move.phase', 'move.progress'] as const;
 // The five file kinds (summary, space, deleted, the copy back) and all six move kinds (plans, bounds, chunk ids, check counts, kinds):
 // ptz is a camera's PTZ positions, rows that travel with it (cam-proxy plan D).
@@ -554,8 +603,25 @@ export const ANALYTICS_PROVIDER_PATTERN = '^[a-z][a-z0-9-]{0,31}$';
 export const ANALYTICS_KEY_SOURCES = ['env', 'manual', 'none'] as const;
 export const ANALYTICS_PROVIDERS_MAX = 8;
 
+// --- PoE switches as account resources (design 2026-11-07-poe-switches-design.md) ----------
+// switch.* run on the proxy that operates the switch (allow entry: its own name; switch.cycle is disruptive: off by default,
+// typed confirm in cams-admin). camera.power.* go to the camera's own proxy: its power record, and the notices around a power-cycle
+// (not disruptive, they change nothing on the camera).
+export const SWITCH_COMMANDS = ['switch.read', 'switch.locate', 'switch.survey', 'switch.cycle', 'switch.poeOn', 'switch.forget'] as const;
+export const POWER_COMMANDS = ['camera.power.set', 'camera.power.cycling', 'camera.power.cycled', 'camera.power.cycle.result'] as const;
+export const DISRUPTIVE_COMMANDS = ['switch.cycle'] as const;
+// A switch id, the switch models, the power kinds of a camera, why a locate found nothing.
+export const SWITCH_ID_PATTERN = '^sw_[A-Za-z0-9]{20}$';
+export const SWITCH_MODELS = ['sscpoe-web'] as const;
+export const POWER_KINDS = ['poe', 'data-only', 'adapter', 'unknown'] as const;
+export const LOCATE_REASONS = ['not_reachable', 'ambiguous', 'no_traffic'] as const;
+export const SWITCH_PORTS_MAX = 64;
+export const SWITCH_SURVEY_MAX = 16;
+// Failure codes of switch.cycle (status failed).
+export const SWITCH_CYCLE_FAILURES = ['not_verified', 'no_power', 'switch_busy', 'poe_may_be_off', 'password_unset', 'switch_unknown'] as const;
+
 // The command names on the wire (strict enum). P2 implements tokens.apply.
-export const WIRE_COMMANDS = ['tokens.apply', 'config.get', 'config.set', 'config.unset', 'config.rollback', 'camera.action', 'camera.name.set', 'proxy.restart', ...MOVE_COMMANDS, ...ONBOARDING_COMMANDS, ...ANALYTICS_COMMANDS] as const;
+export const WIRE_COMMANDS = ['tokens.apply', 'config.get', 'config.set', 'config.unset', 'config.rollback', 'camera.action', 'camera.name.set', 'proxy.restart', ...MOVE_COMMANDS, ...ONBOARDING_COMMANDS, ...ANALYTICS_COMMANDS, ...SWITCH_COMMANDS, ...POWER_COMMANDS] as const;
 // The camera actions a proxy may allow for remote use (camera.action:<a>).
 export const REMOTE_ACTIONS = [
   'camera-test', 'onvif-resubscribe', 'camera-ftp-test', 'poe-switch-read', 'inventory', 'inventory-cancel', 'retention-run', 'restart',
@@ -572,6 +638,9 @@ export const ALLOW_ENTRIES: readonly string[] = [
   ...ONBOARDING_COMMANDS,
   // Analytics: analytics.usage.get, read only (on by default on cam-proxy, like config.get).
   ...ANALYTICS_COMMANDS,
+  // PoE switches: each command its own entry (switch.cycle is disruptive); camera.power.* go to the camera's own proxy.
+  ...SWITCH_COMMANDS,
+  ...POWER_COMMANDS,
   ...REMOTE_ACTIONS.map((a) => `camera.action:${a}`),
 ];
 

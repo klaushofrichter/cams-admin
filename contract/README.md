@@ -381,6 +381,50 @@ and for the ceiling rules `valid-command-config-set-vision`,
 `valid-result-config-set-enable-no-ceiling`, `valid-result-config-set-failed-ceiling`.
 `vectors.json` has the command and its result as signed envelopes.
 
+## PoE switches (switch commands, camera power messages)
+
+Additive (design `docs/superpowers/specs/2026-11-07-poe-switches-design.md`).
+Ten commands, all `v: 1`, in the strict `command` enum, each with
+`commands/<name>.args` and `.result` (lenient and strict), each its own allow
+entry (the entry is the command's name). Strict objects are closed with every
+field required unless marked optional.
+
+`SwitchRef` = `{id /^sw_[A-Za-z0-9]{20}$/, model 'sscpoe-web', host (host or
+IPv4, at most 253), ports 1..64, offSeconds 1..120}`; `PortState` = `{port, poe,
+watts, link (boolean or null), tx, rx}`; `LocateResult` = `{found, port?, poe?,
+watts?, link?, reason? (not_reachable | ambiguous | no_traffic), ratio?}`.
+
+To the proxy that operates the switch (`SWITCH_COMMANDS`):
+
+| Command | Args | Result |
+|---|---|---|
+| `switch.read` | `{v, switch}` | `{sn, firmware, ports: PortState[]}` (`sn`, `firmware` string or null) |
+| `switch.locate` | `{v, switch, host}` | `LocateResult & {sn}` |
+| `switch.survey` | `{v, switch, cameras: [{camera: cam_id, host}]}` (1..16) | `{sn, results: (LocateResult & {camera})[]}` |
+| `switch.cycle` | `{v, switch, port, host (or null), force, camera: cam_id}` | `{verified, offAt, onAt, watts}`; failed codes `not_verified`, `no_power`, `switch_busy`, `poe_may_be_off`, `password_unset`, `switch_unknown` |
+| `switch.poeOn` | `{v, switch, port}` | `PortState & {wasOn}` |
+| `switch.forget` | `{v, switchId}` | `{forgot}` |
+
+`switch.cycle` is the only disruptive one (`DISRUPTIVE_COMMANDS`): off by default
+per proxy, typed confirm in cams-admin. `camera` is the registry id (`cam_` and 20
+characters), not the proxy's camera id.
+
+To the camera's own proxy (`POWER_COMMANDS`; not disruptive, they change nothing
+on the camera; `camera` is the proxy camera id; every result is `{}`):
+
+- `camera.power.set {v, camera, power: {kind (poe | data-only | adapter | unknown), switchName?, port?, watts?, verifiedAt?, notSeen?}}`
+- `camera.power.cycling {v, camera, at}`: the operator reports PoE off.
+- `camera.power.cycled {v, camera, ok, message (at most 200)}`: PoE on again, or gave up.
+- `camera.power.cycle.result {v, camera, requestId (at most 64), ok, reason? (at most 200)}`: the answer to a request below.
+
+Event kind `camera.power.cycle.request {camera, requestId}` (proxy to cams-admin;
+the one non-move proxy event, `PROXY_EVENT_KINDS`; no `force` from a proxy;
+validated by `validateProxyEvent`).
+
+Fixtures (`$context.feature: 'poe'`): `valid-command-switch-read`,
+`valid-command-switch-cycle-force`, `refused-switch-cycle-bad-id`,
+`valid-event-camera-power-cycle-request`.
+
 ## Camera moves
 
 Additive: the envelope stays v1, signatures and JCS unchanged. Thirteen commands

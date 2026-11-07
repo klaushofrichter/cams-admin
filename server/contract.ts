@@ -50,8 +50,29 @@ import moveCancelArgsStrict from '../contract/v1/strict/commands/move.cancel.arg
 import moveCancelResult from '../contract/v1/commands/move.cancel.result.schema.json';
 import cameraOnboardingGetArgsStrict from '../contract/v1/strict/commands/camera.onboarding.get.args.schema.json';
 import cameraOnboardingGetResult from '../contract/v1/commands/camera.onboarding.get.result.schema.json';
+import { PROXY_EVENT_KINDS } from '../contract/build';
 import analyticsUsageGetArgsStrict from '../contract/v1/strict/commands/analytics.usage.get.args.schema.json';
 import analyticsUsageGetResult from '../contract/v1/commands/analytics.usage.get.result.schema.json';
+import switchReadArgs from '../contract/v1/strict/commands/switch.read.args.schema.json';
+import switchLocateArgs from '../contract/v1/strict/commands/switch.locate.args.schema.json';
+import switchSurveyArgs from '../contract/v1/strict/commands/switch.survey.args.schema.json';
+import switchCycleArgs from '../contract/v1/strict/commands/switch.cycle.args.schema.json';
+import switchPoeOnArgs from '../contract/v1/strict/commands/switch.poeOn.args.schema.json';
+import switchForgetArgs from '../contract/v1/strict/commands/switch.forget.args.schema.json';
+import cameraPowerSetArgs from '../contract/v1/strict/commands/camera.power.set.args.schema.json';
+import cameraPowerCyclingArgs from '../contract/v1/strict/commands/camera.power.cycling.args.schema.json';
+import cameraPowerCycledArgs from '../contract/v1/strict/commands/camera.power.cycled.args.schema.json';
+import cameraPowerCycleResultArgs from '../contract/v1/strict/commands/camera.power.cycle.result.args.schema.json';
+import switchReadResult from '../contract/v1/commands/switch.read.result.schema.json';
+import switchLocateResult from '../contract/v1/commands/switch.locate.result.schema.json';
+import switchSurveyResult from '../contract/v1/commands/switch.survey.result.schema.json';
+import switchCycleResult from '../contract/v1/commands/switch.cycle.result.schema.json';
+import switchPoeOnResult from '../contract/v1/commands/switch.poeOn.result.schema.json';
+import switchForgetResult from '../contract/v1/commands/switch.forget.result.schema.json';
+import cameraPowerSetResult from '../contract/v1/commands/camera.power.set.result.schema.json';
+import cameraPowerCyclingResult from '../contract/v1/commands/camera.power.cycling.result.schema.json';
+import cameraPowerCycledResult from '../contract/v1/commands/camera.power.cycled.result.schema.json';
+import cameraPowerCycleResultResult from '../contract/v1/commands/camera.power.cycle.result.result.schema.json';
 import eventStrict from '../contract/v1/strict/event.schema.json';
 import { jcs } from './crypto/jcs';
 import enrollRequest from '../contract/v1/enroll-request.schema.json';
@@ -123,6 +144,16 @@ const vArgs: Record<string, ValidateFunction> = {
   'move.return.open': compile(moveReturnOpenArgsStrict), 'move.return.start': compile(moveReturnStartArgsStrict),
   'camera.onboarding.get': compile(cameraOnboardingGetArgsStrict),
   'analytics.usage.get': compile(analyticsUsageGetArgsStrict),
+  'switch.read': compile(switchReadArgs),
+  'switch.locate': compile(switchLocateArgs),
+  'switch.survey': compile(switchSurveyArgs),
+  'switch.cycle': compile(switchCycleArgs),
+  'switch.poeOn': compile(switchPoeOnArgs),
+  'switch.forget': compile(switchForgetArgs),
+  'camera.power.set': compile(cameraPowerSetArgs),
+  'camera.power.cycling': compile(cameraPowerCyclingArgs),
+  'camera.power.cycled': compile(cameraPowerCycledArgs),
+  'camera.power.cycle.result': compile(cameraPowerCycleResultArgs),
 };
 // A proxy's result payload, leniently (unknown fields ignored).
 const vResult: Record<string, ValidateFunction> = {
@@ -134,6 +165,16 @@ const vResult: Record<string, ValidateFunction> = {
   'move.return.open': compile(moveReturnOpenResult), 'move.return.start': compile(moveReturnStartResult),
   'camera.onboarding.get': compile(cameraOnboardingGetResult),
   'analytics.usage.get': compile(analyticsUsageGetResult),
+  'switch.read': compile(switchReadResult),
+  'switch.locate': compile(switchLocateResult),
+  'switch.survey': compile(switchSurveyResult),
+  'switch.cycle': compile(switchCycleResult),
+  'switch.poeOn': compile(switchPoeOnResult),
+  'switch.forget': compile(switchForgetResult),
+  'camera.power.set': compile(cameraPowerSetResult),
+  'camera.power.cycling': compile(cameraPowerCyclingResult),
+  'camera.power.cycled': compile(cameraPowerCycledResult),
+  'camera.power.cycle.result': compile(cameraPowerCycleResultResult),
 };
 export function validateCommandArgs(command: string, args: unknown): { ok: true } | { ok: false; detail: string } {
   const v = Object.hasOwn(vArgs, command) ? vArgs[command] : undefined;
@@ -208,5 +249,12 @@ export function validateCams(name: CamsSchema, value: unknown): { ok: true } | {
 const vMoveEvent = compile(eventStrict.properties.body);
 export function validateMoveEvent(body: unknown): { ok: true } | { ok: false; detail: string } {
   if (!isRecord(body) || body.cmdId !== undefined) return { ok: false, detail: 'not a move event' };
+  return vMoveEvent(body) ? { ok: true } : { ok: false, detail: errText(vMoveEvent).slice(0, TEXT_MAX) };
+}
+
+// The one proxy event that is no move event (camera.power.cycle.request, PROXY_EVENT_KINDS): the same strict event body schema,
+// and the kind must be one of the proxy kinds. Dispatch is not wired yet.
+export function validateProxyEvent(body: unknown): { ok: true } | { ok: false; detail: string } {
+  if (!isRecord(body) || body.cmdId !== undefined || !(PROXY_EVENT_KINDS as readonly unknown[]).includes(body.kind)) return { ok: false, detail: 'not a proxy event' };
   return vMoveEvent(body) ? { ok: true } : { ok: false, detail: errText(vMoveEvent).slice(0, TEXT_MAX) };
 }
