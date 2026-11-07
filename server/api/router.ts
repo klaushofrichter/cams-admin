@@ -18,6 +18,7 @@ import { exportForInstance } from '../import/export';
 import { snapshotRevision } from '../cams/snapshot';
 import type { ProxyConfig } from '../config/service';
 import type { Vision } from '../vision/service';
+import type { SwitchService } from '../switches/service';
 import { sysadminAllowed } from '../auth/session';
 import type { RemoteActions } from '../actions/service';
 import type { ReportedPins } from '../onboarding/pins';
@@ -58,7 +59,7 @@ export interface BackupService { state(): BackupState; backupNow(actor: string):
 
 export interface ApiDeps {
   db: Db; clock: Clock; cfg: Config; audit: Audit; registry: Registry; enrollment: Enrollment; hub: Hub; status: StatusStore; live: LiveHub; sessions: Sessions; backup: BackupService;
-  commands: Commands; tokens: Tokens; camsInstances: CamsInstances; serverKeyFingerprints: string[]; importer: Importer; config: ProxyConfig; actions: RemoteActions; moves: Moves; diag: DiagTokens; ops: OpsTokens; pins: ReportedPins; viewerTokens: ViewerTokens; vision: Vision;
+  commands: Commands; tokens: Tokens; camsInstances: CamsInstances; serverKeyFingerprints: string[]; importer: Importer; config: ProxyConfig; actions: RemoteActions; moves: Moves; diag: DiagTokens; ops: OpsTokens; pins: ReportedPins; viewerTokens: ViewerTokens; vision: Vision; switches: SwitchService;
 }
 
 type H = (req: Request, res: Response) => unknown;
@@ -279,6 +280,21 @@ export function apiRouter(d: ApiDeps): express.Router {
   r.get('/accounts/:accountId/vision', h((req, res) => d.vision.get(sys(res), p(req, 'accountId'))));
   r.post('/accounts/:accountId/vision/refresh', h((req, res) => { res.locals.status = 202; return d.vision.refresh(sys(res), p(req, 'accountId')); }));
   r.put('/accounts/:accountId/vision/proxies/:proxyId/providers/:provider', h((req, res) => accepted(res, d.vision.setLimit(sys(res), p(req, 'accountId'), p(req, 'proxyId'), p(req, 'provider'), req.body))));
+  // --- PoE switches (design 2026-11-07, "Switch lifecycle"): writes for a signed-in system admin only (no
+  // operations-token scope). A step that depends on the switch answers 202 with its command id(s); the record
+  // changes when the proxy's answer arrives. POST read is a live read (a short wait), not a write.
+  r.get('/accounts/:accountId/switches', h((req) => ({ items: d.switches.list(p(req, 'accountId')) })));
+  r.post('/accounts/:accountId/switches', h((req, res) => { created(res); return d.switches.add(sys(res), p(req, 'accountId'), req.body); }));
+  r.get('/switches/:switchId', h((req) => d.switches.get(p(req, 'switchId'))));
+  r.patch('/switches/:switchId', h((req, res) => {
+    const out = d.switches.update(sys(res), p(req, 'switchId'), req.body);
+    if ('commandId' in out) res.locals.status = 202;
+    return out;
+  }));
+  r.delete('/switches/:switchId', h((req, res) => accepted(res, d.switches.remove(sys(res), p(req, 'switchId')))));
+  r.post('/switches/:switchId/test', h((req, res) => accepted(res, d.switches.test(sys(res), p(req, 'switchId')))));
+  r.post('/switches/:switchId/move', h((req, res) => accepted(res, d.switches.move(sys(res), p(req, 'switchId'), req.body))));
+  r.post('/switches/:switchId/read', h((req, res) => d.switches.read(sys(res), p(req, 'switchId'))));
   r.get(`${proxyBase}/actions`, h((req) => d.actions.available(p(req, 'accountId'), p(req, 'proxyId'))));
   r.post(`${proxyBase}/actions`, h((req, res) => accepted(res, d.actions.cameraAction(actor(res), p(req, 'accountId'), p(req, 'proxyId'), req.body))));
   r.post(`${proxyBase}/cameras/:camera/name`, h((req, res) => accepted(res, d.actions.rename(actor(res), p(req, 'accountId'), p(req, 'proxyId'), p(req, 'camera'), req.body))));

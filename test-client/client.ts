@@ -1,6 +1,6 @@
 import { EventEmitter } from 'events';
 import { generateKeyPair, privateFromB64, publicFromB64, sign, signEnvelope, signedText, verify } from '../server/crypto/ed25519';
-import { moveRequestFromBegin, moveSummaryOf, onboardingResultOf, refCheck, type JournalEntry } from './commands';
+import { moveRequestFromBegin, moveSummaryOf, onboardingResultOf, refCheck, switchResultOf, type JournalEntry } from './commands';
 import type { RefProxyConfig } from './config';
 import { normaliseCode, ulid } from '../server/ids';
 import { makeProxyInfo } from './summaries';
@@ -320,6 +320,7 @@ export class ProxyClient extends EventEmitter {
     this.executed.push(b.cmdId);
     this.journalEntries.push({ cmdId: b.cmdId, command: b.command, at: this.now() + this.serverOffset, ...(b.command === 'camera.action' ? { action: b.args.action } : {}) });
     const d: DoneBody = b.command === 'tokens.apply' ? this.applyTokens(b.args) : b.command.startsWith('move.') ? this.runMove(b)
+      : b.command.startsWith('switch.') ? this.runSwitch(b)
       : b.command === 'camera.onboarding.get' ? { status: 'ok', result: onboardingResultOf(this.o.onboarding?.(), b.args.camera, this.now() + this.serverOffset) } : this.runP3(b);
     this.journal.set(b.cmdId, d);
     if (this.dropAfterReceived > 0) {
@@ -364,6 +365,15 @@ export class ProxyClient extends EventEmitter {
       case 'move.return.open': return { status: 'ok', result: { chunks: 0, bytes: 0 } };
       default: return { status: 'ok', result: {} };
     }
+  }
+
+  // The switch commands: switchResults per command (a DoneBody, or a function of the args: per switch, per host),
+  // else the canned healthy switch of ./commands.ts.
+  switchResults: Record<string, DoneBody | ((args: Record<string, any>) => DoneBody)> = {};
+  private runSwitch(b: Record<string, any>): DoneBody {
+    const o = this.switchResults[b.command];
+    if (o) return typeof o === 'function' ? o(b.args) : o;
+    return { status: 'ok', result: switchResultOf(b.command, b.args, this.now() + this.serverOffset) };
   }
 
   private runP3(b: Record<string, any>): DoneBody {

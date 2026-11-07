@@ -78,6 +78,12 @@ export class SwitchStore {
     return toSwitch(this.row(accountId, id));
   }
 
+  // By id alone (the /switches/:switchId routes); null when there is none.
+  findById(id: string): Switch | null {
+    const r = this.db.prepare('SELECT * FROM switches WHERE id = ?').get(id) as Row | undefined;
+    return r ? toSwitch(r) : null;
+  }
+
   listSwitches(accountId: string): Switch[] {
     return (this.db.prepare('SELECT * FROM switches WHERE account_id = ? ORDER BY name').all(accountId) as Row[]).map(toSwitch);
   }

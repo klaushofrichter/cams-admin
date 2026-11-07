@@ -17,7 +17,7 @@ describe('audit completeness', () => {
   const keyFile = join(dir, 'viewer.key');
   writeFileSync(keyFile, randomBytes(32).toString('base64'));
   chmodSync(keyFile, 0o600);
-  const a = testApp(dir, { VIEWER_TOKEN_KEY_FILE: keyFile });
+  const a = testApp(dir, { VIEWER_TOKEN_KEY_FILE: keyFile, SWITCH_READ_WAIT_MS: '20' });
   afterAll(() => a.close());
   // A rename needs the proxy on the live channel (no queued renames); the fake proxy here only reports.
   const realConnected = a.hub.connected.bind(a.hub);
@@ -78,6 +78,14 @@ describe('audit completeness', () => {
     ['put', '/accounts/:accountId/cameras/:cameraId/sim', () => `/accounts/${ids.acc}/cameras/${ids.cam}/sim`, () => ({ runsOn: 'mac' }), 'sim-update'],
     ['delete', '/accounts/:accountId/cameras/:cameraId/sim', () => `/accounts/${ids.acc}/cameras/${ids.cam}/sim`, () => ({}), 'sim-delete'],
     ['delete', '/accounts/:accountId/cameras/:cameraId', () => `/accounts/${ids.acc}/cameras/${ids.cam}`, () => ({}), 'camera-delete'],
+    // PoE switches: the record's own writes; a step through the operator is its command (the answer comes later).
+    // Each step on a switch of its own (an open command makes a switch busy); the rows go before the proxy's delete.
+    ['post', '/accounts/:accountId/switches', () => `/accounts/${ids.acc}/switches`, () => ({ name: 'GPS-208', host: '192.168.1.217', proxyId: ids.prx }), 'switch-create'],
+    ['patch', '/switches/:switchId', () => `/switches/${ids.sw}`, () => ({ offSeconds: 20 }), 'switch-update'],
+    ['post', '/switches/:switchId/test', () => `/switches/${ids.swTest}/test`, () => ({}), 'command-create'],
+    ['post', '/switches/:switchId/move', () => `/switches/${ids.swMove}/move`, () => ({ proxyId: ids.bgs }), 'command-create'],
+    ['post', '/switches/:switchId/read', () => `/switches/${ids.swRead}/read`, () => ({}), 'command-create'],
+    ['delete', '/switches/:switchId', () => `/switches/${ids.sw}`, () => ({}), 'command-create'],
     ['post', '/accounts/:accountId/proxies/:proxyId/pins/from-report', () => `/accounts/${ids.acc}/proxies/${ids.prx}/pins/from-report`, () => ({}), 'proxy-update'],
     ['post', '/accounts/:accountId/proxies/:proxyId/block', () => `/accounts/${ids.acc}/proxies/${ids.prx}/block`, () => ({}), 'proxy-block'],
     ['delete', '/accounts/:accountId/proxies/:proxyId', () => `/accounts/${ids.acc}/proxies/${ids.prx}`, () => ({}), 'proxy-delete'],
@@ -142,7 +150,7 @@ describe('audit completeness', () => {
       // A pin that differs from the reported one (set without an audit), for the pins/from-report row.
       a.db.prepare(`UPDATE proxies SET ca_fingerprints = ? WHERE id = ?`).run(JSON.stringify([`SHA256:${'AA'.repeat(32)}`]), ids.prx);
       a.status.hello(ids.prx, 'v2', Date.now(), ['status', 'commands']);
-      a.status.heartbeat(ids.prx, { summary: makeSummary({ cameras: 2, now: Date.now() }), proxy: { ...makeProxyInfo({ now: Date.now(), site: 'home' }), commands: { enabled: true, paused: false, pauseReason: null, allow: ['tokens.apply', ...P3_ALLOW, 'camera.onboarding.get', 'analytics.usage.get'], seenWindow: 1000 } }, truncated: false }, Date.now());
+      a.status.heartbeat(ids.prx, { summary: makeSummary({ cameras: 2, now: Date.now() }), proxy: { ...makeProxyInfo({ now: Date.now(), site: 'home' }), commands: { enabled: true, paused: false, pauseReason: null, allow: ['tokens.apply', ...P3_ALLOW, 'camera.onboarding.get', 'analytics.usage.get', 'switch.read', 'switch.poeOn', 'switch.forget'], seenWindow: 1000 } }, truncated: false }, Date.now());
     }
     // The proxy isn't connected: finish the P3 commands by hand, as the proxy would.
     const finish = (id: string, result: object) => a.db.prepare(`UPDATE commands SET state = 'done', finished_at = ?, result = ? WHERE id = ?`).run(Date.now(), JSON.stringify({ body: { phase: 'done', status: 'ok', result } }), id);
@@ -185,13 +193,23 @@ describe('audit completeness', () => {
         a.db.prepare(`INSERT INTO proxies (id, account_id, name, display_name, runs_on, state, url, tls_site, tls_servername, ca_fingerprints, created_at, updated_at) VALUES (?, ?, ?, ?, 'cluster', 'enrolled', 'http://192.0.2.9:8480', 'site-bg', ?, ?, 1, 1)`).run(id, ids.acc, tag, tag, `${tag}.internal`, JSON.stringify([`SHA256:${'CD'.repeat(32)}`]));
         a.db.prepare(`INSERT INTO proxy_keys (id, proxy_id, public_key, fingerprint, created_at, confirmed_at) VALUES (?, ?, ?, ?, 1, 1)`).run(`key_${tag.padEnd(20, '0')}`, id, `pk${tag}`, `fp${tag}`);
         a.status.hello(id, 'v2', Date.now(), ['status', 'commands']);
-        a.status.heartbeat(id, { summary: makeSummary({ cameras: 1, now: Date.now() }), proxy: { ...makeProxyInfo({ now: Date.now(), site: 'site-bg' }), commands: { enabled: true, paused: false, pauseReason: null, allow: ['move.send', 'move.receive'], seenWindow: 1000 } }, truncated: false }, Date.now());
+        a.status.heartbeat(id, { summary: makeSummary({ cameras: 1, now: Date.now() }), proxy: { ...makeProxyInfo({ now: Date.now(), site: 'site-bg' }), commands: { enabled: true, paused: false, pauseReason: null, allow: ['move.send', 'move.receive', 'switch.read'], seenWindow: 1000 } }, truncated: false }, Date.now());
         return id;
       };
       ids.bgs = live('BGSRC');
       ids.bgt = live('BGTGT');
       a.db.prepare(`INSERT INTO cameras (id, account_id, proxy_id, cams_id, proxy_camera_id, name, kind, created_at, updated_at) VALUES ('cam_bgbegin', ?, ?, 'beginporch', 'pc', 'B', 'camera', 1, 1)`).run(ids.acc, ids.bgs);
     }
+    if (action === 'switch-create') {
+      ids.sw = r.body.id;
+      // More switches on the same proxy, without audit records (each step below needs one that is not busy).
+      for (const k of ['swTest', 'swMove', 'swRead']) {
+        ids[k] = `sw_${k.padEnd(20, '0')}`;
+        a.db.prepare(`INSERT INTO switches (id, account_id, name, model, host, ports, off_seconds, proxy_id, state, created_at, updated_at) VALUES (?, ?, ?, 'sscpoe-web', '192.168.1.2', 8, 10, ?, 'pending', 1, 1)`).run(ids[k], ids.acc, k, ids.prx);
+      }
+    }
+    // The proxy goes later: its switches go first (their forget never comes back here).
+    if (pattern === '/switches/:switchId' && m === 'delete') a.db.exec('DELETE FROM switches');
     // The account goes next: its moves must end first (an active one refuses the delete); ended ones go with it.
     if (action === 'backup-now') a.db.exec('UPDATE moves SET ended_at = 1 WHERE ended_at IS NULL');
     if (actions.includes('import-apply')) ids.impcam = (a.db.prepare(`SELECT id FROM cameras WHERE cams_id = 'imp1'`).get() as { id: string }).id;
