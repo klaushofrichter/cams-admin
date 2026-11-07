@@ -208,8 +208,13 @@ describe('audit completeness', () => {
         a.db.prepare(`INSERT INTO switches (id, account_id, name, model, host, ports, off_seconds, proxy_id, state, created_at, updated_at) VALUES (?, ?, ?, 'sscpoe-web', '192.168.1.2', 8, 10, ?, 'pending', 1, 1)`).run(ids[k], ids.acc, k, ids.prx);
       }
     }
-    // The proxy goes later: its switches go first (their forget never comes back here).
-    if (pattern === '/switches/:switchId' && m === 'delete') a.db.exec('DELETE FROM switches');
+    // The proxy goes later. While it operates a switch its delete is refused (409 switch_operated, no record); the
+    // switches go first by hand here (their forget never comes back in this test).
+    if (pattern === '/switches/:switchId' && m === 'delete') {
+      const refused = await a.api('delete', `/accounts/${ids.acc}/proxies/${ids.prx}`);
+      expect([refused.status, refused.body.error]).toEqual([409, 'switch_operated']);
+      a.db.exec('DELETE FROM switches');
+    }
     // The account goes next: its moves must end first (an active one refuses the delete); ended ones go with it.
     if (action === 'backup-now') a.db.exec('UPDATE moves SET ended_at = 1 WHERE ended_at IS NULL');
     if (actions.includes('import-apply')) ids.impcam = (a.db.prepare(`SELECT id FROM cameras WHERE cams_id = 'imp1'`).get() as { id: string }).id;

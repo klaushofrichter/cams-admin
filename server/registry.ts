@@ -307,6 +307,9 @@ export class Registry {
     return guard(() => tx(this.db, () => {
       const p = this.getProxy(accountId, id);
       if (this.db.prepare('SELECT 1 FROM moves WHERE ended_at IS NULL AND (source_proxy_id = ? OR target_proxy_id = ?) LIMIT 1').get(id, id)) throw new ApiError(409, 'move_active');
+      // A PoE switch it operates goes to another proxy (move) or away (remove) first.
+      const ops = (this.db.prepare('SELECT name FROM switches WHERE proxy_id = ? ORDER BY name').all(id) as { name: string }[]).map((x) => x.name);
+      if (ops.length) throw new ApiError(409, 'switch_operated', undefined, `operates PoE switch${ops.length > 1 ? 'es' : ''} ${ops.map((n) => `"${n}"`).join(', ')}: move or remove ${ops.length > 1 ? 'them' : 'it'} first`);
       const keyIds = this.revokeActiveKeys(id, 'proxy-deleted', this.clock.now());
       this.db.prepare('DELETE FROM proxies WHERE id = ?').run(id);
       this.log(actor, 'proxy-delete', accountId, 'proxy', id, p.name);

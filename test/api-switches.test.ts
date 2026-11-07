@@ -156,6 +156,33 @@ describe('switch lifecycle API', () => {
     expect(await get(sw.id)).toMatchObject({ host: '192.168.1.99', offSeconds: 30, sn: 'GPS208X', last: { op: 'update', outcome: 'ok' } });
   });
 
+  it('update: a name taken now → 409 duplicate_name before any command; taken while the test runs → save_failed, nothing changes', async () => {
+    const p = await proxy();
+    const sw = await activate(p, 'GPS208X');
+    const other = await add(p);
+    const reads = sent(p, 'switch.read').length;
+    expect((await call('PATCH', `/switches/${sw.id}`, { host: '192.168.1.99', name: other.name })).body).toEqual({ error: 'duplicate_name', field: 'name' });
+    expect(sent(p, 'switch.read')).toHaveLength(reads);
+    // The proxy answers after another switch took the name.
+    p.client.switchResults['switch.read'] = () => {
+      s.built.switches.store.updateSwitch(ACTOR, p.acc, other.id, { name: 'Garage' });
+      return { status: 'ok', result: { sn: 'GPS208X', firmware: 'V2.1', ports: [] } };
+    };
+    expect((await call('PATCH', `/switches/${sw.id}`, { host: '192.168.1.99', name: 'Garage' })).status).toBe(202);
+    await idle(sw.id);
+    expect(await get(sw.id)).toMatchObject({ name: sw.name, host: '192.168.1.217', last: { op: 'update', outcome: 'failed', code: 'save_failed' } });
+    expect(audits('switch-test').at(-1)).toMatchObject({ outcome: 'failed', op: 'update', code: 'save_failed', reason: 'duplicate_name' });
+  });
+
+  it('a proxy that operates a switch is not deleted: 409 switch_operated naming the switch', async () => {
+    const p = await proxy();
+    const sw = await add(p);
+    const r = await call('DELETE', `/accounts/${p.acc}/proxies/${p.prx}`);
+    expect(r.status).toBe(409);
+    expect(r.body).toMatchObject({ error: 'switch_operated', message: expect.stringContaining(`"${sw.name}"`) });
+    expect((await get(sw.id)).proxyId).toBe(p.prx);
+  });
+
   it('move: switch.read through the new operator, flip, switch.forget to the old one, audited switch-move, onActive', async () => {
     const p = await proxy();
     const q = await proxy(ALL); // same account ('home')

@@ -127,6 +127,8 @@ export class SwitchService {
       return out;
     }
     this.notBusy(s.id);
+    // The fields are saved with the answer: a name taken now is refused now (the store's 409 for a plain change).
+    if (patch.name !== undefined && patch.name !== s.name && this.d.db.prepare('SELECT 1 FROM switches WHERE account_id = ? AND name = ? AND id != ?').get(s.accountId, patch.name, s.id)) throw new ApiError(409, 'duplicate_name', 'name');
     const args = { v: 1, switch: ref(s, { host: patch.host, ports: patch.ports, offSeconds: patch.offSeconds }) };
     return { commandId: this.send({ op: 'update', switchId: s.id, accountId: s.accountId, actor: c.actor, patch }, s.proxyId, 'switch.read', args) };
   }
@@ -174,8 +176,12 @@ export class SwitchService {
   private onFinal(p: Pending, r: CommandRow): void {
     this.pending.delete(r.id);
     if (p.op === 'remove') return this.removeStep(p, r);
-    const s = this.d.db.prepare('SELECT 1 FROM switches WHERE id = ?').get(p.switchId) ? this.store.getSwitch(p.accountId, p.switchId) : null;
-    if (!s) return;
+    const s = this.store.findById(p.switchId);
+    if (!s) {
+      // Removed meanwhile (another path): nothing to save, the answer is kept in the audit.
+      this.d.audit.write({ actorType: 'sysadmin', actor: p.actor, action: 'switch-test', accountId: p.accountId, targetType: 'switch', targetId: p.switchId, outcome: 'failed', detail: { op: p.op, code: 'not_found', cmdId: r.id } });
+      return;
+    }
     const res = r.result;
     if (r.state !== 'done' || !res || !(res.sn === null || typeof res.sn === 'string')) {
       return this.outcome(p, s, r.state === 'refused' ? 'refused' : 'failed', r.state === 'done' ? 'unreadable' : (r.outcomeCode ?? r.state), { cmdId: r.id });
@@ -186,7 +192,12 @@ export class SwitchService {
     const holder = sn === null ? null : this.store.findBySerial(sn);
     if (holder && holder.id !== s.id) return this.outcome(p, s, 'refused', 'switch_taken', { cmdId: r.id, sn });
     const tested: SwitchPatch = { state: 'active', sn, firmware: typeof res.firmware === 'string' ? res.firmware : null, readAt: this.d.clock.now() };
-    this.store.updateSwitch(p.actor, p.accountId, s.id, { ...(p.patch ?? {}), ...tested });
+    try {
+      this.store.updateSwitch(p.actor, p.accountId, s.id, { ...(p.patch ?? {}), ...tested });
+    } catch (e) {
+      // The test passed but the change can't be saved (a name taken meanwhile, the switch gone): nothing changes.
+      return this.outcome(p, s, 'failed', 'save_failed', { cmdId: r.id, sn, reason: e instanceof ApiError ? e.code : 'error' });
+    }
     this.outcome(p, s, 'ok', null, { cmdId: r.id, sn });
     if (p.op === 'move' && p.from) {
       try {
