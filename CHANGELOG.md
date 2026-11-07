@@ -5,8 +5,5 @@ then empties it on `main`.
 
 ## [Unreleased]
 
-### Added
-
-- Operations-token scope `switches`: a script can add, test, change, move, remove and survey PoE switches, declare, verify and power-cycle (also forced) a camera's power. Audited with the token as actor (actorType `system`).
-- Diagnostics reads for PoE switches: `/diag/accounts/:accountId/switches`, `/diag/switches/:switchId`, `/diag/cameras/:cameraId/power`.
+- Proxy contract: the old single-PoE-switch settings and actions are gone. The camera action "Read the PoE switch" (`poe-switch-read`) is no longer offered, the never-remote `camera-poe-on` and the denied settings `poeSwitch` / `cameras.*.poeSwitch` are dropped. PoE switches are managed per account under Switches (since v2026.11.07.1); proxies from v2026.11.07.3 no longer have these settings.
 
