@@ -19,6 +19,7 @@ import { snapshotRevision } from '../cams/snapshot';
 import type { ProxyConfig } from '../config/service';
 import type { Vision } from '../vision/service';
 import type { SwitchService } from '../switches/service';
+import type { PowerOutcome, PowerService } from '../switches/power';
 import { sysadminAllowed } from '../auth/session';
 import type { RemoteActions } from '../actions/service';
 import type { ReportedPins } from '../onboarding/pins';
@@ -59,7 +60,7 @@ export interface BackupService { state(): BackupState; backupNow(actor: string):
 
 export interface ApiDeps {
   db: Db; clock: Clock; cfg: Config; audit: Audit; registry: Registry; enrollment: Enrollment; hub: Hub; status: StatusStore; live: LiveHub; sessions: Sessions; backup: BackupService;
-  commands: Commands; tokens: Tokens; camsInstances: CamsInstances; serverKeyFingerprints: string[]; importer: Importer; config: ProxyConfig; actions: RemoteActions; moves: Moves; diag: DiagTokens; ops: OpsTokens; pins: ReportedPins; viewerTokens: ViewerTokens; vision: Vision; switches: SwitchService;
+  commands: Commands; tokens: Tokens; camsInstances: CamsInstances; serverKeyFingerprints: string[]; importer: Importer; config: ProxyConfig; actions: RemoteActions; moves: Moves; diag: DiagTokens; ops: OpsTokens; pins: ReportedPins; viewerTokens: ViewerTokens; vision: Vision; switches: SwitchService; power: PowerService;
 }
 
 type H = (req: Request, res: Response) => unknown;
@@ -295,6 +296,24 @@ export function apiRouter(d: ApiDeps): express.Router {
   r.post('/switches/:switchId/test', h((req, res) => accepted(res, d.switches.test(sys(res), p(req, 'switchId')))));
   r.post('/switches/:switchId/move', h((req, res) => accepted(res, d.switches.move(sys(res), p(req, 'switchId'), req.body))));
   r.post('/switches/:switchId/read', h((req, res) => d.switches.read(sys(res), p(req, 'switchId'))));
+  // Camera power (design 2026-11-07, "Verify", "Power-cycle", "Survey"): a check or a power-cycle answers 202 with
+  // its first command; the outcome shows in GET power (lastCheck, lastCycle). A refusal known at once is a 409 with
+  // the reason as message (host_unknown, not_poe, power_unknown, busy, ...).
+  const started = (res: Response, out: PowerOutcome) => {
+    if (!out.ok) throw new ApiError(409, out.code, undefined, out.reason);
+    return accepted(res, { commandId: out.commandId });
+  };
+  const camPower = '/cameras/:cameraId/power';
+  r.get(camPower, h((req) => d.power.get(p(req, 'cameraId'))));
+  r.put(camPower, h((req, res) => {
+    const out = d.power.declare(sys(res), p(req, 'cameraId'), req.body);
+    return 'ok' in out ? started(res, out) : out;
+  }));
+  r.post(`${camPower}/verify`, h((req, res) => started(res, d.power.verify(sys(res), p(req, 'cameraId')))));
+  r.post(`${camPower}/cycle`, h((req, res) => started(res, d.power.cycle(sys(res), p(req, 'cameraId'), req.body))));
+  r.get('/switches/:switchId/survey', h((req) => d.power.lastSurvey(p(req, 'switchId')) ?? { switchId: p(req, 'switchId'), state: 'none', results: [] }));
+  r.post('/switches/:switchId/survey', h((req, res) => { res.locals.status = 202; return d.power.survey(sys(res), p(req, 'switchId')); }));
+  r.post('/accounts/:accountId/switches/survey', h((req, res) => { res.locals.status = 202; return d.power.surveyAccount(sys(res), p(req, 'accountId')); }));
   r.get(`${proxyBase}/actions`, h((req) => d.actions.available(p(req, 'accountId'), p(req, 'proxyId'))));
   r.post(`${proxyBase}/actions`, h((req, res) => accepted(res, d.actions.cameraAction(actor(res), p(req, 'accountId'), p(req, 'proxyId'), req.body))));
   r.post(`${proxyBase}/cameras/:camera/name`, h((req, res) => accepted(res, d.actions.rename(actor(res), p(req, 'accountId'), p(req, 'proxyId'), p(req, 'camera'), req.body))));
@@ -385,9 +404,16 @@ export function apiRouter(d: ApiDeps): express.Router {
   // --- cameras ---------------------------------------------------------------------------
   const camBase = '/accounts/:accountId/cameras/:cameraId';
   r.get('/accounts/:accountId/cameras', h((req) => { d.registry.getAccount(p(req, 'accountId')); return { items: d.registry.listCameras(p(req, 'accountId')) }; }));
-  r.post('/accounts/:accountId/cameras', h((req, res) => { created(res); const c = d.registry.createCamera(actor(res), p(req, 'accountId'), req.body); reg('camera', c.id); return c; }));
+  // A new camera, or a changed host: a survey of the account's switches (debounced per switch).
+  r.post('/accounts/:accountId/cameras', h((req, res) => { created(res); const c = d.registry.createCamera(actor(res), p(req, 'accountId'), req.body); reg('camera', c.id); d.power.cameraChanged(c.accountId); return c; }));
   r.get(camBase, h((req) => d.registry.getCamera(p(req, 'accountId'), p(req, 'cameraId'))));
-  r.patch(camBase, h((req, res) => { const c = d.registry.updateCamera(actor(res), p(req, 'accountId'), p(req, 'cameraId'), req.body); reg('camera', c.id); return c; }));
+  r.patch(camBase, h((req, res) => {
+    const before = d.registry.getCamera(p(req, 'accountId'), p(req, 'cameraId')).host;
+    const c = d.registry.updateCamera(actor(res), p(req, 'accountId'), p(req, 'cameraId'), req.body);
+    reg('camera', c.id);
+    if (c.host !== before) d.power.cameraChanged(c.accountId);
+    return c;
+  }));
   r.delete(camBase, h((req, res) => { d.registry.deleteCamera(actor(res), p(req, 'accountId'), p(req, 'cameraId')); reg('camera', p(req, 'cameraId')); }));
   r.put(`${camBase}/sim`, h((req, res) => { const s = d.registry.setSim(actor(res), p(req, 'accountId'), p(req, 'cameraId'), req.body); reg('camera', p(req, 'cameraId')); return s; }));
   r.delete(`${camBase}/sim`, h((req, res) => { d.registry.deleteSim(actor(res), p(req, 'accountId'), p(req, 'cameraId')); reg('camera', p(req, 'cameraId')); }));

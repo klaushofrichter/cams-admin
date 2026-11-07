@@ -140,6 +140,12 @@ export class SwitchStore {
     this.audit.write({ actorType, actor, action: 'camera-power-set', accountId, targetType: 'camera', targetId: cameraId, targetLabel: camsId, outcome: 'ok', detail: { from, to, why } });
   }
 
+  // The same mapping seen again (a verify, a survey): a newer verifiedAt and watts, not audited (the mapping didn't
+  // change) and without a version step (a person's edit of the camera isn't refused for it).
+  touchPower(cameraId: string, power: CameraPower): void {
+    this.db.prepare('UPDATE cameras SET power = ? WHERE id = ?').run(JSON.stringify(power), cameraId);
+  }
+
   // One camera per switch port: the older record on the port goes to unknown (verifiedAt smaller; none = older).
   // If the port's holder is strictly newer than the incoming record, the incoming one is stored as unknown instead.
   // Both changes are audited as camera-power-set.

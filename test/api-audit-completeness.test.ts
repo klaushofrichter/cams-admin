@@ -78,6 +78,13 @@ describe('audit completeness', () => {
     ['put', '/accounts/:accountId/cameras/:cameraId/sim', () => `/accounts/${ids.acc}/cameras/${ids.cam}/sim`, () => ({ runsOn: 'mac' }), 'sim-update'],
     ['delete', '/accounts/:accountId/cameras/:cameraId/sim', () => `/accounts/${ids.acc}/cameras/${ids.cam}/sim`, () => ({}), 'sim-delete'],
     ['delete', '/accounts/:accountId/cameras/:cameraId', () => `/accounts/${ids.acc}/cameras/${ids.cam}`, () => ({}), 'camera-delete'],
+    // Camera power: a declaration is its power record; a check, a power-cycle and a survey are their first command
+    // (the camera.power.* notices go to the camera's proxy only, and these cameras have none). Switches and cameras by hand.
+    ['put', '/cameras/:cameraId/power', () => `/cameras/${ids.camA}/power`, () => ({ kind: 'adapter' }), 'camera-power-set'],
+    ['post', '/cameras/:cameraId/power/verify', () => `/cameras/${ids.camV}/power/verify`, () => ({}), 'command-create'],
+    ['post', '/cameras/:cameraId/power/cycle', () => `/cameras/${ids.camC}/power/cycle`, () => ({}), 'command-create'],
+    ['post', '/accounts/:accountId/switches/survey', () => `/accounts/${ids.acc}/switches/survey`, () => ({}), 'command-create'],
+    ['post', '/switches/:switchId/survey', () => `/switches/${ids.swP2}/survey`, () => ({}), 'command-create'],
     // PoE switches: the record's own writes; a step through the operator is its command (the answer comes later).
     // Each step on a switch of its own (an open command makes a switch busy); the rows go before the proxy's delete.
     ['post', '/accounts/:accountId/switches', () => `/accounts/${ids.acc}/switches`, () => ({ name: 'GPS-208', host: '192.168.1.217', proxyId: ids.prx }), 'switch-create'],
@@ -150,7 +157,7 @@ describe('audit completeness', () => {
       // A pin that differs from the reported one (set without an audit), for the pins/from-report row.
       a.db.prepare(`UPDATE proxies SET ca_fingerprints = ? WHERE id = ?`).run(JSON.stringify([`SHA256:${'AA'.repeat(32)}`]), ids.prx);
       a.status.hello(ids.prx, 'v2', Date.now(), ['status', 'commands']);
-      a.status.heartbeat(ids.prx, { summary: makeSummary({ cameras: 2, now: Date.now() }), proxy: { ...makeProxyInfo({ now: Date.now(), site: 'home' }), commands: { enabled: true, paused: false, pauseReason: null, allow: ['tokens.apply', ...P3_ALLOW, 'camera.onboarding.get', 'analytics.usage.get', 'switch.read', 'switch.poeOn', 'switch.forget'], seenWindow: 1000 } }, truncated: false }, Date.now());
+      a.status.heartbeat(ids.prx, { summary: makeSummary({ cameras: 2, now: Date.now() }), proxy: { ...makeProxyInfo({ now: Date.now(), site: 'home' }), commands: { enabled: true, paused: false, pauseReason: null, allow: ['tokens.apply', ...P3_ALLOW, 'camera.onboarding.get', 'analytics.usage.get', 'switch.read', 'switch.poeOn', 'switch.forget', 'switch.locate', 'switch.survey', 'switch.cycle'], seenWindow: 1000 } }, truncated: false }, Date.now());
     }
     // The proxy isn't connected: finish the P3 commands by hand, as the proxy would.
     const finish = (id: string, result: object) => a.db.prepare(`UPDATE commands SET state = 'done', finished_at = ?, result = ? WHERE id = ?`).run(Date.now(), JSON.stringify({ body: { phase: 'done', status: 'ok', result } }), id);
@@ -215,6 +222,18 @@ describe('audit completeness', () => {
       expect([refused.status, refused.body.error]).toEqual([409, 'switch_operated']);
       a.db.exec('DELETE FROM switches');
     }
+    if (action === 'camera-delete') {
+      const swIn = (k: string) => a.db.prepare(`INSERT INTO switches (id, account_id, name, model, host, ports, off_seconds, proxy_id, state, survey, created_at, updated_at) VALUES (?, ?, ?, 'sscpoe-web', '192.168.1.2', 8, 10, ?, 'active', 1, 1, 1)`).run(ids[k] = `sw_${k.padEnd(20, '0')}`, ids.acc, k, ids.prx);
+      swIn('swP1');
+      for (const [k, power] of [['camA', { kind: 'unknown' }], ['camV', { kind: 'poe', switchId: ids.swP1, port: 2, watts: 4 }], ['camC', { kind: 'poe', switchId: ids.swP1, port: 3, watts: 4 }]] as const) {
+        ids[k] = `cam_PWR${k.slice(3)}`.padEnd(24, '0');
+        a.db.prepare(`INSERT INTO cameras (id, account_id, cams_id, name, kind, host, power, created_at, updated_at) VALUES (?, ?, ?, ?, 'camera', ?, ?, 1, 1)`).run(ids[k], ids.acc, `p${k.toLowerCase()}`, k, '192.168.60.9', JSON.stringify(power));
+      }
+    }
+    // A second active switch for its own survey (the first one's is still open).
+    if (pattern === '/accounts/:accountId/switches/survey') a.db.prepare(`INSERT INTO switches (id, account_id, name, model, host, ports, off_seconds, proxy_id, state, survey, created_at, updated_at) VALUES (?, ?, 'swP2', 'sscpoe-web', '192.168.1.3', 8, 10, ?, 'active', 1, 1, 1)`).run(ids.swP2 = `sw_${'swP2'.padEnd(20, '0')}`, ids.acc, ids.prx);
+    // The proxy's delete comes later: the switches it operates go by hand.
+    if (pattern === '/switches/:switchId/survey') a.db.exec('DELETE FROM switches');
     // The account goes next: its moves must end first (an active one refuses the delete); ended ones go with it.
     if (action === 'backup-now') a.db.exec('UPDATE moves SET ended_at = 1 WHERE ended_at IS NULL');
     if (actions.includes('import-apply')) ids.impcam = (a.db.prepare(`SELECT id FROM cameras WHERE cams_id = 'imp1'`).get() as { id: string }).id;

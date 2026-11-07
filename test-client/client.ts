@@ -321,6 +321,8 @@ export class ProxyClient extends EventEmitter {
     this.journalEntries.push({ cmdId: b.cmdId, command: b.command, at: this.now() + this.serverOffset, ...(b.command === 'camera.action' ? { action: b.args.action } : {}) });
     const d: DoneBody = b.command === 'tokens.apply' ? this.applyTokens(b.args) : b.command.startsWith('move.') ? this.runMove(b)
       : b.command.startsWith('switch.') ? this.runSwitch(b)
+      // The camera.power.* messages change nothing here: an empty result, as cam-proxy's.
+      : b.command.startsWith('camera.power.') ? { status: 'ok', result: {} }
       : b.command === 'camera.onboarding.get' ? { status: 'ok', result: onboardingResultOf(this.o.onboarding?.(), b.args.camera, this.now() + this.serverOffset) } : this.runP3(b);
     this.journal.set(b.cmdId, d);
     if (this.dropAfterReceived > 0) {

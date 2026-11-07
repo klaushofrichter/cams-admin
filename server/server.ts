@@ -18,6 +18,8 @@ import { Tokens } from './tokens/service';
 import { ProxyConfig } from './config/service';
 import { Vision } from './vision/service';
 import { SwitchService } from './switches/service';
+import { PowerService } from './switches/power';
+import { SurveySchedule } from './switches/schedule';
 import { RemoteActions } from './actions/service';
 import { ReportedPins } from './onboarding/pins';
 import { AutoAdopt } from './onboarding/autoAdopt';
@@ -45,7 +47,7 @@ import { limiter } from './rateLimit';
 import { version } from './version';
 
 export interface Built {
-  cfg: Config; clock: Clock; db: Db; audit: Audit; registry: Registry; live: LiveHub; status: StatusStore; hub: Hub; commands: Commands; moves: Moves; tokens: Tokens; actions: RemoteActions; config: ProxyConfig; vision: Vision; switches: SwitchService; enrollment: Enrollment; sessions: Sessions; backup: BackupService;
+  cfg: Config; clock: Clock; db: Db; audit: Audit; registry: Registry; live: LiveHub; status: StatusStore; hub: Hub; commands: Commands; moves: Moves; tokens: Tokens; actions: RemoteActions; config: ProxyConfig; vision: Vision; switches: SwitchService; power: PowerService; surveys: SurveySchedule; enrollment: Enrollment; sessions: Sessions; backup: BackupService;
   camsInstances: CamsInstances; camsAuth: CamsAuth; importer: Importer; signing: SigningKey; diag: DiagTokens; ops: OpsTokens; pins: ReportedPins; viewerTokens: ViewerTokens;
   app: express.Express; http: Server; epochFile: string;
   tick(): void;
@@ -90,6 +92,11 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
   const vision = new Vision({ db, clock, registry, status, commands, config, live, log });
   // PoE switches (design 2026-11-07): the lifecycle through the operating proxy's switch commands.
   const switches = new SwitchService({ db, clock, audit, registry, commands, live, log, readWaitMs: Number(merged.SWITCH_READ_WAIT_MS) > 0 ? Number(merged.SWITCH_READ_WAIT_MS) : undefined });
+  // Camera power (verify, search, power-cycle, survey): a survey after a switch's test or move, and daily at 03:30
+  // in the backup's zone (the tick below).
+  const power = new PowerService({ db, clock, audit, registry, commands, status, switches, live, log });
+  switches.onActive = (id) => power.switchActive(id);
+  const surveys = new SurveySchedule({ clock, tz: merged.TZ || 'America/Chicago', run: () => power.surveyDaily() });
   const actions = new RemoteActions({ db, audit, registry, commands, status, clock, config, connected: (proxyId) => hub.connected(proxyId) });
   // Onboarding (cam-proxy onboarding design §5): after each heartbeat, the reported site-CA pins.
   const pins = new ReportedPins({ registry, status, live, log });
@@ -145,7 +152,7 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
   app.use(camsRouter({ globalPerMin: cfg.limits.camsGlobalPerMin, enrollment: camsEnrollment, auth: camsAuth, signingKey: signing.key, testRoutes: cfg.nodeEnv === 'test', instances: camsInstances, tokens, fleet: { db, clock, instances: camsInstances, registry, status, moves }, snapshot: { db, clock, signingKey: signing.key, signingFingerprint: signing.fingerprint } }));
   app.use(cookieParser());
   app.use(authRoutes({ cfg, sessions, audit, clock, live }));
-  const apiDeps = { db, clock, cfg, audit, registry, enrollment, hub, status, live, sessions, backup, commands, tokens, config, actions, moves, camsInstances, serverKeyFingerprints: [signing.fingerprint], importer, diag, ops, pins, viewerTokens, vision, switches };
+  const apiDeps = { db, clock, cfg, audit, registry, enrollment, hub, status, live, sessions, backup, commands, tokens, config, actions, moves, camsInstances, serverKeyFingerprints: [signing.fingerprint], importer, diag, ops, pins, viewerTokens, vision, switches, power };
   const api = apiRouter(apiDeps);
   // Before the API: the diagnostics token opens this router only (issue #45).
   app.use('/api/v1/diag', diagRouter(apiDeps));
@@ -177,6 +184,7 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
       tokens.tick();
       camsAuth.sweep();
       config.tick();
+      surveys.tick();
       audit.flushThrottled();
       writeEpochFile(db, epochFile);
       if (clock.now() - lastDaily > 86400_000) {
@@ -193,7 +201,7 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
   let closed = false;
 
   return {
-    cfg, clock, db, audit, registry, live, status, hub, commands, moves, tokens, actions, config, enrollment, sessions, backup, camsInstances, camsAuth, importer, signing, diag, ops, pins, viewerTokens, vision, switches, app, http, epochFile, tick,
+    cfg, clock, db, audit, registry, live, status, hub, commands, moves, tokens, actions, config, enrollment, sessions, backup, camsInstances, camsAuth, importer, signing, diag, ops, pins, viewerTokens, vision, switches, power, surveys, app, http, epochFile, tick,
     writeRoutes() {
       const out: string[] = [];
       for (const layer of (api as unknown as { stack: { route?: { path: string; methods: Record<string, boolean> } }[] }).stack) {

@@ -1,0 +1,359 @@
+// PoE switches: camera power (design 2026-11-07-poe-switches-design.md, "Verify", "Power-cycle", "Survey").
+// A real server on a fake clock and the test client answering the switch commands with canned results.
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { tmpDir } from './helpers/tmp';
+import { fakeClock, type FakeClock } from './helpers/clock';
+import { enrolled, makeClient, resetAccounts, startServer, until, type Running } from './helpers/server';
+import type { ProxyClient } from '../test-client/client';
+import { POWER_COMMANDS, SWITCH_COMMANDS } from '../contract/build';
+import type { CameraPower } from '../server/switches/store';
+import { SYSTEM } from '../server/switches/power';
+import { SurveySchedule } from '../server/switches/schedule';
+import { nextRunAt } from '../server/backup/scheduler';
+
+const ACTOR = 'admin@example.com';
+const ALL = [...SWITCH_COMMANDS, ...POWER_COMMANDS];
+const HOST_UNKNOWN = 'camera host unknown in cams-admin';
+const dir = tmpDir();
+let s: Running;
+let clock: FakeClock;
+const clients: ProxyClient[] = [];
+let n = 0;
+
+beforeEach(async () => {
+  resetAccounts();
+  clock = fakeClock(Date.now());
+  s = await startServer(dir, { HEARTBEAT_MIN_GAP_MS: '0', LIMIT_MSG_PER_MIN: '10000', LIMIT_HELLO_PER_PROXY: '1000', TICK_MS: '60000', LIMIT_COMMANDS_PER_MIN: '1000' }, 0, clock);
+});
+afterEach(async () => {
+  for (const c of clients.splice(0)) await c.stop('shutdown');
+  await s.stop();
+});
+
+async function proxy(allow: string[] = ALL) {
+  const p = await enrolled(s, `pw${n++}`);
+  const client = makeClient(p.key, { commands: { allow } });
+  clients.push(client);
+  client.start();
+  await until(() => !!s.built.status.row(p.proxyId)?.reported?.commands, 5000, 'commands report');
+  return { client, acc: p.accountId, prx: p.proxyId };
+}
+type P = Awaited<ReturnType<typeof proxy>>;
+
+async function call(method: string, path: string, body?: unknown): Promise<{ status: number; body: any }> {
+  const res = await fetch(`${s.url}/api/v1${path}`, { method, headers: { Cookie: `__Host-cams_admin=${s.cookie}`, 'X-Cams-Admin': '1', 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
+  const text = await res.text();
+  return { status: res.status, body: text ? JSON.parse(text) : {} };
+}
+// A camera of the proxy (before any switch is active: a new camera triggers a survey).
+async function camera(p: P, host: string | null = `192.168.60.${20 + n}`) {
+  const tag = `c${n++}`;
+  const r = await call('POST', `/accounts/${p.acc}/cameras`, { camsId: tag, name: tag, kind: 'camera', proxyId: p.prx, proxyCameraId: tag, ...(host ? { host } : {}) });
+  expect(r.status, JSON.stringify(r.body)).toBe(201);
+  return r.body as { id: string; camsId: string; proxyCameraId: string; host: string | null };
+}
+// An active switch without the test (no onActive survey).
+async function sw(p: P, name: string, extra: Record<string, unknown> = {}) {
+  const r = await call('POST', `/accounts/${p.acc}/switches`, { name, host: '192.168.1.217', proxyId: p.prx, ...extra });
+  expect(r.status, JSON.stringify(r.body)).toBe(201);
+  return s.built.switches.store.updateSwitch(ACTOR, p.acc, r.body.id, { state: 'active', sn: `SN${n++}` });
+}
+const setPower = (camId: string, power: CameraPower) => s.built.switches.store.setPower(camId, power, ACTOR, 'sysadmin', 'test');
+const power = async (camId: string) => (await call('GET', `/cameras/${camId}/power`)).body;
+const sent = (p: P, command: string) => p.client.receivedCommands.filter((m) => m.body.command === command).map((m) => m.body.args);
+const commands = (p: P) => p.client.receivedCommands.map((m) => m.body.command as string);
+const audits = (action: string) => (s.built.db.prepare('SELECT outcome, target_id, detail FROM audit_log WHERE action = ? ORDER BY id').all(action) as { outcome: string; target_id: string; detail: string }[])
+  .map((x) => ({ outcome: x.outcome, targetId: x.target_id, ...JSON.parse(x.detail ?? '{}') }));
+const found = (port: number, watts: number) => ({ status: 'ok' as const, result: { sn: null, found: true, port, poe: true, watts, link: true } });
+const notFound = (reason = 'no_traffic') => ({ status: 'ok' as const, result: { sn: null, found: false, reason } });
+const checkDone = (camId: string) => until(async () => ['ok', 'failed'].includes((await power(camId)).lastCheck?.state), 5000, 'check done');
+const cycleDone = (camId: string) => until(async () => ['ok', 'failed'].includes((await power(camId)).lastCycle?.state), 5000, 'cycle done');
+
+describe('camera power', () => {
+  it('verify: found on the mapped port → verifiedAt and watts updated', async () => {
+    const p = await proxy();
+    const cam = await camera(p);
+    const a = await sw(p, 'Alpha');
+    setPower(cam.id, { kind: 'poe', switchId: a.id, port: 3, watts: 4 });
+    p.client.switchResults['switch.locate'] = found(3, 4.5);
+    const r = await call('POST', `/cameras/${cam.id}/power/verify`);
+    expect(r.status, JSON.stringify(r.body)).toBe(202);
+    expect(r.body.commandId).toMatch(/^cmd_/);
+    await checkDone(cam.id);
+    const v = await power(cam.id);
+    expect(v.power).toEqual({ kind: 'poe', switchId: a.id, port: 3, watts: 4.5, verifiedAt: clock.now() });
+    expect(v.lastCheck).toMatchObject({ op: 'verify', state: 'ok' });
+    expect(v.switch).toMatchObject({ id: a.id, name: 'Alpha' });
+    expect(sent(p, 'switch.locate')).toEqual([{ v: 1, switch: { id: a.id, model: 'sscpoe-web', host: '192.168.1.217', ports: 8, offSeconds: 10 }, host: cam.host }]);
+  });
+
+  it('verify: not on the mapped switch → search (by name, first found wins) → the record moves, audited, camera.power.set sent', async () => {
+    const p = await proxy();
+    const cam = await camera(p);
+    const z = await sw(p, 'Zulu');
+    const b = await sw(p, 'Bravo');
+    await sw(p, 'Charlie');
+    setPower(cam.id, { kind: 'poe', switchId: z.id, port: 3, watts: 4 });
+    p.client.switchResults['switch.locate'] = (a) => (a.switch.id === b.id ? found(2, 3.9) : notFound());
+    expect((await call('POST', `/cameras/${cam.id}/power/verify`)).status).toBe(202);
+    await checkDone(cam.id);
+    expect(sent(p, 'switch.locate').map((a) => a.switch.id)).toEqual([z.id, b.id]);
+    expect((await power(cam.id)).power).toEqual({ kind: 'poe', switchId: b.id, port: 2, watts: 3.9, verifiedAt: clock.now() });
+    expect(audits('camera-power-set').at(-1)).toMatchObject({ outcome: 'ok', targetId: cam.id, to: { kind: 'poe', switchId: b.id, port: 2 } });
+    await until(() => sent(p, 'camera.power.set').length > 0, 5000, 'power set');
+    expect(sent(p, 'camera.power.set').at(-1)).toEqual({ v: 1, camera: cam.proxyCameraId, power: { kind: 'poe', switchName: 'Bravo', port: 2, watts: 3.9, verifiedAt: clock.now() } });
+  });
+
+  it('found nowhere: verify fails with the reasons, the record stays', async () => {
+    const p = await proxy();
+    const cam = await camera(p);
+    const a = await sw(p, 'Alpha');
+    setPower(cam.id, { kind: 'poe', switchId: a.id, port: 3, watts: 4 });
+    p.client.switchResults['switch.locate'] = notFound('not_reachable');
+    await call('POST', `/cameras/${cam.id}/power/verify`);
+    await checkDone(cam.id);
+    const v = await power(cam.id);
+    expect(v.power).toEqual({ kind: 'poe', switchId: a.id, port: 3, watts: 4 });
+    expect(v.lastCheck).toMatchObject({ state: 'failed', code: 'not_found' });
+    expect(v.lastCheck.reason).toMatch(/Alpha: camera not reachable from the operator/);
+  });
+
+  it('locate with 0 W → data-only; a cycle, forced or not, → 409 not_poe', async () => {
+    const p = await proxy();
+    const cam = await camera(p);
+    const a = await sw(p, 'Alpha');
+    p.client.switchResults['switch.locate'] = { status: 'ok', result: { sn: null, found: true, port: 4, poe: true, watts: 0, link: true } };
+    const r = await call('PUT', `/cameras/${cam.id}/power`, { kind: 'auto' });
+    expect(r.status, JSON.stringify(r.body)).toBe(202);
+    await checkDone(cam.id);
+    expect((await power(cam.id)).power).toEqual({ kind: 'data-only', switchId: a.id, port: 4, verifiedAt: clock.now() });
+    expect((await call('POST', `/cameras/${cam.id}/power/cycle`, {})).body).toMatchObject({ error: 'not_poe' });
+    expect((await call('POST', `/cameras/${cam.id}/power/cycle`, { force: true })).body).toMatchObject({ error: 'not_poe' });
+    expect(sent(p, 'switch.cycle')).toEqual([]);
+  });
+
+  it('declare adapter; propose a port: saved only when the traffic is on it', async () => {
+    const p = await proxy();
+    const cam = await camera(p);
+    const a = await sw(p, 'Alpha');
+    const r = await call('PUT', `/cameras/${cam.id}/power`, { kind: 'adapter' });
+    expect([r.status, r.body.power]).toEqual([200, { kind: 'adapter' }]);
+    expect((await call('POST', `/cameras/${cam.id}/power/verify`)).body).toMatchObject({ error: 'adapter' });
+    expect((await call('POST', `/cameras/${cam.id}/power/cycle`, {})).body).toMatchObject({ error: 'not_poe' });
+    p.client.switchResults['switch.locate'] = found(3, 5);
+    expect((await call('PUT', `/cameras/${cam.id}/power`, { switchId: a.id, port: 5 })).status).toBe(202);
+    await checkDone(cam.id);
+    expect(await power(cam.id)).toMatchObject({ power: { kind: 'adapter' }, lastCheck: { op: 'propose', state: 'failed', code: 'not_on_port' } });
+    expect((await call('PUT', `/cameras/${cam.id}/power`, { switchId: a.id, port: 3 })).status).toBe(202);
+    await checkDone(cam.id);
+    expect((await power(cam.id)).power).toEqual({ kind: 'poe', switchId: a.id, port: 3, watts: 5, verifiedAt: clock.now() });
+    for (const body of [{ switchId: a.id, port: 9 }, { switchId: a.id }, { kind: 'other' }, { kind: 'adapter', x: 1 }]) {
+      expect((await call('PUT', `/cameras/${cam.id}/power`, body)).status, JSON.stringify(body)).toBe(400);
+    }
+  });
+
+  it('forced cycle of a poe camera: switch.cycle with force and no host, audited as forced, cycling/cycled to its proxy', async () => {
+    const p = await proxy();
+    const cam = await camera(p);
+    const a = await sw(p, 'Alpha');
+    setPower(cam.id, { kind: 'poe', switchId: a.id, port: 3, watts: 4 });
+    const r = await call('POST', `/cameras/${cam.id}/power/cycle`, { force: true });
+    expect(r.status, JSON.stringify(r.body)).toBe(202);
+    await cycleDone(cam.id);
+    expect(sent(p, 'switch.cycle')).toEqual([{ v: 1, switch: expect.objectContaining({ id: a.id }), port: 3, host: null, force: true, camera: cam.id }]);
+    expect((await power(cam.id)).lastCycle).toMatchObject({ force: true, state: 'ok', requestedAt: expect.any(Number) });
+    expect(audits('camera-power-cycle-forced')).toEqual([expect.objectContaining({ outcome: 'ok', targetId: cam.id, switchId: a.id, port: 3 })]);
+    await until(() => sent(p, 'camera.power.cycled').length > 0, 5000, 'cycled');
+    const order = commands(p).filter((c) => c === 'camera.power.cycling' || c === 'switch.cycle' || c === 'camera.power.cycled');
+    expect(order).toEqual(['camera.power.cycling', 'switch.cycle', 'camera.power.cycled']);
+    expect(sent(p, 'camera.power.cycled')[0]).toMatchObject({ camera: cam.proxyCameraId, ok: true });
+  });
+
+  it('unforced cycle answered not_verified → search → one cycle on the found port (no loop)', async () => {
+    const p = await proxy();
+    const cam = await camera(p);
+    const a = await sw(p, 'Alpha');
+    const b = await sw(p, 'Bravo');
+    setPower(cam.id, { kind: 'poe', switchId: a.id, port: 3, watts: 4 });
+    p.client.switchResults['switch.locate'] = (x) => (x.switch.id === b.id ? found(5, 4.1) : notFound());
+    // Every cycle answers not_verified: the retry on Bravo is the last one.
+    p.client.switchResults['switch.cycle'] = { status: 'failed', code: 'not_verified' };
+    expect((await call('POST', `/cameras/${cam.id}/power/cycle`, {})).status).toBe(202);
+    await cycleDone(cam.id);
+    expect(sent(p, 'switch.cycle').map((x) => [x.switch.id, x.port, x.host, x.force])).toEqual([[a.id, 3, cam.host, false], [b.id, 5, cam.host, false]]);
+    expect((await power(cam.id)).power).toMatchObject({ kind: 'poe', switchId: b.id, port: 5 });
+    expect((await power(cam.id)).lastCycle).toMatchObject({ force: false, state: 'failed', code: 'not_verified' });
+    // Now Bravo cycles.
+    p.client.switchResults['switch.cycle'] = (x) => (x.switch.id === b.id ? { status: 'ok', result: { verified: true, offAt: 1, onAt: 2, watts: 4.3 } } : { status: 'failed', code: 'not_verified' });
+    setPower(cam.id, { kind: 'poe', switchId: a.id, port: 3, watts: 4 });
+    await call('POST', `/cameras/${cam.id}/power/cycle`, {});
+    await cycleDone(cam.id);
+    expect(sent(p, 'switch.cycle')).toHaveLength(4);
+    expect(await power(cam.id)).toMatchObject({ power: { kind: 'poe', switchId: b.id, port: 5, watts: 4.3 }, lastCycle: { state: 'ok' } });
+  });
+
+  it('unforced cycle: the retry answered not_verified too → no second search, even if the camera moved again', async () => {
+    const p = await proxy();
+    const cam = await camera(p);
+    const a = await sw(p, 'Alpha');
+    const b = await sw(p, 'Bravo');
+    const c = await sw(p, 'Charlie');
+    setPower(cam.id, { kind: 'poe', switchId: a.id, port: 3, watts: 4 });
+    let searches = 0;
+    // The first search finds it on Bravo; any later one would find it on Charlie.
+    p.client.switchResults['switch.locate'] = (x) => (x.switch.id === b.id && searches++ === 0 ? found(5, 4) : x.switch.id === c.id ? found(1, 4) : notFound());
+    p.client.switchResults['switch.cycle'] = { status: 'failed', code: 'not_verified' };
+    await call('POST', `/cameras/${cam.id}/power/cycle`, {});
+    await cycleDone(cam.id);
+    expect(sent(p, 'switch.cycle').map((x) => x.switch.id)).toEqual([a.id, b.id]);
+    expect((await power(cam.id)).lastCycle).toMatchObject({ state: 'failed', code: 'not_verified' });
+  });
+
+  it('unforced cycle: not_verified and found on the same port again → no retry', async () => {
+    const p = await proxy();
+    const cam = await camera(p);
+    const a = await sw(p, 'Alpha');
+    setPower(cam.id, { kind: 'poe', switchId: a.id, port: 3, watts: 4 });
+    p.client.switchResults['switch.locate'] = found(3, 4);
+    p.client.switchResults['switch.cycle'] = { status: 'failed', code: 'not_verified' };
+    await call('POST', `/cameras/${cam.id}/power/cycle`, {});
+    await cycleDone(cam.id);
+    expect(sent(p, 'switch.cycle')).toHaveLength(1);
+    expect((await power(cam.id)).lastCycle).toMatchObject({ state: 'failed', code: 'not_verified' });
+  });
+
+  it('unknown power → 409 power_unknown; without camera.power.* allowed the cycle still runs', async () => {
+    const p = await proxy([...SWITCH_COMMANDS]);
+    const cam = await camera(p);
+    const a = await sw(p, 'Alpha');
+    expect((await call('POST', `/cameras/${cam.id}/power/cycle`, {})).body).toMatchObject({ error: 'power_unknown' });
+    setPower(cam.id, { kind: 'poe', switchId: a.id, port: 3, watts: 4 });
+    expect((await call('POST', `/cameras/${cam.id}/power/cycle`, {})).status).toBe(202);
+    await cycleDone(cam.id);
+    expect((await power(cam.id)).lastCycle).toMatchObject({ state: 'ok' });
+    expect(commands(p).filter((c) => c.startsWith('camera.power'))).toEqual([]);
+  });
+
+  it('a camera without host: the reason everywhere', async () => {
+    const p = await proxy();
+    const cam = await camera(p, null);
+    const a = await sw(p, 'Alpha');
+    setPower(cam.id, { kind: 'poe', switchId: a.id, port: 3, watts: 4 });
+    for (const [m, path, body] of [['POST', 'verify', {}], ['POST', 'cycle', {}], ['POST', 'cycle', { force: true }], ['PUT', '', { kind: 'auto' }], ['PUT', '', { switchId: a.id, port: 3 }]] as const) {
+      const r = await call(m, `/cameras/${cam.id}/power${path ? `/${path}` : ''}`, body);
+      expect([r.status, r.body], `${m} ${path} ${JSON.stringify(body)}`).toEqual([409, { error: 'host_unknown', message: HOST_UNKNOWN }]);
+    }
+    expect(s.built.power.cycle(SYSTEM, cam.id, {})).toEqual({ ok: false, code: 'host_unknown', reason: HOST_UNKNOWN });
+  });
+
+  it('survey: 20 cameras → 2 commands; found → mapped; not seen keeps the mapping with notSeen; not_reachable sets nothing', async () => {
+    const p = await proxy();
+    const cams: Awaited<ReturnType<typeof camera>>[] = [];
+    for (let i = 0; i < 20; i++) cams.push(await camera(p, `10.0.0.${i + 1}`));
+    const noHost = await camera(p, null);
+    const adapter = await camera(p);
+    const a = await sw(p, 'Alpha');
+    setPower(adapter.id, { kind: 'adapter' });
+    setPower(cams[1].id, { kind: 'poe', switchId: a.id, port: 2, watts: 4 });
+    setPower(cams[2].id, { kind: 'poe', switchId: a.id, port: 6, watts: 4 });
+    p.client.switchResults['switch.survey'] = (x) => ({ status: 'ok', result: { sn: null, results: x.cameras.map((c: { camera: string }) =>
+      c.camera === cams[0].id ? { camera: c.camera, found: true, port: 1, poe: true, watts: 3 }
+        : c.camera === cams[2].id ? { camera: c.camera, found: false, reason: 'not_reachable' }
+          : { camera: c.camera, found: false, reason: 'no_traffic' }) } });
+    const r = await call('POST', `/switches/${a.id}/survey`);
+    expect(r.status, JSON.stringify(r.body)).toBe(202);
+    expect(r.body.commandIds).toHaveLength(2);
+    await until(async () => (await call('GET', `/switches/${a.id}/survey`)).body.state === 'done', 5000, 'survey done');
+    const args = sent(p, 'switch.survey');
+    expect(args.map((x) => x.cameras.length)).toEqual([16, 4]);
+    const surveyed = args.flatMap((x) => x.cameras.map((c: { camera: string }) => c.camera));
+    expect(surveyed).not.toContain(noHost.id);
+    expect(surveyed).not.toContain(adapter.id);
+    expect(args[0].cameras[0]).toEqual({ camera: cams[0].id, host: '10.0.0.1' });
+    expect((await power(cams[0].id)).power).toEqual({ kind: 'poe', switchId: a.id, port: 1, watts: 3, verifiedAt: clock.now() });
+    expect((await power(cams[1].id)).power).toEqual({ kind: 'poe', switchId: a.id, port: 2, watts: 4, notSeen: true });
+    expect((await power(cams[2].id)).power).toEqual({ kind: 'poe', switchId: a.id, port: 6, watts: 4 });
+    expect((await power(cams[3].id)).power).toEqual({ kind: 'unknown' });
+    const view = (await call('GET', `/switches/${a.id}/survey`)).body;
+    expect(view.results.find((x: { cameraId: string }) => x.cameraId === cams[2].id)).toMatchObject({ found: false, reason: 'not_reachable' });
+    expect(view.results.find((x: { cameraId: string }) => x.cameraId === noHost.id)).toMatchObject({ found: false, reason: HOST_UNKNOWN });
+    // A later survey that finds it clears notSeen.
+    p.client.switchResults['switch.survey'] = (x) => ({ status: 'ok', result: { sn: null, results: x.cameras.map((c: { camera: string }) =>
+      c.camera === cams[1].id ? { camera: c.camera, found: true, port: 2, poe: true, watts: 4 } : { camera: c.camera, found: false, reason: 'no_traffic' }) } });
+    await call('POST', `/switches/${a.id}/survey`);
+    await until(async () => sent(p, 'switch.survey').length === 4 && (await call('GET', `/switches/${a.id}/survey`)).body.state === 'done', 5000, 'survey 2 done');
+    expect((await power(cams[1].id)).power).toEqual({ kind: 'poe', switchId: a.id, port: 2, watts: 4, verifiedAt: clock.now() });
+  });
+
+  it('surveys are debounced: at most one queued per switch', async () => {
+    const p = await proxy();
+    await camera(p);
+    const a = await sw(p, 'Alpha');
+    const first = s.built.power.survey(SYSTEM, a.id);
+    expect(first.commandIds).toHaveLength(1);
+    expect(s.built.power.survey(SYSTEM, a.id)).toEqual({ commandIds: [], queued: true });
+    expect(s.built.power.survey(SYSTEM, a.id)).toEqual({ commandIds: [], queued: true });
+    await until(() => sent(p, 'switch.survey').length === 2, 5000, 'queued survey ran');
+    await until(async () => (await call('GET', `/switches/${a.id}/survey`)).body.state === 'done', 5000, 'done');
+    expect(sent(p, 'switch.survey')).toHaveLength(2);
+  });
+
+  it('triggers: a switch becoming active, a new camera, a changed host, the account survey', async () => {
+    const p = await proxy();
+    await camera(p);
+    const r = await call('POST', `/accounts/${p.acc}/switches`, { name: 'Alpha', host: '192.168.1.217', proxyId: p.prx });
+    p.client.switchResults['switch.read'] = { status: 'ok', result: { sn: 'GPS', firmware: 'V1', ports: [] } };
+    await call('POST', `/switches/${r.body.id}/test`);
+    await until(() => sent(p, 'switch.survey').length === 1, 5000, 'survey after test');
+    await until(async () => (await call('GET', `/switches/${r.body.id}/survey`)).body.state === 'done', 5000, 'done');
+    const cam = await camera(p);
+    await until(() => sent(p, 'switch.survey').length === 2, 5000, 'survey after camera create');
+    await until(async () => (await call('GET', `/switches/${r.body.id}/survey`)).body.state === 'done', 5000, 'done');
+    const v = (await call('GET', `/accounts/${p.acc}/cameras/${cam.id}`)).body.version;
+    expect((await call('PATCH', `/accounts/${p.acc}/cameras/${cam.id}`, { host: '10.1.1.1', version: v })).status).toBe(200);
+    await until(() => sent(p, 'switch.survey').length === 3, 5000, 'survey after host change');
+    await until(async () => (await call('GET', `/switches/${r.body.id}/survey`)).body.state === 'done', 5000, 'done');
+    const all = await call('POST', `/accounts/${p.acc}/switches/survey`);
+    expect(all.status).toBe(202);
+    expect(all.body.switches).toEqual([{ switchId: r.body.id, commandIds: [expect.stringMatching(/^cmd_/)], queued: false }]);
+    expect(audits('command-create').filter((x) => x.command === 'switch.survey').map((x) => x.outcome)).toEqual(['ok', 'ok', 'ok', 'ok']);
+  });
+
+  it('the daily survey runs at 03:30 from the server tick', async () => {
+    const p = await proxy();
+    await camera(p);
+    const a = await sw(p, 'Alpha');
+    await sw(p, 'Off', { survey: false });
+    const at = s.built.surveys.nextAt;
+    clock.set(at - 1000);
+    s.built.tick();
+    expect(sent(p, 'switch.survey')).toHaveLength(0);
+    clock.set(at);
+    s.built.tick();
+    await until(() => sent(p, 'switch.survey').length === 1, 5000, 'daily survey');
+    expect(sent(p, 'switch.survey')[0].switch.id).toBe(a.id);
+    expect(s.built.surveys.nextAt).toBeGreaterThan(at);
+  });
+});
+
+describe('SurveySchedule', () => {
+  it('fires once at 03:30 in its time zone, then the next day', () => {
+    const c = fakeClock(Date.UTC(2026, 10, 7, 3, 0));
+    const runs: number[] = [];
+    const sch = new SurveySchedule({ clock: c, tz: 'UTC', run: () => runs.push(c.now()) });
+    expect(sch.nextAt).toBe(Date.UTC(2026, 10, 7, 3, 30));
+    expect(sch.nextAt).toBe(nextRunAt(Date.UTC(2026, 10, 7, 3, 0), '03:30', 'UTC'));
+    sch.tick();
+    c.set(Date.UTC(2026, 10, 7, 3, 29, 59));
+    sch.tick();
+    expect(runs).toEqual([]);
+    c.set(Date.UTC(2026, 10, 7, 3, 30));
+    sch.tick();
+    sch.tick();
+    expect(runs).toEqual([Date.UTC(2026, 10, 7, 3, 30)]);
+    expect(sch.nextAt).toBe(Date.UTC(2026, 10, 8, 3, 30));
+    c.set(Date.UTC(2026, 10, 8, 3, 31));
+    sch.tick();
+    expect(runs).toHaveLength(2);
+  });
+});
