@@ -771,6 +771,6 @@ export class PowerService {
     if (!who.sysadmin) throw new ApiError(403, 'forbidden');
   }
   private type(who: Who): Extract<PowerActorType, 'sysadmin' | 'system' | 'proxy'> {
-    return who.system ? 'system' : who.proxy ? 'proxy' : 'sysadmin';
+    return who.system || who.actor.startsWith('ops-token:') ? 'system' : who.proxy ? 'proxy' : 'sysadmin';
   }
 }

@@ -183,6 +183,31 @@ describe('camera power', () => {
     expect(sent(p, 'camera.power.cycled')[0]).toMatchObject({ camera: cam.proxyCameraId, ok: true });
   });
 
+  it('operations token: `switches` scope requests a power-cycle (forced too, audited with the token); without it 403 scope', async () => {
+    const p = await proxy();
+    const cam = await camera(p);
+    const a = await sw(p, 'Alpha');
+    setPower(cam.id, { kind: 'poe', switchId: a.id, port: 3, watts: 4 });
+    const bearer = (scopes: ('switches' | 'tokens')[]) => ({ Authorization: `Bearer ${s.built.ops.issue(ACTOR, { name: 't', scopes, days: 1 }).token}`, 'Content-Type': 'application/json' });
+    const no = await fetch(`${s.url}/api/v1/cameras/${cam.id}/power/cycle`, { method: 'POST', headers: bearer(['tokens']), body: '{"force":true}' });
+    expect(no.status).toBe(403);
+    expect(await no.json()).toEqual({ error: 'scope' });
+    expect(sent(p, 'switch.cycle')).toEqual([]);
+    const headers = bearer(['switches']);
+    const ok = await fetch(`${s.url}/api/v1/cameras/${cam.id}/power/cycle`, { method: 'POST', headers, body: '{"force":true}' });
+    expect(ok.status).toBe(202);
+    await cycleDone(cam.id);
+    expect(sent(p, 'switch.cycle')).toEqual([expect.objectContaining({ port: 3, force: true })]);
+    const forced = s.built.db.prepare("SELECT actor_type, actor FROM audit_log WHERE action = 'camera-power-cycle-forced'").all() as { actor_type: string; actor: string }[];
+    expect(forced).toHaveLength(1);
+    expect(forced[0].actor).toMatch(/^ops-token:/);
+    expect(forced[0].actor_type).toBe('system');
+    expect(audits('camera-power-cycle-forced')).toEqual([expect.objectContaining({ outcome: 'ok', targetId: cam.id, switchId: a.id, port: 3 })]);
+    // A plain cycle request by the same token is allowed too (409 or 202, never 403).
+    const plain = await fetch(`${s.url}/api/v1/cameras/${cam.id}/power/verify`, { method: 'POST', headers, body: '{}' });
+    expect(plain.status).not.toBe(403);
+  });
+
   it('unforced cycle answered not_verified → search → one cycle on the found port (no loop)', async () => {
     const p = await proxy();
     const cam = await camera(p);

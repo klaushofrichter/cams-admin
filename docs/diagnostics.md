@@ -184,6 +184,12 @@ actor `ops-token:<8 hex>`. The list is also at `/diag/ops-tokens`.
 | `config` | `POST /accounts/:accountId/proxies/:proxyId/config/rollback/preview` |
 | `config` | `POST /accounts/:accountId/proxies/:proxyId/config/rollback/apply` |
 | `offboard` | `DELETE /accounts/:accountId/cameras/:cameraId` |
+| `switches` | `POST /accounts/:accountId/switches` |
+| `switches` | `PATCH /switches/:switchId`, `DELETE /switches/:switchId` |
+| `switches` | `POST /switches/:switchId/test`, `…/move`, `…/read`, `…/survey` |
+| `switches` | `POST /accounts/:accountId/switches/survey` |
+| `switches` | `PUT /cameras/:cameraId/power` |
+| `switches` | `POST /cameras/:cameraId/power/verify`, `…/power/cycle` |
 
 Paths must be exactly as listed (the fixed words in lower case, ids as issued, no trailing slash). Anything else,
 and every route not in the table, gets 403 `scope`. No token can issue proxy
@@ -286,6 +292,11 @@ curl -fsS -X POST -H "Authorization: Bearer $(cat ~/.config/cams-admin/ops-token
   -d '{"set":{"sse.pingS":20}}' \
   "https://cams-admin.example.net/api/v1/accounts/acc_…/proxies/prx_…/config/preview"
 ```
+
+A `switches` token manages PoE switches and camera power (the writes of the
+switch and power features, a forced power-cycle included; reads stay with the
+diagnostics token or a sign-in). Its records show the token as actor with
+actorType `system`.
 
 An `offboard` token removes a camera from its account (204; audited as
 `camera-delete`). The proxy keeps the camera until it is removed there; with

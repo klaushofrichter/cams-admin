@@ -16,6 +16,8 @@ import { SwitchStore, type CameraPower, type Switch, type SwitchPatch } from './
 // changes nothing (the record stays as it was; the command history and the audit keep what happened).
 
 export interface Caller { actor: string; sysadmin: boolean }
+// An operations token (scope `switches`) is audited as actorType 'system', like the other token routes.
+const typeOf = (actor: string): 'sysadmin' | 'system' => (actor.startsWith('ops-token:') ? 'system' : 'sysadmin');
 export type SwitchOp = 'test' | 'update' | 'move' | 'remove';
 export interface SwitchLast { op: SwitchOp; outcome: 'ok' | 'refused' | 'failed'; code: string | null; at: number }
 export interface SwitchView extends Switch { pending: { op: SwitchOp; commandIds: string[] }[]; last: SwitchLast | null }
@@ -79,7 +81,7 @@ export class SwitchService {
   async read(c: Caller, id: string): Promise<ReadView> {
     this.sysadmin(c);
     const s = this.find(id);
-    const cmd = this.d.commands.create(c.actor, s.accountId, s.proxyId, 'switch.read', { v: 1, switch: ref(s) }, { actorType: 'sysadmin' });
+    const cmd = this.d.commands.create(c.actor, s.accountId, s.proxyId, 'switch.read', { v: 1, switch: ref(s) }, { actorType: typeOf(c.actor) });
     const fin = await this.d.commands.waitFinal(cmd.id, this.d.readWaitMs ?? READ_WAIT_MS);
     const result = fin?.state === 'done' ? fin.result : null;
     const livePorts = new Map<number, Record<string, unknown>>();
@@ -101,7 +103,7 @@ export class SwitchService {
     this.d.registry.getAccount(accountId);
     const input = switchInput(raw, false) as Required<ReturnType<typeof switchInput>>;
     this.operatorOf(accountId, input.proxyId);
-    const s = this.store.createSwitch(c.actor, accountId, { ...input, state: 'pending' });
+    const s = this.store.createSwitch(c.actor, accountId, { ...input, state: 'pending' }, typeOf(c.actor));
     this.publish(s.id);
     return s;
   }
@@ -122,7 +124,7 @@ export class SwitchService {
     const patch = switchInput(raw, true) as SwitchPatch;
     if (patch.proxyId !== undefined) throw new FieldError('proxyId', 'invalid', 'a move changes the operating proxy');
     if (patch.host === undefined || patch.host === s.host || s.state === 'pending') {
-      const out = this.store.updateSwitch(c.actor, s.accountId, s.id, patch);
+      const out = this.store.updateSwitch(c.actor, s.accountId, s.id, patch, typeOf(c.actor));
       this.publish(s.id);
       return out;
     }
@@ -179,7 +181,7 @@ export class SwitchService {
     const s = this.store.findById(p.switchId);
     if (!s) {
       // Removed meanwhile (another path): nothing to save, the answer is kept in the audit.
-      this.d.audit.write({ actorType: 'sysadmin', actor: p.actor, action: 'switch-test', accountId: p.accountId, targetType: 'switch', targetId: p.switchId, outcome: 'failed', detail: { op: p.op, code: 'not_found', cmdId: r.id } });
+      this.d.audit.write({ actorType: typeOf(p.actor), actor: p.actor, action: 'switch-test', accountId: p.accountId, targetType: 'switch', targetId: p.switchId, outcome: 'failed', detail: { op: p.op, code: 'not_found', cmdId: r.id } });
       return;
     }
     const res = r.result;
@@ -193,7 +195,7 @@ export class SwitchService {
     if (holder && holder.id !== s.id) return this.outcome(p, s, 'refused', 'switch_taken', { cmdId: r.id, sn });
     const tested: SwitchPatch = { state: 'active', sn, firmware: typeof res.firmware === 'string' ? res.firmware : null, readAt: this.d.clock.now() };
     try {
-      this.store.updateSwitch(p.actor, p.accountId, s.id, { ...(p.patch ?? {}), ...tested });
+      this.store.updateSwitch(p.actor, p.accountId, s.id, { ...(p.patch ?? {}), ...tested }, typeOf(p.actor));
     } catch (e) {
       // The test passed but the change can't be saved (a name taken meanwhile, the switch gone): nothing changes.
       return this.outcome(p, s, 'failed', 'save_failed', { cmdId: r.id, sn, reason: e instanceof ApiError ? e.code : 'error' });
@@ -201,10 +203,10 @@ export class SwitchService {
     this.outcome(p, s, 'ok', null, { cmdId: r.id, sn });
     if (p.op === 'move' && p.from) {
       try {
-        this.d.commands.create(p.actor, p.accountId, p.from, 'switch.forget', { v: 1, switchId: s.id }, { actorType: 'sysadmin' });
+        this.d.commands.create(p.actor, p.accountId, p.from, 'switch.forget', { v: 1, switchId: s.id }, { actorType: typeOf(p.actor) });
       } catch (e) {
         // The old operator keeps the password (it can't be told now): audited, the move stands.
-        this.d.audit.write({ actorType: 'sysadmin', actor: p.actor, action: 'switch-move', accountId: p.accountId, targetType: 'switch', targetId: s.id, targetLabel: s.name, outcome: 'failed',
+        this.d.audit.write({ actorType: typeOf(p.actor), actor: p.actor, action: 'switch-move', accountId: p.accountId, targetType: 'switch', targetId: s.id, targetLabel: s.name, outcome: 'failed',
           detail: { step: 'forget', proxyId: p.from, code: e instanceof ApiError ? e.code : 'error' } });
       }
     }
@@ -220,26 +222,26 @@ export class SwitchService {
   private removeStep(p: Pending, r: CommandRow): void {
     p.open!.delete(r.id);
     if (r.command === 'switch.poeOn' && r.state !== 'done') {
-      this.d.audit.write({ actorType: 'sysadmin', actor: p.actor, action: 'switch-delete', accountId: p.accountId, targetType: 'switch', targetId: p.switchId, outcome: 'failed',
+      this.d.audit.write({ actorType: typeOf(p.actor), actor: p.actor, action: 'switch-delete', accountId: p.accountId, targetType: 'switch', targetId: p.switchId, outcome: 'failed',
         detail: { step: 'poeOn', cmdId: r.id, port: r.args.port ?? null, state: r.state, code: r.outcomeCode } });
     }
     if (p.open!.size > 0 || p.abort) return;
     if (!this.d.db.prepare('SELECT 1 FROM switches WHERE id = ?').get(p.switchId)) return;
-    this.store.deleteSwitch(p.actor, p.accountId, p.switchId);
+    this.store.deleteSwitch(p.actor, p.accountId, p.switchId, typeOf(p.actor));
     this.last.delete(p.switchId);
     this.publish(p.switchId);
   }
 
   private outcome(p: Pending, s: Switch, outcome: SwitchLast['outcome'], code: string | null, detail: Record<string, unknown>): void {
     this.last.set(s.id, { op: p.op, outcome, code, at: this.d.clock.now() });
-    this.d.audit.write({ actorType: 'sysadmin', actor: p.actor, action: 'switch-test', accountId: p.accountId, targetType: 'switch', targetId: s.id, targetLabel: s.name, outcome,
+    this.d.audit.write({ actorType: typeOf(p.actor), actor: p.actor, action: 'switch-test', accountId: p.accountId, targetType: 'switch', targetId: s.id, targetLabel: s.name, outcome,
       detail: { op: p.op, ...(code ? { code } : {}), ...(p.to ? { proxyId: p.to } : {}), ...detail } });
     this.publish(s.id);
   }
 
   // --- helpers --------------------------------------------------------------------------
   private send(p: Pending, proxyId: string, command: 'switch.read' | 'switch.poeOn' | 'switch.forget', args: Record<string, unknown>): string {
-    const cmd = this.d.commands.create(p.actor, p.accountId, proxyId, command, args, { actorType: 'sysadmin' });
+    const cmd = this.d.commands.create(p.actor, p.accountId, proxyId, command, args, { actorType: typeOf(p.actor) });
     this.pending.set(cmd.id, p);
     p.open?.add(cmd.id);
     this.publish(p.switchId);
