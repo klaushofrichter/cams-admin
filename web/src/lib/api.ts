@@ -28,15 +28,33 @@ export async function api<T = any>(method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'D
   return j as T;
 }
 
-export const errorText = (e: unknown): string => {
-  if (!(e instanceof ApiFailure)) return String(e);
-  const known: Record<string, string> = {
+const known: Record<string, string> = {
     duplicate_email: 'This email is already a user of this account.', duplicate_name: 'That name is taken.', duplicate_cams_id: 'That cams id is taken in this account.',
     duplicate_proxy_camera: 'That proxy camera id is already registered.', rename_at_camera: "This camera is behind a proxy: a new name goes to the camera. Reload, and edit it again.",
     proxy_offline: 'The proxy is offline: a rename needs it connected. Try again when it is online.', not_allowed_on_proxy: 'The proxy does not allow this (its allow list).', conflict: 'Someone changed this meanwhile: reload and try again.', confirm_mismatch: 'The typed name does not match.',
     invalid: 'Not valid', fleet_busy: "Another proxy's disruptive action is still running: wait until it reports back (at most 15 min).", rate_limited: 'Too many requests: wait a moment.', proxy_blocked: 'The proxy is blocked.', not_reported: 'The proxy does not report that camera.',
     viewer_tokens_unconfigured: 'Tokens are off: this server has no viewer token key.', too_many_tokens: 'Too many valid tokens for an account (at most 50).', token_unreadable: "This token can't be read with the server's key: make a new one.",
+    // PoE switches and camera power.
+    switch_taken: 'That switch (by its serial number) is already registered under another name.',
+    switch_mismatch: 'The device at this address is a different switch than the one registered (another serial number).',
+    switch_busy: 'Another step on this switch is still running: wait until it finishes.',
+    switch_operated: 'The proxy operates a PoE switch: move or remove the switch first.',
+    save_failed: 'The switch answered, but the change could not be saved: nothing was changed.',
+    not_poe: 'This camera is not powered by a PoE port (data only, or a power adapter): it cannot be power-cycled from here.',
+    power_unknown: 'Where this camera gets its power is not known yet: verify or find it first.',
+    host_unknown: "The camera's address is not known to cams-admin: set its host first.",
+    not_verified: 'The camera was not found on that port: nothing was cut. Verify it, or find it again.',
+    password_unset: "The proxy has no password for this switch (it is tied to the address): set it again on the proxy's Proxy settings, PoE switches.",
+    no_switch: 'No active PoE switch to ask: add a switch and test it first.',
+    switch_unavailable: 'The camera\'s switch is not active.',
+    switch_not_active: 'Test the switch first: it is not active yet.',
+    busy: 'A check or power-cycle is already running on this camera.',
+    not_on_port: 'The camera was not found on that port.',
+    forbidden: 'Only a system administrator can do this.',
   };
+export const codeText = (code: string): string | undefined => known[code];
+export const errorText = (e: unknown): string => {
+  if (!(e instanceof ApiFailure)) return String(e);
   if (e.code === 'fleet_limit') return `Fleet limit: at most 3 disruptive actions in 10 minutes across all proxies${e.field ? `; ${e.field}` : ''}.`;
   const message = (e.body as { message?: unknown } | undefined)?.message;
   if (e.code === 'invalid' && typeof message === 'string') return `Not valid: ${message}.`;

@@ -12,6 +12,8 @@
   import ImportPanel from '../components/ImportPanel.svelte';
   import ViewerTokens from '../components/ViewerTokens.svelte';
   import VisionTab from '../components/VisionTab.svelte';
+  import SwitchesTab from '../components/SwitchesTab.svelte';
+  import CameraPower from '../components/CameraPower.svelte';
 
   let { accountId, tab }: { accountId: string; tab: string } = $props();
 
@@ -21,18 +23,20 @@
   let users = $state<any[]>([]);
   let proxies = $state<any[]>([]);
   let cameras = $state<any[]>([]);
+  let switches = $state<any[]>([]);
   let others = $state<Record<string, string[]>>({});
   let error = $state('');
   let notFound = $state(false);
   let confirmDelete = $state(false);
   // The Vision tab is for system admins only (the server checks it too).
   let systemAdmin = $state(false);
-  const TABS = $derived(['overview', 'users', 'proxies', 'cameras', 'sims', 'import', ...(systemAdmin ? ['vision'] : [])]);
+  const TABS = $derived(['overview', 'users', 'proxies', 'cameras', 'switches', 'sims', 'import', ...(systemAdmin ? ['vision'] : [])]);
 
   async function load() {
     try {
       account = await api('GET', `/accounts/${accountId}`);
       api('GET', '/me').then((m) => (systemAdmin = m?.systemAdmin === true)).catch(() => (systemAdmin = false));
+      api('GET', `/accounts/${accountId}/switches`).then((r) => (switches = r.items)).catch(() => (switches = []));
       [users, proxies, cameras] = await Promise.all([
         api('GET', `/accounts/${accountId}/users`).then((r) => r.items),
         api('GET', `/accounts/${accountId}/proxies`).then((r) => r.items),
@@ -274,7 +278,7 @@
       {@const list = tab === 'sims' ? cameras.filter((c) => c.kind === 'sim') : cameras}
       <div class="scroll-x">
         <table>
-          <thead><tr><th>cams id</th><th>Name</th><th>Kind</th><th>Proxy</th><th class="hide-phone">Proxy id</th><th>Live</th>{#if tab === 'sims'}<th>Runs on / URLs</th>{/if}<th></th></tr></thead>
+          <thead><tr><th>cams id</th><th>Name</th><th>Kind</th><th>Proxy</th><th class="hide-phone">Proxy id</th><th>Live</th><th>Power</th>{#if tab === 'sims'}<th>Runs on / URLs</th>{/if}<th></th></tr></thead>
           <tbody>
             {#each list as c (c.id)}
               <tr data-testid="camera-row-{c.camsId}">
@@ -284,6 +288,7 @@
                 <td><select value={c.proxyId ?? ''} data-testid="camera-proxy-{c.camsId}" onchange={(e) => assign(c, (e.target as HTMLSelectElement).value)}><option value="">— none —</option>{#each proxies as p}<option value={p.id}>{p.name}</option>{/each}</select></td>
                 <td class="hide-phone mono">{#if c.proxyId && c.proxyCameraId}<a href="#/accounts/{accountId}/proxies/{c.proxyId}?camera={encodeURIComponent(c.proxyCameraId)}" data-testid="camera-actions-link-{c.camsId}" title="onboarding and camera actions">{c.proxyCameraId}</a>{:else}{c.proxyCameraId ?? ''}{/if}</td>
                 <td><span class="chip {camClass(liveOf(c))}" data-testid="camera-live-{c.camsId}">{liveOf(c) === true ? 'online' : liveOf(c) === false ? 'offline' : 'unknown'}</span></td>
+                <td>{#if c.kind === 'camera'}<CameraPower camera={c} {switches} canAct={systemAdmin} onchanged={load} />{/if}</td>
                 {#if tab === 'sims' && simEdit[c.id]}
                   {@const s = simEdit[c.id]}
                   <td class="simedit">
@@ -335,6 +340,8 @@
       {#if cProxy}<p class="muted small" data-testid="camera-name-placeholder">The camera's own name replaces this when its proxy reports it.</p>{/if}
       {#if renameDone}<p class="mono small" data-testid="camera-rename-result">{renameDone}</p>{/if}
       {#if cError}<p class="error" data-testid="camera-error">{cError}</p>{/if}
+    {:else if tab === 'switches'}
+      <SwitchesTab {accountId} {proxies} {cameras} canAct={systemAdmin} onchanged={load} />
     {:else if tab === 'import'}
       <ImportPanel accountId={accountId} accountName={account.name} />
     {:else if tab === 'vision' && systemAdmin}
