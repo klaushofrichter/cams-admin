@@ -88,6 +88,8 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
   status.onCameras = (proxyId, cams) => {
     for (const c of registry.fillCameraModels(proxyId, cams)) live.publishRegistry('camera', c.id);
     for (const c of registry.syncCameraNames(proxyId, cams, log)) live.publishRegistry('camera', c.id);
+    // A camera's reported address is its host where the registry has none: a change is a host change (a survey).
+    power.reportedCameras(proxyId, cams);
   };
   const vision = new Vision({ db, clock, registry, status, commands, config, live, log });
   // PoE switches (design 2026-11-07): the lifecycle through the operating proxy's switch commands.
@@ -103,7 +105,8 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
   const autoAdopt = new AutoAdopt({ db, registry, status, audit, live, log });
   status.onHeartbeat = (proxyId) => {
     pins.onHeartbeat(proxyId);
-    autoAdopt.onHeartbeat(proxyId);
+    // An adopted camera: a survey of its account's switches (debounced per switch).
+    for (const c of autoAdopt.onHeartbeat(proxyId)) power.cameraChanged(c.accountId);
   };
   const enrollment = new Enrollment({ db, clock, audit, registry, cfg, serverKeys: [signing.publicKeyB64], onKeyRevoked: (k) => hub.closeKey(k, 4401), onProxyChanged: (p) => live.publishRegistry('proxy', p) });
   const backup = createBackup({ db, clock, cfg, audit, env: merged });

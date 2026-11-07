@@ -398,6 +398,7 @@ export function apiRouter(d: ApiDeps): express.Router {
     // A manual adopt lifts what auto-adopt was blocked from (a camera deleted or moved off this proxy).
     d.registry.liftAdoptBlock(px.id, ref);
     reg('camera', cam.id);
+    d.power.cameraChanged(accountId);
     return cam;
   }));
 

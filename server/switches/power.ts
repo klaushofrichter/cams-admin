@@ -46,7 +46,11 @@ interface Hit { sw: Switch; port: number; watts: number; poe: boolean }
 type Occupying = Extract<CameraPower, { switchId: string }>;
 
 const occupies = (p: CameraPower): p is Occupying => p.kind === 'poe' || p.kind === 'data-only';
-const hostOf = (c: Camera): string | null => (c.host && c.host !== 'from-proxy' ? c.host : null);
+// A reported address without its ":port" (an IPv6 literal keeps its brackets).
+export const bareHost = (a: string): string => {
+  const m = /^(\[[^\]]+\]|[^:]+):\d{1,5}$/.exec(a);
+  return m ? m[1] : a;
+};
 const ref = (s: Switch) => ({ id: s.id, model: s.model, host: s.host, ports: s.ports, offSeconds: s.offSeconds });
 const clamp = (s: string) => (s.length > 200 ? s.slice(0, 199) + '…' : s);
 const LOCATE_TEXT: Record<string, string> = { not_reachable: 'camera not reachable from the operator', ambiguous: 'no clear port (ambiguous)', no_traffic: 'no traffic on any port' };
@@ -71,6 +75,8 @@ export class PowerService {
   private surveys = new Map<string, SurveyView>();
   // A survey asked for while one runs on the switch: at most one waits (the newest caller).
   private queued = new Map<string, Who>();
+  // proxyId → camera ref → the last reported address (memory: the first report after a start is no change).
+  private addresses = new Map<string, Map<string, string>>();
 
   constructor(private d: PowerDeps) {
     d.commands.onFinal((r) => {
@@ -114,7 +120,7 @@ export class PowerService {
         return this.get(c.id);
       }
       if (raw.kind !== 'auto') throw new FieldError('kind');
-      const host = hostOf(c);
+      const host = this.hostOf(c);
       if (!host) return this.refuse('host_unknown', HOST_UNKNOWN);
       if (this.busy(c.id)) return this.refuse('busy', 'a power check or power-cycle of this camera is running');
       this.store(who, c, { kind: 'unknown' }, 'declared auto: search');
@@ -153,8 +159,8 @@ export class PowerService {
     for (const k of Object.keys(b)) if (k !== 'force') throw new FieldError(k, 'unknown');
     if (b.force !== undefined && typeof b.force !== 'boolean') throw new FieldError('force');
     const force = b.force === true;
-    const host = hostOf(c);
-    if (!host) return this.refuse('host_unknown', HOST_UNKNOWN);
+    // A forced cycle sends no host (host:null): it needs none.
+    if (!force && !this.hostOf(c)) return this.refuse('host_unknown', HOST_UNKNOWN);
     const p = c.power;
     if (p.kind === 'unknown') return this.refuse('power_unknown', 'what powers the camera is unknown: verify or search first');
     if (p.kind !== 'poe') return this.refuse('not_poe', p.kind === 'adapter' ? 'not PoE powered (adapter)' : 'not PoE powered: its port draws 0 W');
@@ -229,7 +235,7 @@ export class PowerService {
 
   // --- verify / search / propose --------------------------------------------------------------
   private find(who: Who, c: Camera, op: 'verify' | 'search'): PowerOutcome {
-    const host = hostOf(c);
+    const host = this.hostOf(c);
     if (!host) return this.refuse('host_unknown', HOST_UNKNOWN);
     if (this.busy(c.id)) return this.refuse('busy', 'a power check or power-cycle of this camera is running');
     const flow = this.flow(op);
@@ -245,7 +251,7 @@ export class PowerService {
   }
 
   private propose(who: Who, c: Camera, sw: Switch, port: number): PowerOutcome {
-    const host = hostOf(c);
+    const host = this.hostOf(c);
     if (!host) return this.refuse('host_unknown', HOST_UNKNOWN);
     if (sw.state !== 'active') return this.refuse('switch_not_active', 'test the switch first');
     if (this.busy(c.id)) return this.refuse('busy', 'a power check or power-cycle of this camera is running');
@@ -312,7 +318,7 @@ export class PowerService {
 
   // --- cycle -------------------------------------------------------------------------------------
   private sendCycle(who: Who, c: Camera, sw: Switch, port: number, force: boolean, retried: boolean, flow: PowerFlow): string {
-    const host = force ? null : hostOf(c);
+    const host = force ? null : this.hostOf(c);
     return this.send(who, c.accountId, sw.proxyId, 'switch.cycle', { v: 1, switch: ref(sw), port, host, force, camera: c.id }, flow, (r) => {
       if (r.state === 'done') {
         const res = r.result ?? {};
@@ -327,7 +333,7 @@ export class PowerService {
       const code = r.outcomeCode ?? r.state;
       if (code !== 'not_verified' || force || retried) return this.finishCycle(who, c, flow, 'failed', code, CYCLE_TEXT[code] ?? code);
       // Not on the mapped port: search, then once more on the port it was found on (never a loop).
-      const host2 = hostOf(this.camera(c.id));
+      const host2 = this.hostOf(this.camera(c.id));
       const notes: string[] = [];
       const onHit = (hit: Hit | null) => {
         if (!hit) return this.finishCycle(who, c, flow, 'failed', 'not_verified', clamp(`found on no switch (last known: ${sw.name} port ${port}); ${notes.join('; ')}`));
@@ -353,10 +359,10 @@ export class PowerService {
   // --- survey ------------------------------------------------------------------------------------
   private runSurvey(who: Who, sw: Switch): SurveyStart {
     const cams = this.d.registry.listCameras(sw.accountId).filter((c) => c.power.kind !== 'adapter');
-    const withHost = cams.filter((c) => hostOf(c));
+    const withHost = cams.filter((c) => this.hostOf(c));
     const view: SurveyView = {
       switchId: sw.id, at: this.d.clock.now(), state: 'running', commandIds: [],
-      results: cams.filter((c) => !hostOf(c)).map((c) => ({ cameraId: c.id, camsId: c.camsId, found: false, reason: HOST_UNKNOWN })),
+      results: cams.filter((c) => !this.hostOf(c)).map((c) => ({ cameraId: c.id, camsId: c.camsId, found: false, reason: HOST_UNKNOWN })),
     };
     const open = new Set<string>();
     const end = () => {
@@ -372,7 +378,7 @@ export class PowerService {
     for (const [i, chunk] of chunks.entries()) {
       let id: string;
       try {
-        id = this.send(who, sw.accountId, sw.proxyId, 'switch.survey', { v: 1, switch: ref(sw), cameras: chunk.map((c) => ({ camera: c.id, host: hostOf(c)! })) }, null, (r) => {
+        id = this.send(who, sw.accountId, sw.proxyId, 'switch.survey', { v: 1, switch: ref(sw), cameras: chunk.map((c) => ({ camera: c.id, host: this.hostOf(c)! })) }, null, (r) => {
           open.delete(r.id);
           try {
             this.surveyAnswer(who, sw, chunk, r, view);
@@ -413,9 +419,10 @@ export class PowerService {
           view.results.push({ cameraId: c.id, camsId: c.camsId, found: true, port: res.port as number, kind: stored.kind });
           continue;
         }
-        const reason = typeof res.reason === 'string' ? res.reason : 'no_traffic';
+        const reason = typeof res.reason === 'string' ? res.reason : 'not found';
         view.results.push({ cameraId: c.id, camsId: c.camsId, found: false, reason });
-        if (reason === 'not_reachable') continue;
+        // notSeen only when the operator saw no traffic or no clear port (not_reachable: reported only).
+        if (reason !== 'no_traffic' && reason !== 'ambiguous') continue;
         const cur = this.camera(c.id).power;
         if (occupies(cur) && cur.switchId === sw.id && !cur.notSeen) this.store(who, this.camera(c.id), { ...cur, notSeen: true }, 'not seen in the survey');
       } catch (e) {
@@ -459,6 +466,32 @@ export class PowerService {
     } catch (e) {
       this.d.log.warn({ err: e, cameraId: c.id, command }, 'power_notice_not_sent');
     }
+  }
+
+  // The camera's address: the registry host, else (none, or 'from-proxy') the owning proxy's reported camera
+  // address (its health summary, ":port" dropped); null when neither exists.
+  hostOf(c: Camera): string | null {
+    if (c.host && c.host !== 'from-proxy') return c.host;
+    if (!c.proxyId || !c.proxyCameraId) return null;
+    const a = this.d.status.row(c.proxyId)?.reported?.cameras.find((x) => x.ref === c.proxyCameraId)?.address;
+    return a ? bareHost(a) : null;
+  }
+
+  // After each heartbeat: a camera whose reported address changed (a later report than the first this run) is a
+  // host change for a camera that takes its host from the proxy: a survey of its account (debounced per switch).
+  reportedCameras(proxyId: string, cams: { ref: string; address?: string }[]): void {
+    const seen = this.addresses.get(proxyId) ?? new Map<string, string>();
+    this.addresses.set(proxyId, seen);
+    const accounts = new Set<string>();
+    for (const rc of cams) {
+      if (!rc.address) continue;
+      const before = seen.get(rc.ref);
+      seen.set(rc.ref, rc.address);
+      if (before === undefined || before === rc.address) continue;
+      const row = this.d.db.prepare('SELECT account_id, host FROM cameras WHERE proxy_id = ? AND proxy_camera_id = ?').get(proxyId, rc.ref) as { account_id: string; host: string | null } | undefined;
+      if (row && (!row.host || row.host === 'from-proxy')) accounts.add(row.account_id);
+    }
+    for (const a of accounts) this.cameraChanged(a);
   }
 
   private allowed(proxyId: string, command: string): boolean {

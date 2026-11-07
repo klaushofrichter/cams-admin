@@ -10,6 +10,7 @@ import type { CameraPower } from '../server/switches/store';
 import { SYSTEM } from '../server/switches/power';
 import { SurveySchedule } from '../server/switches/schedule';
 import { nextRunAt } from '../server/backup/scheduler';
+import { makeSummary } from '../test-client/summaries';
 
 const ACTOR = 'admin@example.com';
 const ALL = [...SWITCH_COMMANDS, ...POWER_COMMANDS];
@@ -22,6 +23,7 @@ let n = 0;
 
 beforeEach(async () => {
   resetAccounts();
+  reportedAddr = {};
   clock = fakeClock(Date.now());
   s = await startServer(dir, { HEARTBEAT_MIN_GAP_MS: '0', LIMIT_MSG_PER_MIN: '10000', LIMIT_HELLO_PER_PROXY: '1000', TICK_MS: '60000', LIMIT_COMMANDS_PER_MIN: '1000' }, 0, clock);
 });
@@ -30,9 +32,21 @@ afterEach(async () => {
   await s.stop();
 });
 
+// The cameras' reported addresses (summary camera.address) by proxy camera id; undefined → none reported.
+let reportedAddr: Record<string, string | undefined> = {};
 async function proxy(allow: string[] = ALL) {
   const p = await enrolled(s, `pw${n++}`);
-  const client = makeClient(p.key, { commands: { allow } });
+  const summary = () => {
+    const sum = makeSummary({ cameras: 2, now: Date.now() });
+    for (const c of sum.cameras as { camera: { id: string; address?: string } }[]) {
+      if (!(c.camera.id in reportedAddr)) continue;
+      const a = reportedAddr[c.camera.id];
+      if (a === undefined) delete c.camera.address;
+      else c.camera.address = a;
+    }
+    return sum;
+  };
+  const client = makeClient(p.key, { commands: { allow }, summary });
   clients.push(client);
   client.start();
   await until(() => !!s.built.status.row(p.proxyId)?.reported?.commands, 5000, 'commands report');
@@ -239,11 +253,63 @@ describe('camera power', () => {
     const cam = await camera(p, null);
     const a = await sw(p, 'Alpha');
     setPower(cam.id, { kind: 'poe', switchId: a.id, port: 3, watts: 4 });
-    for (const [m, path, body] of [['POST', 'verify', {}], ['POST', 'cycle', {}], ['POST', 'cycle', { force: true }], ['PUT', '', { kind: 'auto' }], ['PUT', '', { switchId: a.id, port: 3 }]] as const) {
+    for (const [m, path, body] of [['POST', 'verify', {}], ['POST', 'cycle', {}], ['PUT', '', { kind: 'auto' }], ['PUT', '', { switchId: a.id, port: 3 }]] as const) {
       const r = await call(m, `/cameras/${cam.id}/power${path ? `/${path}` : ''}`, body);
       expect([r.status, r.body], `${m} ${path} ${JSON.stringify(body)}`).toEqual([409, { error: 'host_unknown', message: HOST_UNKNOWN }]);
     }
     expect(s.built.power.cycle(SYSTEM, cam.id, {})).toEqual({ ok: false, code: 'host_unknown', reason: HOST_UNKNOWN });
+    // A forced cycle needs no host: it sends host null.
+    expect((await call('POST', `/cameras/${cam.id}/power/cycle`, { force: true })).status).toBe(202);
+    await cycleDone(cam.id);
+    expect(sent(p, 'switch.cycle')).toEqual([{ v: 1, switch: expect.objectContaining({ id: a.id }), port: 3, host: null, force: true, camera: cam.id }]);
+    expect((await power(cam.id)).lastCycle).toMatchObject({ force: true, state: 'ok' });
+  });
+
+  it("an adopted camera (host from-proxy) takes its proxy's reported address: verify, cycle, survey; none reported → host unknown", async () => {
+    reportedAddr = { cam1: '192.0.2.77:443', cam2: undefined };
+    const p = await proxy();
+    await until(() => s.built.status.row(p.prx)?.reported?.cameras.find((c) => c.ref === 'cam1')?.address === '192.0.2.77:443', 5000, 'address reported');
+    const adopt = async (ref: string) => {
+      const r = await call('POST', `/accounts/${p.acc}/proxies/${p.prx}/adopt`, { proxyCameraId: ref });
+      expect(r.status, JSON.stringify(r.body)).toBe(201);
+      expect(r.body.host).toBe('from-proxy');
+      return r.body as { id: string };
+    };
+    const c1 = await adopt('cam1');
+    const c2 = await adopt('cam2');
+    const a = await sw(p, 'Alpha');
+    setPower(c1.id, { kind: 'poe', switchId: a.id, port: 3, watts: 4 });
+    setPower(c2.id, { kind: 'poe', switchId: a.id, port: 4, watts: 4 });
+    p.client.switchResults['switch.locate'] = found(3, 4);
+    expect((await call('POST', `/cameras/${c1.id}/power/verify`)).status).toBe(202);
+    await checkDone(c1.id);
+    expect(sent(p, 'switch.locate').map((x) => x.host)).toEqual(['192.0.2.77']);
+    expect((await call('POST', `/cameras/${c1.id}/power/cycle`, {})).status).toBe(202);
+    await cycleDone(c1.id);
+    expect(sent(p, 'switch.cycle').map((x) => [x.host, x.force])).toEqual([['192.0.2.77', false]]);
+    expect((await call('POST', `/switches/${a.id}/survey`)).status).toBe(202);
+    await until(async () => (await call('GET', `/switches/${a.id}/survey`)).body.state === 'done', 5000, 'survey done');
+    expect(sent(p, 'switch.survey')[0].cameras).toEqual([{ camera: c1.id, host: '192.0.2.77' }]);
+    expect((await call('GET', `/switches/${a.id}/survey`)).body.results.find((x: { cameraId: string }) => x.cameraId === c2.id)).toMatchObject({ found: false, reason: HOST_UNKNOWN });
+    expect((await call('POST', `/cameras/${c2.id}/power/verify`)).body).toEqual({ error: 'host_unknown', message: HOST_UNKNOWN });
+  });
+
+  it('adopting a camera, and a changed reported address, each trigger one survey', async () => {
+    reportedAddr = { cam1: '192.0.2.77' };
+    const p = await proxy();
+    await until(() => s.built.status.row(p.prx)?.reported?.cameras.find((c) => c.ref === 'cam1')?.address === '192.0.2.77', 5000, 'address reported');
+    const a = await sw(p, 'Alpha');
+    const surveyDone = () => until(async () => (await call('GET', `/switches/${a.id}/survey`)).body.state === 'done', 5000, 'survey done');
+    expect((await call('POST', `/accounts/${p.acc}/proxies/${p.prx}/adopt`, { proxyCameraId: 'cam1' })).status).toBe(201);
+    await until(() => sent(p, 'switch.survey').length === 1, 5000, 'survey after adopt');
+    await surveyDone();
+    reportedAddr.cam1 = '192.0.2.78';
+    await until(() => sent(p, 'switch.survey').length === 2, 5000, 'survey after an address change');
+    await surveyDone();
+    expect(sent(p, 'switch.survey')[1].cameras).toEqual([expect.objectContaining({ host: '192.0.2.78' })]);
+    // More heartbeats (every 0.2 s) with the same address: no more surveys.
+    await new Promise((r) => setTimeout(r, 800));
+    expect(sent(p, 'switch.survey')).toHaveLength(2);
   });
 
   it('survey: 20 cameras → 2 commands; found → mapped; not seen keeps the mapping with notSeen; not_reachable sets nothing', async () => {
