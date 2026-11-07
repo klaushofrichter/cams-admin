@@ -604,4 +604,26 @@ CREATE TABLE proxy_analytics (
   result TEXT NOT NULL CHECK (json_valid(result) AND length(result) <= 65536)
 ) STRICT;
 `),
+  // 22: PoE switches (design 2026-11-07-poe-switches-design.md): a switch record per account, run by one proxy.
+  (db) => db.exec(`
+CREATE TABLE switches (
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  model TEXT NOT NULL CHECK (model IN ('sscpoe-web')),
+  host TEXT NOT NULL,
+  ports INTEGER NOT NULL,
+  off_seconds INTEGER NOT NULL,
+  proxy_id TEXT NOT NULL REFERENCES proxies(id),
+  state TEXT NOT NULL CHECK (state IN ('pending','active')),
+  sn TEXT,
+  firmware TEXT,
+  read_at INTEGER,
+  survey INTEGER NOT NULL DEFAULT 1,
+  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+  UNIQUE(account_id, name)
+) STRICT;
+`),
+  // 23: what powers a camera (JSON; NULL reads as unknown).
+  (db) => db.exec(`ALTER TABLE cameras ADD COLUMN power TEXT CHECK (power IS NULL OR json_valid(power));`),
 ];

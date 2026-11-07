@@ -3,6 +3,7 @@ import type { Audit, AuditAction } from './audit';
 import { nameChanges } from './audit';
 import { tx, type Db } from './db/open';
 import { newId } from './ids';
+import type { CameraPower } from './switches/store';
 import { cameraNameProblem } from './cameraName';
 import {
   accountInput, cameraInput, checkCameraHost, checkCameraProxy, FieldError, normaliseEmail, normaliseFingerprint, proxyInput, simInput, userInput,
@@ -35,7 +36,7 @@ export interface ProxyKey { id: string; proxyId: string; publicKey: string; fing
 export const PENDING_KEY_MS = 24 * 3600_000;
 export const pendingExpired = (createdAt: number, now: number) => now - createdAt >= PENDING_KEY_MS;
 export interface Sim extends SimFields { cameraId: string }
-export interface Camera extends CameraFields { id: string; accountId: string; createdAt: number; updatedAt: number; version: number; sim: Sim | null }
+export interface Camera extends CameraFields { power: CameraPower; id: string; accountId: string; createdAt: number; updatedAt: number; version: number; sim: Sim | null }
 export interface Membership { accountId: string; accountName: string; displayName: string; role: 'admin' | 'viewer' }
 
 const toAccount = (r: Row): Account => ({ id: r.id as string, name: r.name as string, displayName: r.display_name as string, notes: r.notes as string | null, autoAdopt: r.auto_adopt === 1, createdAt: r.created_at as number, updatedAt: r.updated_at as number, version: r.version as number });
@@ -58,6 +59,7 @@ const toCamera = (r: Row, sim: Sim | null): Camera => ({
   name: r.name as string, kind: r.kind as Camera['kind'], model: r.model as string | null, host: r.host as string | null, protocol: r.protocol as string | null,
   tlsServername: r.tls_servername as string | null, cameraUser: r.camera_user as string | null, webUiUrl: r.web_ui_url as string | null, webUiNote: r.web_ui_note as string | null,
   notes: r.notes as string | null, createdAt: r.created_at as number, updatedAt: r.updated_at as number, version: r.version as number, sim,
+  power: r.power ? (JSON.parse(r.power as string) as CameraPower) : { kind: 'unknown' },
 });
 
 // camelCase field → column.
@@ -65,9 +67,9 @@ const COLUMNS: Record<string, string> = {
   name: 'name', displayName: 'display_name', notes: 'notes', email: 'email', role: 'role', disabled: 'disabled',
   runsOn: 'runs_on', hostKind: 'host_kind', url: 'url', adminUiUrl: 'admin_ui_url', dnsName: 'dns_name', tlsSite: 'tls_site', tlsServername: 'tls_servername', caFingerprints: 'ca_fingerprints',
   proxyId: 'proxy_id', camsId: 'cams_id', proxyCameraId: 'proxy_camera_id', kind: 'kind', model: 'model', host: 'host', protocol: 'protocol', cameraUser: 'camera_user', webUiUrl: 'web_ui_url', webUiNote: 'web_ui_note',
-  controlUrl: 'control_url', uiUrl: 'ui_url', image: 'image', autoAdopt: 'auto_adopt',
+  controlUrl: 'control_url', uiUrl: 'ui_url', image: 'image', autoAdopt: 'auto_adopt', power: 'power',
 };
-const dbValue = (k: string, v: unknown): string | number | null => (k === 'caFingerprints' ? JSON.stringify(v) : k === 'disabled' || k === 'autoAdopt' ? (v ? 1 : 0) : (v as string | number | null));
+const dbValue = (k: string, v: unknown): string | number | null => (k === 'caFingerprints' || k === 'power' ? JSON.stringify(v) : k === 'disabled' || k === 'autoAdopt' ? (v ? 1 : 0) : (v as string | number | null));
 
 // SQLite constraint messages → API errors naming the field.
 function mapConstraint(e: unknown): never {
