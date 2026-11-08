@@ -329,6 +329,45 @@ export class Registry {
     }));
   }
 
+  // What deleteProxy takes with it (the Delete dialog; read only). Goes (cascade): moves it was in, tokens, cams
+  // routes, keys. Stays: its cameras (without a proxy), its command records (without a proxy), the audit log.
+  // Refused while a move runs or it operates a switch.
+  proxyDeletePreview(accountId: string, id: string): { cameras: number; moves: number; activeMoves: number; tokens: number; liveTokens: number; routes: number; keys: number; commands: number; switches: string[] } {
+    this.getProxy(accountId, id);
+    const n = (sql: string, ...args: string[]) => (this.db.prepare(sql).get(...args) as { n: number }).n;
+    return {
+      cameras: n('SELECT count(*) n FROM cameras WHERE proxy_id = ?', id),
+      moves: n('SELECT count(*) n FROM moves WHERE source_proxy_id = ? OR target_proxy_id = ?', id, id),
+      activeMoves: n('SELECT count(*) n FROM moves WHERE ended_at IS NULL AND (source_proxy_id = ? OR target_proxy_id = ?)', id, id),
+      tokens: n('SELECT count(*) n FROM proxy_tokens WHERE proxy_id = ?', id),
+      liveTokens: n(`SELECT count(*) n FROM proxy_tokens WHERE proxy_id = ? AND state IN ('pending','active','retiring')`, id),
+      routes: n('SELECT count(*) n FROM cams_instance_routes WHERE proxy_id = ?', id),
+      keys: n('SELECT count(*) n FROM proxy_keys WHERE proxy_id = ? AND revoked_at IS NULL', id),
+      commands: n('SELECT count(*) n FROM commands WHERE proxy_id = ?', id),
+      switches: (this.db.prepare('SELECT name FROM switches WHERE proxy_id = ? ORDER BY name').all(id) as { name: string }[]).map((x) => x.name),
+    };
+  }
+
+  // What deleteAccount takes with it (the Delete dialog; read only): everything in the account; the cams instances
+  // and viewer tokens that serve it lose it; the audit log stays.
+  accountDeletePreview(id: string): { users: number; proxies: number; cameras: number; moves: number; activeMoves: number; commands: number; tokens: number; routes: number; switches: number; camsInstances: number; viewerTokens: number } {
+    this.getAccount(id);
+    const n = (sql: string) => (this.db.prepare(sql).get(id) as { n: number }).n;
+    return {
+      users: n('SELECT count(*) n FROM account_users WHERE account_id = ?'),
+      proxies: n('SELECT count(*) n FROM proxies WHERE account_id = ?'),
+      cameras: n('SELECT count(*) n FROM cameras WHERE account_id = ?'),
+      moves: n('SELECT count(*) n FROM moves WHERE account_id = ?'),
+      activeMoves: n('SELECT count(*) n FROM moves WHERE account_id = ? AND ended_at IS NULL'),
+      commands: n('SELECT count(*) n FROM commands WHERE account_id = ?'),
+      tokens: n('SELECT count(*) n FROM proxy_tokens WHERE account_id = ?'),
+      routes: n('SELECT count(*) n FROM cams_instance_routes r JOIN proxies p ON p.id = r.proxy_id WHERE p.account_id = ?'),
+      switches: n('SELECT count(*) n FROM switches WHERE account_id = ?'),
+      camsInstances: n('SELECT count(*) n FROM cams_instance_accounts WHERE account_id = ?'),
+      viewerTokens: n('SELECT count(*) n FROM viewer_token_accounts WHERE account_id = ?'),
+    };
+  }
+
   // Spec §8.10: state revoked; the active key and any live code die.
   blockProxy(actor: string, accountId: string, id: string): Proxy {
     return guard(() => tx(this.db, () => {

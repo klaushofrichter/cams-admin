@@ -158,6 +158,9 @@ describe('tokens', () => {
 
   it('restore: a proxy ahead of cams-admin blocks token changes until an admin confirms; then the set goes out above it', async () => {
     const { acc, prx, client } = await proxy();
+    // The record had a token set (a fresh record takes a proxy ahead without the question: the test below).
+    const first = T().issue(ACTOR, acc, prx, { kind: 'client', label: 'before the restore' });
+    await until(() => tokenState(acc, prx, first.tokenId) === 'active');
     client.tokensRevision = 50; // the proxy has seen revision 50 (from before the restore)
     await until(() => T().list(acc, prx).ahead === 50, 5000, 'ahead from the heartbeat');
     expect(() => T().issue(ACTOR, acc, prx, { kind: 'client', label: 'x' })).toThrow(expect.objectContaining({ status: 409, code: 'proxy_ahead' }));
@@ -171,6 +174,37 @@ describe('tokens', () => {
     const r = T().issue(ACTOR, acc, prx, { kind: 'client', label: 'after restore' });
     await until(() => tokenState(acc, prx, r.tokenId) === 'active');
     expect(() => T().confirmRestore(ACTOR, acc, prx)).toThrow(expect.objectContaining({ status: 409, code: 'not_ahead' }));
+  });
+
+  it('a re-enrolled proxy (a new record that never had a token set) ahead of us: the set goes out above it without the question, audited new-record', async () => {
+    const { acc, prx, client } = await proxy();
+    client.tokensRevision = 14; // kept from its old record (deleted, the proxy added and enrolled again)
+    await until(() => client.tokensRevision === 15, 5000, 'our set above the proxy\'s revision');
+    // The proxy took it; its result reaches cams-admin a moment later.
+    await until(() => T().list(acc, prx).appliedRevision === 15, 5000, 'the result confirmed');
+    expect(T().list(acc, prx)).toMatchObject({ ahead: null, revision: 15, appliedRevision: 15, items: [] });
+    expect(audit('command-create').filter((d) => d.reason === 'new-record')).toMatchObject([{ command: 'tokens.apply' }]);
+    expect(s.built.db.prepare(`SELECT actor_type, actor FROM audit_log WHERE action = 'command-create' ORDER BY id DESC LIMIT 1`).get()).toEqual({ actor_type: 'system', actor: 'system' });
+    expect(appliedArgs(client).at(-1)).toMatchObject({ revision: 15, tokens: [] });
+    // Token changes work at once; no restore question.
+    const r = T().issue(ACTOR, acc, prx, { kind: 'client', label: 'after re-enroll' });
+    await until(() => tokenState(acc, prx, r.tokenId) === 'active');
+    expect(T().list(acc, prx).revision).toBe(16);
+    expect(() => T().confirmRestore(ACTOR, acc, prx)).toThrow(expect.objectContaining({ status: 409, code: 'not_ahead' }));
+    expect(audit('command-create').filter((d) => d.reason === 'new-record')).toHaveLength(1);
+  });
+
+  it('a new record whose proxy cannot take the set yet: the guard holds (no token change slips in) and the set goes out once it can, without the question', async () => {
+    const { acc, prx, client } = await proxy([]);
+    client.tokensRevision = 14;
+    await until(() => T().list(acc, prx).ahead === 14, 5000, 'ahead while the proxy refuses tokens.apply');
+    expect(() => T().issue(ACTOR, acc, prx, { kind: 'client', label: 'x' })).toThrow(expect.objectContaining({ status: 409, code: 'proxy_ahead' }));
+    client.commands!.allow = ['tokens.apply', 'tokens.apply.admin'];
+    await until(() => client.tokensRevision === 15, 5000, 'taken once allowed');
+    await until(() => T().list(acc, prx).appliedRevision === 15, 5000, 'the result confirmed');
+    expect(T().list(acc, prx)).toMatchObject({ ahead: null, revision: 15, appliedRevision: 15 });
+    expect(audit('command-create').filter((d) => d.reason === 'new-record')).toHaveLength(1);
+    expect(audit('command-create').filter((d) => d.reason === 'restore-confirmed')).toHaveLength(0);
   });
 
   it('restore: a stale answer at our own revision (another set with the same number) also asks for the confirmation, never auto-confirms', async () => {

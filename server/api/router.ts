@@ -170,6 +170,8 @@ export function apiRouter(d: ApiDeps): express.Router {
     d.registry.deleteAccount(actor(res), id, req.body?.confirmName);
     reg('account', id);
   }));
+  // What a Delete takes with it, for the confirmation (read only).
+  r.get('/accounts/:accountId/delete-preview', h((req) => d.registry.accountDeletePreview(p(req, 'accountId'))));
   r.get('/accounts/:accountId/users', h((req) => ({ items: d.registry.listUsers(p(req, 'accountId')) })));
   r.post('/accounts/:accountId/users', h((req, res) => { created(res); const u = d.registry.createUser(actor(res), p(req, 'accountId'), req.body); reg('user', u.id); return u; }));
   r.patch('/accounts/:accountId/users/:userId', h((req, res) => { const u = d.registry.updateUser(actor(res), p(req, 'accountId'), p(req, 'userId'), req.body); reg('user', u.id); return u; }));
@@ -214,6 +216,7 @@ export function apiRouter(d: ApiDeps): express.Router {
     for (const k of keyIds) d.hub.closeKey(k, 4403);
     reg('proxy', p(req, 'proxyId'));
   }));
+  r.get(`${proxyBase}/delete-preview`, h((req) => d.registry.proxyDeletePreview(p(req, 'accountId'), p(req, 'proxyId'))));
   r.post(`${proxyBase}/enrollment-codes`, h((req, res) => {
     created(res);
     const c = d.enrollment.createCode(actor(res), p(req, 'accountId'), p(req, 'proxyId'), req.body?.lifetimeH);

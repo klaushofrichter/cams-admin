@@ -57,6 +57,14 @@ cams-admin restored from a backup?" and Issue, Retire and Re-apply answer
 2. **Confirm** on the card: cams-admin sends its current set above the
    proxy's revision, and token changes work again.
 
+A proxy record that has never had a token set (no token rows and no
+`tokens.apply` ever, as after a proxy was deleted, added again and
+re-enrolled) is not asked about: cams-admin sends its set above the proxy's
+revision at once (audit `command-create`, reason `new-record`). After a
+restore this also covers a proxy whose record in the backup had no tokens
+yet. Tokens issued for it after the backup are dropped from the proxy, which
+is what Confirm would have sent as well.
+
 ## cams instances after a restore
 
 A restore must not bring back a blocked cams instance, a revoked cams key

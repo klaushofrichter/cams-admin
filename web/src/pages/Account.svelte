@@ -9,6 +9,8 @@
   import StateChip from '../components/StateChip.svelte';
   import ProxyGui from '../components/ProxyGui.svelte';
   import Confirm from '../components/Confirm.svelte';
+  import DeleteLines from '../components/DeleteLines.svelte';
+  import { accountDeleteLines, cameraDeleteLines, type DeleteLines as Lines } from '../lib/deletes';
   import ImportPanel from '../components/ImportPanel.svelte';
   import ViewerTokens from '../components/ViewerTokens.svelte';
   import VisionTab from '../components/VisionTab.svelte';
@@ -28,6 +30,8 @@
   let error = $state('');
   let notFound = $state(false);
   let confirmDelete = $state(false);
+  let deleteLines = $state<Lines | null>(null);
+  let deletingCamera = $state<any>(null);
   // The Vision tab is for system admins only (the server checks it too).
   let systemAdmin = $state(false);
   const TABS = $derived(['overview', 'users', 'proxies', 'cameras', 'switches', 'sims', 'import', ...(systemAdmin ? ['vision'] : [])]);
@@ -71,6 +75,12 @@
   async function saveAccount() {
     error = '';
     try { account = await api('PATCH', `/accounts/${accountId}`, { name: editName, displayName: editDisplay, notes: editNotes || null, autoAdopt: editAutoAdopt, version: account.version }); } catch (e) { error = errorText(e); }
+  }
+  // The Delete dialog names what goes and what stays (counts from the server).
+  async function askDeleteAccount() {
+    deleteLines = null;
+    confirmDelete = true;
+    try { deleteLines = accountDeleteLines(await api('GET', `/accounts/${accountId}/delete-preview`)); } catch (e) { confirmDelete = false; error = errorText(e); }
   }
   async function deleteAccount() {
     try { await api('DELETE', `/accounts/${accountId}`, { confirmName: account.name }); location.hash = '#/accounts'; } catch (e) { error = errorText(e); confirmDelete = false; }
@@ -171,7 +181,9 @@
       cError = renameError(otherSaved, e?.status === 409 && e?.code === 'conflict' ? 'Someone changed this camera meanwhile: cancel, and edit it again.' : errorText(e));
     } finally { renaming = false; }
   }
-  async function deleteCamera(c: any) {
+  async function deleteCamera() {
+    const c = deletingCamera;
+    deletingCamera = null;
     try { await api('DELETE', `/accounts/${accountId}/cameras/${c.id}`); await load(); } catch (e) { cError = errorText(e); }
   }
   const liveOf = (c: any) => {
@@ -201,7 +213,8 @@
 {:else if account}
   <section class="card grid">
     <div class="row"><a href="#/accounts" class="muted">Accounts</a><span class="muted">/</span><h2 data-testid="account-title">{account.displayName}</h2><span class="mono muted">{account.name}</span></div>
-    {#if admins === 0}<p class="badge warn" data-testid="no-admin-warning">This account has no admin user.</p>{/if}
+    {#if users.length === 0}<p class="badge warn" data-testid="no-admin-warning">This account has no users: nobody can open it in cams with a Google sign-in until a user is added under Users.</p>
+    {:else if admins === 0}<p class="badge warn" data-testid="no-admin-warning">This account has no admin user.</p>{/if}
     <nav class="tabs row">
       {#each TABS as t}
         <button class="btn" class:on={tab === t} data-testid="tab-{t}" onclick={() => go(t)}>{t[0].toUpperCase() + t.slice(1)}</button>
@@ -220,7 +233,7 @@
       <div class="row">
         <button class="btn primary" data-testid="account-save" onclick={saveAccount}>Save</button>
         <span class="muted">{users.length} users · {proxies.length} proxies · {cameras.length} cameras · <span class="mono">{account.id}</span></span>
-        <button class="btn danger right" data-testid="delete-account" onclick={() => (confirmDelete = true)}>Delete account</button>
+        <button class="btn danger right" data-testid="delete-account" onclick={askDeleteAccount}>Delete account</button>
       </div>
     {:else if tab === 'users'}
       <div class="scroll-x">
@@ -298,7 +311,7 @@
                     <button class="btn" data-testid="sim-save-{c.camsId}" onclick={() => saveSim(c)}>Save</button>
                   </td>
                 {/if}
-                <td class="row"><button class="btn" data-testid="camera-edit-{c.camsId}" onclick={() => editCamera(c)}>Edit</button><button class="btn danger" data-testid="camera-delete-{c.camsId}" onclick={() => deleteCamera(c)}>Delete</button></td>
+                <td class="row"><button class="btn" data-testid="camera-edit-{c.camsId}" onclick={() => editCamera(c)}>Edit</button><button class="btn danger" data-testid="camera-delete-{c.camsId}" onclick={() => (deletingCamera = c)}>Delete</button></td>
               </tr>
             {/each}
           </tbody>
@@ -349,7 +362,14 @@
     {/if}
   </section>
   {#if confirmDelete}
-    <Confirm title="Delete account {account.name}" body="This deletes its users, proxies, keys, cameras and status, and disconnects its proxies. A restore from backup is the only undo." typed={account.name} ok="Delete account" onconfirm={deleteAccount} oncancel={() => (confirmDelete = false)} />
+    <Confirm title="Delete account {account.name}" body="Everything in the account goes and its proxies are disconnected. A restore from backup is the only undo." typed={account.name} ok="Delete account" okDisabled={!deleteLines || !!deleteLines.blocked} onconfirm={deleteAccount} oncancel={() => (confirmDelete = false)}>
+      <DeleteLines lines={deleteLines} testid="account-delete-lines" />
+    </Confirm>
+  {/if}
+  {#if deletingCamera}
+    <Confirm title="Delete camera {deletingCamera.camsId}" body="The camera's record leaves the account; cams no longer shows it." ok="Delete camera" onconfirm={deleteCamera} oncancel={() => (deletingCamera = null)}>
+      <DeleteLines lines={cameraDeleteLines(mappedCam(deletingCamera))} testid="camera-delete-lines" />
+    </Confirm>
   {/if}
 {:else if error}
   <p class="error">{error}</p>

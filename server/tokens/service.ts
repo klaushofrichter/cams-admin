@@ -371,6 +371,7 @@ export class Tokens {
     if (!t || !Number.isSafeInteger(t.revision)) return;
     const st = this.state(proxyId);
     if (t.revision > st.revision) {
+      if (this.takeForNewRecord(proxyId, t.revision)) return;
       if (this.ahead.get(proxyId) !== t.revision) {
         this.ahead.set(proxyId, t.revision);
         this.d.live.publishRegistry('proxy', proxyId);
@@ -381,6 +382,28 @@ export class Tokens {
     if (t.revision <= st.appliedRevision) return;
     const sent = this.q(`SELECT 1 FROM commands WHERE proxy_id = ? AND command = 'tokens.apply' AND attempts > 0 AND json_extract(args, '$.revision') = ? AND state NOT IN ('refused','failed')`).get(proxyId, t.revision);
     if (sent) this.confirm(proxyId, t.revision);
+  }
+
+  // A proxy ahead of a record that never had a token set (no token rows, no tokens.apply ever, revision 0) is not a
+  // restore: it was deleted and added again (re-enrolled) and kept its old record's revision. Our (empty) set goes
+  // out above it at once, audited as command-create reason 'new-record'. While the proxy can't take it (paused, not
+  // allowed) the guard stands, so no token change slips in below it, and each heartbeat tries again.
+  private takeForNewRecord(proxyId: string, proxyRevision: number): boolean {
+    const st = this.state(proxyId);
+    if (st.revision !== 0 || st.appliedRevision !== 0) return false;
+    if (this.q('SELECT 1 FROM proxy_tokens WHERE proxy_id = ? LIMIT 1').get(proxyId)) return false;
+    if (this.q(`SELECT 1 FROM commands WHERE proxy_id = ? AND command = 'tokens.apply' LIMIT 1`).get(proxyId)) return false;
+    const px = this.d.registry.proxyById(proxyId);
+    if (!px) return false;
+    try {
+      tx(this.d.db, () => this.nextApply('system', px.accountId, proxyId, 'new-record', proxyRevision + 1, false, 'system'));
+    } catch (e) {
+      this.d.log.debug({ proxyId, err: (e as Error).message }, 'tokens_new_record_not_queued');
+      return false;
+    }
+    this.d.log.info({ proxyId, proxyRevision, revision: proxyRevision + 1 }, 'tokens_new_record');
+    if (this.ahead.delete(proxyId)) this.d.live.publishRegistry('proxy', proxyId);
+    return true;
   }
 
   // A live proxy below our revision with no tokens.apply on its way (it

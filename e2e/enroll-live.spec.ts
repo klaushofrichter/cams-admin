@@ -113,6 +113,8 @@ test('revoke a key, block, delete the account with its typed name; the audit log
   await expect(page.getByTestId('live-state')).toHaveAttribute('data-state', 'revoked');
   await page.goto(`/#/accounts/${acc.id}`);
   await page.getByTestId('delete-account').click();
+  await expect(page.getByTestId('account-delete-lines-goes')).toContainText('1 proxy (disconnected, keys revoked)');
+  await expect(page.getByTestId('account-delete-lines-stays')).toContainText('the audit log');
   await expect(page.getByTestId('confirm-ok')).toBeDisabled();
   await page.getByTestId('confirm-input').fill(name);
   await page.getByTestId('confirm-ok').click();
