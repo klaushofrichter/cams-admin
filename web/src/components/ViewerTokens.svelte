@@ -6,7 +6,7 @@
   import { api, errorText } from '../lib/api';
   import { live } from '../lib/live';
   import { when } from '../lib/format';
-  import { ADMIN_WARNING, DEFAULT_VALIDITY_DAYS, ROLES, VALIDITY, linkHost, qrPath, roleClass, stateClass } from '../lib/viewerTokens';
+  import { ADMIN_WARNING, DEFAULT_VALIDITY_DAYS, ROLES, VALIDITY, linkHost, qrPath, roleClass, stateClass, viewerLabel, type ViewerLink } from '../lib/viewerTokens';
   import Ago from './Ago.svelte';
   import Confirm from './Confirm.svelte';
 
@@ -47,7 +47,7 @@
       days = DEFAULT_VALIDITY_DAYS;
       role = 'viewer';
       chosen = { [accountId]: true };
-      qr = { name: r.item.name, link: r.link, ...qrPath(r.link) };
+      showQr(r.item.name, r);
       await load();
     } catch (err) { error = errorText(err); }
   }
@@ -66,17 +66,25 @@
       flash(t.id, 'Copied');
     } catch (e) { flash(t.id, 'Copy failed'); if (!(e instanceof DOMException)) error = errorText(e); }
   }
-  let qr = $state<{ name: string; link: string; size: number; path: string } | null>(null);
+  // The QR window: one link per viewer that can sign the token in (finding 19); the server builds them, the main one first.
+  let qr = $state<{ name: string; links: ViewerLink[]; pick: number } | null>(null);
+  const shown = $derived.by(() => {
+    if (!qr) return null;
+    const v = qr.links[qr.pick] ?? qr.links[0];
+    return { link: v.link, ...qrPath(v.link) };
+  });
+  const showQr = (name: string, r: { link: string; links?: ViewerLink[] }) => {
+    qr = { name, links: r.links?.length ? r.links : [{ instanceId: null, name: '', base: r.link, link: r.link }], pick: 0 };
+  };
   async function openQr(t: Tok) {
     error = '';
     try {
-      const r = await api('POST', `/viewer-tokens/${t.id}/copy`, { what: 'qr' });
-      qr = { name: t.name, link: r.link, ...qrPath(r.link) };
+      showQr(t.name, await api('POST', `/viewer-tokens/${t.id}/copy`, { what: 'qr' }));
     } catch (e) { error = errorText(e); }
   }
   async function copyLink() {
-    if (!qr) return;
-    try { await navigator.clipboard.writeText(qr.link); flash('qr', 'Copied'); } catch { flash('qr', 'Copy failed'); }
+    if (!shown) return;
+    try { await navigator.clipboard.writeText(shown.link); flash('qr', 'Copied'); } catch { flash('qr', 'Copy failed'); }
   }
 
   // --- validity, accounts, delete -------------------------------------------------------------
@@ -152,18 +160,21 @@
     </fieldset>
     <button class="btn primary" data-testid="vt-add" disabled={!configured}>Add token</button>
   </form>
-  {#if role === 'admin' || items.some((t) => t.role === 'admin')}<p class="badge warn" data-testid="vt-admin-warning">{ADMIN_WARNING}</p>{/if}
+  {#if role === 'admin'}<p class="badge warn" data-testid="vt-admin-warning">{ADMIN_WARNING}</p>{/if}
   {#if error}<p class="error" data-testid="vt-error">{error}</p>{/if}
 </section>
 
-{#if qr}
+{#if qr && shown}
   <div class="scrim" role="presentation" onclick={() => (qr = null)}></div>
   <div class="dialog card" role="dialog" aria-modal="true" aria-label="Sign-in QR code" data-testid="vt-qr-window">
     <h3>Sign in as “{qr.name}”</h3>
-    <svg class="qr" viewBox="0 0 {qr.size} {qr.size}" shape-rendering="crispEdges" role="img" aria-label="QR code of the sign-in link" data-testid="vt-qr-code">
-      <rect width={qr.size} height={qr.size} fill="#fff" /><path d={qr.path} fill="#000" />
+    {#if qr.links.length > 1}
+      <label>Viewer<select data-testid="vt-viewer" bind:value={qr.pick}>{#each qr.links as v, i (v.base)}<option value={i}>{viewerLabel(v)}</option>{/each}</select></label>
+    {/if}
+    <svg class="qr" viewBox="0 0 {shown.size} {shown.size}" shape-rendering="crispEdges" role="img" aria-label="QR code of the sign-in link" data-testid="vt-qr-code">
+      <rect width={shown.size} height={shown.size} fill="#fff" /><path d={shown.path} fill="#000" />
     </svg>
-    <p class="muted">Scan with a phone camera, or open the link: it signs in on <b>{linkHost(qr.link)}</b>. On another viewer of these accounts, paste the token.</p>
+    <p class="muted">Scan with a phone camera, or open the link: it signs in on <b>{linkHost(shown.link)}</b>.{#if qr.links.length > 1} Pick the viewer the person will use.{:else} On another viewer of these accounts, paste the token.{/if}</p>
     <div class="row end">
       <button class="btn" data-testid="vt-copy-link" onclick={copyLink} aria-live="polite">{copied.qr ?? 'Copy link'}</button>
       <button class="btn primary" data-testid="vt-qr-close" onclick={() => (qr = null)}>Close</button>
@@ -207,6 +218,8 @@
   form { align-items: end; }
   .actions { gap: 4px; flex-wrap: nowrap; }
   select.role.warn { border-color: var(--warning); color: var(--warning); }
+  /* The role pulldown and the buttons are taller than the text cells: centre the row (Klaus 2026-11-08). */
+  td { vertical-align: middle; }
   .accounts { border: 1px solid var(--border); border-radius: var(--radius); padding: 2px 8px 6px; gap: 10px; flex-wrap: wrap; }
   .accounts legend { font-size: 12px; color: var(--muted); }
   .check { display: inline-flex; gap: 6px; align-items: center; }

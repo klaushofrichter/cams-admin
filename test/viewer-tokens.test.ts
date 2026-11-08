@@ -82,7 +82,7 @@ describe('create', () => {
 describe('copy, validity, revoke, accounts, delete', () => {
   it('copy gives the same token any time, also after a revoke; audited without the token', () => {
     const r = vt.create(ACTOR, { name: 'phone', accountIds: [home] });
-    expect(vt.reveal(ACTOR, r.item.id, 'token')).toEqual({ token: r.token, link: r.link });
+    expect(vt.reveal(ACTOR, r.item.id, 'token')).toEqual({ token: r.token, link: r.link, links: r.links });
     vt.revoke(ACTOR, r.item.id);
     expect(vt.reveal(ACTOR, r.item.id, 'qr').token).toBe(r.token);
     expect(code(() => vt.reveal(ACTOR, r.item.id, 'nope' as 'token'))).toBe('400 invalid what');
@@ -236,5 +236,62 @@ describe('role (spec 2026-11-08 A4/B6)', () => {
     expect(a.audit.list({ action: 'viewer-token-role' }).items.length).toBe(n);
     expect(code(() => vt.setRole(ACTOR, v.item.id, { role: 'root' }))).toBe('400 invalid role');
     expect(code(() => vt.setRole(ACTOR, 'vtk_00000000000000000000', { role: 'viewer' }))).toBe('404 not_found');
+  });
+});
+
+describe('a link per viewer (finding 19)', () => {
+  let n = 0;
+  const viewer = (o: { name: string; displayName: string; baseUrl: string | null; state?: 'pending' | 'enrolled' | 'revoked'; accounts: string[] }) => {
+    const id = `cin_${String(n++).padStart(20, '0')}`;
+    a.db.prepare(`INSERT INTO cams_instances (id, name, display_name, base_url, state, created_at, updated_at) VALUES (?,?,?,?,?,?,?)`).run(id, o.name, o.displayName, o.baseUrl, o.state ?? 'enrolled', 1, 1);
+    for (const acc of o.accounts) a.db.prepare('INSERT INTO cams_instance_accounts (instance_id, account_id) VALUES (?, ?)').run(id, acc);
+    return id;
+  };
+  beforeEach(() => { a.db.prepare('DELETE FROM cams_instances').run(); });
+
+  it('only the main viewer: one link, the main one (the answer as before, plus links)', () => {
+    const r = vt.create(ACTOR, { name: 'one', accountIds: [home] });
+    const main = { instanceId: null, name: 'Main viewer', base: DEFAULT_VIEWER_LINK_URL, link: r.link };
+    expect(r.links).toEqual([main]);
+    expect(vt.reveal(ACTOR, r.item.id, 'qr')).toEqual({ token: r.token, link: r.link, links: [main] });
+  });
+
+  it('every enrolled viewer with a base URL that serves one of its accounts; the main viewer first, named by its record', () => {
+    const cluster = viewer({ name: 'cluster', displayName: 'Cluster', baseUrl: 'https://cams.skylar.technology/', accounts: [home] });
+    const pi = viewer({ name: 'pi', displayName: 'Pi', baseUrl: 'http://192.0.2.10:8080/', accounts: [away, home] });
+    viewer({ name: 'a-away', displayName: 'Away only', baseUrl: 'http://192.0.2.11:8080', accounts: [away] });
+    viewer({ name: 'b-pending', displayName: 'Pending', baseUrl: 'http://192.0.2.12:8080', state: 'pending', accounts: [home] });
+    viewer({ name: 'c-blocked', displayName: 'Blocked', baseUrl: 'http://192.0.2.13:8080', state: 'revoked', accounts: [home] });
+    viewer({ name: 'd-nourl', displayName: 'No URL', baseUrl: null, accounts: [home] });
+    viewer({ name: 'e-ftp', displayName: 'FTP', baseUrl: 'ftp://192.0.2.14', accounts: [home] });
+    viewer({ name: 'z-same', displayName: 'Same as Pi', baseUrl: 'http://192.0.2.10:8080', accounts: [home] });
+    const r = vt.create(ACTOR, { name: 'two', accountIds: [home] });
+    const t = r.token;
+    expect(r.links).toEqual([
+      { instanceId: cluster, name: 'Cluster', base: 'https://cams.skylar.technology', link: `https://cams.skylar.technology/token#t=${t}` },
+      { instanceId: pi, name: 'Pi', base: 'http://192.0.2.10:8080', link: `http://192.0.2.10:8080/token#t=${t}` },
+    ]);
+    expect(r.link).toBe(r.links[0].link);
+    const c = vt.reveal(ACTOR, r.item.id, 'qr');
+    expect(c.links).toEqual(r.links);
+    expect(c.link).toBe(r.links[0].link);
+  });
+
+  it('the main viewer stays first even without a record or when its record serves none of the accounts', () => {
+    const pi = viewer({ name: 'pi', displayName: 'Pi', baseUrl: 'http://192.0.2.10:8080', accounts: [away] });
+    const r = vt.create(ACTOR, { name: 'away', accountIds: [away] });
+    expect(r.links.map((l) => [l.instanceId, l.name, l.base])).toEqual([[null, 'Main viewer', DEFAULT_VIEWER_LINK_URL], [pi, 'Pi', 'http://192.0.2.10:8080']]);
+    const cluster = viewer({ name: 'cluster', displayName: 'Cluster', baseUrl: DEFAULT_VIEWER_LINK_URL, accounts: [home] });
+    expect(vt.reveal(ACTOR, r.item.id, 'link').links.map((l) => [l.instanceId, l.name])).toEqual([[cluster, 'Cluster'], [pi, 'Pi']]);
+  });
+
+  it('the copy is audited with the viewers offered, never the token or a link', () => {
+    const pi = viewer({ name: 'pi', displayName: 'Pi', baseUrl: 'http://192.0.2.10:8080', accounts: [home] });
+    const r = vt.create(ACTOR, { name: 'audit', accountIds: [home] });
+    vt.reveal(ACTOR, r.item.id, 'qr');
+    const copy = a.audit.list({ action: 'viewer-token-copy' }).items.find((x) => x.targetId === r.item.id)!;
+    expect(copy.detail).toMatchObject({ what: 'qr', viewers: [null, pi] });
+    expect(JSON.stringify(copy)).not.toContain(r.token.slice(4));
+    expect(JSON.stringify(copy)).not.toContain('192.0.2.10');
   });
 });

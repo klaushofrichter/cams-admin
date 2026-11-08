@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ADMIN_WARNING, DEFAULT_VALIDITY_DAYS, QUIET_ZONE, VALIDITY, linkHost, qrPath, roleClass, stateClass } from './viewerTokens';
+import { ADMIN_WARNING, DEFAULT_VALIDITY_DAYS, QUIET_ZONE, VALIDITY, linkHost, qrPath, roleClass, stateClass, viewerLabel } from './viewerTokens';
 
 describe('viewer tokens (web)', () => {
   it('offers Klaus\'s validities, one week preselected', () => {
@@ -27,5 +27,16 @@ describe('role (spec 2026-11-08 B6)', () => {
     expect(roleClass('admin')).toBe('warn');
     expect(roleClass('viewer')).toBe('');
     expect(ADMIN_WARNING).toMatch(/^An admin token can confirm held cameras/);
+  });
+});
+
+describe('a link per viewer (finding 19)', () => {
+  it('labels a viewer by its name and the host of its base', () => {
+    expect(viewerLabel({ name: 'Cluster', base: 'https://cams.skylar.technology' })).toBe('Cluster (cams.skylar.technology)');
+    expect(viewerLabel({ name: 'Pi', base: 'http://192.0.2.10:8080' })).toBe('Pi (192.0.2.10:8080)');
+  });
+
+  it('a LAN viewer\'s link is still a version 5 code at most', () => {
+    expect(qrPath('http://192.0.2.10:8080/token#t=cav_TestOnlyNotARealToken0').modules).toBeLessThanOrEqual(37);
   });
 });

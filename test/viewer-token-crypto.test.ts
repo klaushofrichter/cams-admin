@@ -8,6 +8,7 @@ import qrcode from 'qrcode-generator';
 import { tmpDir } from './helpers/tmp';
 import {
   DEFAULT_VIEWER_LINK_URL, VIEWER_TOKEN_RE, loadViewerKey, newViewerToken, openToken, sealToken, viewerFingerprint, viewerLink, viewerLinkBase,
+  MAX_VIEWER_BASE, viewerBase,
 } from '../server/viewerTokens/crypto';
 
 const dir = tmpDir();
@@ -69,6 +70,36 @@ describe('fingerprint and link', () => {
       q.make();
       expect(q.getModuleCount()).toBeLessThanOrEqual(37);
     }
+  });
+});
+
+const modules = (text: string) => {
+  const q = qrcode(0, 'M');
+  q.addData(text, 'Byte');
+  q.make();
+  return q.getModuleCount();
+};
+
+describe('a viewer\'s base URL (a link per viewer, finding 19)', () => {
+  it('http(s) only, no user, query or fragment, the trailing slash stripped; a path stays', () => {
+    expect(viewerBase('https://cams.example.org/')).toBe('https://cams.example.org');
+    expect(viewerBase('http://192.0.2.10:8080')).toBe('http://192.0.2.10:8080');
+    expect(viewerBase('http://192.0.2.10:8080/')).toBe('http://192.0.2.10:8080');
+    expect(viewerBase('https://example.org/cams//')).toBe('https://example.org/cams');
+    expect(viewerBase('HTTPS://CAMS.Example.org')).toBe('https://cams.example.org');
+    for (const bad of [null, undefined, '', 'ftp://192.0.2.10', 'javascript:alert(1)', 'http://u:p@192.0.2.10', 'http://192.0.2.10/?x=1', 'http://192.0.2.10/#t=1', 'not a url', 'https://' + 'a'.repeat(MAX_VIEWER_BASE) + '.org']) {
+      expect(viewerBase(bad), String(bad)).toBeNull();
+    }
+  });
+
+  it('a LAN viewer\'s link still fits version 5; a longer base gets a bigger code (the generator picks the version), at most version 8', () => {
+    expect(modules(viewerLink(viewerBase('http://192.0.2.10:8080')!, newViewerToken()))).toBeLessThanOrEqual(37);
+    expect(modules(viewerLink(viewerBase('http://192.0.2.200:8080')!, newViewerToken()))).toBeLessThanOrEqual(37);
+    expect(modules(viewerLink(viewerBase('http://viewer-pi.example.net:8080')!, newViewerToken()))).toBeLessThanOrEqual(37);
+    expect(modules(viewerLink(viewerBase('https://' + 'a'.repeat(30) + '.example.net:8443')!, newViewerToken()))).toBe(41); // version 6
+    const longest = viewerBase('https://' + 'a'.repeat(MAX_VIEWER_BASE - 12) + '.org')!;
+    expect(longest.length).toBe(MAX_VIEWER_BASE);
+    expect(modules(viewerLink(longest, newViewerToken()))).toBeLessThanOrEqual(49); // version 8
   });
 });
 

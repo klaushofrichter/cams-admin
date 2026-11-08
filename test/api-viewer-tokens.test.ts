@@ -42,7 +42,11 @@ describe('viewer token routes', () => {
     const copy = await a.api('post', `/viewer-tokens/${id}/copy`, { what: 'token' });
     expect(copy.status).toBe(200);
     expect(copy.headers['cache-control']).toBe('no-store');
-    expect(copy.body).toEqual({ token: c.body.token, link: c.body.link });
+    expect(copy.body).toEqual({ token: c.body.token, link: c.body.link, links: c.body.links });
+    expect(c.body.links).toEqual([{ instanceId: null, name: 'Main viewer', base: 'https://cams.skylar.technology', link: c.body.link }]);
+    // A URL in the request is never used: the server builds every link.
+    const forged = await a.api('post', `/viewer-tokens/${id}/copy`, { what: 'qr', base: 'https://evil.example.com', links: [{ base: 'https://evil.example.com' }] });
+    expect(JSON.stringify(forged.body)).not.toContain('evil.example.com');
 
     const v = await a.api('post', `/viewer-tokens/${id}/validity`, { days: 365 });
     expect(v.body).toMatchObject({ days: 365, state: 'valid' });
