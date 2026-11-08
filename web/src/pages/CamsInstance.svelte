@@ -10,6 +10,8 @@
   import { when } from '../lib/format';
   import Ago from '../components/Ago.svelte';
   import Confirm from '../components/Confirm.svelte';
+  import DeleteLines from '../components/DeleteLines.svelte';
+  import { instanceDeleteLines } from '../lib/deletes';
 
   let { instanceId }: { instanceId: string } = $props();
   let inst = $state<any>(null);
@@ -270,7 +272,7 @@
   {#if revoking}<Confirm title="Revoke this key" body="The key stops working at once, and every proxy token the instance holds is revoked with it (a stolen instance holds both). The instance keeps its routes; enroll it again with a new code. For a planned token change use Rotate now." ok="Revoke key and tokens" onconfirm={() => revokeKey(revoking)} oncancel={() => (revoking = null)} />{/if}
   {#if confirm === 'rotate'}<Confirm title="Rotate tokens of {inst.name}" body="cams registers new client and admin tokens for every proxy and retires its current ones (24 h)." ok="Rotate" onconfirm={doConfirm} oncancel={() => (confirm = '')} />{/if}
   {#if confirm === 'block'}<Confirm title="Block {inst.name}" body="Its keys and every token it holds are revoked at once; it can't pull its configuration any more. A new enrollment needs a new instance." typed={inst.name} ok="Block" onconfirm={doConfirm} oncancel={() => (confirm = '')} />{/if}
-  {#if confirm === 'delete'}<Confirm title="Delete {inst.name}" body="Its keys, routes and codes go, and every token it holds is revoked." typed={inst.name} ok="Delete" onconfirm={doConfirm} oncancel={() => (confirm = '')} />{/if}
+  {#if confirm === 'delete'}<Confirm title="Delete {inst.name}" body="The instance can't pull its configuration any more; a new enrollment needs a new instance." typed={inst.name} ok="Delete" onconfirm={doConfirm} oncancel={() => (confirm = '')}><DeleteLines lines={instanceDeleteLines({ routes: routes.length, overrides: overrides.length, accounts: inst.accounts.length })} testid="cms-delete-lines" /></Confirm>{/if}
 {:else if error}
   <p class="error">{error}</p>
 {/if}

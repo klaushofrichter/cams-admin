@@ -15,8 +15,8 @@ test('a proxy page: GUI address link and warning, rename in the Registry form, e
   const address = page.getByTestId('proxy-edit-address');
   await page.goto(`/#/accounts/${acc.id}/proxies/${px.id}`);
 
-  // No address: a pointer to the form, no link, no warning, nothing to save.
-  await expect(page.getByTestId('proxy-no-address')).toBeVisible();
+  // No GUI address: a pointer to the form, no link, no warning, nothing to save.
+  await expect(page.getByTestId('proxy-no-address')).toHaveText('no GUI address set: enter it under Registry');
   await expect(link).toHaveCount(0);
   await expect(warning).toHaveCount(0);
   await expect(save).toBeDisabled();
@@ -151,9 +151,11 @@ test('create an account, users (duplicate refused here, allowed elsewhere), a pr
   await page.goto('/#/accounts');
   await page.getByTestId('new-account-name').fill(a);
   await page.getByTestId('new-account-display').fill('Account A');
+  await expect(page.getByTestId('new-account-add-me')).toBeChecked();
+  await page.getByTestId('new-account-add-me').uncheck();
   await page.getByTestId('new-account-submit').click();
   await expect(page.getByTestId('account-title')).toHaveText('Account A');
-  await expect(page.getByTestId('no-admin-warning')).toBeVisible();
+  await expect(page.getByTestId('no-admin-warning')).toContainText('nobody can open it in cams');
   // Users.
   await page.getByTestId('tab-users').click();
   await page.getByTestId('user-email').fill('Viewer@Example.com');
@@ -187,4 +189,44 @@ test('create an account, users (duplicate refused here, allowed elsewhere), a pr
   await page.getByTestId('sim-control-sim1').fill('http://127.0.0.1:29502');
   await page.getByTestId('sim-save-sim1').click();
   await expect(page.getByTestId('sim-control-sim1')).toHaveValue('http://127.0.0.1:29502');
+  // Delete asks first and names what goes and what stays.
+  await page.getByTestId('camera-delete-sim1').click();
+  await expect(page.getByTestId('camera-delete-lines-goes')).toContainText('its move records');
+  await expect(page.getByTestId('camera-delete-lines-stays')).toContainText('the audit log');
+  await page.getByTestId('confirm-cancel').click();
+  await expect(page.getByTestId('camera-row-sim1')).toBeVisible();
+  await page.getByTestId('camera-delete-sim1').click();
+  await page.getByTestId('confirm-ok').click();
+  await expect(page.getByTestId('camera-row-sim1')).toHaveCount(0);
+});
+
+test('a new account: the creator is its admin by default, so cams lists it for them', async ({ page }, info) => {
+  const a = uniq(info, 'mine');
+  await page.goto('/#/accounts');
+  await page.getByTestId('new-account-name').fill(a);
+  await page.getByTestId('new-account-display').fill('Mine');
+  await page.getByTestId('new-account-submit').click();
+  await expect(page.getByTestId('account-title')).toHaveText('Mine');
+  await expect(page.getByTestId('no-admin-warning')).toHaveCount(0);
+  await page.getByTestId('tab-users').click();
+  await expect(page.getByTestId('user-role-admin@example.com')).toHaveValue('admin');
+  await page.goto('/#/audit');
+  await page.getByTestId('audit-filter-action').selectOption('user-create');
+  await expect(page.getByTestId('audit-row').first()).toContainText('admin@example.com');
+});
+
+test('delete a proxy: the dialog names what goes (moves, tokens, routes) and what stays (cameras, commands, the audit log)', async ({ page }, info) => {
+  const acc = await api(page, 'POST', '/accounts', { name: uniq(info, 'dpx'), displayName: 'Delete proxy' });
+  const px = await api(page, 'POST', `/accounts/${acc.id}/proxies`, { name: 'pi', displayName: 'Pi', runsOn: 'local-host' });
+  await api(page, 'POST', `/accounts/${acc.id}/cameras`, { camsId: 'c1', name: 'One', kind: 'camera', proxyId: px.id, proxyCameraId: 'cam1' });
+  await api(page, 'POST', `/accounts/${acc.id}/cameras`, { camsId: 'c2', name: 'Two', kind: 'camera', proxyId: px.id, proxyCameraId: 'cam2' });
+  await page.goto(`/#/accounts/${acc.id}/proxies/${px.id}`);
+  await page.getByTestId('delete-proxy').click();
+  await expect(page.getByTestId('proxy-delete-lines-stays')).toContainText('2 cameras, left in the account without a proxy');
+  await expect(page.getByTestId('proxy-delete-lines-stays')).toContainText('the audit log');
+  await expect(page.getByTestId('proxy-delete-lines-goes')).toContainText('its live status, history, settings and token revision');
+  await page.getByTestId('confirm-ok').click();
+  await expect(page).toHaveURL(new RegExp(`#/accounts/${acc.id}/proxies$`));
+  await page.goto(`/#/accounts/${acc.id}/cameras`);
+  await expect(page.getByTestId('camera-proxy-c1')).toHaveValue('');
 });

@@ -8,9 +8,11 @@
   import { keepEdits } from '../lib/edits';
   import { proxyForm, proxyPatch, validProxyName } from '../lib/proxy';
   import { summaryLeaves } from '../lib/summaryTree';
+  import { proxyDeleteLines, type DeleteLines as Lines } from '../lib/deletes';
   import StateChip from '../components/StateChip.svelte';
   import Ago from '../components/Ago.svelte';
   import Confirm from '../components/Confirm.svelte';
+  import DeleteLines from '../components/DeleteLines.svelte';
   import ProxyCommands from '../components/ProxyCommands.svelte';
   import ProxyTokens from '../components/ProxyTokens.svelte';
   import ProxySettings from '../components/ProxySettings.svelte';
@@ -27,6 +29,7 @@
   let shownCode = $state<{ id: string; code: string; command: string; expiresAt: number } | null>(null);
   let lifetimeH = $state(24);
   let confirm = $state<null | { kind: 'revoke' | 'block' | 'delete'; keyId?: string }>(null);
+  let deleteLines = $state<Lines | null>(null);
   let showAll = $state(false);
   let activeMove = $state<any>(null);
   let refresh = $state(0); // bumps after every load: the command and token cards reload with it
@@ -91,6 +94,12 @@
   async function cancelCode() {
     try { await api('DELETE', `/accounts/${accountId}/proxies/${proxyId}/enrollment-codes/${d.enrollment.id}`); shownCode = null; await load(); } catch (e) { error = errorText(e); }
   }
+  // The Delete dialog names what goes and what stays (counts from the server).
+  async function askDelete() {
+    deleteLines = null;
+    confirm = { kind: 'delete' };
+    try { deleteLines = proxyDeleteLines(await api('GET', `/accounts/${accountId}/proxies/${proxyId}/delete-preview`)); } catch (e) { confirm = null; error = errorText(e); }
+  }
   async function act() {
     const c = confirm;
     confirm = null;
@@ -129,7 +138,7 @@
       {#if d.view.stale}<span class="badge">stale (before the last restart)</span>{/if}
       {#if address.href}<a class="mono" href={address.href} target="_blank" rel="noopener noreferrer" data-testid="proxy-address">{d.proxy.adminUiUrl}</a>
       {:else if d.proxy.adminUiUrl}<span class="mono" data-testid="proxy-address-text">{d.proxy.adminUiUrl}</span>
-      {:else}<button type="button" class="plain muted" data-testid="proxy-no-address" onclick={() => document.getElementById('proxy-edit-address')?.focus()}>no address set: enter it under Registry</button>{/if}
+      {:else}<button type="button" class="plain muted" data-testid="proxy-no-address" onclick={() => document.getElementById('proxy-edit-address')?.focus()}>no GUI address set: enter it under Registry</button>{/if}
       {#if address.warning}<span class="badge warn" data-testid="proxy-address-warning">{address.warning}</span>{/if}
     </div>
     <div class="row muted">
@@ -240,7 +249,7 @@
     </div>
     <div class="row">
       {#if d.proxy.state !== 'revoked'}<button class="btn danger" data-testid="block-proxy" onclick={() => (confirm = { kind: 'block' })}>Block proxy</button>{/if}
-      <button class="btn danger" data-testid="delete-proxy" onclick={() => (confirm = { kind: 'delete' })}>Delete proxy</button>
+      <button class="btn danger" data-testid="delete-proxy" onclick={askDelete}>Delete proxy</button>
     </div>
   </section>
 
@@ -277,9 +286,12 @@
   {#if confirm}
     <Confirm
       title={confirm.kind === 'revoke' ? 'Revoke this key' : confirm.kind === 'block' ? `Block ${d.proxy.name}` : `Delete ${d.proxy.name}`}
-      body={confirm.kind === 'revoke' ? 'The proxy is disconnected and must be re-enrolled with a new code.' : confirm.kind === 'block' ? 'The proxy is disconnected, its key and any live code die, and it cannot enroll again until unblocked by deleting and re-adding it.' : 'Its keys are revoked and it is disconnected; its cameras stay in the account without a proxy.'}
+      body={confirm.kind === 'revoke' ? 'The proxy is disconnected and must be re-enrolled with a new code.' : confirm.kind === 'block' ? 'The proxy is disconnected, its key and any live code die, and it cannot enroll again until unblocked by deleting and re-adding it.' : 'The proxy record goes. To use the proxy again, add it anew and enroll it with a new code; a restore from backup is the only undo.'}
       ok={confirm.kind === 'revoke' ? 'Revoke' : confirm.kind === 'block' ? 'Block' : 'Delete'}
-      onconfirm={act} oncancel={() => (confirm = null)} />
+      okDisabled={confirm.kind === 'delete' && (!deleteLines || !!deleteLines.blocked)}
+      onconfirm={act} oncancel={() => (confirm = null)}>
+      {#if confirm.kind === 'delete'}<DeleteLines lines={deleteLines} testid="proxy-delete-lines" />{/if}
+    </Confirm>
   {/if}
 {:else if error}
   <p class="error">{error}</p>

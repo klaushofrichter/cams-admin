@@ -49,6 +49,12 @@ test('a cams instance: served accounts, routes default-deny (one loopback route)
   await page.getByTestId('confirm-input').fill(name);
   await page.getByTestId('confirm-ok').click();
   await expect(page.getByTestId('cms-state')).toHaveText('blocked');
+  // Delete names what goes (the route, two account links) and what stays; cancelled here.
+  await page.getByTestId('cms-delete').click();
+  await expect(page.getByTestId('cms-delete-lines-goes')).toContainText('1 route');
+  await expect(page.getByTestId('cms-delete-lines-goes')).toContainText('its link to 2 accounts');
+  await expect(page.getByTestId('cms-delete-lines-stays')).toContainText('the audit log');
+  await page.getByTestId('confirm-cancel').click();
   await page.goto('/#/cams-instances');
   await expect(page.getByTestId(`cms-state-${name}`)).toHaveText('blocked');
 });
