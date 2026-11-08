@@ -40,6 +40,20 @@ export function viewerLinkBase(value: string | undefined): string {
   return u.origin;
 }
 
+// A viewer's base URL from its registry record (a link per viewer, finding 19): http(s), no user, query or
+// fragment, the trailing slash stripped (a path stays: a viewer behind a prefix). null when it can't be one.
+// At most MAX_VIEWER_BASE characters: the link then stays at most a version 8 QR code at level M (the
+// generator picks the version; a LAN base like http://192.0.2.10:8080 still fits version 5).
+export const MAX_VIEWER_BASE = 100;
+export function viewerBase(value: string | null | undefined): string | null {
+  if (!value) return null;
+  let u: URL;
+  try { u = new URL(value); } catch { return null; }
+  if ((u.protocol !== 'https:' && u.protocol !== 'http:') || u.username || u.password || u.search || u.hash || value.includes('#') || value.includes('?')) return null;
+  const base = u.origin + u.pathname.replace(/\/+$/, '');
+  return base.length <= MAX_VIEWER_BASE ? base : null;
+}
+
 // The token only in the fragment: never sent to the server, its logs or link previews.
 export const viewerLink = (base: string, token: string): string => `${base}/token#t=${token}`;
 

@@ -179,11 +179,11 @@ revision moves in the same transaction as the revoke:
 | method and path | what |
 |---|---|
 | `GET /viewer-tokens?account=acc_…` | the tokens with that account (without `account`: all) |
-| `POST /viewer-tokens` `{name, accountIds, days}` | create; `201 {item, token, link}` |
+| `POST /viewer-tokens` `{name, accountIds, days}` | create; `201 {item, token, link, links}` (`links`: one `{instanceId, name, base, link}` per viewer that can sign it in, the main one first; `link` = the first) |
 | `POST /viewer-tokens/:id/validity` `{days}` | valid for `days` from now (also after revoke or expiry) |
 | `POST /viewer-tokens/:id/revoke` | revoke (idempotent) |
 | `PUT /viewer-tokens/:id/accounts` `{accountIds, version}` | set the accounts (≥ 1) |
-| `POST /viewer-tokens/:id/copy` `{what: "token" \| "link" \| "qr"}` | `{token, link}`, `Cache-Control: no-store`, audited |
+| `POST /viewer-tokens/:id/copy` `{what: "token" \| "link" \| "qr"}` | `{token, link, links}`, `Cache-Control: no-store`, audited (with `viewers`: the instance ids offered, null for a main viewer without a record) |
 | `DELETE /viewer-tokens/:id` | revoke and remove |
 | `GET /diag/viewer-tokens` | the list without token or fingerprint (diag token) |
 

@@ -29,6 +29,10 @@ export const linkHost = (link: string): string => {
   try { return new URL(link).host; } catch { return ''; }
 };
 
+// A link per viewer (finding 19): the server's list of viewers that can sign the token in, the main one first.
+export type ViewerLink = { instanceId: string | null; name: string; base: string; link: string };
+export const viewerLabel = (v: { name: string; base: string }): string => `${v.name} (${linkHost(v.base)})`;
+
 // A token's role (spec 2026-11-08 A4/B6): viewer (default) or admin of each of its accounts in cams.
 export const ROLES = [{ role: 'viewer', label: 'viewer' }, { role: 'admin', label: 'admin' }] as const;
 export const ADMIN_WARNING = 'An admin token can confirm held cameras and change settings in each of its accounts in cams, like a Google admin of the account.';
