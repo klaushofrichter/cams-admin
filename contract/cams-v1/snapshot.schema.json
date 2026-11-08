@@ -401,6 +401,10 @@
                 "expiresAt": {
                   "type": "integer",
                   "minimum": 0
+                },
+                "role": {
+                  "type": "string",
+                  "maxLength": 64
                 }
               },
               "required": [

@@ -115,7 +115,7 @@ describe('the cams snapshot (GET /cams/v1/config)', () => {
   it('revision changes with the snapshot format: a server change to what the snapshot says reaches every cams (no 304 on the old one)', () => {
     expect(snapshotRevision(d.db, cluster.id, FP(), SNAPSHOT_FORMAT)).toBe(snapshotRevision(d.db, cluster.id, FP()));
     expect(snapshotRevision(d.db, cluster.id, FP(), SNAPSHOT_FORMAT + 1)).not.toBe(snapshotRevision(d.db, cluster.id, FP()));
-    expect(SNAPSHOT_FORMAT).toBe(4); // 2: no TLS name with a plain-http URL (#48); 3: cameras[].move attestation; 4: accounts[].viewerTokens
+    expect(SNAPSHOT_FORMAT).toBe(5); // 2: no TLS name with a plain-http URL (#48); 3: cameras[].move attestation; 4: accounts[].viewerTokens; 5: viewerTokens[].role
   });
 
   it('revision changes on a user role change, a route change, a token state change, served accounts, rotate-now, a key change, and not on a heartbeat', async () => {

@@ -457,6 +457,33 @@ export function buildSchemas(mode: Mode): Record<string, S> {
     switchSchemas[`commands/${c}.result`] = { $id: BASE + `commands/${c}.result.schema.json`, title: `${c} result v1`, ...obj({}, []) };
   }
 
+  // --- remove a camera, decommission a proxy (decommission spec 2026-11-08, A1-A3) -----------
+  // camera.remove.preview: what the proxy holds for a camera (read only). camera.remove: the proxy's local remove (FTP upload
+  // off, configuration, stored password, certificate trust, PTZ positions) and, with content `delete`, the camera's clips and
+  // stills now (`archive: true` only with `delete`: also its archived clips). proxy.unenroll: the proxy unenrolls itself after
+  // the result and clears its token set and the command policy entries cams-admin set.
+  const count = int(0, { maximum: 100_000_000 });
+  const removeItems = arr(str(REMOVE_ITEM_LEN, { minLength: 1 }), REMOVE_ITEMS_MAX);
+  const decommissionArgs: Record<(typeof DECOMMISSION_COMMANDS)[number], S> = {
+    'camera.remove.preview': all({ v: { const: 1 }, camera: camId }),
+    'camera.remove': {
+      ...all({ v: { const: 1 }, camera: camId, content: en([...REMOVE_CONTENT]), archive: bool }),
+      // archive: true only with content: delete (else the args are invalid)
+      ...(strict ? { if: { properties: { archive: { const: true } }, required: ['archive'] }, then: { properties: { content: { const: 'delete' } } } } : {}),
+    },
+    'proxy.unenroll': all({ v: { const: 1 } }),
+  };
+  const decommissionResults: Record<(typeof DECOMMISSION_COMMANDS)[number], S> = {
+    'camera.remove.preview': all({ camera: camId, clips: count, stills: count, archivedClips: count, bytes: int() }),
+    'camera.remove': all({ camera: camId, removed: removeItems, leftovers: removeItems, deleted: all({ clips: count, stills: count, archivedClips: count }) }),
+    'proxy.unenroll': all({ unenrollAt: int() }),
+  };
+  const decommissionSchemas: Record<string, S> = {};
+  for (const c of DECOMMISSION_COMMANDS) {
+    decommissionSchemas[`commands/${c}.args`] = { $id: BASE + `commands/${c}.args.schema.json`, title: `${c} args v1`, ...decommissionArgs[c] };
+    decommissionSchemas[`commands/${c}.result`] = { $id: BASE + `commands/${c}.result.schema.json`, title: `${c} result v1`, ...decommissionResults[c] };
+  }
+
   // --- events (proxy -> cams-admin): command.done and the move kinds ---------------
   const doneEvent = obj({ ...resultCore, kind: en(['command.done']), phase: { const: 'done' } },
     ['proxyId', 'connId', 'kind', 'cmdId', 'phase', 'status'], ['code', 'retryAfterS', 'duplicate', 'result']);
@@ -537,6 +564,7 @@ export function buildSchemas(mode: Mode): Record<string, S> {
     ...onboardingSchemas,
     ...analyticsSchemas,
     ...switchSchemas,
+    ...decommissionSchemas,
   };
   if (strict) for (const s of Object.values(schemas)) s.$id = (s.$id as string).replace(BASE, BASE + 'strict/');
   return Object.fromEntries(Object.entries(schemas).map(([k, v]) => [k, { $schema: 'https://json-schema.org/draft/2020-12/schema', ...v }]));
@@ -609,7 +637,7 @@ export const ANALYTICS_PROVIDERS_MAX = 8;
 // (not disruptive, they change nothing on the camera).
 export const SWITCH_COMMANDS = ['switch.read', 'switch.locate', 'switch.survey', 'switch.cycle', 'switch.poeOn', 'switch.forget'] as const;
 export const POWER_COMMANDS = ['camera.power.set', 'camera.power.cycling', 'camera.power.cycled', 'camera.power.cycle.result'] as const;
-export const DISRUPTIVE_COMMANDS = ['switch.cycle'] as const;
+export const DISRUPTIVE_COMMANDS = ['switch.cycle', 'camera.remove', 'proxy.unenroll'] as const;
 // A switch id, the switch models, the power kinds of a camera, why a locate found nothing.
 export const SWITCH_ID_PATTERN = '^sw_[A-Za-z0-9]{20}$';
 export const SWITCH_MODELS = ['sscpoe-web'] as const;
@@ -620,8 +648,25 @@ export const SWITCH_SURVEY_MAX = 16;
 // Failure codes of switch.cycle (status failed).
 export const SWITCH_CYCLE_FAILURES = ['not_verified', 'no_power', 'switch_busy', 'poe_may_be_off', 'password_unset', 'switch_unknown'] as const;
 
+// --- remove a camera, decommission a proxy (decommission spec 2026-11-08) -------------------------
+// Each its own allow entry. camera.remove.preview is a read (on by default on cam-proxy, like camera.onboarding.get);
+// camera.remove and proxy.unenroll are disruptive: off by default per proxy, typed confirm in cams-admin. camera.remove counts
+// toward (and is bounded by) the journal budget of the disruptive camera actions (6 an hour per proxy, shared).
+export const DECOMMISSION_COMMANDS = ['camera.remove.preview', 'camera.remove', 'proxy.unenroll'] as const;
+// camera.remove's content choice: keep (retention ages it out) or delete now.
+export const REMOVE_CONTENT = ['keep', 'delete'] as const;
+// camera.remove's removed / leftovers: at most 16 items of 1..80 characters.
+export const REMOVE_ITEMS_MAX = 16;
+export const REMOVE_ITEM_LEN = 80;
+// The failure codes (status failed): camera.remove.preview not_found; camera.remove not_found, move_open (a move of the camera is
+// open), config_json (the camera is defined in a config.json the proxy cannot rewrite); proxy.unenroll has_cameras (the proxy
+// still holds cameras, moved-away markers not counted).
+export const CAMERA_REMOVE_PREVIEW_FAILURES = ['not_found'] as const;
+export const CAMERA_REMOVE_FAILURES = ['not_found', 'move_open', 'config_json'] as const;
+export const PROXY_UNENROLL_FAILURES = ['has_cameras'] as const;
+
 // The command names on the wire (strict enum). P2 implements tokens.apply.
-export const WIRE_COMMANDS = ['tokens.apply', 'config.get', 'config.set', 'config.unset', 'config.rollback', 'camera.action', 'camera.name.set', 'proxy.restart', ...MOVE_COMMANDS, ...ONBOARDING_COMMANDS, ...ANALYTICS_COMMANDS, ...SWITCH_COMMANDS, ...POWER_COMMANDS] as const;
+export const WIRE_COMMANDS = ['tokens.apply', 'config.get', 'config.set', 'config.unset', 'config.rollback', 'camera.action', 'camera.name.set', 'proxy.restart', ...MOVE_COMMANDS, ...ONBOARDING_COMMANDS, ...ANALYTICS_COMMANDS, ...SWITCH_COMMANDS, ...POWER_COMMANDS, ...DECOMMISSION_COMMANDS] as const;
 // The camera actions a proxy may allow for remote use (camera.action:<a>).
 export const REMOTE_ACTIONS = [
   'camera-test', 'onvif-resubscribe', 'camera-ftp-test', 'inventory', 'inventory-cancel', 'retention-run', 'restart',
@@ -641,6 +686,8 @@ export const ALLOW_ENTRIES: readonly string[] = [
   // PoE switches: each command its own entry (switch.cycle is disruptive); camera.power.* go to the camera's own proxy.
   ...SWITCH_COMMANDS,
   ...POWER_COMMANDS,
+  // Remove a camera, decommission a proxy: each its own entry (camera.remove and proxy.unenroll disruptive).
+  ...DECOMMISSION_COMMANDS,
   ...REMOTE_ACTIONS.map((a) => `camera.action:${a}`),
 ];
 

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { existsSync, readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
 import Ajv2020 from 'ajv/dist/2020';
-import { POWER_COMMANDS, PROXY_EVENT_KINDS, SWITCH_COMMANDS, DISRUPTIVE_COMMANDS, ABOVE_LOCAL_CEILING, ALLOW_ENTRIES, ANALYTICS_COMMANDS, NARROW_KINDS, ONBOARDING_CAMERAS_MAX, ONBOARDING_COMMANDS, ONBOARDING_REQUIRED, ONBOARDING_STEPS, ONBOARDING_STEP_LEN, WIRE_COMMANDS, FILE_KINDS, MOVE_KINDS, MOVE_LEFTOVERS_MAX, MOVE_LEFTOVER_ITEMS_MAX, MOVE_LEFTOVER_ITEM_LEN, JOURNAL_BUDGET_ACTIONS, buildSchemas, DISRUPTIVE_ACTIONS, LOCAL_ONLY, NEVER_REMOTE_ACTIONS, P3_COMMANDS, PATH_PATTERN, REMOTE_ACTIONS, REMOTE_SETTABLE, SECRET_KEY_PATTERN, CAMERA_NAME_PATTERN } from '../contract/build';
+import { DECOMMISSION_COMMANDS, REMOVE_CONTENT, CAMERA_REMOVE_FAILURES, PROXY_UNENROLL_FAILURES, POWER_COMMANDS, PROXY_EVENT_KINDS, SWITCH_COMMANDS, DISRUPTIVE_COMMANDS, ABOVE_LOCAL_CEILING, ALLOW_ENTRIES, ANALYTICS_COMMANDS, NARROW_KINDS, ONBOARDING_CAMERAS_MAX, ONBOARDING_COMMANDS, ONBOARDING_REQUIRED, ONBOARDING_STEPS, ONBOARDING_STEP_LEN, WIRE_COMMANDS, FILE_KINDS, MOVE_KINDS, MOVE_LEFTOVERS_MAX, MOVE_LEFTOVER_ITEMS_MAX, MOVE_LEFTOVER_ITEM_LEN, JOURNAL_BUDGET_ACTIONS, buildSchemas, DISRUPTIVE_ACTIONS, LOCAL_ONLY, NEVER_REMOTE_ACTIONS, P3_COMMANDS, PATH_PATTERN, REMOTE_ACTIONS, REMOTE_SETTABLE, SECRET_KEY_PATTERN, CAMERA_NAME_PATTERN } from '../contract/build';
 import { fixtures } from '../contract/make';
 import { validateProxyEvent, validateCommandArgs, validateEnroll, validateMessage, validateResultPayload, validateSummary } from '../server/contract';
 import { publicFromB64, verifyEnvelope } from '../server/crypto/ed25519';
@@ -95,7 +95,7 @@ describe('the v1 contract', () => {
   it('every proxy-receiver fixture has a $context and a runtime code from the nack list', () => {
     const NACKS = ['bad_signature', 'wrong_target', 'expired', 'replayed', 'not_allowed', 'paused', 'rate_limited', 'invalid_args', 'unsupported_version', 'busy'];
     const proxyFixtures = allFixtures().filter((x) => x.$expect?.receiver === 'proxy');
-    expect(proxyFixtures.length).toBe(40);
+    expect(proxyFixtures.length).toBe(44);
     for (const f of proxyFixtures) {
       expect(f.$context, f.name).toMatchObject({ now: expect.any(Number), proxyId: expect.stringMatching(/^prx_/), connId: expect.stringMatching(/^con_/), serverKeys: [vectors.keys.server.publicKey] });
       expect(NACKS, f.name).toContain(f.$expect.runtime);
@@ -533,7 +533,8 @@ describe('the v1 contract', () => {
     const all = [...SWITCH_COMMANDS, ...POWER_COMMANDS];
     expect(all).toHaveLength(10);
     for (const c of all) { expect(WIRE_COMMANDS as readonly string[], c).toContain(c); expect(ALLOW_ENTRIES, c).toContain(c); }
-    expect([...DISRUPTIVE_COMMANDS]).toEqual(['switch.cycle']);
+    expect(DISRUPTIVE_COMMANDS as readonly string[]).toContain('switch.cycle');
+    for (const c of all) if (c !== 'switch.cycle') expect(DISRUPTIVE_COMMANDS as readonly string[], c).not.toContain(c);
     const sw = { id: 'sw_0123456789abcdefghij', model: 'sscpoe-web', host: '192.0.2.217', ports: 8, offSeconds: 10 };
     const CAM = 'cam_0123456789ABCDEFGHJK';
     const args = (c: string) => strictValidator(`commands/${c}.args`);
@@ -581,6 +582,42 @@ describe('the v1 contract', () => {
     expect(validateProxyEvent({ ...ev, cmdId: 'cmd_0123456789ABCDEFGHJK' })).toMatchObject({ ok: false });
     expect(fixture('refused-switch-cycle-bad-id').$expect.runtime).toBe('invalid_args');
     expect(readFileSync(join(__dirname, '../contract/README.md'), 'utf8')).toContain('## PoE switches');
+  });
+  it('remove a camera, decommission a proxy: three commands, two disruptive, strict args and results', () => {
+    for (const c of DECOMMISSION_COMMANDS) { expect(WIRE_COMMANDS as readonly string[], c).toContain(c); expect(ALLOW_ENTRIES, c).toContain(c); }
+    expect([...DISRUPTIVE_COMMANDS]).toEqual(expect.arrayContaining(['camera.remove', 'proxy.unenroll']));
+    expect(DISRUPTIVE_COMMANDS as readonly string[]).not.toContain('camera.remove.preview');
+    expect([...REMOVE_CONTENT]).toEqual(['keep', 'delete']);
+    expect([...CAMERA_REMOVE_FAILURES]).toEqual(['not_found', 'move_open', 'config_json']);
+    expect([...PROXY_UNENROLL_FAILURES]).toEqual(['has_cameras']);
+    expect(validateCommandArgs('camera.remove.preview', { v: 1, camera: 'cam2' })).toEqual({ ok: true });
+    expect(validateCommandArgs('camera.remove.preview', { v: 1, camera: 'Cam 2' })).toMatchObject({ ok: false });
+    expect(validateCommandArgs('camera.remove', { v: 1, camera: 'cam2', content: 'keep', archive: false })).toEqual({ ok: true });
+    expect(validateCommandArgs('camera.remove', { v: 1, camera: 'cam2', content: 'delete', archive: true })).toEqual({ ok: true });
+    expect(validateCommandArgs('camera.remove', { v: 1, camera: 'cam2', content: 'delete', archive: false })).toEqual({ ok: true });
+    expect(validateCommandArgs('camera.remove', { v: 1, camera: 'cam2', content: 'keep', archive: true })).toMatchObject({ ok: false });
+    expect(validateCommandArgs('camera.remove', { v: 1, camera: 'cam2', content: 'purge', archive: false })).toMatchObject({ ok: false });
+    expect(validateCommandArgs('camera.remove', { v: 1, camera: 'cam2', content: 'keep' })).toMatchObject({ ok: false });
+    expect(validateCommandArgs('proxy.unenroll', { v: 1 })).toEqual({ ok: true });
+    expect(validateCommandArgs('proxy.unenroll', { v: 1, force: true })).toMatchObject({ ok: false });
+    const res = (c: string) => strictValidator(`commands/${c}.result`);
+    expect(res('camera.remove.preview')({ camera: 'cam2', clips: 1, stills: 2, archivedClips: 0, bytes: 3 })).toBe(true);
+    expect(res('camera.remove.preview')({ camera: 'cam2', clips: 1, stills: 2, bytes: 3 })).toBe(false);
+    const ok = { camera: 'cam2', removed: ['configuration'], leftovers: [], deleted: { clips: 0, stills: 0, archivedClips: 0 } };
+    expect(res('camera.remove')(ok)).toBe(true);
+    expect(res('camera.remove')({ ...ok, leftovers: ['x'.repeat(81)] })).toBe(false);
+    expect(res('camera.remove')({ ...ok, removed: Array.from({ length: 17 }, () => 'x') })).toBe(false);
+    expect(res('camera.remove')({ ...ok, deleted: { clips: 0, stills: 0 } })).toBe(false);
+    expect(res('proxy.unenroll')({ unenrollAt: 1 })).toBe(true);
+    expect(res('proxy.unenroll')({})).toBe(false);
+    // The lenient result ignores unknown fields.
+    expect(validateResultPayload('proxy.unenroll', { unenrollAt: 1, more: 1 })).toBe(true);
+    expect(validateResultPayload('camera.remove', { ...ok, more: 1 })).toBe(true);
+    expect(fixture('refused-camera-remove-archive-keep').$expect.runtime).toBe('invalid_args');
+    expect(fixture('refused-camera-remove-budget').$expect.runtime).toBe('rate_limited');
+    const readme = readFileSync(join(__dirname, '../contract/README.md'), 'utf8');
+    expect(readme).toContain('## Remove a camera, decommission a proxy');
+    for (const c of DECOMMISSION_COMMANDS) expect(readme).toContain(`\`${c}\``);
   });
   it('validateCommandArgs: what cams-admin sends for every P3 command', () => {
     const REV = `sha256:${'a'.repeat(64)}`;
