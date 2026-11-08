@@ -29,6 +29,8 @@
   let gone = $state(false);
   let shownCode = $state<{ id: string; code: string; command: string; expiresAt: number } | null>(null);
   let lifetimeH = $state(24);
+  // Finding 10: read the select itself when sending, so a value set without a change event is still the one sent.
+  let lifetimeSel = $state<HTMLSelectElement | null>(null);
   let confirm = $state<null | { kind: 'revoke' | 'block' | 'delete'; keyId?: string }>(null);
   let deleteLines = $state<Lines | null>(null);
   // Decommission (spec 2026-11-08 B5): its panel is open.
@@ -85,7 +87,7 @@
   async function createCode() {
     error = '';
     try {
-      const c = await api('POST', `/accounts/${accountId}/proxies/${proxyId}/enrollment-codes`, { lifetimeH: Number(lifetimeH) });
+      const c = await api('POST', `/accounts/${accountId}/proxies/${proxyId}/enrollment-codes`, { lifetimeH: Number(lifetimeSel?.value || lifetimeH) });
       await load(); // first: the page then knows the code is live
       shownCode = c;
     } catch (e) { error = errorText(e); }
@@ -231,7 +233,7 @@
     {/if}
     <div class="row">
       {#if d.proxy.state !== 'revoked'}
-        <label>Lifetime<select bind:value={lifetimeH} data-testid="code-lifetime"><option value={1}>1 h</option><option value={24}>24 h</option><option value={168}>7 d</option></select></label>
+        <label>Lifetime<select bind:value={lifetimeH} bind:this={lifetimeSel} data-testid="code-lifetime"><option value={1}>1 h</option><option value={24}>24 h</option><option value={168}>7 d</option></select></label>
         <button class="btn primary" data-testid="code-create" onclick={createCode}>Create enrollment code</button>
       {/if}
       {#if d.enrollment}

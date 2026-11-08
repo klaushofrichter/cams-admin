@@ -3,7 +3,7 @@
   // the outcome is read from the switch (`last`) every 2 s, for at most 60 s.
   import { onMount } from 'svelte';
   import { api, ApiFailure, errorText } from '../lib/api';
-  import { chainedText, lastText, passwordHint, poll, removeText, trunkText } from '../lib/switches';
+  import { chainedText, lastText, operatingProxies, passwordHint, poll, removeText, trunkText } from '../lib/switches';
   import Ago from './Ago.svelte';
   import Confirm from './Confirm.svelte';
 
@@ -28,14 +28,16 @@
   let aPorts = $state(8);
   let aOff = $state(10);
   let aProxy = $state('');
-  $effect(() => { if (!aProxy && proxies.length) aProxy = proxies[0].id; });
+  // No silent default (the first proxy may be the cluster's simulator proxy): the only non-cluster proxy, else a choice.
+  const opProxies = $derived(operatingProxies(proxies));
+  $effect(() => { if (!aProxy && opProxies.preset) aProxy = opProxies.preset; });
   let addHint = $state('');
   let addError = $state('');
   async function add(e: Event) {
     e.preventDefault();
     addError = addHint = '';
     try {
-      const proxyId = aProxy || proxies[0]?.id;
+      const proxyId = aProxy;
       const s = await api<any>('POST', `/accounts/${accountId}/switches`, { name: aName, host: aHost, model: aModel, ports: aPorts, offSeconds: aOff, proxyId });
       addHint = `Set the password on ${proxyName(s.proxyId)}'s Proxy settings → PoE switches, then Test.`;
       aName = aHost = '';
@@ -263,7 +265,7 @@
       <label>Model<select data-testid="switch-model" bind:value={aModel}><option>sscpoe-web</option></select></label>
       <label>Ports<input type="number" min="1" max="64" bind:value={aPorts} /></label>
       <label>Off seconds<input type="number" min="1" max="120" bind:value={aOff} /></label>
-      <label>Operating proxy<select data-testid="switch-proxy" bind:value={aProxy}>{#each proxies as p}<option value={p.id}>{p.name}</option>{/each}</select></label>
+      <label>Operating proxy<select data-testid="switch-proxy" bind:value={aProxy} required><option value="" disabled>Choose the proxy on the switch's network</option>{#each opProxies.list as p}<option value={p.id}>{p.name}{p.runsOn === 'cluster' ? ' (cluster)' : ''}</option>{/each}</select></label>
       <button class="btn primary" data-testid="switch-add" disabled={!proxies.length}>Add switch</button>
     </form>
     {#if addError}<p class="error" data-testid="switch-add-error">{addError}</p>{/if}

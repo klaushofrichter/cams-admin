@@ -30,7 +30,8 @@ import { chunkCounts, moveView } from '../moves/view';
 import { SummaryRefused } from '../moves/summary';
 import { SESSION_COOKIE, type Session, type Sessions } from '../auth/session';
 import { bearerOf, requireAuth, sessionBeforeBody } from '../auth/middleware';
-import { reconcile } from '../status/derive';
+import { reconcile, reportedConnection } from '../status/derive';
+import { accountCamsProblems } from '../cams/problems';
 import { FieldError } from '../validate';
 import { Buckets } from '../channel/limits';
 import { limiter, sessionKey } from '../rateLimit';
@@ -421,9 +422,16 @@ export function apiRouter(d: ApiDeps): express.Router {
 
   // --- cameras ---------------------------------------------------------------------------
   const camBase = '/accounts/:accountId/cameras/:cameraId';
+  // A cams instance's problems for this account, in words (finding 12b: snapshot_invalid).
+  r.get('/accounts/:accountId/cams-problems', h((req) => { d.registry.getAccount(p(req, 'accountId')); return { items: accountCamsProblems(d.db, d.camsInstances.list(), p(req, 'accountId')) }; }));
   r.get('/accounts/:accountId/cameras', h((req) => { d.registry.getAccount(p(req, 'accountId')); return { items: d.registry.listCameras(p(req, 'accountId')) }; }));
   // A new camera, or a changed host: a survey of the account's switches (debounced per switch).
-  r.post('/accounts/:accountId/cameras', h((req, res) => { created(res); const c = d.registry.createCamera(actor(res), p(req, 'accountId'), req.body); reg('camera', c.id); d.power.cameraChanged(c.accountId); return c; }));
+  // Host, protocol and TLS name the request leaves out come from the proxy's report of that camera (finding 12b).
+  r.post('/accounts/:accountId/cameras', h((req, res) => {
+    created(res);
+    const body = withReportedConnection(d, p(req, 'accountId'), req.body);
+    const c = d.registry.createCamera(actor(res), p(req, 'accountId'), body); reg('camera', c.id); d.power.cameraChanged(c.accountId); return c;
+  }));
   r.get(camBase, h((req) => d.registry.getCamera(p(req, 'accountId'), p(req, 'cameraId'))));
   r.patch(camBase, h((req, res) => {
     const before = d.registry.getCamera(p(req, 'accountId'), p(req, 'cameraId')).host;
@@ -580,6 +588,8 @@ export function dashboard(d: ApiDeps) {
   const camerasOf = groupBy(d.registry.listCameras(), (c) => c.accountId);
   // PoE switches with a configuration problem (a chained switch, from their latest survey).
   const switchProblemsOf = groupBy(d.switches.store.listAllWithProblems(), (sw) => sw.accountId);
+  // The cams instances (their reports live in memory): problems per account (finding 12b).
+  const instances = d.camsInstances.list();
   let proxies = 0, proxiesOnline = 0, cameras = 0, camerasOnline = 0, problems = 0;
   const out = accounts.map((a) => {
     const accCams = camerasOf.get(a.id) ?? [];
@@ -603,11 +613,12 @@ export function dashboard(d: ApiDeps) {
     });
     const switchProblems = (switchProblemsOf.get(a.id) ?? []).flatMap((sw) => sw.problems.map((x) => ({ switchId: sw.id, switch: sw.name, ...x })));
     const warnings = [...(a.admins === 0 ? ['no-admin'] : []), ...(switchProblems.length ? ['chained-switch'] : [])];
-    return { id: a.id, name: a.name, displayName: a.displayName, users: a.users, proxies: pxs, cameras: camRows, warnings, switchProblems };
+    const camsProblems = accountCamsProblems(d.db, instances, a.id);
+    return { id: a.id, name: a.name, displayName: a.displayName, users: a.users, proxies: pxs, cameras: camRows, warnings, switchProblems, camsProblems };
   });
   // P4: one row per cams instance (its pulls and reports live in memory).
   const fp = d.serverKeyFingerprints[0] ?? '';
-  const cams = d.camsInstances.list().map((i) => {
+  const cams = instances.map((i) => {
     const rep = i.live.report;
     const current = snapshotRevision(d.db, i.id, fp);
     return {
@@ -638,4 +649,19 @@ function groupBy<T>(items: T[], key: (x: T) => string): Map<string, T[]> {
     else m.set(k, [x]);
   }
   return m;
+}
+
+// Add camera (finding 12b): a camera with a proxy and a proxy camera id takes host, protocol and TLS name from the
+// proxy's latest report of that camera, each only when the request leaves it out (absent or empty).
+function withReportedConnection(d: Pick<ApiDeps, 'registry' | 'status'>, accountId: string, body: unknown): unknown {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return body;
+  const b = body as Record<string, unknown>;
+  if (typeof b.proxyId !== 'string' || typeof b.proxyCameraId !== 'string' || !b.proxyCameraId) return body;
+  const px = d.registry.proxyById(b.proxyId);
+  if (!px || px.accountId !== accountId) return body;
+  const rep = d.status.row(px.id)?.reported?.cameras.find((c) => c.ref === b.proxyCameraId);
+  const fill = reportedConnection(rep);
+  const out = { ...b };
+  for (const k of ['host', 'protocol', 'tlsServername'] as const) if ((out[k] === undefined || out[k] === null || out[k] === '') && fill[k] !== undefined) out[k] = fill[k];
+  return out;
 }
