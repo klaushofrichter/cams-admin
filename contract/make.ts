@@ -334,6 +334,29 @@ export function fixtures(): Record<string, unknown> {
       "the camera's proxy asks cams-admin to power-cycle the camera through its switch (no force from a proxy)")),
   };
 
+  // --- remove a camera, decommission a proxy (decommission spec 2026-11-08). $context.feature: the cross-check treats these
+  // as pending until cam-proxy implements camera.remove.
+  const dec = <T extends object>(f: T) => ({ ...f, $context: { ...(f as { $context?: object }).$context, feature: 'decommission' } });
+  const removed = ['camera FTP upload off', 'configuration', 'stored password', 'certificate trust', 'PTZ positions'];
+  const decommission = {
+    'valid-command-camera-remove-preview': dec(p3Valid('what the proxy holds for a camera before its removal (read only)', ['camera.remove.preview'], 'camera.remove.preview', { v: 1, camera: 'cam2' })),
+    'valid-command-camera-remove-keep': dec(p3Valid('remove a camera, its content left to retention (disruptive)', ['camera.remove'], 'camera.remove', { v: 1, camera: 'cam2', content: 'keep', archive: false })),
+    'valid-command-camera-remove-delete-archive': dec(p3Valid('remove a camera and delete its clips, stills and archived clips now (disruptive)', ['camera.remove'], 'camera.remove', { v: 1, camera: 'cam2', content: 'delete', archive: true })),
+    'refused-camera-remove-not-allowed': dec(p3Refused('not_allowed', 'camera.remove', { v: 1, camera: 'cam2', content: 'keep', archive: false }, ['camera.remove.preview'], 'camera.remove needs its own entry (the preview entry is not enough)')),
+    'refused-camera-remove-archive-keep': dec(p3Refused('invalid_args', 'camera.remove', { v: 1, camera: 'cam2', content: 'keep', archive: true }, ['camera.remove'], 'archive: true only with content: delete (strict args refuse)')),
+    'refused-camera-remove-budget': dec(p3Refused('rate_limited', 'camera.remove', { v: 1, camera: 'cam2', content: 'delete', archive: false }, ['camera.remove'],
+      'five disruptive actions and one camera.remove within the hour: the shared journal budget', { journal: [...journal(5, 'camera.action', () => 'camera-reboot'), ...journal(1, 'camera.remove').map((e) => ({ ...e, cmdId: `cmd_${'9'.repeat(20)}`, at: NOW - 30 * 60_000 }))] })),
+    'valid-command-proxy-unenroll': dec(p3Valid('the proxy unenrolls itself after the result (disruptive)', ['proxy.unenroll'], 'proxy.unenroll', { v: 1 })),
+    'refused-proxy-unenroll-not-allowed': dec(p3Refused('not_allowed', 'proxy.unenroll', { v: 1 }, ['proxy.restart'], 'proxy.unenroll needs its own entry')),
+    'valid-result-camera-remove-preview': p3Result('camera.remove.preview', 'clips, stills and archived clips the proxy holds for the camera', { status: 'ok', result: { camera: 'cam2', clips: 412, stills: 8_640, archivedClips: 3, bytes: 9_876_543_210 } }),
+    'valid-result-camera-remove-preview-not-found': p3Result('camera.remove.preview', 'an unknown camera', { status: 'failed', code: 'not_found' }),
+    'valid-result-camera-remove': p3Result('camera.remove', 'removed with content deleted now, archived clips kept', { status: 'ok', result: { camera: 'cam2', removed, leftovers: [], deleted: { clips: 412, stills: 8_640, archivedClips: 0 } } }),
+    'valid-result-camera-remove-leftovers': p3Result('camera.remove', 'removed, content kept for retention; one thing the proxy could not clean up', { status: 'ok', result: { camera: 'cam2', removed: removed.slice(1), leftovers: ['camera FTP upload off (camera offline)'], deleted: { clips: 0, stills: 0, archivedClips: 0 } } }),
+    'valid-result-camera-remove-move-open': p3Result('camera.remove', 'a move of this camera is open', { status: 'failed', code: 'move_open' }),
+    'valid-result-proxy-unenroll': p3Result('proxy.unenroll', 'the proxy unenrolls itself right after this result', { status: 'ok', result: { unenrollAt: NOW + 1_000 } }),
+    'valid-result-proxy-unenroll-has-cameras': p3Result('proxy.unenroll', 'refused while the proxy holds cameras', { status: 'failed', code: 'has_cameras' }),
+  };
+
   return {
     'valid-heartbeat-4cam': valid('heartbeat', hb(four, false, makeProxyInfo({ now: NOW, site: 'garage', publicUrl: 'https://proxy.example.net' })), 'four cameras, site CA, cam3 offline'),
     'valid-heartbeat-1cam-pi': valid('heartbeat', hb(pi), 'the Pi: one camera, host stats'),
@@ -425,6 +448,7 @@ export function fixtures(): Record<string, unknown> {
     ...onboarding,
     ...vision,
     ...poeFixtures,
+    ...decommission,
   };
 }
 

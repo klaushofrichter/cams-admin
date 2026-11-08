@@ -69,7 +69,10 @@ export function buildCamsSchemas(mode: Mode): Record<string, S> {
   const camera = obj(cameraProps, Object.keys(cameraProps).filter((k) => k !== 'moveId' && k !== 'move'));
   // Viewer tokens (snapshot format 4, design 2026-11-05): the tokens valid at generatedAt that include this account, sorted by id.
   // Only the fingerprint, never the token. Required in strict, optional at run time (an older snapshot, an older cams).
-  const viewerToken = all({ id: id('vtk'), name: str(64), fingerprint: hash, expiresAt: int() });
+  // role (spec 2026-11-08 A4): viewer | admin of each account listing the token; required in strict, optional at run time
+  // (absent = viewer: a snapshot from before format 5).
+  const viewerTokenProps: Record<string, S> = { id: id('vtk'), name: str(64), fingerprint: hash, expiresAt: int(), role: en([...VIEWER_TOKEN_ROLES]) };
+  const viewerToken = obj(viewerTokenProps, ['id', 'name', 'fingerprint', 'expiresAt']);
   const accountProps: Record<string, S> = { id: id('acc'), name: str(32), displayName: str(), revision: int(0), users: arr(user, 500), proxies: arr(proxy, 64), cameras: arr(camera, 256), viewerTokens: arr(viewerToken, 64) };
   const account = obj(accountProps, Object.keys(accountProps).filter((k) => k !== 'viewerTokens'));
   const snapshot = all({
@@ -174,10 +177,12 @@ export const IDS = {
   pi: fixedId('prx', 1), cluster: fixedId('prx', 2), b1: fixedId('prx', 3),
   cam1: fixedId('cam', 1), cam2: fixedId('cam', 2), bcam1: fixedId('cam', 3),
   tok1: fixedId('tok', 1), tok2: fixedId('tok', 2),
-  vtk1: fixedId('vtk', 1),
+  vtk1: fixedId('vtk', 1), vtk2: fixedId('vtk', 2),
 };
 // A fixed fake viewer token (never a real one): cams reproduces its fingerprint and link.
 export const VIEWER_TOKEN_VECTOR = 'cav_TestOnlyNotARealToken0';
+// A viewer token's role in the accounts listing it (snapshot format 5): viewer (default) or admin.
+export const VIEWER_TOKEN_ROLES = ['viewer', 'admin'] as const;
 
 function keys() {
   return Object.fromEntries(Object.entries(SEEDS).map(([n, seedHex]) => {
@@ -198,7 +203,10 @@ function unsignedSnapshot(kind: 'two-accounts' | 'empty'): Record<string, unknow
     {
       id: IDS.home, name: 'home', displayName: 'Home', revision: 17,
       users: [{ email: 'klaus@example.org', role: 'admin', disabled: false }, { email: 'viewer@example.org', role: 'viewer', disabled: false }],
-      viewerTokens: [{ id: IDS.vtk1, name: 'Kitchen tablet', fingerprint: viewerFingerprint(VIEWER_TOKEN_VECTOR), expiresAt: NOW + 7 * 86_400_000 }],
+      viewerTokens: [
+        { id: IDS.vtk1, name: 'Kitchen tablet', fingerprint: viewerFingerprint(VIEWER_TOKEN_VECTOR), expiresAt: NOW + 7 * 86_400_000, role: 'viewer' },
+        { id: IDS.vtk2, name: 'Demo kit admin', fingerprint: viewerFingerprint('cav_TestOnlyNotARealToken1'), expiresAt: NOW + 86_400_000, role: 'admin' },
+      ],
       proxies: [
         { id: IDS.cluster, name: 'cluster', displayName: 'Cluster', url: 'https://proxy.example.net:8480', adminUiUrl: null, tlsServername: 'proxy.example.net',
           caFingerprints: ['SHA256:' + 'A1'.repeat(32)], tokens: [{ id: IDS.tok2, kind: 'admin', state: 'retiring', retireAt: NOW + 86_400_000 }], site: 'garage' },
@@ -307,6 +315,8 @@ export function camsFixtures(): Record<string, unknown> {
     'drift-fleet-new-field': drift('fleet-response', { ...fleet(), newThing: 1 }, 'run time ignores an unknown field; strict refuses: add it to the contract first'),
     'drift-snapshot-new-field': drift('snapshot', withCamera({ newThing: 1 }), 'run time ignores an unknown field; strict refuses: add it to the contract first'),
     'drift-snapshot-no-viewer-tokens': drift('snapshot', withAccount((a) => { delete a.viewerTokens; }), 'a snapshot from before format 4: run time reads it as no viewer tokens; strict refuses'),
+    'drift-snapshot-viewer-token-no-role': drift('snapshot', withAccount((a) => { delete (a.viewerTokens as Record<string, unknown>[])[0].role; }), 'a viewer token without role (before format 5): run time reads it as viewer; strict refuses'),
+    'invalid-snapshot-viewer-token-role': invalid('snapshot', withAccount((a) => { (a.viewerTokens as Record<string, unknown>[])[0].role = 'owner'; }), 'role is viewer or admin'),
     'invalid-snapshot-viewer-token-secret': invalid('snapshot', withAccount((a) => { (a.viewerTokens as Record<string, unknown>[])[0].token = VIEWER_TOKEN_VECTOR; }), 'a viewer token with the token itself: never in a snapshot (only its fingerprint)'),
     'invalid-snapshot-viewer-token-fingerprint': invalid('snapshot', withAccount((a) => { (a.viewerTokens as Record<string, unknown>[])[0].fingerprint = 'sha256:' + 'A'.repeat(64); }), 'the fingerprint is sha256: + 64 lower-case hex'),
   };

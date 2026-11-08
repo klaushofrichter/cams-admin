@@ -425,6 +425,54 @@ Fixtures (`$context.feature: 'poe'`): `valid-command-switch-read`,
 `valid-command-switch-cycle-force`, `refused-switch-cycle-bad-id`,
 `valid-event-camera-power-cycle-request`.
 
+## Remove a camera, decommission a proxy
+
+Additive (spec "decommission + account-move fixes", 2026-11-08, A1–A3). Three
+commands (`DECOMMISSION_COMMANDS`), all `v: 1`, in the strict `command` enum,
+each with `commands/<name>.args` and `.result` (lenient and strict), each its
+own allow entry (the entry is the command's name). Strict objects are closed,
+every field required.
+
+| Command | Args | Result | `failed` codes |
+|---|---|---|---|
+| `camera.remove.preview` | `{v, camera}` | `{camera, clips, stills, archivedClips, bytes}` | `not_found` |
+| `camera.remove` | `{v, camera, content: keep \| delete, archive}` | `{camera, removed, leftovers, deleted: {clips, stills, archivedClips}}` | `not_found`, `move_open`, `config_json` |
+| `proxy.unenroll` | `{v}` | `{unenrollAt}` | `has_cameras` |
+
+- `camera` is the proxy's camera id. Counts are integers ≥ 0; `removed` and
+  `leftovers` are at most 16 (`REMOVE_ITEMS_MAX`) strings of 1..80 characters
+  (`REMOVE_ITEM_LEN`), in words (`configuration`, `stored password`, …). A
+  proxy reports every leftover: never an empty `leftovers` while something stays.
+- **`camera.remove.preview`** is a read (not disruptive, not in the journal
+  budget; on by default on cam-proxy like `camera.onboarding.get`): what the
+  proxy holds for the camera (clips, stills, archived clips; `bytes` all of them).
+- **`camera.remove`** (disruptive: off by default per proxy, typed confirm in
+  cams-admin) runs the proxy's local remove (the camera's FTP upload off, its
+  configuration, stored password, certificate trust, PTZ positions). `content:
+  delete` deletes the camera's clips and stills now; `archive: true` (only with
+  `delete`; else the strict args refuse: `invalid_args`) also its archived
+  clips, which otherwise stay. `keep` leaves the files to retention. Step 11:
+  it counts toward, and is bounded by, the journal budget of the disruptive
+  camera actions (6 an hour per proxy, shared) → `rate_limited`. `move_open`: a
+  move of this camera is open; `config_json`: the camera is defined in a
+  config.json the proxy cannot rewrite.
+- **`proxy.unenroll`** (disruptive) is refused `has_cameras` while the proxy
+  holds cameras (moved-away markers not counted). After the result the proxy
+  unenrolls itself like its local `admin-unenroll` (key file deleted,
+  `camsAdmin.url` cleared, `bye unenrolled`), and also clears its managed token
+  set (and revision) and the command policy entries cams-admin set, so a later
+  enrollment starts clean. Not in the journal budget.
+
+Fixtures (`$context.feature: 'decommission'`: the cross-check reports them
+`pending` until cam-proxy implements `camera.remove`):
+`valid-command-camera-remove-preview`, `valid-command-camera-remove-keep`,
+`valid-command-camera-remove-delete-archive`, `refused-camera-remove-not-allowed`,
+`refused-camera-remove-archive-keep`, `refused-camera-remove-budget`,
+`valid-command-proxy-unenroll`, `refused-proxy-unenroll-not-allowed`, and the
+results `valid-result-camera-remove-preview`, `-preview-not-found`,
+`valid-result-camera-remove`, `-leftovers`, `-move-open`,
+`valid-result-proxy-unenroll`, `-has-cameras`.
+
 ## Camera moves
 
 Additive: the envelope stays v1, signatures and JCS unchanged. Thirteen commands

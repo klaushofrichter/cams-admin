@@ -10,7 +10,7 @@ import { createHash } from 'crypto';
 import Ajv2020 from 'ajv/dist/2020';
 import type { ValidateFunction } from 'ajv';
 import { publicFromB64, verifyEnvelope } from '../server/crypto/ed25519';
-import { buildSchemas, CAMERA_NAME_PATTERN, DISRUPTIVE_ACTIONS, JOURNAL_BUDGET_ACTIONS, MOVE_COMMANDS, NEVER_REMOTE_ACTIONS, ONBOARDING_COMMANDS, ANALYTICS_COMMANDS, SWITCH_COMMANDS, POWER_COMMANDS, ONBOARDING_REQUIRED, ONBOARDING_STEPS, P3_COMMANDS, PATH_PATTERN, REMOTE_ACTIONS } from '../contract/build';
+import { buildSchemas, CAMERA_NAME_PATTERN, DISRUPTIVE_ACTIONS, JOURNAL_BUDGET_ACTIONS, MOVE_COMMANDS, NEVER_REMOTE_ACTIONS, ONBOARDING_COMMANDS, ANALYTICS_COMMANDS, SWITCH_COMMANDS, POWER_COMMANDS, DECOMMISSION_COMMANDS, ONBOARDING_REQUIRED, ONBOARDING_STEPS, P3_COMMANDS, PATH_PATTERN, REMOTE_ACTIONS } from '../contract/build';
 
 export interface CheckContext {
   now: number; // cams-admin time: Date.now() + the offset learned from the challenge
@@ -35,8 +35,9 @@ const TOK_RE = new RegExp(`^tok_${ULID20}$`);
 const HASH_RE = /^sha256:[0-9a-f]{64}$/;
 // eslint-disable-next-line no-control-regex
 const LABEL_RE = /^[^\u0000-\u001f\u007f]{1,64}$/;
-// What this version implements: tokens.apply (P2), the P3 commands, the camera-move commands, camera.onboarding.get, analytics.usage.get, the switch commands and the camera.power messages.
-export const IMPLEMENTED: readonly string[] = ['tokens.apply', ...P3_COMMANDS, ...MOVE_COMMANDS, ...ONBOARDING_COMMANDS, ...ANALYTICS_COMMANDS, ...SWITCH_COMMANDS, ...POWER_COMMANDS];
+// What this version implements: tokens.apply (P2), the P3 commands, the camera-move commands, camera.onboarding.get, analytics.usage.get, the switch commands,
+// the camera.power messages and camera.remove.preview / camera.remove / proxy.unenroll.
+export const IMPLEMENTED: readonly string[] = ['tokens.apply', ...P3_COMMANDS, ...MOVE_COMMANDS, ...ONBOARDING_COMMANDS, ...ANALYTICS_COMMANDS, ...SWITCH_COMMANDS, ...POWER_COMMANDS, ...DECOMMISSION_COMMANDS];
 const PATH_RE = new RegExp(PATH_PATTERN);
 const REV_RE = /^sha256:[0-9a-f]{64}$/;
 const CAM_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
@@ -112,7 +113,7 @@ const moveValidators = new Map<string, ValidateFunction>();
 export function moveArgsOk(command: string, a: unknown): boolean {
   if (moveValidators.size === 0) {
     const schemas = buildSchemas('strict');
-    for (const c of [...MOVE_COMMANDS, ...SWITCH_COMMANDS, ...POWER_COMMANDS]) moveValidators.set(c, moveAjv.compile(schemas[`commands/${c}.args`]));
+    for (const c of [...MOVE_COMMANDS, ...SWITCH_COMMANDS, ...POWER_COMMANDS, ...DECOMMISSION_COMMANDS]) moveValidators.set(c, moveAjv.compile(schemas[`commands/${c}.args`]));
   }
   return moveValidators.get(command)!(a) as boolean;
 }
@@ -157,9 +158,10 @@ export function onboardingResultOf(compact: unknown, camera: string | null, now:
 }
 
 const isDisruptive = (a: string | undefined) => (DISRUPTIVE_ACTIONS as readonly string[]).includes(a ?? '');
-// Step 11's journal budget: proxy.restart ≤ 2 an hour, disruptive camera actions ≤ 6 an hour (any status).
+// Step 11's journal budget: proxy.restart ≤ 2 an hour, disruptive camera actions and camera.remove ≤ 6 an hour together (any status).
 export function journalBudget(journal: JournalEntry[], now: number, command: string, action?: string): { ok: true } | { ok: false; retryAfterS: number } {
-  const counted = journal.filter((e) => e.at > now - HOUR && (command === 'proxy.restart' ? e.command === 'proxy.restart' : e.command === 'camera.action' && (JOURNAL_BUDGET_ACTIONS as readonly string[]).includes(e.action ?? '')));
+  const counted = journal.filter((e) => e.at > now - HOUR && (command === 'proxy.restart' ? e.command === 'proxy.restart'
+    : e.command === 'camera.remove' || (e.command === 'camera.action' && (JOURNAL_BUDGET_ACTIONS as readonly string[]).includes(e.action ?? ''))));
   const cap = command === 'proxy.restart' ? 2 : 6;
   if (counted.length < cap) return { ok: true };
   const oldest = Math.min(...counted.map((e) => e.at));
@@ -220,6 +222,14 @@ export function refCheck(m: Record<string, any>, ctx: CheckContext): CheckVerdic
     if (!moveArgsOk(b.command, b.args)) return nack('invalid_args');
     // 11. the entry of the side the command is for (move.finish and move.cancel: args.role)
     if (!ctx.allow.includes(moveEntryOf(b.command, b.args))) return nack('not_allowed');
+  } else if ((DECOMMISSION_COMMANDS as readonly string[]).includes(b.command)) {
+    // Remove a camera, decommission a proxy: the strict args schema (archive only with delete); camera.remove shares the
+    // journal budget of the disruptive camera actions. The entry is the command's own name (step 8).
+    if (!moveArgsOk(b.command, b.args)) return nack('invalid_args');
+    if (b.command === 'camera.remove') {
+      const budget = journalBudget(ctx.journal ?? [], ctx.now, b.command);
+      if (!budget.ok) return { kind: 'nack', code: 'rate_limited', retryAfterS: budget.retryAfterS };
+    }
   } else if ((SWITCH_COMMANDS as readonly string[]).includes(b.command) || (POWER_COMMANDS as readonly string[]).includes(b.command)) {
     // PoE switches: the strict args schema; the entry is the command's own name (step 8). cam-proxy's journal budget for switch.cycle is not in the reference.
     if (!moveArgsOk(b.command, b.args)) return nack('invalid_args');

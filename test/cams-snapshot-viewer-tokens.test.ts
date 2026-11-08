@@ -35,7 +35,7 @@ describe('viewer tokens in the snapshot', () => {
 
   it('a token is in every serving instance\'s snapshot, by fingerprint; strict passes; never the token or its ciphertext', async () => {
     const c = await s.api('POST', '/viewer-tokens', { name: 'Kitchen tablet', accountIds: [home.id, beta.id], days: 30 });
-    const want = { id: c.item.id, name: 'Kitchen tablet', fingerprint: viewerFingerprint(c.token), expiresAt: c.item.expiresAt };
+    const want = { id: c.item.id, name: 'Kitchen tablet', fingerprint: viewerFingerprint(c.token), expiresAt: c.item.expiresAt, role: 'viewer' };
     expect(tokensOf(cluster.id, home.id)).toEqual([want]);
     expect(tokensOf(cluster.id, beta.id)).toEqual([want]);
     expect(tokensOf(pi.id, home.id)).toEqual([want]);
