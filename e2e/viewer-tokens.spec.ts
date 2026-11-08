@@ -1,5 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { api, signIn, uniq } from './helpers';
+import { BASE } from './env';
+import { CamsTestClient, enrollCams } from '../test-client/cams';
 
 // Viewer tokens on an account's Users tab (design 2026-11-05): add, copy,
 // the QR window, validity, revoke and valid again, accounts, delete.
@@ -106,4 +108,51 @@ test('a token role: admin on add (orange, one-line warning), back to viewer per 
   await expect(page.getByTestId('vt-role-Kit admin')).toHaveValue('viewer');
   const audit = await api(page, 'GET', `/audit?account=${acc.id}&action=viewer-token-role`);
   expect(audit.items[0].detail).toMatchObject({ role: 'viewer', from: 'admin' });
+});
+
+test('a link per viewer: with a second viewer of the account, the QR window switches link and code (finding 19)', async ({ page }, info) => {
+  const name = uniq(info, 'vtl');
+  const acc = await api(page, 'POST', '/accounts', { name, displayName: 'Two viewers' });
+  // A second cams viewer of this account, enrolled (its first signed request confirms the key).
+  const inst = await api(page, 'POST', '/cams-instances', { name: uniq(info, 'pi'), displayName: 'Pi', baseUrl: 'http://192.0.2.10:8080/', accounts: [acc.id] });
+  const { code } = await api(page, 'POST', `/cams-instances/${inst.id}/enrollment-codes`, { lifetimeH: 1 });
+  const key = await enrollCams(BASE, code);
+  const cams = new CamsTestClient({ url: BASE, instanceId: key.instanceId, keyId: key.keyId, privateKey: key.privateKey, serverKeys: key.serverKeys });
+  await cams.snapshot();
+  await expect.poll(async () => (await api(page, 'GET', `/cams-instances/${inst.id}`)).state).toBe('enrolled');
+
+  await page.goto(`/#/accounts/${acc.id}/users`);
+  await page.getByTestId('vt-name').fill('Demo phone');
+  await page.getByTestId('vt-add').click();
+  const win = page.getByTestId('vt-qr-window');
+  const choice = page.getByTestId('vt-viewer');
+  await expect(choice).toBeVisible();
+  await expect(choice.locator('option')).toHaveText(['Main viewer (cams.skylar.technology)', 'Pi (192.0.2.10:8080)']);
+  await expect(win).toContainText('cams.skylar.technology');
+  const mainPath = await page.getByTestId('vt-qr-code').locator('path').getAttribute('d');
+
+  await choice.selectOption({ label: 'Pi (192.0.2.10:8080)' });
+  await expect(win).toContainText('192.0.2.10:8080');
+  await expect.poll(() => page.getByTestId('vt-qr-code').locator('path').getAttribute('d')).not.toBe(mainPath);
+  await page.getByTestId('vt-copy-link').click();
+  await expect(page.getByTestId('vt-copy-link')).toHaveText('Copied');
+  const link = await page.evaluate(() => navigator.clipboard.readText());
+  expect(link).toMatch(/^http:\/\/192\.0\.2\.10:8080\/token#t=cav_[0-9A-Za-z]{22}$/);
+  await page.getByTestId('vt-qr-close').click();
+
+  // From the list too; the copy's audit names the viewers offered, never the token.
+  await page.getByTestId('vt-qr-Demo phone').click();
+  await expect(page.getByTestId('vt-viewer')).toHaveValue('0');
+  await page.getByTestId('vt-qr-close').click();
+  const audit = await api(page, 'GET', `/audit?account=${acc.id}&action=viewer-token-copy`);
+  expect(audit.items[0].detail).toMatchObject({ what: 'qr', viewers: [null, inst.id] });
+  expect(JSON.stringify(audit)).not.toContain(link.split('#t=')[1]);
+
+  // A token of another account (that the Pi does not serve): no choice.
+  const other = await api(page, 'POST', '/accounts', { name: `${name}-o`.slice(0, 32), displayName: 'One viewer' });
+  await page.goto(`/#/accounts/${other.id}/users`);
+  await page.getByTestId('vt-name').fill('Solo');
+  await page.getByTestId('vt-add').click();
+  await expect(win).toBeVisible();
+  await expect(page.getByTestId('vt-viewer')).toHaveCount(0);
 });

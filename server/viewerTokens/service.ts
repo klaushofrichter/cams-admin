@@ -3,7 +3,7 @@ import type { Audit, AuditAction } from '../audit';
 import { tx, type Db } from '../db/open';
 import { newId } from '../ids';
 import { ApiError } from '../registry';
-import { newViewerToken, openToken, sealToken, viewerFingerprint, viewerLink, type ViewerKey } from './crypto';
+import { newViewerToken, openToken, sealToken, viewerBase, viewerFingerprint, viewerLink, type ViewerKey } from './crypto';
 
 // Viewer tokens (design 2026-11-05-viewer-tokens-design.md): sign people in
 // to the cams viewers as viewers of one or more accounts. Kept readable
@@ -39,6 +39,9 @@ export interface ViewerTokenView {
 export type ViewerTokenJournal =
   | { kind: 'viewer-token'; tokenId: string; change: 'revoked' | 'deleted' }
   | { kind: 'viewer-token'; tokenId: string; change: 'expires'; expiresAt: number };
+// A sign-in link per viewer that can sign the token in (finding 19): the main one first.
+export interface ViewerLink { instanceId: string | null; name: string; base: string; link: string }
+export const MAIN_VIEWER_NAME = 'Main viewer';
 export interface ViewerTokenDeps { db: Db; clock: Clock; audit: Audit; key: ViewerKey | null; linkBase: string; journal?: (e: ViewerTokenJournal) => void }
 
 type Row = Record<string, unknown>;
@@ -144,7 +147,28 @@ export class ViewerTokens {
     if (!canManage(actor, accountIds)) throw new ApiError(403, 'forbidden');
   }
 
-  create(actor: string, input: unknown): { item: ViewerTokenView; token: string; link: string } {
+  // The viewers that can sign this token in (finding 19), built here from the registry, never from a request:
+  // the main viewer (linkBase) first, named by its record if one has that base; then every enrolled cams
+  // instance with an http(s) base URL that serves at least one of the token's accounts, by name, one per base.
+  private viewers(id: string): Omit<ViewerLink, 'link'>[] {
+    const rows = this.d.db.prepare(`SELECT i.id, i.name, i.display_name, i.base_url,
+        EXISTS (SELECT 1 FROM cams_instance_accounts s JOIN viewer_token_accounts v ON v.account_id = s.account_id WHERE s.instance_id = i.id AND v.token_id = ?) AS serves
+      FROM cams_instances i WHERE i.state = 'enrolled' AND i.base_url IS NOT NULL ORDER BY i.name`).all(id) as Row[];
+    const named = (r: Row) => ((r.display_name as string) || (r.name as string));
+    const main = rows.find((r) => viewerBase(r.base_url as string) === this.d.linkBase);
+    const out: Omit<ViewerLink, 'link'>[] = [{ instanceId: main ? (main.id as string) : null, name: main ? named(main) : MAIN_VIEWER_NAME, base: this.d.linkBase }];
+    for (const r of rows) {
+      const base = viewerBase(r.base_url as string);
+      if (base && r.serves && !out.some((x) => x.base === base)) out.push({ instanceId: r.id as string, name: named(r), base });
+    }
+    return out;
+  }
+
+  private links(id: string, token: string): ViewerLink[] {
+    return this.viewers(id).map((v) => ({ ...v, link: viewerLink(v.base, token) }));
+  }
+
+  create(actor: string, input: unknown): { item: ViewerTokenView; token: string; link: string; links: ViewerLink[] } {
     const o = obj(input);
     const name = typeof o.name === 'string' ? o.name.trim() : '';
     if (!NAME_RE.test(name)) throw invalid('name');
@@ -162,18 +186,20 @@ export class ViewerTokens {
       for (const acc of accountIds) this.d.db.prepare('INSERT INTO viewer_token_accounts (token_id, account_id) VALUES (?, ?)').run(id, acc);
       this.log(actor, 'viewer-token-create', this.row(id), accountIds, { days, expiresAt: now + days * DAY, role });
     });
-    return { item: this.get(id), token, link: viewerLink(this.d.linkBase, token) };
+    const links = this.links(id, token);
+    return { item: this.get(id), token, link: links[0].link, links };
   }
 
-  // The token itself, for Copy, Copy link and the QR window: audited, never logged.
-  reveal(actor: string, id: string, what: CopyWhat): { token: string; link: string } {
+  // The token itself, for Copy, Copy link and the QR window: audited (with the viewers offered), never logged.
+  reveal(actor: string, id: string, what: CopyWhat): { token: string; link: string; links: ViewerLink[] } {
     if (!(COPY_WHAT as readonly unknown[]).includes(what)) throw invalid('what');
     const key = this.key();
     const r = this.row(id);
     const token = openToken(key, id, r.secret as string);
     if (token === null) throw new ApiError(409, 'token_unreadable');
-    this.log(actor, 'viewer-token-copy', r, this.accountIdsOfToken(id), { what });
-    return { token, link: viewerLink(this.d.linkBase, token) };
+    const links = this.links(id, token);
+    this.log(actor, 'viewer-token-copy', r, this.accountIdsOfToken(id), { what, viewers: links.map((l) => l.instanceId) });
+    return { token, link: links[0].link, links };
   }
 
   // Valid for `days` from now: longer or shorter, and again after a revoke or an expiry (the same token).
