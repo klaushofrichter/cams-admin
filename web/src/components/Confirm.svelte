@@ -1,6 +1,7 @@
 <script lang="ts">
-  // A confirmation dialog; with `typed`, the user must type that text. `cancel` names the button that backs out.
-  let { title, body, typed = '', ok = 'Confirm', cancel = 'Cancel', onconfirm, oncancel, children }: { title: string; body: string; typed?: string; ok?: string; cancel?: string; onconfirm: () => void; oncancel: () => void; children?: import('svelte').Snippet } = $props();
+  // A confirmation dialog; with `typed`, the user must type that text. `cancel` names the button that backs out;
+  // `okDisabled` holds the confirm button (e.g. a Delete the server would refuse).
+  let { title, body, typed = '', ok = 'Confirm', cancel = 'Cancel', okDisabled = false, onconfirm, oncancel, children }: { title: string; body: string; typed?: string; ok?: string; cancel?: string; okDisabled?: boolean; onconfirm: () => void; oncancel: () => void; children?: import('svelte').Snippet } = $props();
   let value = $state('');
 </script>
 <div class="scrim" role="presentation" onclick={oncancel}></div>
@@ -13,7 +14,7 @@
   {/if}
   <div class="row end">
     <button class="btn" data-testid="confirm-cancel" onclick={oncancel}>{cancel}</button>
-    <button class="btn danger" data-testid="confirm-ok" disabled={!!typed && value !== typed} onclick={onconfirm}>{ok}</button>
+    <button class="btn danger" data-testid="confirm-ok" disabled={okDisabled || (!!typed && value !== typed)} onclick={onconfirm}>{ok}</button>
   </div>
 </div>
 <style>

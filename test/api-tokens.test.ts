@@ -97,6 +97,9 @@ describe('token and command routes', () => {
 
   it('restore: a proxy ahead → 409 proxy_ahead on issue; POST …/tokens/confirm-restore sends the set above it', async () => {
     const a = await proxy('api-ahead', { allow: ['tokens.apply'] });
+    // The record had a token set (a never-used record takes a proxy ahead without the question: test/tokens.test.ts).
+    await call('POST', `${a.base}/tokens`, { kind: 'client', label: 'before' });
+    await until(async () => (await call('GET', `${a.base}/tokens`)).body.appliedRevision === 1);
     a.client.tokensRevision = 9;
     await until(async () => (await call('GET', `${a.base}/tokens`)).body.ahead === 9);
     expect((await call('POST', `${a.base}/tokens`, { kind: 'client', label: 'x' })).body).toEqual({ error: 'proxy_ahead' });
