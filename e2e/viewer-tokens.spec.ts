@@ -95,6 +95,9 @@ test('a token role: admin on add (orange, one-line warning), back to viewer per 
   await expect(page.getByTestId('vt-admin-warning')).toContainText('An admin token can confirm held cameras');
   await page.getByTestId('vt-add').click();
   await page.getByTestId('vt-qr-close').click();
+  // The warning belongs to the form's choice: back on viewer, it goes, even with an admin token listed (orange row).
+  await expect(page.getByTestId('vt-role')).toHaveValue('viewer');
+  await expect(page.getByTestId('vt-admin-warning')).toHaveCount(0);
   const sel = page.getByTestId('vt-role-Kit admin');
   await expect(sel).toHaveValue('admin');
   await expect(sel).toHaveClass(/warn/);

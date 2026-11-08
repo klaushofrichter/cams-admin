@@ -152,7 +152,7 @@
     </fieldset>
     <button class="btn primary" data-testid="vt-add" disabled={!configured}>Add token</button>
   </form>
-  {#if role === 'admin' || items.some((t) => t.role === 'admin')}<p class="badge warn" data-testid="vt-admin-warning">{ADMIN_WARNING}</p>{/if}
+  {#if role === 'admin'}<p class="badge warn" data-testid="vt-admin-warning">{ADMIN_WARNING}</p>{/if}
   {#if error}<p class="error" data-testid="vt-error">{error}</p>{/if}
 </section>
 
@@ -207,6 +207,8 @@
   form { align-items: end; }
   .actions { gap: 4px; flex-wrap: nowrap; }
   select.role.warn { border-color: var(--warning); color: var(--warning); }
+  /* The role pulldown and the buttons are taller than the text cells: centre the row (Klaus 2026-11-08). */
+  td { vertical-align: middle; }
   .accounts { border: 1px solid var(--border); border-radius: var(--radius); padding: 2px 8px 6px; gap: 10px; flex-wrap: wrap; }
   .accounts legend { font-size: 12px; color: var(--muted); }
   .check { display: inline-flex; gap: 6px; align-items: center; }
