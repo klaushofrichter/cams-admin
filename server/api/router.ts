@@ -652,7 +652,8 @@ function groupBy<T>(items: T[], key: (x: T) => string): Map<string, T[]> {
 }
 
 // Add camera (finding 12b): a camera with a proxy and a proxy camera id takes host, protocol and TLS name from the
-// proxy's latest report of that camera, each only when the request leaves it out (absent or empty).
+// proxy's latest report of that camera, each only when the request leaves it out (absent or empty). An empty name
+// becomes the reported name, else the cams id (finding 22).
 function withReportedConnection(d: Pick<ApiDeps, 'registry' | 'status'>, accountId: string, body: unknown): unknown {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return body;
   const b = body as Record<string, unknown>;
@@ -662,6 +663,8 @@ function withReportedConnection(d: Pick<ApiDeps, 'registry' | 'status'>, account
   const rep = d.status.row(px.id)?.reported?.cameras.find((c) => c.ref === b.proxyCameraId);
   const fill = reportedConnection(rep);
   const out = { ...b };
+  // Finding 22: behind a proxy the name is optional; the camera's own name replaces it at the proxy's next report.
+  if ((out.name === undefined || out.name === null || out.name === '') && typeof b.camsId === 'string') out.name = adoptedName(rep?.name, b.camsId);
   for (const k of ['host', 'protocol', 'tlsServername'] as const) if ((out[k] === undefined || out[k] === null || out[k] === '') && fill[k] !== undefined) out[k] = fill[k];
   return out;
 }

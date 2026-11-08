@@ -16,6 +16,7 @@ export interface AddCameraForm { camsId: string; name: string; kind: string; pro
 export function addCameraBody(f: AddCameraForm): Record<string, unknown> {
   const body: Record<string, unknown> = { camsId: f.camsId, name: f.name, kind: f.kind, proxyId: f.proxyId || null, proxyCameraId: f.proxyCameraId || null };
   if (!f.proxyId) return body;
+  if (!f.name.trim()) delete body.name; // optional behind a proxy: the server takes the reported name, else the cams id
   if (f.host.trim()) body.host = f.host.trim();
   if (f.protocol) body.protocol = f.protocol;
   if (f.tlsName.trim()) body.tlsServername = f.tlsName.trim();

@@ -46,4 +46,20 @@ describe('Add camera takes host, protocol and TLS name from the proxy report', (
     expect((await t.add({ camsId: 'cam9', name: 'Other', proxyCameraId: 'cam9' })).body).toMatchObject({ host: null, protocol: null });
     expect((await t.a.api('post', `/accounts/${t.acc.id}/cameras`, { camsId: 'lone', name: 'Lone', kind: 'camera' })).body).toMatchObject({ host: null, protocol: null, proxyId: null });
   });
+
+  // Finding 22: the form's hint says the camera's own name replaces the typed one, so behind a proxy the name is optional.
+  it('behind a proxy the name is optional: the reported name, else the cams id; without a proxy it stays required', async () => {
+    const { add, a, acc } = await setup();
+    expect((await add({ camsId: 'gate', proxyCameraId: 'cam1' })).body).toMatchObject({ name: 'Camera 1' });
+    expect((await add({ camsId: 'yard', name: '', proxyCameraId: 'cam2' })).body).toMatchObject({ name: 'Camera 2' });
+    // A typed name wins.
+    expect((await add({ camsId: 'porch', name: 'Porch', proxyCameraId: 'cam8' })).body).toMatchObject({ name: 'Porch' });
+    // Not reported by the proxy: the cams id.
+    expect((await add({ camsId: 'shed', proxyCameraId: 'cam9' })).body).toMatchObject({ name: 'shed' });
+    // No proxy: no report will come, the name stays required.
+    for (const body of [{ camsId: 'lone', kind: 'camera' }, { camsId: 'lone', kind: 'camera', name: '' }]) {
+      const r = await a.api('post', `/accounts/${acc.id}/cameras`, body);
+      expect(r.status).toBe(400);
+    }
+  });
 });
