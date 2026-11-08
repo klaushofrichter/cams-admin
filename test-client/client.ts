@@ -323,7 +323,8 @@ export class ProxyClient extends EventEmitter {
       : b.command.startsWith('switch.') ? this.runSwitch(b)
       // The camera.power.* messages change nothing here: an empty result, as cam-proxy's.
       : b.command.startsWith('camera.power.') ? { status: 'ok', result: {} }
-      : b.command === 'camera.onboarding.get' ? { status: 'ok', result: onboardingResultOf(this.o.onboarding?.(), b.args.camera, this.now() + this.serverOffset) } : this.runP3(b);
+      : b.command === 'camera.onboarding.get' ? { status: 'ok', result: onboardingResultOf(this.o.onboarding?.(), b.args.camera, this.now() + this.serverOffset) }
+      : b.command === 'camera.remove.preview' || b.command === 'camera.remove' || b.command === 'proxy.unenroll' ? this.runDecommission(b) : this.runP3(b);
     this.journal.set(b.cmdId, d);
     if (this.dropAfterReceived > 0) {
       this.dropAfterReceived--;
@@ -366,6 +367,20 @@ export class ProxyClient extends EventEmitter {
       case 'move.finish': return { status: 'ok', result: {} };
       case 'move.return.open': return { status: 'ok', result: { chunks: 0, bytes: 0 } };
       default: return { status: 'ok', result: {} };
+    }
+  }
+
+  // Remove camera / Decommission proxy: decommissionResults per command (a DoneBody, or a function of the args), else a
+  // canned answer (the preview: some content; remove: what cam-proxy removes, with deleted counts as asked; unenroll: now).
+  decommissionResults = new Map<string, DoneBody | ((args: Record<string, any>) => DoneBody)>();
+  private runDecommission(b: Record<string, any>): DoneBody {
+    const o = this.decommissionResults.get(b.command);
+    if (o) return typeof o === 'function' ? o(b.args) : o;
+    const del = b.args.content === 'delete';
+    switch (b.command) {
+      case 'camera.remove.preview': return { status: 'ok', result: { camera: b.args.camera, clips: 12, stills: 340, archivedClips: 2, bytes: 123_456_789 } };
+      case 'camera.remove': return { status: 'ok', result: { camera: b.args.camera, removed: ['camera FTP upload off', 'configuration', 'stored password', 'certificate trust', 'PTZ positions'], leftovers: [], deleted: { clips: del ? 12 : 0, stills: del ? 340 : 0, archivedClips: del && b.args.archive ? 2 : 0 } } };
+      default: return { status: 'ok', result: { unenrollAt: this.now() + this.serverOffset + 1000 } };
     }
   }
 

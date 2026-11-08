@@ -23,6 +23,7 @@ export interface Limits {
   camsPerInstancePerMin: number; // signed /cams/v1 requests per instance
   camsFailedSigPer10Min: number; // per named instance, and once for unknown ids (unknown key, bad signature)
   camsGlobalPerMin: number; // /cams/v1 requests per well-formed instance id, and once for the rest (a ceiling before the check)
+  fleetDisruptivePer10Min: number;
 }
 
 export interface Config {
@@ -188,6 +189,8 @@ export function loadConfig(env: Env = process.env): Config {
       camsPerInstancePerMin: num(env, 'LIMIT_CAMS_PER_INSTANCE', 60, 1, 100_000),
       camsFailedSigPer10Min: num(env, 'LIMIT_CAMS_FAILED_SIG', 300, 1, 100_000),
       camsGlobalPerMin: num(env, 'LIMIT_CAMS_GLOBAL', 3000, 1, 1_000_000),
+      // I3's fleet budget: disruptive commands across all proxies per 10 minutes (the e2e server raises it).
+      fleetDisruptivePer10Min: num(env, 'LIMIT_FLEET_DISRUPTIVE', 3, 1, 1000),
     },
   };
 }

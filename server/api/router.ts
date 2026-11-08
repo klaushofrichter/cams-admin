@@ -20,6 +20,7 @@ import type { ProxyConfig } from '../config/service';
 import type { Vision } from '../vision/service';
 import type { SwitchService } from '../switches/service';
 import type { PowerOutcome, PowerService } from '../switches/power';
+import type { Decommission } from '../decommission/service';
 import { sysadminAllowed } from '../auth/session';
 import type { RemoteActions } from '../actions/service';
 import type { ReportedPins } from '../onboarding/pins';
@@ -60,7 +61,7 @@ export interface BackupService { state(): BackupState; backupNow(actor: string):
 
 export interface ApiDeps {
   db: Db; clock: Clock; cfg: Config; audit: Audit; registry: Registry; enrollment: Enrollment; hub: Hub; status: StatusStore; live: LiveHub; sessions: Sessions; backup: BackupService;
-  commands: Commands; tokens: Tokens; camsInstances: CamsInstances; serverKeyFingerprints: string[]; importer: Importer; config: ProxyConfig; actions: RemoteActions; moves: Moves; diag: DiagTokens; ops: OpsTokens; pins: ReportedPins; viewerTokens: ViewerTokens; vision: Vision; switches: SwitchService; power: PowerService;
+  commands: Commands; tokens: Tokens; camsInstances: CamsInstances; serverKeyFingerprints: string[]; importer: Importer; config: ProxyConfig; actions: RemoteActions; moves: Moves; diag: DiagTokens; ops: OpsTokens; pins: ReportedPins; viewerTokens: ViewerTokens; vision: Vision; switches: SwitchService; power: PowerService; decommission: Decommission;
 }
 
 type H = (req: Request, res: Response) => unknown;
@@ -193,6 +194,7 @@ export function apiRouter(d: ApiDeps): express.Router {
     return out;
   }));
   r.post('/viewer-tokens/:tokenId/validity', h((req, res) => { const t = d.viewerTokens.setValidity(actor(res), p(req, 'tokenId'), req.body); reg('viewer-token', t.id); return t; }));
+  r.post('/viewer-tokens/:tokenId/role', h((req, res) => { const t = d.viewerTokens.setRole(actor(res), p(req, 'tokenId'), req.body); reg('viewer-token', t.id); return t; }));
   r.post('/viewer-tokens/:tokenId/revoke', h((req, res) => { const t = d.viewerTokens.revoke(actor(res), p(req, 'tokenId')); reg('viewer-token', t.id); return t; }));
   r.put('/viewer-tokens/:tokenId/accounts', h((req, res) => { const t = d.viewerTokens.setAccounts(actor(res), p(req, 'tokenId'), req.body); reg('viewer-token', t.id); return t; }));
   // The token itself (Copy, Copy link, the QR window): a session only, audited, never cached.
@@ -217,6 +219,15 @@ export function apiRouter(d: ApiDeps): express.Router {
     reg('proxy', p(req, 'proxyId'));
   }));
   r.get(`${proxyBase}/delete-preview`, h((req) => d.registry.proxyDeletePreview(p(req, 'accountId'), p(req, 'proxyId'))));
+  // Decommission (spec 2026-11-08 B5): the proxy unenrolls itself (proxy.unenroll); its done answer deletes the record.
+  // The cameras it reports (it must hold none) beside the delete preview.
+  r.get(`${proxyBase}/decommission-preview`, h((req) => ({
+    ...d.registry.proxyDeletePreview(p(req, 'accountId'), p(req, 'proxyId')),
+    reportedCameras: d.decommission.reportedCameras(p(req, 'proxyId')), connected: d.hub.connected(p(req, 'proxyId')),
+  })));
+  r.post(`${proxyBase}/decommission`, h((req, res) => accepted(res, d.decommission.unenroll(actor(res), p(req, 'accountId'), p(req, 'proxyId'), req.body))));
+  // A command of the account by id, also after its proxy's record is gone (a decommission's answer).
+  r.get('/accounts/:accountId/commands/:cmdId', h((req) => d.commands.getInAccount(p(req, 'accountId'), p(req, 'cmdId'))));
   r.post(`${proxyBase}/enrollment-codes`, h((req, res) => {
     created(res);
     const c = d.enrollment.createCode(actor(res), p(req, 'accountId'), p(req, 'proxyId'), req.body?.lifetimeH);
@@ -421,6 +432,10 @@ export function apiRouter(d: ApiDeps): express.Router {
     if (c.host !== before) d.power.cameraChanged(c.accountId);
     return c;
   }));
+  // Remove from proxy (spec 2026-11-08 B4): what the proxy holds (camera.remove.preview, a read), then camera.remove;
+  // its done answer deletes the record (audited camera-remove).
+  r.get(`${camBase}/remove-preview`, h((req, res) => d.decommission.removePreview(actor(res), p(req, 'accountId'), p(req, 'cameraId'))));
+  r.post(`${camBase}/remove`, h((req, res) => accepted(res, d.decommission.remove(actor(res), p(req, 'accountId'), p(req, 'cameraId'), req.body))));
   r.delete(camBase, h((req, res) => { d.registry.deleteCamera(actor(res), p(req, 'accountId'), p(req, 'cameraId')); reg('camera', p(req, 'cameraId')); }));
   r.put(`${camBase}/sim`, h((req, res) => { const s = d.registry.setSim(actor(res), p(req, 'accountId'), p(req, 'cameraId'), req.body); reg('camera', p(req, 'cameraId')); return s; }));
   r.delete(`${camBase}/sim`, h((req, res) => { d.registry.deleteSim(actor(res), p(req, 'accountId'), p(req, 'cameraId')); reg('camera', p(req, 'cameraId')); }));

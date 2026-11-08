@@ -6,14 +6,14 @@
   import { api, errorText } from '../lib/api';
   import { live } from '../lib/live';
   import { when } from '../lib/format';
-  import { DEFAULT_VALIDITY_DAYS, VALIDITY, linkHost, qrPath, stateClass } from '../lib/viewerTokens';
+  import { ADMIN_WARNING, DEFAULT_VALIDITY_DAYS, ROLES, VALIDITY, linkHost, qrPath, roleClass, stateClass } from '../lib/viewerTokens';
   import Ago from './Ago.svelte';
   import Confirm from './Confirm.svelte';
 
   let { accountId }: { accountId: string } = $props();
 
   type Acc = { id: string; name: string; displayName: string };
-  type Tok = { id: string; name: string; accounts: Acc[]; days: number; expiresAt: number; state: 'valid' | 'expired' | 'revoked'; lastUsedAt: number | null; version: number };
+  type Tok = { id: string; name: string; accounts: Acc[]; days: number; expiresAt: number; state: 'valid' | 'expired' | 'revoked'; lastUsedAt: number | null; version: number; role: 'viewer' | 'admin' };
   let items = $state<Tok[]>([]);
   let all = $state<Acc[]>([]);
   let configured = $state(true);
@@ -35,15 +35,17 @@
   // --- add ------------------------------------------------------------------------------
   let name = $state('');
   let days = $state(DEFAULT_VALIDITY_DAYS);
+  let role = $state<'viewer' | 'admin'>('viewer');
   let chosen = $state<Record<string, boolean>>({});
   $effect(() => { if (!(accountId in chosen)) chosen = { ...chosen, [accountId]: true }; });
   async function add(e: Event) {
     e.preventDefault();
     error = '';
     try {
-      const r = await api('POST', '/viewer-tokens', { name, days, accountIds: Object.keys(chosen).filter((k) => chosen[k]) });
+      const r = await api('POST', '/viewer-tokens', { name, days, role, accountIds: Object.keys(chosen).filter((k) => chosen[k]) });
       name = '';
       days = DEFAULT_VALIDITY_DAYS;
+      role = 'viewer';
       chosen = { [accountId]: true };
       qr = { name: r.item.name, link: r.link, ...qrPath(r.link) };
       await load();
@@ -99,6 +101,11 @@
       await load();
     } catch (e) { error = errorText(e); }
   }
+  // The role of one token: viewer or admin of its accounts (audited, every viewer of those accounts follows).
+  async function setRole(t: Tok, r: string) {
+    error = '';
+    try { await api('POST', `/viewer-tokens/${t.id}/role`, { role: r }); await load(); } catch (e) { error = errorText(e); await load(); }
+  }
   let deleting = $state<Tok | null>(null);
   async function remove() {
     if (!deleting) return;
@@ -108,16 +115,17 @@
 
 <section class="grid" data-testid="vt-section">
   <h3>Tokens</h3>
-  <p class="muted">A token signs a person in to the cams viewers as a <b>viewer</b> of its accounts, without a Google account, until it expires or is revoked. A revoke reaches the viewers within about a minute.</p>
+  <p class="muted">A token signs a person in to the cams viewers as a <b>viewer</b> (or, if chosen, an <b>admin</b>) of its accounts, without a Google account, until it expires or is revoked. A revoke reaches the viewers within about a minute.</p>
   {#if !configured}<p class="badge warn" data-testid="vt-unconfigured">Tokens can't be created or copied: this server has no viewer token key (VIEWER_TOKEN_KEY_FILE).</p>{/if}
   <div class="scroll-x">
     <table>
-      <thead><tr><th>Name</th><th>Accounts</th><th>Valid until</th><th>Status</th><th class="hide-phone">Last used</th><th></th></tr></thead>
+      <thead><tr><th>Name</th><th>Accounts</th><th>Role</th><th>Valid until</th><th>Status</th><th class="hide-phone">Last used</th><th></th></tr></thead>
       <tbody>
         {#each items as t (t.id)}
           <tr data-testid="vt-row-{t.name}">
             <td>{t.name}</td>
             <td data-testid="vt-accounts-{t.name}">{t.accounts.map((a) => a.name).join(', ')}</td>
+            <td><select class="role {roleClass(t.role)}" value={t.role} data-testid="vt-role-{t.name}" title={t.role === 'admin' ? ADMIN_WARNING : ''} onchange={(e) => setRole(t, (e.target as HTMLSelectElement).value)}>{#each ROLES as r}<option value={r.role}>{r.label}</option>{/each}</select></td>
             <td data-testid="vt-until-{t.name}">{when(t.expiresAt)}</td>
             <td><span class="chip {stateClass(t.state)}" data-testid="vt-state-{t.name}">{t.state}</span></td>
             <td class="hide-phone">{#if t.lastUsedAt}<Ago t={t.lastUsedAt} />{:else}<span class="muted">–</span>{/if}</td>
@@ -130,19 +138,21 @@
             </td>
           </tr>
         {/each}
-        {#if !items.length}<tr><td colspan="6" class="muted" data-testid="vt-empty">No tokens.</td></tr>{/if}
+        {#if !items.length}<tr><td colspan="7" class="muted" data-testid="vt-empty">No tokens.</td></tr>{/if}
       </tbody>
     </table>
   </div>
   <form class="row" onsubmit={add}>
     <label>Name<input data-testid="vt-name" bind:value={name} maxlength="64" placeholder="Kitchen tablet" required /></label>
     <label>Valid for<select data-testid="vt-days" bind:value={days}>{#each VALIDITY as v}<option value={v.days}>{v.label}</option>{/each}</select></label>
+    <label>Role<select class="role {roleClass(role)}" data-testid="vt-role" bind:value={role}>{#each ROLES as r}<option value={r.role}>{r.label}</option>{/each}</select></label>
     <fieldset class="row accounts" data-testid="vt-pick">
       <legend>Accounts</legend>
       {#each all as a (a.id)}<label class="check"><input type="checkbox" data-testid="vt-pick-{a.name}" bind:checked={chosen[a.id]} /> {a.name}</label>{/each}
     </fieldset>
     <button class="btn primary" data-testid="vt-add" disabled={!configured}>Add token</button>
   </form>
+  {#if role === 'admin' || items.some((t) => t.role === 'admin')}<p class="badge warn" data-testid="vt-admin-warning">{ADMIN_WARNING}</p>{/if}
   {#if error}<p class="error" data-testid="vt-error">{error}</p>{/if}
 </section>
 
@@ -196,6 +206,7 @@
   p { margin: 0; }
   form { align-items: end; }
   .actions { gap: 4px; flex-wrap: nowrap; }
+  select.role.warn { border-color: var(--warning); color: var(--warning); }
   .accounts { border: 1px solid var(--border); border-radius: var(--radius); padding: 2px 8px 6px; gap: 10px; flex-wrap: wrap; }
   .accounts legend { font-size: 12px; color: var(--muted); }
   .check { display: inline-flex; gap: 6px; align-items: center; }

@@ -577,14 +577,16 @@ export class Registry {
     }));
   }
 
-  deleteCamera(actor: string, accountId: string, id: string): void {
+  // `as`: a Remove camera (camera.remove answered done) is audited camera-remove with the proxy's answer.
+  deleteCamera(actor: string, accountId: string, id: string, as?: { action: 'camera-remove'; detail: Record<string, unknown> }): void {
     guard(() => tx(this.db, () => {
       const c = this.getCamera(accountId, id);
       if (this.db.prepare('SELECT 1 FROM moves WHERE ended_at IS NULL AND camera_id = ? LIMIT 1').get(id)) throw new ApiError(409, 'move_active');
       this.db.prepare('DELETE FROM cameras WHERE id = ?').run(id);
       // The proxy may still report it (ready): auto-adopt never brings it back.
       if (c.proxyId && c.proxyCameraId) this.blockAdopt(c.proxyId, c.proxyCameraId, 'deleted');
-      this.log(actor, 'camera-delete', accountId, 'camera', id, c.camsId, { proxyId: c.proxyId, proxyCameraId: c.proxyCameraId });
+      if (as) this.log(actor, as.action, accountId, 'camera', id, c.camsId, { proxyId: c.proxyId, proxyCameraId: c.proxyCameraId, ...as.detail });
+      else this.log(actor, 'camera-delete', accountId, 'camera', id, c.camsId, { proxyId: c.proxyId, proxyCameraId: c.proxyCameraId });
     }));
   }
 

@@ -83,3 +83,24 @@ test('add a token, copy it, see its QR code, change validity and accounts, revok
   for (const a of ['viewer-token-create', 'viewer-token-copy', 'viewer-token-revoke', 'viewer-token-validity', 'viewer-token-accounts', 'viewer-token-delete']) expect(actions).toContain(a);
   expect(JSON.stringify(audit)).not.toContain(token);
 });
+
+test('a token role: admin on add (orange, one-line warning), back to viewer per token; audited (spec 2026-11-08 B6)', async ({ page }, info) => {
+  const name = uniq(info, 'vtr');
+  const acc = await api(page, 'POST', '/accounts', { name, displayName: 'Token roles' });
+  await page.goto(`/#/accounts/${acc.id}/users`);
+  await expect(page.getByTestId('vt-role')).toHaveValue('viewer');
+  await expect(page.getByTestId('vt-admin-warning')).toHaveCount(0);
+  await page.getByTestId('vt-name').fill('Kit admin');
+  await page.getByTestId('vt-role').selectOption('admin');
+  await expect(page.getByTestId('vt-admin-warning')).toContainText('An admin token can confirm held cameras');
+  await page.getByTestId('vt-add').click();
+  await page.getByTestId('vt-qr-close').click();
+  const sel = page.getByTestId('vt-role-Kit admin');
+  await expect(sel).toHaveValue('admin');
+  await expect(sel).toHaveClass(/warn/);
+  await sel.selectOption('viewer');
+  await expect.poll(async () => (await api(page, 'GET', `/viewer-tokens?account=${acc.id}`)).items[0].role).toBe('viewer');
+  await expect(page.getByTestId('vt-role-Kit admin')).toHaveValue('viewer');
+  const audit = await api(page, 'GET', `/audit?account=${acc.id}&action=viewer-token-role`);
+  expect(audit.items[0].detail).toMatchObject({ role: 'viewer', from: 'admin' });
+});

@@ -39,6 +39,10 @@ export const AUDIT_ACTIONS = [
   'camera-name-synced',
   // PoE switches (design 2026-11-07): the switch record, and what powers a camera.
   'switch-create', 'switch-update', 'switch-move', 'switch-delete', 'switch-test', 'camera-power-set', 'camera-power-verify', 'camera-power-cycle', 'camera-power-cycle-forced', 'switch-survey',
+  // Remove camera / Decommission proxy (spec 2026-11-08): the proxy's answer, and the record deleted with it.
+  'camera-remove', 'proxy-unenroll',
+  // A viewer token's role (viewer or admin, spec 2026-11-08 A4/B6).
+  'viewer-token-role',
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 const KNOWN = new Set<string>(AUDIT_ACTIONS);
