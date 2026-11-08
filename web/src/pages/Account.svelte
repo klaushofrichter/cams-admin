@@ -371,7 +371,7 @@
       {/if}
       <form class="row" onsubmit={addCamera}>
         <label>cams id<input data-testid="camera-cams-id" bind:value={cCamsId} required /></label>
-        <label>Name<input data-testid="camera-name" bind:value={cName} maxlength="31" required /></label>
+        <label>Name<input data-testid="camera-name" bind:value={cName} maxlength="31" required={!cProxy} /></label>
         <label>Kind<select data-testid="camera-kind" bind:value={cKind}><option>camera</option><option>sim</option></select></label>
         <label>Proxy<select bind:value={cProxy} data-testid="camera-proxy"><option value="">— none —</option>{#each proxies as p}<option value={p.id}>{p.name}</option>{/each}</select></label>
         <label>Proxy's camera id<input bind:value={cProxyCam} placeholder="cam1" data-testid="camera-proxy-cam" /></label>

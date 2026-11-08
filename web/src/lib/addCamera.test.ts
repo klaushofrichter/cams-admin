@@ -24,4 +24,10 @@ describe('Add camera: host, protocol and TLS name (finding 12b)', () => {
     expect(addCameraBody({ ...base, proxyId: '', proxyCameraId: '', host: '192.0.2.12', protocol: 'https', tlsName: '' }))
       .toEqual({ ...base, proxyId: null, proxyCameraId: null });
   });
+  it('the name is optional behind a proxy (left to the server) and required without one', () => {
+    const f = { camsId: 'e1', name: '', kind: 'camera', proxyId: 'prx_1', proxyCameraId: 'cam1', host: '', protocol: '', tlsName: '' };
+    expect(addCameraBody(f)).toEqual({ camsId: 'e1', kind: 'camera', proxyId: 'prx_1', proxyCameraId: 'cam1' });
+    expect(addCameraBody({ ...f, name: 'PTZ' })).toMatchObject({ name: 'PTZ' });
+    expect(addCameraBody({ ...f, proxyId: '', proxyCameraId: '' })).toHaveProperty('name', '');
+  });
 });

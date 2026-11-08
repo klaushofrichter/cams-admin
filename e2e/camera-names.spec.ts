@@ -44,6 +44,13 @@ test('a camera behind a proxy is renamed at the camera; the record follows the r
     await expect(page.getByTestId('camera-name-placeholder')).toHaveCount(0);
     await page.getByTestId('camera-proxy').selectOption(px.id);
     await expect(page.getByTestId('camera-name-placeholder')).toHaveText("The camera's own name replaces this when its proxy reports it.");
+    // The name is optional behind a proxy: the form submits without it, the record takes the reported name.
+    await page.getByTestId('camera-cams-id').fill('side');
+    await expect(page.getByTestId('camera-name')).not.toHaveAttribute('required', '');
+    await page.getByTestId('camera-proxy-cam').fill('cam2');
+    await page.getByTestId('camera-add').click();
+    await expect(page.getByTestId('camera-row-side')).toBeVisible();
+    await expect(page.getByTestId('camera-error')).toHaveCount(0);
     // No queued renames: with the proxy gone the rename is refused, and the form keeps the typed name.
     await c.stop();
     await page.getByTestId('camera-edit-garage').click();
