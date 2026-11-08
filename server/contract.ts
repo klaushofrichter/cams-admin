@@ -73,6 +73,12 @@ import cameraPowerSetResult from '../contract/v1/commands/camera.power.set.resul
 import cameraPowerCyclingResult from '../contract/v1/commands/camera.power.cycling.result.schema.json';
 import cameraPowerCycledResult from '../contract/v1/commands/camera.power.cycled.result.schema.json';
 import cameraPowerCycleResultResult from '../contract/v1/commands/camera.power.cycle.result.result.schema.json';
+import cameraRemovePreviewArgs from '../contract/v1/strict/commands/camera.remove.preview.args.schema.json';
+import cameraRemoveArgs from '../contract/v1/strict/commands/camera.remove.args.schema.json';
+import proxyUnenrollArgs from '../contract/v1/strict/commands/proxy.unenroll.args.schema.json';
+import cameraRemovePreviewResult from '../contract/v1/commands/camera.remove.preview.result.schema.json';
+import cameraRemoveResult from '../contract/v1/commands/camera.remove.result.schema.json';
+import proxyUnenrollResult from '../contract/v1/commands/proxy.unenroll.result.schema.json';
 import eventStrict from '../contract/v1/strict/event.schema.json';
 import { jcs } from './crypto/jcs';
 import enrollRequest from '../contract/v1/enroll-request.schema.json';
@@ -154,6 +160,9 @@ const vArgs: Record<string, ValidateFunction> = {
   'camera.power.cycling': compile(cameraPowerCyclingArgs),
   'camera.power.cycled': compile(cameraPowerCycledArgs),
   'camera.power.cycle.result': compile(cameraPowerCycleResultArgs),
+  'camera.remove.preview': compile(cameraRemovePreviewArgs),
+  'camera.remove': compile(cameraRemoveArgs),
+  'proxy.unenroll': compile(proxyUnenrollArgs),
 };
 // A proxy's result payload, leniently (unknown fields ignored).
 const vResult: Record<string, ValidateFunction> = {
@@ -175,6 +184,9 @@ const vResult: Record<string, ValidateFunction> = {
   'camera.power.cycling': compile(cameraPowerCyclingResult),
   'camera.power.cycled': compile(cameraPowerCycledResult),
   'camera.power.cycle.result': compile(cameraPowerCycleResultResult),
+  'camera.remove.preview': compile(cameraRemovePreviewResult),
+  'camera.remove': compile(cameraRemoveResult),
+  'proxy.unenroll': compile(proxyUnenrollResult),
 };
 export function validateCommandArgs(command: string, args: unknown): { ok: true } | { ok: false; detail: string } {
   const v = Object.hasOwn(vArgs, command) ? vArgs[command] : undefined;

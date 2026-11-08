@@ -13,6 +13,7 @@
   import Ago from '../components/Ago.svelte';
   import Confirm from '../components/Confirm.svelte';
   import DeleteLines from '../components/DeleteLines.svelte';
+  import DecommissionProxy from '../components/DecommissionProxy.svelte';
   import ProxyCommands from '../components/ProxyCommands.svelte';
   import ProxyTokens from '../components/ProxyTokens.svelte';
   import ProxySettings from '../components/ProxySettings.svelte';
@@ -28,8 +29,12 @@
   let gone = $state(false);
   let shownCode = $state<{ id: string; code: string; command: string; expiresAt: number } | null>(null);
   let lifetimeH = $state(24);
+  // Finding 10: read the select itself when sending, so a value set without a change event is still the one sent.
+  let lifetimeSel = $state<HTMLSelectElement | null>(null);
   let confirm = $state<null | { kind: 'revoke' | 'block' | 'delete'; keyId?: string }>(null);
   let deleteLines = $state<Lines | null>(null);
+  // Decommission (spec 2026-11-08 B5): its panel is open.
+  let decommissioning = $state(false);
   let showAll = $state(false);
   let activeMove = $state<any>(null);
   let refresh = $state(0); // bumps after every load: the command and token cards reload with it
@@ -82,7 +87,7 @@
   async function createCode() {
     error = '';
     try {
-      const c = await api('POST', `/accounts/${accountId}/proxies/${proxyId}/enrollment-codes`, { lifetimeH: Number(lifetimeH) });
+      const c = await api('POST', `/accounts/${accountId}/proxies/${proxyId}/enrollment-codes`, { lifetimeH: Number(lifetimeSel?.value || lifetimeH) });
       await load(); // first: the page then knows the code is live
       shownCode = c;
     } catch (e) { error = errorText(e); }
@@ -127,7 +132,10 @@
   const nameOk = $derived(validProxyName(f.name ?? ''));
 </script>
 
-{#if gone}
+{#if gone && decommissioning}
+  <!-- The decommission's done answer deleted the record (the live reload finds it gone first). -->
+  <p data-testid="decommission-done">The proxy unenrolled itself and its record is deleted. <a href="#/accounts/{accountId}/proxies" data-testid="decommission-close">Proxies</a></p>
+{:else if gone}
   <p class="muted" data-testid="proxy-gone">This proxy does not exist (any more). <a href="#/accounts/{accountId}/proxies">Proxies</a></p>
 {:else if d}
   <section class="card grid">
@@ -225,7 +233,7 @@
     {/if}
     <div class="row">
       {#if d.proxy.state !== 'revoked'}
-        <label>Lifetime<select bind:value={lifetimeH} data-testid="code-lifetime"><option value={1}>1 h</option><option value={24}>24 h</option><option value={168}>7 d</option></select></label>
+        <label>Lifetime<select bind:value={lifetimeH} bind:this={lifetimeSel} data-testid="code-lifetime"><option value={1}>1 h</option><option value={24}>24 h</option><option value={168}>7 d</option></select></label>
         <button class="btn primary" data-testid="code-create" onclick={createCode}>Create enrollment code</button>
       {/if}
       {#if d.enrollment}
@@ -249,6 +257,7 @@
     </div>
     <div class="row">
       {#if d.proxy.state !== 'revoked'}<button class="btn danger" data-testid="block-proxy" onclick={() => (confirm = { kind: 'block' })}>Block proxy</button>{/if}
+      <button class="btn danger" data-testid="decommission-proxy" onclick={() => (decommissioning = true)}>Decommission…</button>
       <button class="btn danger" data-testid="delete-proxy" onclick={askDelete}>Delete proxy</button>
     </div>
   </section>
@@ -283,6 +292,9 @@
     {/each}
   </section>
 
+  {#if decommissioning}
+    <DecommissionProxy {accountId} proxy={d.proxy} onclose={() => (decommissioning = false)} ondeleterecord={() => { decommissioning = false; askDelete(); }} />
+  {/if}
   {#if confirm}
     <Confirm
       title={confirm.kind === 'revoke' ? 'Revoke this key' : confirm.kind === 'block' ? `Block ${d.proxy.name}` : `Delete ${d.proxy.name}`}

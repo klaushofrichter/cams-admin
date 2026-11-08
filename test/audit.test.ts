@@ -37,10 +37,12 @@ describe('audit log', () => {
     for (const a of VIEWER) expect(AUDIT_ACTIONS).toContain(a);
     // Camera name sync (design 2026-11-06).
     expect(AUDIT_ACTIONS).toContain('camera-name-synced');
+    // Remove camera / Decommission proxy, viewer token role (spec 2026-11-08).
+    for (const a of ['camera-remove', 'proxy-unenroll', 'viewer-token-role']) expect(AUDIT_ACTIONS).toContain(a);
     // PoE switches (design 2026-11-07).
     const SWITCHES = ['switch-create', 'switch-update', 'switch-move', 'switch-delete', 'switch-test', 'camera-power-set', 'camera-power-verify', 'camera-power-cycle', 'camera-power-cycle-forced', 'switch-survey'];
     for (const a of SWITCHES) expect(AUDIT_ACTIONS).toContain(a);
-    expect(AUDIT_ACTIONS).toHaveLength(37 + P4.length + OVERRIDES.length + 1 + 3 + 2 + 4 + 3 + 4 + 2 + 5 + 1 + VIEWER.length + 1 + SWITCHES.length);
+    expect(AUDIT_ACTIONS).toHaveLength(37 + P4.length + OVERRIDES.length + 1 + 3 + 2 + 4 + 3 + 4 + 2 + 5 + 1 + VIEWER.length + 1 + SWITCHES.length + 3);
     expect(new Set(AUDIT_ACTIONS).size).toBe(AUDIT_ACTIONS.length);
   });
 

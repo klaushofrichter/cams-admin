@@ -116,3 +116,25 @@ test('a chained switch: two cameras behind one port are a configuration issue on
     await c.stop();
   }
 });
+
+test('the Operating proxy of a new switch: never the cluster proxy by default; a choice when several could run it', async ({ page }, info) => {
+  const acc = await api(page, 'POST', '/accounts', { name: uniq(info, 'swp'), displayName: 'Switch proxies' });
+  // Named first, so it comes first in the account's proxy list.
+  await api(page, 'POST', `/accounts/${acc.id}/proxies`, { name: 'a-cluster', displayName: 'Cluster', runsOn: 'cluster' });
+  await api(page, 'POST', `/accounts/${acc.id}/proxies`, { name: 'een', displayName: 'een', runsOn: 'local-host' });
+  await page.goto(`/#/accounts/${acc.id}/switches`);
+  const sel = page.getByTestId('switch-proxy');
+  await expect(sel.locator('option:checked')).toHaveText('een');
+  await expect(sel.locator('option').last()).toHaveText('a-cluster (cluster)');
+  // A second local proxy: no default, Add asks for a choice (nothing is created).
+  await api(page, 'POST', `/accounts/${acc.id}/proxies`, { name: 'pi', displayName: 'Pi', runsOn: 'local-host' });
+  await page.reload();
+  await expect(sel).toHaveValue('');
+  await page.getByTestId('switch-name').fill('GPS-208');
+  await page.getByTestId('switch-host').fill('192.0.2.52');
+  await page.getByTestId('switch-add').click();
+  expect((await api(page, 'GET', `/accounts/${acc.id}/switches`)).items).toEqual([]);
+  await sel.selectOption({ label: 'pi' });
+  await page.getByTestId('switch-add').click();
+  await expect(page.getByTestId('switch-add-hint')).toHaveText("Set the password on pi's Proxy settings → PoE switches, then Test.");
+});

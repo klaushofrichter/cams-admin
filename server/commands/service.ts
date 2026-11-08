@@ -38,7 +38,8 @@ export type WireCommand = 'tokens.apply' | 'config.get' | 'config.set' | 'config
   | 'camera.onboarding.get'
   | 'analytics.usage.get'
   | 'switch.read' | 'switch.locate' | 'switch.survey' | 'switch.cycle' | 'switch.poeOn' | 'switch.forget'
-  | 'camera.power.set' | 'camera.power.cycling' | 'camera.power.cycled' | 'camera.power.cycle.result';
+  | 'camera.power.set' | 'camera.power.cycling' | 'camera.power.cycled' | 'camera.power.cycle.result'
+  | 'camera.remove.preview' | 'camera.remove' | 'proxy.unenroll';
 export interface CommandRow {
   id: string; accountId: string; proxyId: string | null; actor: string; command: string; args: Record<string, unknown>; state: CommandState;
   outcomeCode: string | null; result: Record<string, unknown> | null; createdAt: number; sentAt: number | null; finishedAt: number | null; attempts: number;
@@ -107,6 +108,10 @@ export function summariseArgs(command: string, args: Record<string, unknown>): R
       return { v: args.v, camera: args.camera, power: { ...power, ...('switchName' in power ? { switchName: clampValue(power.switchName) } : {}) } };
     }
     case 'camera.power.cycling': return pick(args, ['v', 'camera', 'at']);
+    // Remove a camera, decommission a proxy: nothing secret in these args.
+    case 'camera.remove.preview': return pick(args, ['v', 'camera']);
+    case 'camera.remove': return pick(args, ['v', 'camera', 'content', 'archive']);
+    case 'proxy.unenroll': return pick(args, ['v']);
     case 'camera.power.cycled': return { v: args.v, camera: args.camera, ok: args.ok, message: clampValue(args.message) };
     case 'camera.power.cycle.result': return { v: args.v, camera: args.camera, requestId: clampValue(args.requestId), ok: args.ok, ...('reason' in args ? { reason: clampValue(args.reason) } : {}) };
   }
@@ -257,6 +262,14 @@ export class Commands {
       .all(...(cursor ? [accountId, proxyId, cursor, lim + 1] : [accountId, proxyId, lim + 1])) as DbRow[];
     const items = rows.slice(0, lim).map((r) => view(toRaw(r)));
     return { items, nextCursor: rows.length > lim ? items[items.length - 1].id : null };
+  }
+
+  // A command of the account by id, whatever its proxy (null once the proxy's record is deleted).
+  getInAccount(accountId: string, cmdId: string): CommandRow {
+    this.d.registry.getAccount(accountId);
+    const r = this.q('SELECT * FROM commands WHERE id = ? AND account_id = ?').get(cmdId, accountId) as DbRow | undefined;
+    if (!r) throw new ApiError(404, 'not_found');
+    return view(toRaw(r));
   }
 
   get(accountId: string, proxyId: string, cmdId: string): CommandRow & { resultEnvelope: unknown } {

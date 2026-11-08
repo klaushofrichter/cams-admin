@@ -49,7 +49,7 @@
   });
 
   const hasProblem = (p: any) => p.state !== 'online' || (p.problemCount ?? 0) > 0 || p.pin === 'mismatch' || p.skewProblem || p.reconcile.reportedNotRegistered.length || p.reconcile.registeredNotReported.length;
-  const visible = $derived(d ? d.accounts.filter((a: any) => !onlyProblems || a.proxies.some(hasProblem) || a.warnings.length) : []);
+  const visible = $derived(d ? d.accounts.filter((a: any) => !onlyProblems || a.proxies.some(hasProblem) || a.warnings.length || a.camsProblems?.length) : []);
   // Proxies that report a profile not set yet (set: false); an older proxy reports none and is not listed.
   const unset = $derived(d ? d.accounts.flatMap((a: any) => a.proxies.filter((p: any) => p.profile && !p.profile.set).map((p: any) => ({ ...p, accountId: a.id }))) : []);
   const longNames = $derived(longTokens(tokens.diag, tokens.ops, clock.now));
@@ -124,6 +124,9 @@
         {#if a.warnings.includes('no-admin')}<span class="badge warn" data-testid="warn-no-admin-{a.name}">no admin user</span>{/if}
         {#each a.switchProblems ?? [] as sp (`${sp.switchId}-${sp.port}`)}<a href="#/accounts/{a.id}/switches" class="badge warn" data-testid="warn-chained-switch-{a.name}" title={chainedText(sp)}>{sp.switch}: another switch chained on port {sp.port}</a>{/each}
       </div>
+      {#each a.camsProblems ?? [] as cp, i (i)}
+        <p class="error small" data-testid="dash-cams-problem-{a.name}" title={cp.code}>{cp.text}</p>
+      {/each}
       {#if !a.proxies.length}<p class="muted">No proxies yet.</p>{/if}
       {#each a.proxies as p (p.id)}
         <div class="proxy" data-testid="proxy-row-{p.name}">

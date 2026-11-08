@@ -1,5 +1,7 @@
 import { expect, test } from '@playwright/test';
-import { api, signIn, uniq } from './helpers';
+import { api, client, enroll, signIn, uniq } from './helpers';
+import { BASE } from './env';
+import { makeSummary } from '../test-client/summaries';
 
 test.beforeEach(async ({ context }) => signIn(context));
 
@@ -229,4 +231,39 @@ test('delete a proxy: the dialog names what goes (moves, tokens, routes) and wha
   await expect(page).toHaveURL(new RegExp(`#/accounts/${acc.id}/proxies$`));
   await page.goto(`/#/accounts/${acc.id}/cameras`);
   await expect(page.getByTestId('camera-proxy-c1')).toHaveValue('');
+});
+
+test("Add camera with a proxy: host, protocol and TLS name from the proxy's report, asked for when it has none (finding 12b)", async ({ page }, info) => {
+  const acc = await api(page, 'POST', '/accounts', { name: uniq(info, 'addcam'), displayName: 'Add camera' });
+  const px = await api(page, 'POST', `/accounts/${acc.id}/proxies`, { name: 'p1', displayName: 'P1', runsOn: 'local-host' });
+  const key = await enroll(BASE, (await api(page, 'POST', `/accounts/${acc.id}/proxies/${px.id}/enrollment-codes`, {})).code);
+  const c = client(key, () => makeSummary({ cameras: 1, now: Date.now(), site: true }));
+  c.start();
+  try {
+    await expect.poll(async () => (await api(page, 'GET', `/accounts/${acc.id}/proxies/${px.id}/status`)).reported?.cameras?.length ?? 0).toBe(1);
+    await page.goto(`/#/accounts/${acc.id}/cameras`);
+    await page.getByTestId('camera-cams-id').fill('gate');
+    await page.getByTestId('camera-name').fill('Gate');
+    await page.getByTestId('camera-proxy').selectOption({ label: 'p1' });
+    await page.getByTestId('camera-proxy-cam').fill('cam1');
+    await expect(page.getByTestId('camera-connection-from-proxy')).toContainText('192.0.2.10, https, cam1.garage.internal');
+    await page.getByTestId('camera-add').click();
+    await expect.poll(async () => (await api(page, 'GET', `/accounts/${acc.id}/cameras`)).items.find((x: { camsId: string }) => x.camsId === 'gate')).toMatchObject({ host: '192.0.2.10', protocol: 'https', tlsServername: 'cam1.garage.internal' });
+    await expect(page.getByTestId('camera-cams-id')).toHaveValue(''); // the form was reset
+    // A camera the proxy doesn't report: host and protocol are asked for.
+    await page.getByTestId('camera-cams-id').fill('yard');
+    await page.getByTestId('camera-name').fill('Yard');
+    await page.getByTestId('camera-proxy').selectOption({ label: 'p1' });
+    await page.getByTestId('camera-proxy-cam').fill('cam7');
+    await expect(page.getByTestId('camera-connection-ask')).toContainText("doesn't report host and protocol");
+    await page.getByTestId('camera-add').click();
+    expect((await api(page, 'GET', `/accounts/${acc.id}/cameras`)).items.map((x: { camsId: string }) => x.camsId)).not.toContain('yard');
+    await page.getByTestId('camera-host').fill('192.0.2.17');
+    await page.getByTestId('camera-protocol').selectOption('https');
+    await page.getByTestId('camera-tls').fill('yard.example.net');
+    await page.getByTestId('camera-add').click();
+    await expect.poll(async () => (await api(page, 'GET', `/accounts/${acc.id}/cameras`)).items.find((x: { camsId: string }) => x.camsId === 'yard')).toMatchObject({ host: '192.0.2.17', protocol: 'https', tlsServername: 'yard.example.net' });
+  } finally {
+    await c.stop();
+  }
 });

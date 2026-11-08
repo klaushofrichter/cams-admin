@@ -20,6 +20,7 @@ import { Vision } from './vision/service';
 import { SwitchService } from './switches/service';
 import { PowerService } from './switches/power';
 import { SurveySchedule } from './switches/schedule';
+import { Decommission } from './decommission/service';
 import { RemoteActions } from './actions/service';
 import { ReportedPins } from './onboarding/pins';
 import { AutoAdopt } from './onboarding/autoAdopt';
@@ -48,7 +49,7 @@ import { version } from './version';
 
 export interface Built {
   cfg: Config; clock: Clock; db: Db; audit: Audit; registry: Registry; live: LiveHub; status: StatusStore; hub: Hub; commands: Commands; moves: Moves; tokens: Tokens; actions: RemoteActions; config: ProxyConfig; vision: Vision; switches: SwitchService; power: PowerService; surveys: SurveySchedule; enrollment: Enrollment; sessions: Sessions; backup: BackupService;
-  camsInstances: CamsInstances; camsAuth: CamsAuth; importer: Importer; signing: SigningKey; diag: DiagTokens; ops: OpsTokens; pins: ReportedPins; viewerTokens: ViewerTokens;
+  camsInstances: CamsInstances; camsAuth: CamsAuth; importer: Importer; signing: SigningKey; diag: DiagTokens; ops: OpsTokens; pins: ReportedPins; viewerTokens: ViewerTokens; decommission: Decommission;
   app: express.Express; http: Server; epochFile: string;
   tick(): void;
   writeRoutes(): string[];
@@ -103,7 +104,14 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
   // A camera's own proxy asks for a power-cycle (its Maintenance page): answered with camera.power.cycle.result.
   hub.deps.onProxyPowerEvent = (proxyId, accountId, ev) => power.requestFromProxy(proxyId, accountId, ev);
   const surveys = new SurveySchedule({ clock, tz: merged.TZ || 'America/Chicago', run: () => power.surveyDaily() });
-  const actions = new RemoteActions({ db, audit, registry, commands, status, clock, config, connected: (proxyId) => hub.connected(proxyId) });
+  const actions = new RemoteActions({ db, audit, registry, commands, status, clock, config, connected: (proxyId) => hub.connected(proxyId), fleetMax: cfg.limits.fleetDisruptivePer10Min });
+  // Remove camera / Decommission proxy (spec 2026-11-08): the record follows the proxy's done answer.
+  const decommission = new Decommission({
+    db, audit, registry, status, commands, log, connected: (proxyId) => hub.connected(proxyId),
+    gate: (actor, accountId, proxyId, command) => actions.fleetGate(actor, accountId, proxyId, command),
+    onCameraRemoved: (accountId, cameraId) => { live.publishRegistry('camera', cameraId); power.cameraChanged(accountId); },
+    onProxyDeleted: (_accountId, proxyId, keyIds) => { for (const k of keyIds) hub.closeKey(k, 4403); live.publishRegistry('proxy', proxyId); },
+  });
   // Onboarding (cam-proxy onboarding design §5): after each heartbeat, the reported site-CA pins.
   const pins = new ReportedPins({ registry, status, live, log });
   const autoAdopt = new AutoAdopt({ db, registry, status, audit, live, log });
@@ -159,7 +167,7 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
   app.use(camsRouter({ globalPerMin: cfg.limits.camsGlobalPerMin, enrollment: camsEnrollment, auth: camsAuth, signingKey: signing.key, testRoutes: cfg.nodeEnv === 'test', instances: camsInstances, tokens, fleet: { db, clock, instances: camsInstances, registry, status, moves, switches: switches.store, power }, snapshot: { db, clock, signingKey: signing.key, signingFingerprint: signing.fingerprint } }));
   app.use(cookieParser());
   app.use(authRoutes({ cfg, sessions, audit, clock, live }));
-  const apiDeps = { db, clock, cfg, audit, registry, enrollment, hub, status, live, sessions, backup, commands, tokens, config, actions, moves, camsInstances, serverKeyFingerprints: [signing.fingerprint], importer, diag, ops, pins, viewerTokens, vision, switches, power };
+  const apiDeps = { db, clock, cfg, audit, registry, enrollment, hub, status, live, sessions, backup, commands, tokens, config, actions, moves, camsInstances, serverKeyFingerprints: [signing.fingerprint], importer, diag, ops, pins, viewerTokens, vision, switches, power, decommission };
   const api = apiRouter(apiDeps);
   // Before the API: the diagnostics token opens this router only (issue #45).
   app.use('/api/v1/diag', diagRouter(apiDeps));
@@ -168,7 +176,7 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
   // The Svelte build (npm run build:web); every other GET is the SPA.
   const web = [join(__dirname, '../web'), join(__dirname, '../../dist/web')].find((p) => existsSync(join(p, 'index.html')));
   if (web) {
-    app.use(express.static(web, { index: false, maxAge: '1h', setHeaders: (res, path) => { if (path.endsWith('.html')) res.setHeader('Cache-Control', 'no-store'); } }));
+    app.use(express.static(web, { index: false, maxAge: '1h', setHeaders: (res, path) => { if (path.endsWith('.html') || path.endsWith('build.json')) res.setHeader('Cache-Control', 'no-store'); } }));
     app.get(/^\/(?!api\/|auth\/|proxy\/|cams\/).*/, limiter({ windowMs: 60_000, limit: 3000, key: () => 'pages' }), (_req, res) => res.set('Cache-Control', 'no-store').sendFile(join(web, 'index.html')));
   }
   app.use(((err, _req, res, _next) => {
@@ -208,7 +216,7 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
   let closed = false;
 
   return {
-    cfg, clock, db, audit, registry, live, status, hub, commands, moves, tokens, actions, config, enrollment, sessions, backup, camsInstances, camsAuth, importer, signing, diag, ops, pins, viewerTokens, vision, switches, power, surveys, app, http, epochFile, tick,
+    cfg, clock, db, audit, registry, live, status, hub, commands, moves, tokens, actions, config, enrollment, sessions, backup, camsInstances, camsAuth, importer, signing, diag, ops, pins, viewerTokens, vision, switches, power, decommission, surveys, app, http, epochFile, tick,
     writeRoutes() {
       const out: string[] = [];
       for (const layer of (api as unknown as { stack: { route?: { path: string; methods: Record<string, boolean> } }[] }).stack) {

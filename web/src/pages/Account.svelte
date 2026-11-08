@@ -16,6 +16,8 @@
   import VisionTab from '../components/VisionTab.svelte';
   import SwitchesTab from '../components/SwitchesTab.svelte';
   import CameraPower from '../components/CameraPower.svelte';
+  import RemoveCamera from '../components/RemoveCamera.svelte';
+  import { addCameraBody, reportedOf, type ReportedCam } from '../lib/addCamera';
 
   let { accountId, tab }: { accountId: string; tab: string } = $props();
 
@@ -32,15 +34,24 @@
   let confirmDelete = $state(false);
   let deleteLines = $state<Lines | null>(null);
   let deletingCamera = $state<any>(null);
+  // Remove from proxy (spec 2026-11-08 B4): the camera whose panel is open.
+  let removingCamera = $state<any>(null);
   // The Vision tab is for system admins only (the server checks it too).
   let systemAdmin = $state(false);
   const TABS = $derived(['overview', 'users', 'proxies', 'cameras', 'switches', 'sims', 'import', ...(systemAdmin ? ['vision'] : [])]);
 
+  // A cams instance's problems for this account, in words (finding 12b).
+  let camsProblems = $state<{ instanceId: string; code: string; text: string }[]>([]);
+  // Read on the Overview only (each registry change reloads the page's lists).
+  const loadCamsProblems = () => api('GET', `/accounts/${accountId}/cams-problems`).then((r) => (camsProblems = r.items)).catch(() => (camsProblems = []));
+  let lastTab = '';
+  $effect(() => { if (tab === 'overview' && lastTab !== 'overview' && account) loadCamsProblems(); lastTab = tab; });
   async function load() {
     try {
       account = await api('GET', `/accounts/${accountId}`);
       api('GET', '/me').then((m) => (systemAdmin = m?.systemAdmin === true)).catch(() => (systemAdmin = false));
       api('GET', `/accounts/${accountId}/switches`).then((r) => (switches = r.items)).catch(() => (switches = []));
+      if (tab === 'overview') loadCamsProblems();
       [users, proxies, cameras] = await Promise.all([
         api('GET', `/accounts/${accountId}/users`).then((r) => r.items),
         api('GET', `/accounts/${accountId}/proxies`).then((r) => r.items),
@@ -126,12 +137,26 @@
   let cProxy = $state('');
   let cProxyCam = $state('');
   let cError = $state('');
+  // Host, protocol and TLS name (finding 12b): the chosen proxy's report of the camera fills them; what it lacks is asked for.
+  let cHost = $state('');
+  let cProtocol = $state('');
+  let cTls = $state('');
+  let cReported = $state<ReportedCam[] | null>(null);
+  $effect(() => {
+    const px = cProxy;
+    cReported = null;
+    if (!px) return;
+    let gone = false;
+    api('GET', `/accounts/${accountId}/proxies/${px}/status`).then((st) => { if (!gone) cReported = st?.reported?.cameras ?? []; }).catch(() => { if (!gone) cReported = []; });
+    return () => { gone = true; };
+  });
+  const cFrom = $derived(reportedOf(cReported, cProxyCam.trim()));
   async function addCamera(e: Event) {
     e.preventDefault();
     cError = '';
     try {
-      await api('POST', `/accounts/${accountId}/cameras`, { camsId: cCamsId, name: cName, kind: cKind, proxyId: cProxy || null, proxyCameraId: cProxyCam || null });
-      cCamsId = cName = cProxyCam = '';
+      await api('POST', `/accounts/${accountId}/cameras`, addCameraBody({ camsId: cCamsId, name: cName, kind: cKind, proxyId: cProxy, proxyCameraId: cProxyCam.trim(), host: cHost, protocol: cProtocol, tlsName: cTls }));
+      cCamsId = cName = cProxyCam = cHost = cProtocol = cTls = '';
       await load();
     } catch (err) { cError = errorText(err); }
   }
@@ -223,6 +248,9 @@
     {#if error}<p class="error" data-testid="account-error">{error}</p>{/if}
 
     {#if tab === 'overview'}
+      {#each camsProblems as cp, i (i)}
+        <p class="error" data-testid="account-cams-problem" title={cp.code}>{cp.text}</p>
+      {/each}
       <div class="grid two">
         <label>Account name (users may type it at login later; cams refers to the id)<input data-testid="account-edit-name" bind:value={editName} /></label>
         <label>Display name<input data-testid="account-edit-display" bind:value={editDisplay} /></label>
@@ -311,7 +339,7 @@
                     <button class="btn" data-testid="sim-save-{c.camsId}" onclick={() => saveSim(c)}>Save</button>
                   </td>
                 {/if}
-                <td class="row"><button class="btn" data-testid="camera-edit-{c.camsId}" onclick={() => editCamera(c)}>Edit</button><button class="btn danger" data-testid="camera-delete-{c.camsId}" onclick={() => (deletingCamera = c)}>Delete</button></td>
+                <td class="row"><button class="btn" data-testid="camera-edit-{c.camsId}" onclick={() => editCamera(c)}>Edit</button>{#if mappedCam(c)}<button class="btn danger" data-testid="camera-remove-{c.camsId}" onclick={() => (removingCamera = c)}>Remove from proxy…</button>{/if}<button class="btn danger" data-testid="camera-delete-{c.camsId}" onclick={() => (deletingCamera = c)}>Delete</button></td>
               </tr>
             {/each}
           </tbody>
@@ -346,9 +374,23 @@
         <label>Name<input data-testid="camera-name" bind:value={cName} maxlength="31" required /></label>
         <label>Kind<select data-testid="camera-kind" bind:value={cKind}><option>camera</option><option>sim</option></select></label>
         <label>Proxy<select bind:value={cProxy} data-testid="camera-proxy"><option value="">— none —</option>{#each proxies as p}<option value={p.id}>{p.name}</option>{/each}</select></label>
-        <label>Proxy's camera id<input bind:value={cProxyCam} placeholder="cam1" /></label>
+        <label>Proxy's camera id<input bind:value={cProxyCam} placeholder="cam1" data-testid="camera-proxy-cam" /></label>
+        {#if cProxy && cProxyCam.trim()}
+          <label>Host<input class="mono" bind:value={cHost} placeholder={cFrom.host ?? '192.0.2.10'} required={cFrom.needs.includes('host')} data-testid="camera-host" /></label>
+          <label>Protocol<select bind:value={cProtocol} required={cFrom.needs.includes('protocol')} data-testid="camera-protocol">
+            <option value="">{cFrom.protocol ? `${cFrom.protocol} (from the proxy)` : '—'}</option><option>https</option><option>http</option>
+          </select></label>
+          <label>TLS name<input class="mono" bind:value={cTls} placeholder={cFrom.tlsName ?? ''} data-testid="camera-tls" /></label>
+        {/if}
         <button class="btn primary" data-testid="camera-add" disabled={!!cName && !!nameError(cName)}>Add camera</button>
       </form>
+      {#if cProxy && cProxyCam.trim() && cReported !== null}
+        {#if cFrom.needs.length}
+          <p class="muted small" data-testid="camera-connection-ask">The proxy doesn't report {cFrom.needs.join(' and ')} for this camera: enter {cFrom.needs.length === 1 ? 'it' : 'them'} (cams needs host and protocol).</p>
+        {:else}
+          <p class="muted small" data-testid="camera-connection-from-proxy">Host, protocol and TLS name come from the proxy's report ({cFrom.host}, {cFrom.protocol}{cFrom.tlsName ? `, ${cFrom.tlsName}` : ''}) unless you enter others.</p>
+        {/if}
+      {/if}
       {#if cName && nameError(cName)}<p class="error small" data-testid="camera-name-error">{nameError(cName)}</p>{/if}
       {#if cProxy}<p class="muted small" data-testid="camera-name-placeholder">The camera's own name replaces this when its proxy reports it.</p>{/if}
       {#if renameDone}<p class="mono small" data-testid="camera-rename-result">{renameDone}</p>{/if}
@@ -365,6 +407,10 @@
     <Confirm title="Delete account {account.name}" body="Everything in the account goes and its proxies are disconnected. A restore from backup is the only undo." typed={account.name} ok="Delete account" okDisabled={!deleteLines || !!deleteLines.blocked} onconfirm={deleteAccount} oncancel={() => (confirmDelete = false)}>
       <DeleteLines lines={deleteLines} testid="account-delete-lines" />
     </Confirm>
+  {/if}
+  {#if removingCamera}
+    <RemoveCamera {accountId} camera={removingCamera} onclose={() => (removingCamera = null)} ondone={load}
+      ondeleterecord={() => { deletingCamera = removingCamera; removingCamera = null; }} />
   {/if}
   {#if deletingCamera}
     <Confirm title="Delete camera {deletingCamera.camsId}" body="The camera's record leaves the account; cams no longer shows it." ok="Delete camera" onconfirm={deleteCamera} oncancel={() => (deletingCamera = null)}>

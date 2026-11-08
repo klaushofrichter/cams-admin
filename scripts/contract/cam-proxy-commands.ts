@@ -59,7 +59,9 @@ const PTZ_STARTED = existsSync(file('src/moves/types.ts')) && readFileSync(file(
 const ONBOARDING_STARTED = implemented('camera.onboarding.get');
 // vision: Vision management (analytics.usage.get), pending until cam-proxy implements it.
 const VISION_STARTED = implemented('analytics.usage.get');
-const FEATURE_STARTED: Record<string, boolean> = { 'move-ptz': PTZ_STARTED, onboarding: ONBOARDING_STARTED, vision: VISION_STARTED };
+// decommission: camera.remove.preview, camera.remove and proxy.unenroll, pending until cam-proxy implements camera.remove.
+const DECOMMISSION_STARTED = implemented('camera.remove');
+const FEATURE_STARTED: Record<string, boolean> = { 'move-ptz': PTZ_STARTED, onboarding: ONBOARDING_STARTED, vision: VISION_STARTED, decommission: DECOMMISSION_STARTED };
 const DIR = join(__dirname, '../../contract/v1/fixtures');
 const ctxOf = (c: Ctx, journal: (id: string) => unknown = () => undefined) => {
   const seen = new SeenIds();

@@ -41,6 +41,14 @@ describe('cams-v1 contract', () => {
       if (f.name.startsWith('drift-')) expect([f.name, strict, lenient]).toEqual([f.name, false, true]);
     }
   });
+  it('viewer token role (A4): viewer or admin, required in strict, absent read as viewer at run time', () => {
+    const names = fixtures.map((f) => f.name);
+    for (const n of ['drift-snapshot-viewer-token-no-role', 'invalid-snapshot-viewer-token-role']) expect(names, n).toContain(n);
+    const two = fixtures.find((f) => f.name === 'valid-snapshot-two-accounts')!.message;
+    const roles = two.accounts.flatMap((a: { viewerTokens: { role: string }[] }) => a.viewerTokens.map((t) => t.role));
+    expect(roles.sort()).toEqual(['admin', 'viewer']);
+    expect(readFileSync(join(ROOT, 'README.md'), 'utf8')).toMatch(/viewerTokens\[\]\.role`.*`viewer` \| `admin`/);
+  });
   it('request and response texts and signatures reproduce byte for byte', () => {
     expect(vectors.requests.length).toBe(4);
     for (const r of vectors.requests) {
@@ -81,11 +89,17 @@ describe('cams-v1 contract', () => {
     // A viewer token's fingerprint is the one hash a snapshot carries, only as accounts[].viewerTokens[].fingerprint (design 2026-11-05).
     const rest = fixtures.filter((f) => !/tokens-request|invalid-snapshot-secret-field|invalid-snapshot-viewer-token-secret/.test(f.name));
     const { viewerTokens: viewerVectors, ...otherVectors } = vectors as typeof vectors & { viewerTokens: { fingerprint: string }[] };
-    const fp = viewerVectors[0].fingerprint;
+    // The vector token's fingerprint, and the second (admin) token's of the two-accounts snapshot.
+    const two = fixtures.find((f) => f.name === 'valid-snapshot-two-accounts')!.message;
+    const fps = [...new Set([viewerVectors[0].fingerprint, ...two.accounts.flatMap((a: { viewerTokens: { fingerprint: string }[] }) => a.viewerTokens.map((t) => t.fingerprint))])];
+    expect(fps).toHaveLength(2);
     const raw = JSON.stringify({ fixtures: rest, vectors: { ...otherVectors, requests: vectors.requests.filter((r) => !r.pathAndQuery.startsWith('/cams/v1/tokens')) } });
-    // Every place it appears is a viewerTokens entry's "fingerprint" (also inside the signed texts).
-    expect(raw.split(fp).length - 1).toBe(raw.split(`fingerprint\\":\\"${fp}`).length - 1 + raw.split(`"fingerprint":"${fp}`).length - 1);
-    const all = raw.split(fp).join('viewer-fingerprint');
+    let all = raw;
+    for (const fp of fps) {
+      // Every place it appears is a viewerTokens entry's "fingerprint" (also inside the signed texts).
+      expect(raw.split(fp).length - 1).toBe(raw.split(`fingerprint\\":\\"${fp}`).length - 1 + raw.split(`"fingerprint":"${fp}`).length - 1);
+      all = all.split(fp).join('viewer-fingerprint');
+    }
     expect(all).toContain('viewer-fingerprint');
     expect(all).not.toMatch(/"password"|"token"\s*:|sha256:[0-9a-f]{64}|cav_/);
   });

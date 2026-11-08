@@ -52,6 +52,14 @@ const known: Record<string, string> = {
     busy: 'A check or power-cycle is already running on this camera.',
     not_on_port: 'The camera was not found on that port.',
     forbidden: 'Only a system administrator can do this.',
+    // Remove camera / Decommission proxy.
+    camera_not_on_proxy: 'This camera is on no proxy: Delete removes its record.',
+    has_cameras: 'The proxy still holds cameras: remove them first.',
+    proxy_update_needed: 'The proxy needs a cam-proxy update for this.',
+    timeout: 'The proxy did not answer in time: try again.',
+    unknown_camera: 'The proxy does not have this camera.',
+    confirm_required: 'Type the name to confirm.',
+    move_active: 'A camera move is running: finish or cancel it first (Moves).',
   };
 export const codeText = (code: string): string | undefined => known[code];
 export const errorText = (e: unknown): string => {
@@ -60,4 +68,9 @@ export const errorText = (e: unknown): string => {
   const message = (e.body as { message?: unknown } | undefined)?.message;
   if (e.code === 'invalid' && typeof message === 'string') return `Not valid: ${message}.`;
   return (known[e.code] ?? e.code) + (e.field && e.code === 'invalid' ? `: ${e.field}` : '');
+};
+// errorText, or the server's own words when it sent some (a refusal's hint).
+export const errorWhy = (e: unknown): string => {
+  const message = e instanceof ApiFailure ? (e.body as { message?: unknown } | undefined)?.message : undefined;
+  return typeof message === 'string' && message && !(e instanceof ApiFailure && e.code === 'invalid') ? message : errorText(e);
 };

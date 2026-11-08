@@ -62,6 +62,8 @@ interface Hit { sw: Switch; port: number; watts: number; poe: boolean }
 interface SurveyHit { c: Camera; port: number; watts: number; poe: boolean }
 type Occupying = Extract<CameraPower, { switchId: string }>;
 
+// A simulated camera is on no switch (surveys skip it; verify and search refuse).
+const SIM_REASON = 'a simulated camera is on no switch';
 const occupies = (p: CameraPower): p is Occupying => p.kind === 'poe' || p.kind === 'data-only';
 // A reported address without its ":port" (an IPv6 literal keeps its brackets).
 export const bareHost = (a: string): string => {
@@ -145,6 +147,7 @@ export class PowerService {
         return this.get(c.id);
       }
       if (raw.kind !== 'auto') throw new FieldError('kind');
+      if (c.kind === 'sim') return this.refuse('sim', SIM_REASON);
       const host = this.hostOf(c);
       if (!host) return this.refuse('host_unknown', HOST_UNKNOWN);
       if (this.busy(c.id)) return this.refuse('busy', 'a power check or power-cycle of this camera is running');
@@ -164,6 +167,7 @@ export class PowerService {
     this.sysadmin(who);
     const c = this.camera(cameraId);
     if (c.power.kind === 'adapter') return this.refuse('adapter', 'declared adapter-powered: on no switch');
+    if (c.kind === 'sim') return this.refuse('sim', SIM_REASON);
     return this.find(who, c, 'verify');
   }
 
@@ -247,7 +251,7 @@ export class PowerService {
     }
   }
 
-  // One switch.survey per ≤16 cameras: every camera of the account that isn't adapter and has a host. While a
+  // One switch.survey per ≤16 cameras: every camera of the account that isn't adapter or simulated (kind sim) and has a host. While a
   // survey runs on the switch, one more waits (queued); more asks fold into that one.
   survey(who: Who, switchId: string): SurveyStart {
     this.sysadmin(who);
@@ -515,7 +519,8 @@ export class PowerService {
 
   // --- survey ------------------------------------------------------------------------------------
   private runSurvey(who: Who, sw: Switch): SurveyStart {
-    const cams = this.d.registry.listCameras(sw.accountId).filter((c) => c.power.kind !== 'adapter');
+    // A simulated camera (kind sim, e.g. cam-sim in the cluster) is on no switch: never surveyed, never "not found".
+    const cams = this.d.registry.listCameras(sw.accountId).filter((c) => c.power.kind !== 'adapter' && c.kind !== 'sim');
     const withHost = cams.filter((c) => this.hostOf(c));
     const view: SurveyView = {
       switchId: sw.id, at: this.d.clock.now(), state: 'running', commandIds: [], trunks: [], problems: [],

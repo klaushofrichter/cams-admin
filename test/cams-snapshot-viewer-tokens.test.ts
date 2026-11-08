@@ -35,7 +35,7 @@ describe('viewer tokens in the snapshot', () => {
 
   it('a token is in every serving instance\'s snapshot, by fingerprint; strict passes; never the token or its ciphertext', async () => {
     const c = await s.api('POST', '/viewer-tokens', { name: 'Kitchen tablet', accountIds: [home.id, beta.id], days: 30 });
-    const want = { id: c.item.id, name: 'Kitchen tablet', fingerprint: viewerFingerprint(c.token), expiresAt: c.item.expiresAt };
+    const want = { id: c.item.id, name: 'Kitchen tablet', fingerprint: viewerFingerprint(c.token), expiresAt: c.item.expiresAt, role: 'viewer' };
     expect(tokensOf(cluster.id, home.id)).toEqual([want]);
     expect(tokensOf(cluster.id, beta.id)).toEqual([want]);
     expect(tokensOf(pi.id, home.id)).toEqual([want]);
@@ -76,6 +76,18 @@ describe('viewer tokens in the snapshot', () => {
     await s.api('DELETE', `/viewer-tokens/${c.item.id}`);
     expect(snapshotRevision(d.db, cluster.id, d.signingFingerprint)).not.toBe(rc);
     expect(tokensOf(cluster.id, beta.id)).toEqual([]);
+  });
+
+  it('the role (A4): admin in every serving instance\'s snapshot after the change, which moves the revision; strict passes', async () => {
+    const c = await s.api('POST', '/viewer-tokens', { name: 'kit', accountIds: [home.id], days: 1 });
+    expect(tokensOf(pi.id, home.id)[0].role).toBe('viewer');
+    const r = snapshotRevision(d.db, pi.id, d.signingFingerprint);
+    expect((await s.api('POST', `/viewer-tokens/${c.item.id}/role`, { role: 'admin' })).role).toBe('admin');
+    expect(snapshotRevision(d.db, pi.id, d.signingFingerprint)).not.toBe(r);
+    expect(tokensOf(pi.id, home.id)[0].role).toBe('admin');
+    expect(tokensOf(cluster.id, home.id)[0].role).toBe('admin');
+    expect(strictCamsValidator('snapshot')(buildSnapshot(d, pi.id)), strictCamsErrors()).toBe(true);
+    await s.api('DELETE', `/viewer-tokens/${c.item.id}`);
   });
 
   it('an expired token is left out without a new revision (cams checks expiresAt itself)', async () => {

@@ -181,7 +181,7 @@ export class StatusStore {
       const pin = pinState(proxy.caFingerprints, reportedFps);
       let summary: unknown, ok: boolean, problemCount: number, version: string | null = null, summaryAt: number | null = null, cams: Reported['cameras'] = [];
       if (v.ok) {
-        const s = v.summary as { ok: boolean; problemCount: number; version: string; generatedAt: number; cameras?: { camera: { id: string; online: boolean; name?: string; nameSource?: unknown; model?: string | null; address?: unknown } }[] };
+        const s = v.summary as { ok: boolean; problemCount: number; version: string; generatedAt: number; cameras?: { camera: { id: string; online: boolean; name?: string; nameSource?: unknown; model?: string | null; address?: unknown }; cert?: unknown }[] };
         summary = { ...s, $truncated: body.truncated === true };
         ok = s.ok;
         problemCount = s.problemCount;
@@ -191,6 +191,7 @@ export class StatusStore {
           ref: c.camera.id, online: c.camera.online, name: c.camera.name, model: c.camera.model ?? null,
           nameSource: c.camera.nameSource === 'camera' || c.camera.nameSource === 'config' ? c.camera.nameSource : undefined,
           ...(typeof c.camera.address === 'string' && c.camera.address.trim() ? { address: c.camera.address.trim() } : {}),
+          ...reportedTls(c.cert),
         }));
       } else {
         summary = { unreadable: v.reason };
@@ -307,4 +308,15 @@ export class StatusStore {
   pruneEvents(): void {
     tx(this.d.db, () => this.d.db.prepare('DELETE FROM status_events WHERE at < ?').run(this.d.clock.now() - 90 * 86400_000));
   }
+}
+
+// A summary camera's cert (finding 12b): an object (mode other than none) = https, its servername the TLS name; null = http;
+// absent (a truncated summary) or mode none = not known.
+const TLS_NAME_RE = /^[A-Za-z0-9.-]{1,253}$/;
+function reportedTls(cert: unknown): { protocol?: 'https' | 'http'; tlsName?: string } {
+  if (cert === null) return { protocol: 'http' };
+  if (!cert || typeof cert !== 'object') return {};
+  const c = cert as { mode?: unknown; servername?: unknown };
+  if (c.mode === 'none') return {};
+  return { protocol: 'https', ...(typeof c.servername === 'string' && TLS_NAME_RE.test(c.servername) ? { tlsName: c.servername } : {}) };
 }

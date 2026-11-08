@@ -640,4 +640,13 @@ CREATE TABLE camera_power_cycles (
   // 25: a switch's configuration problems from its latest complete survey (JSON array, e.g. [{code:'chained_switch',
   // port, cameras}]; NULL = none). A later survey that no longer sees one clears it.
   (db) => db.exec(`ALTER TABLE switches ADD COLUMN problems TEXT CHECK (problems IS NULL OR json_valid(problems));`),
+  // 26: a viewer token's role in its accounts (spec 2026-11-08 A4/B6): viewer (default) or admin. In the snapshot, so a
+  // change bumps the accounts' config_revision like the other snapshot fields.
+  (db) => db.exec(`
+ALTER TABLE viewer_tokens ADD COLUMN role TEXT NOT NULL DEFAULT 'viewer' CHECK (role IN ('viewer', 'admin'));
+DROP TRIGGER rev_vt_upd;
+CREATE TRIGGER rev_vt_upd AFTER UPDATE OF name, fingerprint, expires_at, revoked_at, role ON viewer_tokens BEGIN
+  UPDATE config_revision SET revision = revision + 1 WHERE account_id IN (SELECT account_id FROM viewer_token_accounts WHERE token_id = NEW.id);
+END;
+`),
 ];

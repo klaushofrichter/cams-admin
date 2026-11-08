@@ -376,6 +376,28 @@ describe('camera power', () => {
     expect((await power(cams[1].id)).power).toEqual({ kind: 'poe', switchId: a.id, port: 2, watts: 4, verifiedAt: clock.now() });
   });
 
+  it('a simulated camera (kind sim) is on no switch: never surveyed, nor in the survey results; verify and search refuse', async () => {
+    const p = await proxy();
+    const real = await camera(p, '10.0.1.1');
+    const tag = `c${n++}`;
+    const r = await call('POST', `/accounts/${p.acc}/cameras`, { camsId: tag, name: tag, kind: 'sim', proxyId: p.prx, proxyCameraId: tag, host: '10.0.1.2' });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    const sim = r.body as { id: string };
+    const a = await sw(p, 'Alpha');
+    p.client.switchResults.set('switch.survey', (x) => ({ status: 'ok', result: { sn: null, results: x.cameras.map((c: { camera: string }) => ({ camera: c.camera, found: false, reason: 'not_reachable' })) } }));
+    expect((await call('POST', `/switches/${a.id}/survey`)).status).toBe(202);
+    await until(async () => (await call('GET', `/switches/${a.id}/survey`)).body.state === 'done', 5000, 'survey done');
+    const surveyed = sent(p, 'switch.survey').flatMap((x) => x.cameras.map((c: { camera: string }) => c.camera));
+    expect(surveyed).toContain(real.id);
+    expect(surveyed).not.toContain(sim.id);
+    expect((await call('GET', `/switches/${a.id}/survey`)).body.results.map((x: { cameraId: string }) => x.cameraId)).not.toContain(sim.id);
+    const v = await call('POST', `/cameras/${sim.id}/power/verify`);
+    expect([v.status, v.body.error]).toEqual([409, 'sim']);
+    const d = await call('PUT', `/cameras/${sim.id}/power`, { kind: 'auto' });
+    expect([d.status, d.body.error]).toEqual([409, 'sim']);
+    expect(sent(p, 'switch.locate')).toEqual([]);
+  });
+
   it('surveys are debounced: at most one queued per switch', async () => {
     const p = await proxy();
     await camera(p);

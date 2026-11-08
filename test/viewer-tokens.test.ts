@@ -212,3 +212,29 @@ describe('the audit log', () => {
     expect(items[items.length - 1]).toMatchObject({ accountId: home, targetLabel: 'audited' });
   });
 });
+
+describe('role (spec 2026-11-08 A4/B6)', () => {
+  const lastAudit = (action: string) => a.audit.list({ action }).items[0];
+  it('viewer by default; admin on create; refused otherwise; audited', () => {
+    const v = vt.create(ACTOR, { name: 'tablet', accountIds: [home] });
+    expect(v.item.role).toBe('viewer');
+    expect(lastAudit('viewer-token-create').detail).toMatchObject({ role: 'viewer' });
+    const ad = vt.create(ACTOR, { name: 'kit admin', accountIds: [home], role: 'admin' });
+    expect(ad.item.role).toBe('admin');
+    expect(lastAudit('viewer-token-create').detail).toMatchObject({ role: 'admin' });
+    expect(code(() => vt.create(ACTOR, { name: 'x', accountIds: [home], role: 'owner' }))).toBe('400 invalid role');
+  });
+  it('a role change bumps every account of the token and is audited with from and to; the same role changes nothing', () => {
+    const v = vt.create(ACTOR, { name: 'both', accountIds: [home, away] });
+    const before = [rev(home), rev(away)];
+    const t = vt.setRole(ACTOR, v.item.id, { role: 'admin' });
+    expect([t.role, t.version]).toEqual(['admin', v.item.version + 1]);
+    expect([rev(home), rev(away)]).toEqual([before[0] + 1, before[1] + 1]);
+    expect(lastAudit('viewer-token-role').detail).toMatchObject({ role: 'admin', from: 'viewer', accountIds: [home, away].sort() });
+    const n = a.audit.list({ action: 'viewer-token-role' }).items.length;
+    expect(vt.setRole(ACTOR, v.item.id, { role: 'admin' }).version).toBe(t.version);
+    expect(a.audit.list({ action: 'viewer-token-role' }).items.length).toBe(n);
+    expect(code(() => vt.setRole(ACTOR, v.item.id, { role: 'root' }))).toBe('400 invalid role');
+    expect(code(() => vt.setRole(ACTOR, 'vtk_00000000000000000000', { role: 'viewer' }))).toBe('404 not_found');
+  });
+});

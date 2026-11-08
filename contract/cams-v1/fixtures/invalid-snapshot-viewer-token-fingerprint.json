@@ -81,7 +81,15 @@
             "id": "vtk_00000000000000000001",
             "name": "Kitchen tablet",
             "fingerprint": "sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-            "expiresAt": 1791878400000
+            "expiresAt": 1791878400000,
+            "role": "viewer"
+          },
+          {
+            "id": "vtk_00000000000000000002",
+            "name": "Demo kit admin",
+            "fingerprint": "sha256:4944ff3ff2f8a0f1eb131ba1967ddb1a39b28f7f55b24a759eeda703b5e25e95",
+            "expiresAt": 1791360000000,
+            "role": "admin"
           }
         ],
         "proxies": [
@@ -163,6 +171,6 @@
         ]
       }
     ],
-    "sig": "sCg53M7QKop53xd+N8z31v5G6WwzgC7igTafSVFHj9mfkyjJB5qSbgVzXCdiKb0h0lgU6FLrdlJxhUL2BC5MCA=="
+    "sig": "qY2t2DXGI9ZHC3rejC4kbIiUDWSdJO0uFFb0RQaICkV+XOunfCmo9OoiRlm/iUVPS81MmjdqvCe2e0NoqB/3DA=="
   }
 }

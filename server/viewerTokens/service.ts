@@ -21,11 +21,19 @@ const NAME_RE = /^[^\u0000-\u001f\u007f]{1,64}$/;
 const ACC_RE = /^acc_[0-9A-HJKMNP-TV-Z]{20}$/;
 export const COPY_WHAT = ['token', 'link', 'qr'] as const;
 export type CopyWhat = (typeof COPY_WHAT)[number];
+// A token's role in each of its accounts (spec 2026-11-08 A4): a viewer, or an admin of the account in cams.
+export const VIEWER_TOKEN_ROLES = ['viewer', 'admin'] as const;
+export type ViewerTokenRole = (typeof VIEWER_TOKEN_ROLES)[number];
+function roleOf(v: unknown, dflt?: ViewerTokenRole): ViewerTokenRole {
+  const r = v === undefined ? dflt : v;
+  if (typeof r !== 'string' || !(VIEWER_TOKEN_ROLES as readonly string[]).includes(r)) throw new ApiError(400, 'invalid', 'role');
+  return r as ViewerTokenRole;
+}
 
 export interface ViewerTokenView {
   id: string; name: string; accounts: { id: string; name: string; displayName: string }[]; days: number;
   createdAt: number; createdBy: string; expiresAt: number; revokedAt: number | null; revokedBy: string | null;
-  lastUsedAt: number | null; state: 'valid' | 'expired' | 'revoked'; fingerprintPrefix: string; version: number;
+  lastUsedAt: number | null; state: 'valid' | 'expired' | 'revoked'; fingerprintPrefix: string; version: number; role: ViewerTokenRole;
 }
 // The revocation journal's entries (outside the database and its backups).
 export type ViewerTokenJournal =
@@ -98,7 +106,7 @@ export class ViewerTokens {
       id, name: r.name as string, accounts: this.accountsOf(id), days: r.days as number, createdAt: r.created_at as number, createdBy: r.created_by as string,
       expiresAt, revokedAt: r.revoked_at as number | null, revokedBy: r.revoked_by as string | null, lastUsedAt: this.lastUsed.get(id) ?? null,
       state: r.revoked_at !== null ? 'revoked' : expiresAt <= this.d.clock.now() ? 'expired' : 'valid',
-      fingerprintPrefix: (r.fingerprint as string).slice(7, 15), version: r.version as number,
+      fingerprintPrefix: (r.fingerprint as string).slice(7, 15), version: r.version as number, role: (r.role as ViewerTokenRole | undefined) ?? 'viewer',
     };
   }
 
@@ -142,16 +150,17 @@ export class ViewerTokens {
     if (!NAME_RE.test(name)) throw invalid('name');
     const days = daysOf(o.days, DEFAULT_DAYS);
     const accountIds = accountIdsOf(o.accountIds);
+    const role = roleOf(o.role, 'viewer');
     const key = this.key();
     const now = this.d.clock.now();
     const id = newId('vtk');
     const token = newViewerToken();
     tx(this.d.db, () => {
       this.checkAccounts(actor, accountIds, null);
-      this.d.db.prepare(`INSERT INTO viewer_tokens (id, name, fingerprint, secret, days, created_at, created_by, updated_at, expires_at) VALUES (?,?,?,?,?,?,?,?,?)`)
-        .run(id, name, viewerFingerprint(token), sealToken(key, id, token), days, now, actor, now, now + days * DAY);
+      this.d.db.prepare(`INSERT INTO viewer_tokens (id, name, fingerprint, secret, days, created_at, created_by, updated_at, expires_at, role) VALUES (?,?,?,?,?,?,?,?,?,?)`)
+        .run(id, name, viewerFingerprint(token), sealToken(key, id, token), days, now, actor, now, now + days * DAY, role);
       for (const acc of accountIds) this.d.db.prepare('INSERT INTO viewer_token_accounts (token_id, account_id) VALUES (?, ?)').run(id, acc);
-      this.log(actor, 'viewer-token-create', this.row(id), accountIds, { days, expiresAt: now + days * DAY });
+      this.log(actor, 'viewer-token-create', this.row(id), accountIds, { days, expiresAt: now + days * DAY, role });
     });
     return { item: this.get(id), token, link: viewerLink(this.d.linkBase, token) };
   }
@@ -181,6 +190,21 @@ export class ViewerTokens {
       this.log(actor, 'viewer-token-validity', r, accountIds, { days, expiresAt, ...(r.revoked_at !== null ? { wasRevoked: true } : {}) });
     });
     this.d.journal?.({ kind: 'viewer-token', tokenId: id, change: 'expires', expiresAt });
+    return this.get(id);
+  }
+
+  // Viewer or admin in each of its accounts (A4): the snapshot carries it, so the accounts' revision moves (trigger).
+  setRole(actor: string, id: string, input: unknown): ViewerTokenView {
+    const role = roleOf(obj(input).role);
+    tx(this.d.db, () => {
+      const r = this.row(id);
+      const from = (r.role as ViewerTokenRole | undefined) ?? 'viewer';
+      if (from === role) return;
+      const accountIds = this.accountIdsOfToken(id);
+      if (!canManage(actor, accountIds)) throw new ApiError(403, 'forbidden');
+      this.d.db.prepare('UPDATE viewer_tokens SET role = ?, updated_at = ?, version = version + 1 WHERE id = ?').run(role, this.d.clock.now(), id);
+      this.log(actor, 'viewer-token-role', r, accountIds, { role, from });
+    });
     return this.get(id);
   }
 
