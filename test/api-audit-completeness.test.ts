@@ -24,6 +24,22 @@ describe('audit completeness', () => {
   a.hub.connected = (proxyId: string) => proxyId === ids.prx || realConnected(proxyId);
   const count = () => (a.db.prepare('SELECT count(*) n FROM audit_log').get() as { n: number }).n;
   const ids: Record<string, string> = {};
+  // A connected proxy for the Remove camera / Decommission rows (no camera reported for the decommission), set up when
+  // the row's body is made.
+  const decomSetup = (what: 'remove' | 'decommission') => {
+    const px = what === 'remove' ? 'prx_RM000000000000000000' : 'prx_DC000000000000000000';
+    a.db.prepare(`UPDATE commands SET state = 'done', finished_at = 1 WHERE command IN ('proxy.restart', 'camera.remove') AND state IN ('queued','sent','received')`).run();
+    a.db.prepare(`INSERT INTO proxies (id, account_id, name, display_name, runs_on, state, created_at, updated_at) VALUES (?, ?, ?, ?, 'local-host', 'enrolled', 1, 1)`).run(px, ids.acc, `dc-${what}`, `dc-${what}`);
+    if (what === 'remove') a.db.prepare(`INSERT INTO cameras (id, account_id, proxy_id, cams_id, proxy_camera_id, name, kind, model, created_at, updated_at) VALUES ('cam_RM000000000000000000', ?, ?, 'rmcam', 'cam1', 'R', 'camera', 'RLC-1224A', 1, 1)`).run(ids.acc, px);
+    a.status.hello(px, 'v2', Date.now(), ['status', 'commands']);
+    const summary = makeSummary({ cameras: 1, now: Date.now() });
+    if (what === 'decommission') summary.cameras = [];
+    a.status.heartbeat(px, { summary, proxy: { ...makeProxyInfo({ now: Date.now() }), commands: { enabled: true, paused: false, pauseReason: null, allow: ['camera.remove', 'proxy.unenroll'], seenWindow: 1000 } }, truncated: false }, Date.now());
+    const hub = a.hub as unknown as { connected: (id: string) => boolean };
+    const was = hub.connected.bind(a.hub);
+    hub.connected = (id: string) => id === px || was(id);
+    return what === 'remove' ? { content: 'keep', confirm: 'rmcam' } : { confirm: 'dc-decommission' };
+  };
 
   const IMPORT_FILE = { v: 1, kind: 'cams-export', exportedAt: 1, camsVersion: 't', source: 'cameras-file', cameras: [{ id: 'imp1', name: 'Imp', host: '192.0.2.40', protocol: 'https', user: 'cams' }], counts: { preferencesUsers: 0, proxySwitchOff: 0, tlsCas: 0, tlsPins: 0 } };
   type Row = [method: 'post' | 'patch' | 'put' | 'delete', pattern: string, path: () => string, body: () => unknown, action: string | string[]];
@@ -77,6 +93,11 @@ describe('audit completeness', () => {
     ['patch', '/accounts/:accountId/cameras/:cameraId', () => `/accounts/${ids.acc}/cameras/${ids.cam}`, () => ({ name: 'S one', version: 1 }), 'camera-update'],
     ['put', '/accounts/:accountId/cameras/:cameraId/sim', () => `/accounts/${ids.acc}/cameras/${ids.cam}/sim`, () => ({ runsOn: 'mac' }), 'sim-update'],
     ['delete', '/accounts/:accountId/cameras/:cameraId/sim', () => `/accounts/${ids.acc}/cameras/${ids.cam}/sim`, () => ({}), 'sim-delete'],
+    // Remove camera / Decommission proxy (spec 2026-11-08): the request is its command; camera-remove and proxy-unenroll
+    // follow the proxy's answer (test/decommission.test.ts). Connected proxies of their own; earlier disruptive commands
+    // finished by hand (the fleet gate allows one proxy at a time).
+    ['post', '/accounts/:accountId/cameras/:cameraId/remove', () => `/accounts/${ids.acc}/cameras/cam_RM000000000000000000/remove`, () => decomSetup('remove'), 'command-create'],
+    ['post', '/accounts/:accountId/proxies/:proxyId/decommission', () => `/accounts/${ids.acc}/proxies/prx_DC000000000000000000/decommission`, () => decomSetup('decommission'), 'command-create'],
     ['delete', '/accounts/:accountId/cameras/:cameraId', () => `/accounts/${ids.acc}/cameras/${ids.cam}`, () => ({}), 'camera-delete'],
     // Camera power: a declaration is its power record; a check, a power-cycle and a survey are their own start record
     // (camera-power-verify, camera-power-cycle, switch-survey per switch) and their first command (the camera.power.*
@@ -116,6 +137,7 @@ describe('audit completeness', () => {
     ['post', '/viewer-tokens/:tokenId/copy', () => `/viewer-tokens/${ids.vtk}/copy`, () => ({ what: 'link' }), 'viewer-token-copy'],
     ['post', '/viewer-tokens/:tokenId/validity', () => `/viewer-tokens/${ids.vtk}/validity`, () => ({ days: 30 }), 'viewer-token-validity'],
     ['put', '/viewer-tokens/:tokenId/accounts', () => `/viewer-tokens/${ids.vtk}/accounts`, () => ({ accountIds: [ids.acc], version: 2 }), 'viewer-token-accounts'],
+    ['post', '/viewer-tokens/:tokenId/role', () => `/viewer-tokens/${ids.vtk}/role`, () => ({ role: 'admin' }), 'viewer-token-role'],
     ['post', '/viewer-tokens/:tokenId/revoke', () => `/viewer-tokens/${ids.vtk}/revoke`, () => ({}), 'viewer-token-revoke'],
     ['delete', '/viewer-tokens/:tokenId', () => `/viewer-tokens/${ids.vtk}`, () => ({}), 'viewer-token-delete'],
     ['post', '/backup/now', () => '/backup/now', () => ({}), 'backup-now'],

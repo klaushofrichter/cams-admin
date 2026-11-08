@@ -13,6 +13,7 @@
   import Ago from '../components/Ago.svelte';
   import Confirm from '../components/Confirm.svelte';
   import DeleteLines from '../components/DeleteLines.svelte';
+  import DecommissionProxy from '../components/DecommissionProxy.svelte';
   import ProxyCommands from '../components/ProxyCommands.svelte';
   import ProxyTokens from '../components/ProxyTokens.svelte';
   import ProxySettings from '../components/ProxySettings.svelte';
@@ -30,6 +31,8 @@
   let lifetimeH = $state(24);
   let confirm = $state<null | { kind: 'revoke' | 'block' | 'delete'; keyId?: string }>(null);
   let deleteLines = $state<Lines | null>(null);
+  // Decommission (spec 2026-11-08 B5): its panel is open.
+  let decommissioning = $state(false);
   let showAll = $state(false);
   let activeMove = $state<any>(null);
   let refresh = $state(0); // bumps after every load: the command and token cards reload with it
@@ -127,7 +130,10 @@
   const nameOk = $derived(validProxyName(f.name ?? ''));
 </script>
 
-{#if gone}
+{#if gone && decommissioning}
+  <!-- The decommission's done answer deleted the record (the live reload finds it gone first). -->
+  <p data-testid="decommission-done">The proxy unenrolled itself and its record is deleted. <a href="#/accounts/{accountId}/proxies" data-testid="decommission-close">Proxies</a></p>
+{:else if gone}
   <p class="muted" data-testid="proxy-gone">This proxy does not exist (any more). <a href="#/accounts/{accountId}/proxies">Proxies</a></p>
 {:else if d}
   <section class="card grid">
@@ -249,6 +255,7 @@
     </div>
     <div class="row">
       {#if d.proxy.state !== 'revoked'}<button class="btn danger" data-testid="block-proxy" onclick={() => (confirm = { kind: 'block' })}>Block proxy</button>{/if}
+      <button class="btn danger" data-testid="decommission-proxy" onclick={() => (decommissioning = true)}>Decommission…</button>
       <button class="btn danger" data-testid="delete-proxy" onclick={askDelete}>Delete proxy</button>
     </div>
   </section>
@@ -283,6 +290,9 @@
     {/each}
   </section>
 
+  {#if decommissioning}
+    <DecommissionProxy {accountId} proxy={d.proxy} onclose={() => (decommissioning = false)} ondeleterecord={() => { decommissioning = false; askDelete(); }} />
+  {/if}
   {#if confirm}
     <Confirm
       title={confirm.kind === 'revoke' ? 'Revoke this key' : confirm.kind === 'block' ? `Block ${d.proxy.name}` : `Delete ${d.proxy.name}`}

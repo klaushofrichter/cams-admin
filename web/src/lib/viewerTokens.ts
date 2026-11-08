@@ -28,3 +28,8 @@ export function qrPath(text: string): { size: number; modules: number; path: str
 export const linkHost = (link: string): string => {
   try { return new URL(link).host; } catch { return ''; }
 };
+
+// A token's role (spec 2026-11-08 A4/B6): viewer (default) or admin of each of its accounts in cams.
+export const ROLES = [{ role: 'viewer', label: 'viewer' }, { role: 'admin', label: 'admin' }] as const;
+export const ADMIN_WARNING = 'An admin token can confirm held cameras and change settings in each of its accounts in cams, like a Google admin of the account.';
+export const roleClass = (role: string): string => (role === 'admin' ? 'warn' : '');

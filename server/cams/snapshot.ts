@@ -101,10 +101,9 @@ export function buildSnapshot(d: SnapshotDeps, instanceId: string): Snapshot {
         };
       });
     // Viewer tokens valid now (not revoked, not expired); an expiry needs no new revision: cams checks expiresAt itself.
-    const viewerTokens = (q(`SELECT t.id, t.name, t.fingerprint, t.expires_at FROM viewer_tokens t JOIN viewer_token_accounts v ON v.token_id = t.id
+    const viewerTokens = (q(`SELECT t.id, t.name, t.fingerprint, t.expires_at, t.role FROM viewer_tokens t JOIN viewer_token_accounts v ON v.token_id = t.id
       WHERE v.account_id = ? AND t.revoked_at IS NULL AND t.expires_at > ? ORDER BY t.id`).all(accountId, now) as Row[])
-      // Every token is a viewer token until tokens carry a role (A4/B6).
-      .map((t): SnapViewerToken => ({ id: t.id as string, name: t.name as string, fingerprint: t.fingerprint as string, expiresAt: t.expires_at as number, role: 'viewer' }));
+      .map((t): SnapViewerToken => ({ id: t.id as string, name: t.name as string, fingerprint: t.fingerprint as string, expiresAt: t.expires_at as number, role: t.role === 'admin' ? 'admin' : 'viewer' }));
     return { id: accountId, name: a.name as string, displayName: a.display_name as string, revision: a.revision as number, users, proxies, cameras, viewerTokens };
   });
   const unsigned = {

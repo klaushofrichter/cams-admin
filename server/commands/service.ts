@@ -264,6 +264,14 @@ export class Commands {
     return { items, nextCursor: rows.length > lim ? items[items.length - 1].id : null };
   }
 
+  // A command of the account by id, whatever its proxy (null once the proxy's record is deleted).
+  getInAccount(accountId: string, cmdId: string): CommandRow {
+    this.d.registry.getAccount(accountId);
+    const r = this.q('SELECT * FROM commands WHERE id = ? AND account_id = ?').get(cmdId, accountId) as DbRow | undefined;
+    if (!r) throw new ApiError(404, 'not_found');
+    return view(toRaw(r));
+  }
+
   get(accountId: string, proxyId: string, cmdId: string): CommandRow & { resultEnvelope: unknown } {
     this.d.registry.getProxy(accountId, proxyId);
     const r = this.q('SELECT * FROM commands WHERE id = ? AND account_id = ? AND proxy_id = ?').get(cmdId, accountId, proxyId) as DbRow | undefined;

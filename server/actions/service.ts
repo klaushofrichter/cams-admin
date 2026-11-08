@@ -22,7 +22,8 @@ export const BUSY_MS = 10_000;
 // time, at most 3 in any 10 minutes across all accounts.
 export const FLEET_WINDOW_MS = 10 * 60_000;
 export const FLEET_MAX = 3;
-const DISRUPTIVE_SQL = `(command = 'proxy.restart' OR (command = 'camera.action' AND json_extract(args, '$.action') IN (${JOURNAL_BUDGET_ACTIONS.map((a) => `'${a}'`).join(',')})))`;
+// camera.remove and proxy.unenroll (spec 2026-11-08) count like a restart.
+const DISRUPTIVE_SQL = `(command IN ('proxy.restart', 'camera.remove', 'proxy.unenroll') OR (command = 'camera.action' AND json_extract(args, '$.action') IN (${JOURNAL_BUDGET_ACTIONS.map((a) => `'${a}'`).join(',')})))`;
 
 const isObj = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x);
 const only = (o: Record<string, unknown>, keys: string[]) => Object.keys(o).every((k) => keys.includes(k));
@@ -30,7 +31,7 @@ const isDisruptive = (a: string) => (DISRUPTIVE_ACTIONS as readonly string[]).in
 
 // connected: the live channel (Hub.connected), not the status row: that row is the last stored state and can
 // still say connected after a cams-admin restart while the proxy is down.
-export interface ActionsDeps { db: Db; audit: Audit; registry: Registry; commands: Commands; status: StatusStore; clock: Clock; config?: ProxyConfig; connected: (proxyId: string) => boolean }
+export interface ActionsDeps { db: Db; audit: Audit; registry: Registry; commands: Commands; status: StatusStore; clock: Clock; config?: ProxyConfig; connected: (proxyId: string) => boolean; fleetMax?: number }
 export interface Available {
   actions: { action: string; disruptive: boolean; allowed: boolean }[]; rename: boolean; restart: boolean; cameras: string[];
   // The onboarding entries on the proxy: camera.onboarding.get, camera.action:camera-ftp-setup, camera.action:camera-time-set.
@@ -124,7 +125,7 @@ export class RemoteActions {
   }
 
   // I3: refuse (and audit) a disruptive request while another proxy's is open, or over the fleet window.
-  private fleetGate(actor: string, accountId: string, proxyId: string, command: string, action?: string): void {
+  fleetGate(actor: string, accountId: string, proxyId: string, command: string, action?: string): void {
     const now = this.d.clock.now();
     const refuse = (status: number, reason: string, extra: Record<string, unknown> = {}) => {
       const px = this.d.registry.getProxy(accountId, proxyId);
@@ -137,7 +138,8 @@ export class RemoteActions {
     const other = this.d.db.prepare(`SELECT proxy_id FROM commands WHERE ${DISRUPTIVE_SQL} AND state IN ('queued','sent','received') AND proxy_id IS NOT NULL AND proxy_id <> ? LIMIT 1`).get(proxyId);
     if (other) refuse(409, 'fleet_busy');
     const recent = this.d.db.prepare(`SELECT created_at FROM commands WHERE ${DISRUPTIVE_SQL} AND created_at > ? ORDER BY created_at`).all(now - FLEET_WINDOW_MS) as { created_at: number }[];
-    if (recent.length >= FLEET_MAX) refuse(429, 'fleet_limit', { retryAfterS: Math.max(1, Math.ceil((recent[recent.length - FLEET_MAX].created_at + FLEET_WINDOW_MS - now) / 1000)) });
+    const max = this.d.fleetMax ?? FLEET_MAX;
+    if (recent.length >= max) refuse(429, 'fleet_limit', { retryAfterS: Math.max(1, Math.ceil((recent[recent.length - max].created_at + FLEET_WINDOW_MS - now) / 1000)) });
   }
 
   private isOpen(accountId: string, proxyId: string, cmdId: string): boolean {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_VALIDITY_DAYS, QUIET_ZONE, VALIDITY, linkHost, qrPath, stateClass } from './viewerTokens';
+import { ADMIN_WARNING, DEFAULT_VALIDITY_DAYS, QUIET_ZONE, VALIDITY, linkHost, qrPath, roleClass, stateClass } from './viewerTokens';
 
 describe('viewer tokens (web)', () => {
   it('offers Klaus\'s validities, one week preselected', () => {
@@ -19,5 +19,13 @@ describe('viewer tokens (web)', () => {
     expect([stateClass('valid'), stateClass('expired'), stateClass('revoked')]).toEqual(['ok', 'warn', 'bad']);
     expect(linkHost('https://cams.skylar.technology/token#t=x')).toBe('cams.skylar.technology');
     expect(linkHost('nope')).toBe('');
+  });
+});
+
+describe('role (spec 2026-11-08 B6)', () => {
+  it('admin is shown orange with a one-line warning; viewer plain', () => {
+    expect(roleClass('admin')).toBe('warn');
+    expect(roleClass('viewer')).toBe('');
+    expect(ADMIN_WARNING).toMatch(/^An admin token can confirm held cameras/);
   });
 });

@@ -16,6 +16,7 @@
   import VisionTab from '../components/VisionTab.svelte';
   import SwitchesTab from '../components/SwitchesTab.svelte';
   import CameraPower from '../components/CameraPower.svelte';
+  import RemoveCamera from '../components/RemoveCamera.svelte';
 
   let { accountId, tab }: { accountId: string; tab: string } = $props();
 
@@ -32,6 +33,8 @@
   let confirmDelete = $state(false);
   let deleteLines = $state<Lines | null>(null);
   let deletingCamera = $state<any>(null);
+  // Remove from proxy (spec 2026-11-08 B4): the camera whose panel is open.
+  let removingCamera = $state<any>(null);
   // The Vision tab is for system admins only (the server checks it too).
   let systemAdmin = $state(false);
   const TABS = $derived(['overview', 'users', 'proxies', 'cameras', 'switches', 'sims', 'import', ...(systemAdmin ? ['vision'] : [])]);
@@ -311,7 +314,7 @@
                     <button class="btn" data-testid="sim-save-{c.camsId}" onclick={() => saveSim(c)}>Save</button>
                   </td>
                 {/if}
-                <td class="row"><button class="btn" data-testid="camera-edit-{c.camsId}" onclick={() => editCamera(c)}>Edit</button><button class="btn danger" data-testid="camera-delete-{c.camsId}" onclick={() => (deletingCamera = c)}>Delete</button></td>
+                <td class="row"><button class="btn" data-testid="camera-edit-{c.camsId}" onclick={() => editCamera(c)}>Edit</button>{#if mappedCam(c)}<button class="btn danger" data-testid="camera-remove-{c.camsId}" onclick={() => (removingCamera = c)}>Remove from proxy…</button>{/if}<button class="btn danger" data-testid="camera-delete-{c.camsId}" onclick={() => (deletingCamera = c)}>Delete</button></td>
               </tr>
             {/each}
           </tbody>
@@ -365,6 +368,10 @@
     <Confirm title="Delete account {account.name}" body="Everything in the account goes and its proxies are disconnected. A restore from backup is the only undo." typed={account.name} ok="Delete account" okDisabled={!deleteLines || !!deleteLines.blocked} onconfirm={deleteAccount} oncancel={() => (confirmDelete = false)}>
       <DeleteLines lines={deleteLines} testid="account-delete-lines" />
     </Confirm>
+  {/if}
+  {#if removingCamera}
+    <RemoveCamera {accountId} camera={removingCamera} onclose={() => (removingCamera = null)} ondone={load}
+      ondeleterecord={() => { deletingCamera = removingCamera; removingCamera = null; }} />
   {/if}
   {#if deletingCamera}
     <Confirm title="Delete camera {deletingCamera.camsId}" body="The camera's record leaves the account; cams no longer shows it." ok="Delete camera" onconfirm={deleteCamera} oncancel={() => (deletingCamera = null)}>
