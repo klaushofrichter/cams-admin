@@ -180,6 +180,8 @@ describe('tokens', () => {
     const { acc, prx, client } = await proxy();
     client.tokensRevision = 14; // kept from its old record (deleted, the proxy added and enrolled again)
     await until(() => client.tokensRevision === 15, 5000, 'our set above the proxy\'s revision');
+    // The proxy took it; its result reaches cams-admin a moment later.
+    await until(() => T().list(acc, prx).appliedRevision === 15, 5000, 'the result confirmed');
     expect(T().list(acc, prx)).toMatchObject({ ahead: null, revision: 15, appliedRevision: 15, items: [] });
     expect(audit('command-create').filter((d) => d.reason === 'new-record')).toMatchObject([{ command: 'tokens.apply' }]);
     expect(s.built.db.prepare(`SELECT actor_type, actor FROM audit_log WHERE action = 'command-create' ORDER BY id DESC LIMIT 1`).get()).toEqual({ actor_type: 'system', actor: 'system' });
@@ -199,6 +201,7 @@ describe('tokens', () => {
     expect(() => T().issue(ACTOR, acc, prx, { kind: 'client', label: 'x' })).toThrow(expect.objectContaining({ status: 409, code: 'proxy_ahead' }));
     client.commands!.allow = ['tokens.apply', 'tokens.apply.admin'];
     await until(() => client.tokensRevision === 15, 5000, 'taken once allowed');
+    await until(() => T().list(acc, prx).appliedRevision === 15, 5000, 'the result confirmed');
     expect(T().list(acc, prx)).toMatchObject({ ahead: null, revision: 15, appliedRevision: 15 });
     expect(audit('command-create').filter((d) => d.reason === 'new-record')).toHaveLength(1);
     expect(audit('command-create').filter((d) => d.reason === 'restore-confirmed')).toHaveLength(0);
