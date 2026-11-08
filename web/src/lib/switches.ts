@@ -75,3 +75,11 @@ export function flowLine(f: Flow | null | undefined, now: number): string {
   const what = f.op === 'cycle' ? (f.force ? 'forced power-cycle' : 'power-cycle') : 'check';
   return `Last ${what} ${ago(f.requestedAt, now)}: ${flowText(f)}`;
 }
+
+// The add-switch form's Operating proxy: never a silent default (a cluster proxy runs no physical switch). Proxies that
+// run in the cluster go last; the one proxy that doesn't is preset when there is exactly one, else the person chooses.
+export function operatingProxies<P extends { id: string; runsOn?: string }>(proxies: P[]): { list: P[]; preset: string } {
+  const local = proxies.filter((p) => p.runsOn !== 'cluster');
+  const list = [...local, ...proxies.filter((p) => p.runsOn === 'cluster')];
+  return { list, preset: local.length === 1 ? local[0].id : '' };
+}

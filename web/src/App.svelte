@@ -14,11 +14,14 @@
   import Backup from './pages/Backup.svelte';
   import Diagnostics from './pages/Diagnostics.svelte';
   import { moving, watchMoves } from './lib/activeMoves.svelte';
+  import { watchBuild } from './lib/buildCheck';
 
   let me = $state<{ email: string; expiresAt: number } | null>(null);
   let checked = $state(false);
   let route = $state<Route>(parse(location.hash));
 
+  // A newer build on the server (finding 11): say so and offer Reload; never reload by itself.
+  let newBuild = $state(false);
   setUnauthorized(() => (me = null));
   // The moves under way (the menu's marker), once signed in.
   $effect(() => { if (me) return watchMoves(); });
@@ -26,7 +29,8 @@
     api('GET', '/me').then((m) => (me = m)).catch(() => (me = null)).finally(() => (checked = true));
     const on = () => (route = parse(location.hash));
     addEventListener('hashchange', on);
-    return () => removeEventListener('hashchange', on);
+    const stopBuild = watchBuild(typeof __BUILD_ID__ === 'string' ? __BUILD_ID__ : '', () => (newBuild = true));
+    return () => { removeEventListener('hashchange', on); stopBuild(); };
   });
 
   async function signOut() {
@@ -35,6 +39,12 @@
   }
 </script>
 
+{#if newBuild}
+  <div class="new-build" role="status" data-testid="new-build">
+    <span>A new version of cams-admin is available.</span>
+    <button class="btn" data-testid="new-build-reload" onclick={() => location.reload()}>Reload</button>
+  </div>
+{/if}
 {#if !checked}
   <p class="muted pad">Loading…</p>
 {:else if !me}
@@ -71,6 +81,7 @@
 
 <style>
   .pad { padding: 16px; }
+  .new-build { display: flex; gap: 12px; align-items: center; justify-content: center; flex-wrap: wrap; padding: 8px 16px; background: var(--accent); color: var(--accent-ink); }
   .top { display: flex; gap: 16px; align-items: center; padding: 10px 16px; background: var(--chrome); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
   .brand { font-weight: 700; text-decoration: none; background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
   nav a { text-decoration: none; color: var(--muted); padding: 2px 6px; border-radius: 6px; }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { codeText } from './api';
-import { flowDone, flowText, forceCycleText, lastText, passwordHint, poll, powerLine, powerManaged, removeText, chainedText, trunkText } from './switches';
+import { flowDone, flowText, forceCycleText, lastText, passwordHint, poll, powerLine, powerManaged, removeText, chainedText, trunkText, operatingProxies } from './switches';
 
 const NOW = 1_000_000_000;
 
@@ -122,5 +122,15 @@ describe('chained switches (a configuration issue)', () => {
 describe('trunk_port refusal', () => {
   it('has its own text', () => {
     expect(codeText('trunk_port')).toBe('That port leads to another switch (a configuration issue): cams-admin does not power-cycle it.');
+  });
+});
+
+describe('the add-switch Operating proxy (no silent default)', () => {
+  const px = (id: string, runsOn: string) => ({ id, name: id, runsOn });
+  it('cluster proxies last; the only non-cluster proxy is the default, else none', () => {
+    expect(operatingProxies([px('cam2', 'cluster'), px('een', 'local-host')])).toEqual({ list: [px('een', 'local-host'), px('cam2', 'cluster')], preset: 'een' });
+    expect(operatingProxies([px('cam2', 'cluster'), px('een', 'local-host'), px('pi', 'local-host')])).toEqual({ list: [px('een', 'local-host'), px('pi', 'local-host'), px('cam2', 'cluster')], preset: '' });
+    expect(operatingProxies([px('cam2', 'cluster')])).toEqual({ list: [px('cam2', 'cluster')], preset: '' });
+    expect(operatingProxies([])).toEqual({ list: [], preset: '' });
   });
 });

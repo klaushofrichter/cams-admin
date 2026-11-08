@@ -10,7 +10,9 @@ import type { CameraOnboarding } from './onboarding';
 
 // nameSource (camera name sync, 2026-11-06): 'camera' when the proxy read the name from the camera, 'config' when it shows its config's initial name.
 // address: the camera's address as its proxy reaches it (summary camera.address; the camera's host where the registry has none).
-export interface ReportedCamera { ref: string; online: boolean; name?: string; nameSource?: 'camera' | 'config'; model?: string | null; address?: string }
+// protocol / tlsName (finding 12b): from the summary's per-camera cert (cam-proxy: an object for an https camera, null for http;
+// none in a truncated summary): https with the cert's servername as the TLS name, or http.
+export interface ReportedCamera { ref: string; online: boolean; name?: string; nameSource?: 'camera' | 'config'; model?: string | null; address?: string; protocol?: 'https' | 'http'; tlsName?: string }
 export interface CommandsInfo { enabled: boolean; paused: boolean; pauseReason: string | null; allow: string[]; seenWindow: number }
 export interface TokensInfo { revision: number; client: number; admin: number; blocked: string[] }
 export interface Reported {
@@ -92,4 +94,11 @@ export function deriveCommands(rep: Reported | null | undefined): CommandsPolicy
   if (!rep.commands.enabled) return 'off';
   if (rep.commands.paused) return 'paused';
   return rep.commands.allow.length === 0 ? 'none-allowed' : 'allowed';
+}
+
+// What Add camera takes from the proxy's report of a camera when the request leaves it out (finding 12b): host, protocol
+// and TLS name. Only fields the report has; given values (also null) are left alone by the caller.
+export function reportedConnection(cam: ReportedCamera | undefined): { host?: string; protocol?: 'https' | 'http'; tlsServername?: string } {
+  if (!cam) return {};
+  return { ...(cam.address ? { host: cam.address } : {}), ...(cam.protocol ? { protocol: cam.protocol } : {}), ...(cam.protocol === 'https' && cam.tlsName ? { tlsServername: cam.tlsName } : {}) };
 }

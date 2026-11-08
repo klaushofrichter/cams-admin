@@ -135,3 +135,27 @@ test('backup now shows its result', async ({ page }) => {
   await expect(page.getByTestId('backup-result')).toContainText('Snapshot: cams-admin/dev/snapshots/manual-');
   await expect(page.getByTestId('backup-result')).toContainText('Litestream is not configured');
 });
+
+test('the enrollment code lifetime the person picks is what the server stores and the audit says (finding 10)', async ({ page }, info) => {
+  const name = uniq(info, 'life');
+  const acc = await api(page, 'POST', '/accounts', { name, displayName: 'Life' });
+  const px = await api(page, 'POST', `/accounts/${acc.id}/proxies`, { name: 'p1', displayName: 'P1', runsOn: 'local-host' });
+  await page.goto(`/#/accounts/${acc.id}/proxies/${px.id}`);
+  const audited = async () => {
+    const a = await api(page, 'GET', `/audit?account=${acc.id}&action=enrollment-code-create&limit=1`);
+    return a.items[0].detail.lifetimeH;
+  };
+  for (const [label, h] of [['1 h', 1], ['7 d', 168], ['24 h', 24]] as const) {
+    await page.getByTestId('code-lifetime').selectOption({ label });
+    const t0 = Date.now();
+    await page.getByTestId('code-create').click();
+    await expect(page.getByTestId('code-value')).toBeVisible();
+    expect(await audited()).toBe(h);
+    const st = await api(page, 'GET', `/accounts/${acc.id}/proxies/${px.id}/status`);
+    expect(Math.abs(st.enrollment.expiresAt - (t0 + h * 3600_000))).toBeLessThan(60_000);
+  }
+  // A value set without a change event (a script, some automation) is still the one sent.
+  await page.getByTestId('code-lifetime').evaluate((el: HTMLSelectElement) => { el.value = '1'; });
+  await page.getByTestId('code-create').click();
+  await expect.poll(audited).toBe(1);
+});
