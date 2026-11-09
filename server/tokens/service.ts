@@ -366,7 +366,9 @@ export class Tokens {
 
   // A heartbeat's tokens.revision confirms a set whose done was lost — only a
   // revision a tokens.apply of ours actually carried to the proxy (after a
-  // restore the proxy's revision n may be another set than our n).
+  // restore the proxy's revision n may be another set than our n). Never while
+  // the proxy is ahead, nor for an apply the proxy answered stale (its n is
+  // another set; after a restart the in-memory guard is gone, the answer is not).
   onHeartbeat(proxyId: string, t: { revision: number } | null | undefined): void {
     if (!t || !Number.isSafeInteger(t.revision)) return;
     const st = this.state(proxyId);
@@ -379,8 +381,9 @@ export class Tokens {
       return;
     }
     if (t.revision < st.revision) return this.resync(proxyId, t.revision);
-    if (t.revision <= st.appliedRevision) return;
-    const sent = this.q(`SELECT 1 FROM commands WHERE proxy_id = ? AND command = 'tokens.apply' AND attempts > 0 AND json_extract(args, '$.revision') = ? AND state NOT IN ('refused','failed')`).get(proxyId, t.revision);
+    if (t.revision <= st.appliedRevision || this.ahead.has(proxyId)) return;
+    const sent = this.q(`SELECT 1 FROM commands WHERE proxy_id = ? AND command = 'tokens.apply' AND attempts > 0 AND json_extract(args, '$.revision') = ?
+      AND state NOT IN ('refused','failed') AND NOT (state = 'done' AND COALESCE(json_extract(result, '$.body.result.stale'), 0) = 1)`).get(proxyId, t.revision);
     if (sent) this.confirm(proxyId, t.revision);
   }
 
