@@ -4,7 +4,7 @@
   // Copy and the QR window, kept in this component's state, and dropped on close.
   import { onMount } from 'svelte';
   import { api, errorText } from '../lib/api';
-  import { live } from '../lib/live';
+  import { coalesced, live } from '../lib/live';
   import { when } from '../lib/format';
   import { ADMIN_WARNING, DEFAULT_VALIDITY_DAYS, ROLES, VALIDITY, linkHost, qrPath, roleClass, stateClass, viewerLabel, type ViewerLink } from '../lib/viewerTokens';
   import Ago from './Ago.svelte';
@@ -29,7 +29,9 @@
   }
   onMount(() => {
     load();
-    return live({ registry: () => load() });
+    // Only token and account changes concern this list (any other registry event is one per command change): coalesced.
+    const soon = coalesced(load, 1000);
+    return live({ registry: (r) => { if (r.type === 'viewer-token' || r.type === 'account') soon(); } });
   });
 
   // --- add ------------------------------------------------------------------------------
