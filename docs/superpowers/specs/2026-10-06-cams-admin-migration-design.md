@@ -306,7 +306,8 @@ one active), `cams_enrollment_codes` (as `enrollment_codes`),
 serves; M8), `cams_instance_routes (instance_id, proxy_id, url)` (a
 per-instance proxy URL, §9.6), and `cams_instance_status` (last pull, last
 applied revision, held changes, version; in memory with the P1 write
-budget).
+budget). *Later change (#58): the last report is also stored, written only
+when its content changes, so it survives a restart.*
 
 **`config_revision`** (one row per account): an integer bumped by every
 registry write that changes what cams sees (accounts, users, proxies,
@@ -977,7 +978,8 @@ the old layout again (rollback).
   (last pull, applied revision, held changes, diverged).
 - The contract additions (§7.1), vectors, strict fixtures.
 - P1's write budget (`test/write-budget.test.ts`) extended: commands and
-  token rows are meaningful writes; cams pulls and reports stay in memory.
+  token rows are meaningful writes; cams pulls and reports stay in memory
+  (*later, #58: a report is stored when its content changes*).
 
 ### 12.2 cam-proxy
 
