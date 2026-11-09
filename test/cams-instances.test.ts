@@ -105,6 +105,21 @@ describe('cams instances (P4)', () => {
     expect(auditActions().filter((a) => a === 'route-update')).toHaveLength(4);
   });
 
+  it('an account no longer served takes its routes with it (audited); a re-serve starts default-deny', () => {
+    const i = inst.create(ACTOR, { name: 'both', displayName: 'Both', accounts: [home.id, beta.id] });
+    inst.setRoute(ACTOR, i.id, piProxy.id, { url: null, hidden: false });
+    inst.setRoute(ACTOR, i.id, clusterProxy.id, { url: null, hidden: true });
+    inst.setRoute(ACTOR, i.id, otherAccountProxy.id, { url: null, hidden: false });
+    inst.update(ACTOR, i.id, { accounts: [beta.id], version: inst.get(i.id).version });
+    expect(inst.routes(i.id).map((x) => x.proxyId)).toEqual([otherAccountProxy.id]);
+    const pruned = (r.db.prepare(`SELECT detail FROM audit_log WHERE action = 'route-update' AND detail LIKE '%account-not-served%' ORDER BY id`).all() as { detail: string }[]).map((x) => JSON.parse(x.detail));
+    expect(pruned.map((d) => d.proxyId).sort()).toEqual([piProxy.id, clusterProxy.id].sort());
+    expect(pruned[0]).toMatchObject({ removed: true, reason: 'account-not-served' });
+    // Served again: no route comes back by itself.
+    inst.update(ACTOR, i.id, { accounts: [beta.id, home.id], version: inst.get(i.id).version });
+    expect(inst.routes(i.id).map((x) => x.proxyId)).toEqual([otherAccountProxy.id]);
+  });
+
   it('codes: shown once (CAC1-…), hash stored, a new code cancels the live one, commands name the cluster and the Pi forms', () => {
     const i = make();
     const c = inst.createCode(ACTOR, i.id, 24);
