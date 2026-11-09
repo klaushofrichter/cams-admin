@@ -156,6 +156,19 @@ describe('switch lifecycle API', () => {
     expect(await get(sw.id)).toMatchObject({ host: '192.168.1.99', offSeconds: 30, sn: 'GPS208X', last: { op: 'update', outcome: 'ok' } });
   });
 
+  it('update: fewer ports than a mapped camera\'s port → 409 ports_in_use naming it, nothing changes (#166)', async () => {
+    const p = await proxy();
+    const sw = await activate(p, 'GPS208X');
+    const c1 = s.built.registry.createCamera(ACTOR, p.acc, { camsId: 'c1', name: 'c1', kind: 'camera', host: 'from-proxy' });
+    s.built.switches.store.setPower(c1.id, { kind: 'poe', switchId: sw.id, port: 6, watts: 4 } as CameraPower, ACTOR, 'sysadmin', 't');
+    const r = await call('PATCH', `/switches/${sw.id}`, { ports: 4 });
+    expect(r.status).toBe(409);
+    expect(r.body).toMatchObject({ error: 'ports_in_use', field: 'ports' });
+    expect(JSON.stringify(r.body)).toContain('c1 is on port 6');
+    expect(await get(sw.id)).toMatchObject({ ports: 8 });
+    expect((await call('PATCH', `/switches/${sw.id}`, { ports: 6 })).status).toBe(200);
+  });
+
   it('update: a name taken now → 409 duplicate_name before any command; taken while the test runs → save_failed, nothing changes', async () => {
     const p = await proxy();
     const sw = await activate(p, 'GPS208X');
@@ -265,6 +278,16 @@ describe('switch lifecycle API', () => {
     for (const c of [c1, c2, c3]) expect(reg.getCamera(p.acc, c.id).power).toEqual({ kind: 'unknown' });
     expect(audits('switch-delete').map((x) => x.outcome)).toEqual(['failed', 'ok']);
     expect(audits('switch-delete')[0]).toMatchObject({ step: 'poeOn', port: 5, code: 'switch_unreachable' });
+  });
+
+  it('delete: a failed switch.forget is audited (the operator keeps the password) and the record still goes (#166)', async () => {
+    const p = await proxy();
+    const sw = await activate(p);
+    p.client.switchResults.set('switch.forget', { status: 'failed', code: 'internal' });
+    expect((await call('DELETE', `/switches/${sw.id}`)).status).toBe(202);
+    await until(async () => (await call('GET', `/switches/${sw.id}`)).status === 404, 5000, 'deleted');
+    expect(audits('switch-delete').map((x) => x.outcome)).toEqual(['failed', 'ok']);
+    expect(audits('switch-delete')[0]).toMatchObject({ step: 'forget', proxyId: p.prx, state: 'failed', code: 'internal' });
   });
 
   it('read: the live port table with the mapped cameras per port', async () => {

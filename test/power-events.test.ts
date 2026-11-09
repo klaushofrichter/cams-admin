@@ -122,6 +122,19 @@ describe('power-cycle requests from proxies', () => {
     expect(results(p)[1]).toEqual({ v: 1, camera: other.proxyCameraId, requestId: 'rq-u', ok: false, reason: 'what powers the camera is unknown: verify or search first' });
   });
 
+  it('a request refused at once (power unknown) does not start the 60 s gap: the next one, once the power is known, runs (#166)', async () => {
+    const p = await proxy();
+    const cam = await camera(p);
+    ask(p, cam.proxyCameraId, 'rq-u');
+    await until(() => results(p).length === 1, 5000, 'refused');
+    expect(results(p)[0]).toMatchObject({ requestId: 'rq-u', ok: false });
+    const a = await sw(p, `Sw${n++}`);
+    setPower(cam.id, { kind: 'poe', switchId: a.id, port: 3, watts: 4 });
+    ask(p, cam.proxyCameraId, 'rq-k');
+    await until(() => results(p).length === 2, 5000, 'second');
+    expect(results(p)[1]).toMatchObject({ requestId: 'rq-k', ok: true });
+  });
+
   it('a second request while a cycle is open (from any caller) → "a power-cycle is already running"; within 60 s → "too soon"', async () => {
     const p = await proxy();
     const op = await proxy();
