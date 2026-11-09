@@ -72,17 +72,21 @@ function refuseToken(audit: Audit, res: Response): void {
   res.status(401).json({ error: 'unauthorized' });
 }
 
+// The audit actor of a request made with an operations token: its hash prefix and its name (#53), e.g.
+// `ops-token:1a2b3c4d (mac script)`. Code tells a token's actor by the `ops-token:` prefix only.
+export const opsActor = (t: { hashPrefix: string; name: string }): string => `ops-token:${t.hashPrefix} (${t.name})`;
+
 // A valid token outside its scopes: 403, one throttled record per token. The
 // method and the scope needed only, never the path's ids or the body.
-function refuseScope(audit: Audit, res: Response, t: { id: string; hashPrefix: string }, method: string, scope: OpsScope | null): void {
-  audit.throttled(`ops-scope-refused:${t.id}`, { actorType: 'system', actor: `ops-token:${t.hashPrefix}`, action: 'ops-scope-refused', outcome: 'refused', detail: { method, scope } });
+function refuseScope(audit: Audit, res: Response, t: { id: string; hashPrefix: string; name: string }, method: string, scope: OpsScope | null): void {
+  audit.throttled(`ops-scope-refused:${t.id}`, { actorType: 'system', actor: opsActor(t), action: 'ops-scope-refused', outcome: 'refused', detail: { method, scope } });
   res.status(403).json({ error: 'scope' });
 }
 
 // The API's auth: a sysadmin session (with the CSRF check and its write
 // limit), or an operations token on a write route its scopes cover. With a
 // Bearer header the token decides; a session cookie is ignored. Sets
-// res.locals.actor (the e-mail, or ops-token:<8hex>).
+// res.locals.actor (the e-mail, or ops-token:<8hex> (<name>)).
 export function requireAuth(d: AuthDeps): RequestHandler[] {
   // 60 writes a minute per token (bearer only: no CSRF check to pass).
   const tokenWrites = new Buckets({ capacity: 60, windowMs: 60_000 });
@@ -102,7 +106,7 @@ export function requireAuth(d: AuthDeps): RequestHandler[] {
     if (!scope || !t.scopes.includes(scope) || !opsBodyAllowed(req.method, req.path, req.body)) return refuseScope(d.audit, res, t, req.method, scope);
     const b = tokenWrites.take(`ops:${t.id}`, d.clock.now());
     if (!b.ok) return void res.status(429).set('Retry-After', String(b.retryAfterS)).json({ error: 'rate_limited', retryAfterS: b.retryAfterS });
-    res.locals.actor = `ops-token:${t.hashPrefix}`;
+    res.locals.actor = opsActor(t);
     next();
   };
   // The session's own checks; a token request passed its own above.

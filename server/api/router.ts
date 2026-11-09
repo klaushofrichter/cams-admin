@@ -83,7 +83,7 @@ export function apiRouter(d: ApiDeps): express.Router {
   r.use('/accounts/:accountId/import', sessionBeforeBody(d), express.json({ limit: 1024 * 1024 }));
   r.use(express.json({ limit: 64 * 1024 }));
   r.use(...requireAuth(d));
-  // The e-mail of the session, or ops-token:<8hex> (set by requireAuth).
+  // The e-mail of the session, or ops-token:<8hex> (<name>) (set by requireAuth).
   const actor = (res: Response): string => {
     if (typeof res.locals.actor !== 'string') throw new Error('no actor');
     return res.locals.actor;

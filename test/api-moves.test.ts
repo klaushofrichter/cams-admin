@@ -156,7 +156,7 @@ describe('moves API', () => {
     expect(a.moves.store.get(m.mv)).toBeNull();
     const au = a.db.prepare(`SELECT actor_type, actor FROM audit_log WHERE action = 'move-delete' AND json_extract(detail, '$.moveId') = ?`).get(m.mv) as { actor_type: string; actor: string };
     expect(au.actor_type).toBe('sysadmin');
-    expect(au.actor).toMatch(/^ops-token:[0-9a-f]{8}$/);
+    expect(au.actor).toMatch(/^ops-token:[0-9a-f]{8} \(.+\)$/);
   });
 
   it('cancel needs the typed confirm', async () => {

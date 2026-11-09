@@ -79,7 +79,7 @@ describe('viewer token routes', () => {
     expect(r.status).toBe(200);
     expect(r.body.state).toBe('revoked');
     const rec = a.audit.list({ action: 'viewer-token-revoke' }).items.find((x) => x.targetId === c.item.id)!;
-    expect(rec.actor).toMatch(/^ops-token:[0-9a-f]{8}$/);
+    expect(rec.actor).toMatch(/^ops-token:[0-9a-f]{8} \(.+\)$/);
   });
 
   it('with VIEWER_TOKEN_KEY_FILE naming a missing file: the server runs, the list says so; create and copy answer 503', async () => {
