@@ -244,7 +244,7 @@ export function apiRouter(d: ApiDeps): express.Router {
     return keyView(k);
   }));
   // The proxy's reported site-CA pins into the registry (a change is held in each cams viewer until confirmed).
-  r.post(`${proxyBase}/pins/from-report`, h((req, res) => d.pins.take(actor(res), p(req, 'accountId'), p(req, 'proxyId'))));
+  r.post(`${proxyBase}/pins/from-report`, h((req, res) => d.pins.take(actor(res), p(req, 'accountId'), p(req, 'proxyId'), req.body)));
   r.post(`${proxyBase}/block`, h((req, res) => {
     const px = d.registry.blockProxy(actor(res), p(req, 'accountId'), p(req, 'proxyId'));
     d.hub.closeProxy(px.id, 4403);

@@ -21,4 +21,6 @@ then empties it on `main`.
 - Moves: the move detail shows the request's bounds as "Auto-approve bounds: …" (it said "Auto-approved within: …" also when the source then waited for a person).
 - Moves: a start refused by the precheck and made with an operations token is audited once per token per 10 minutes (the rest are counted), so a retrying script does not fill the audit log; a person's refusals are each still recorded.
 - cams instances: the stored last report keeps only the fields the contract names.
+### Added
+- Proxy pins API ("Use the reported pins"): `POST …/pins/from-report` takes an optional `{"keepPrevious": true}`, which keeps the current pin as the second one after a CA rotation, and refuses a report older than the offline limit (409 `report_stale`).
 

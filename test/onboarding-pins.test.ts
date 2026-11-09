@@ -82,6 +82,32 @@ describe('reported pins', () => {
     expect(code(() => a.pins.take('admin@example.com', acc, p))).toEqual([409, 'no_reported_pins']);
   });
 
+  it('#126: keepPrevious keeps the current first pin second (a CA rotation: old and new both pinned)', () => {
+    const p = mkProxy('enrolled', [FP1, FP2]);
+    hb(p, [FP3]);
+    expect(a.pins.take('admin@example.com', acc, p, { keepPrevious: true })).toMatchObject({ changed: true, proxy: { caFingerprints: [FP3, FP1] } });
+    // Already first: nothing more to keep; two reported: no room for a third.
+    hb(p, [FP3]);
+    expect(a.pins.take('admin@example.com', acc, p, { keepPrevious: true })).toMatchObject({ changed: false, proxy: { caFingerprints: [FP3, FP1] } });
+    hb(p, [FP2, FP1]);
+    expect(a.pins.take('admin@example.com', acc, p, { keepPrevious: true }).proxy.caFingerprints).toEqual([FP2, FP1]);
+    // Without it (or false), the reported ones only.
+    hb(p, [FP3]);
+    expect(a.pins.take('admin@example.com', acc, p, { keepPrevious: false }).proxy.caFingerprints).toEqual([FP3]);
+  });
+
+  it('#126: a bad body is 400; a report older than the offline limit is 409 report_stale', () => {
+    const p = mkProxy('enrolled', [FP1]);
+    hb(p, [FP3]);
+    expect(code(() => a.pins.take('admin@example.com', acc, p, { keepPrevious: 'yes' }))).toEqual([400, 'invalid']);
+    expect(code(() => a.pins.take('admin@example.com', acc, p, { other: 1 }))).toEqual([400, 'invalid']);
+    const q = mkProxy('enrolled', [FP1]);
+    hb(q, [FP3]);
+    (a.status as unknown as { mem: Map<string, { lastHeartbeatAt: number }> }).mem.get(q)!.lastHeartbeatAt = Date.now() - 60 * 60_000; // an hour ago (the offline limit is 90 s)
+    expect(code(() => a.pins.take('admin@example.com', acc, q))).toEqual([409, 'report_stale']);
+    expect(pins(q)).toEqual([FP1]);
+  });
+
   it('take() without a report is 409 no_reported_pins; another account is 404', () => {
     const p = mkProxy();
     expect(code(() => a.pins.take('admin@example.com', acc, p))).toEqual([409, 'no_reported_pins']);

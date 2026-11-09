@@ -175,7 +175,7 @@ actor `ops-token:<8 hex> (<name>)`: the token's hash prefix and its name (before
 | `registry` | `PATCH /accounts/:accountId/proxies/:proxyId` |
 | `registry` | `PATCH /accounts/:accountId/cameras/:cameraId` |
 | `registry` | `PATCH /cams-instances/:instanceId` (only `name`, `displayName`, `baseUrl`, `notes`, `version`) |
-| `registry` | `POST /accounts/:accountId/proxies/:proxyId/pins/from-report` |
+| `registry` | `POST /accounts/:accountId/proxies/:proxyId/pins/from-report` (body only `keepPrevious`) |
 | `onboard` | `POST /accounts/:accountId/proxies/:proxyId/adopt` |
 | `actions` | `POST /accounts/:accountId/proxies/:proxyId/actions` |
 | `actions` | `POST /accounts/:accountId/proxies/:proxyId/cameras/:camera/name` |

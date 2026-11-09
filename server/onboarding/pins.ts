@@ -37,10 +37,21 @@ export class ReportedPins {
     }
   }
 
-  take(actor: string, accountId: string, proxyId: string): { proxy: Proxy; changed: boolean } {
+  // body (#126, optional): { keepPrevious?: boolean }: when the proxy reports one pin, keep the first current pin that
+  // differs from it as the second one (a CA rotation: cams viewers that still meet the old CA keep working).
+  take(actor: string, accountId: string, proxyId: string, body: unknown = {}): { proxy: Proxy; changed: boolean } {
     const p = this.d.registry.getProxy(accountId, proxyId); // 404 for another account's proxy
-    const fps = this.reported(proxyId);
-    if (!fps) throw new ApiError(409, 'no_reported_pins');
+    const b = body ?? {};
+    if (typeof b !== 'object' || Array.isArray(b)) throw new ApiError(400, 'invalid', 'body');
+    for (const k of Object.keys(b)) if (k !== 'keepPrevious') throw new ApiError(400, 'invalid', k);
+    const keep = (b as { keepPrevious?: unknown }).keepPrevious;
+    if (keep !== undefined && typeof keep !== 'boolean') throw new ApiError(400, 'invalid', 'keepPrevious');
+    const reported = this.reported(proxyId);
+    if (!reported) throw new ApiError(409, 'no_reported_pins');
+    // A report older than the offline limit may predate a CA rotation: never taken (#126).
+    if (!this.d.status.reportFresh(proxyId)) throw new ApiError(409, 'report_stale', undefined, 'the proxy has not reported recently: wait until it is online again');
+    const prev = p.caFingerprints.find((f) => f !== reported[0]);
+    const fps = keep === true && reported.length === 1 && prev !== undefined ? [reported[0], prev] : reported;
     if (JSON.stringify(fps) === JSON.stringify(p.caFingerprints)) return { proxy: p, changed: false };
     const proxy = this.d.registry.setProxyPins(actor, 'sysadmin', accountId, proxyId, fps, false);
     this.d.live.publishRegistry('proxy', proxyId);
