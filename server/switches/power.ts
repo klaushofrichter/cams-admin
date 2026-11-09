@@ -103,6 +103,9 @@ export class PowerService {
   private addresses = new Map<string, Map<string, string>>();
   // cameraId → when a proxy's request last started a cycle attempt (the 60 s gap).
   private lastRequest = new Map<string, number>();
+  // A running cycle's proxy request, also in memory: a camera deleted during its cycle takes its camera_power_cycles
+  // row (and the stored request) with it, and the request must still be answered (#166).
+  private cycleRequest = new Map<string, CycleRequest>();
 
   constructor(private d: PowerDeps) {
     d.commands.onFinal((r) => {
@@ -239,6 +242,7 @@ export class PowerService {
     try {
       const id = this.sendCycle(who, c, sw, p.port, force, false, flow);
       this.saveCycle(c.id, flow, id, req);
+      if (req) this.cycleRequest.set(c.id, req);
       // A proxy's request has its own record (requestFromProxy); a forced cycle camera-power-cycle-forced below.
       if (!force && !who.proxy) this.auditCamera(who, c, 'camera-power-cycle', 'ok', { step: 'start', switchId: sw.id, switchName: sw.name, port: p.port, cmdId: id, force: false });
       if (force) {
@@ -403,6 +407,9 @@ export class PowerService {
   private sendCycle(who: Who, c: Camera, sw: Switch, port: number, force: boolean, retried: boolean, flow: PowerFlow): string {
     const host = force ? null : this.hostOf(c);
     return this.send(who, c.accountId, sw.proxyId, 'switch.cycle', { v: 1, switch: ref(sw), port, host, force, camera: c.id }, flow, (r) => {
+      // The camera was deleted meanwhile: the outcome is still answered and audited, nothing more is looked up.
+      if (!this.exists(c.id)) return r.state === 'done' ? this.finishCycle(who, c, flow, 'ok', null, `power-cycled on ${sw.name} port ${port}`)
+        : this.finishCycle(who, c, flow, 'failed', r.outcomeCode ?? r.state, CYCLE_TEXT[r.outcomeCode ?? r.state] ?? (r.outcomeCode ?? r.state));
       if (r.state === 'done') {
         const res = r.result ?? {};
         const now = this.camera(c.id).power;
@@ -439,7 +446,8 @@ export class PowerService {
   private finishCycle(who: Who, c: Camera, flow: PowerFlow, state: 'ok' | 'failed', code: string | null, message: string): void {
     this.finish(flow, state, code, state === 'ok' ? null : message);
     // The open request is taken (cleared) before its answer goes out: at most once, also across a crash.
-    const req = this.saveCycle(c.id, flow, null);
+    const req = (this.exists(c.id) ? this.saveCycle(c.id, flow, null) : null) ?? this.cycleRequest.get(c.id) ?? null;
+    this.cycleRequest.delete(c.id);
     this.auditCamera(who, c, 'camera-power-cycle', state, { step: 'final', force: !!flow.force, code, reason: state === 'ok' ? null : clamp(message), cmdIds: [...flow.commandIds], ...(req ? { requestId: req.requestId } : {}) });
     this.own(who, c, 'camera.power.cycled', { v: 1, camera: c.proxyCameraId, ok: state === 'ok', message: clamp(message) });
     if (req) this.answer(c.accountId, req, state === 'ok', message);
@@ -497,6 +505,10 @@ export class PowerService {
     if (r?.state === 'done') return this.finishCycle(SYSTEM, c, flow, 'ok', null, `power-cycled on ${sw?.name ?? 'the switch'} port ${String(args.port)}`);
     const code = r ? r.outcomeCode ?? r.state : 'restart';
     this.finishCycle(SYSTEM, c, flow, 'failed', code, r ? CYCLE_TEXT[code] ?? code : 'cams-admin restarted during the power-cycle');
+  }
+
+  private exists(cameraId: string): boolean {
+    return !!this.d.db.prepare('SELECT 1 FROM cameras WHERE id = ?').get(cameraId);
   }
 
   private commandRow(id: string): CommandRow | null {
