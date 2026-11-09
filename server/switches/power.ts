@@ -94,6 +94,7 @@ const CYCLE_TEXT: Record<string, string> = {
   no_power: 'the port has PoE off or draws 0 W',
   switch_busy: 'the switch is busy',
   poe_may_be_off: 'PoE may still be off on the port: check the switch',
+  cut_on_again: 'PoE was cut and is on again, but the cycle failed: the camera is rebooting',
   password_unset: 'switch password not set on the operator (or set for another address: set it again)',
   switch_auth: 'the switch refused the password',
   switch_unreachable: 'the switch is not reachable from the operator',
@@ -104,6 +105,9 @@ const CYCLE_TEXT: Record<string, string> = {
 // The configuration problem in plain words (audit, UI).
 export const chainedText = (p: SwitchProblem): string =>
   `Configuration issue: another switch is chained on port ${p.port} (${p.cameras} cameras behind it). Connect each PoE switch directly to its proxy's network instead of through another PoE switch.`;
+// A failed switch.cycle whose PoE was cut and is on again (cam-proxy #364 m6): only cut_on_again says so. poe_may_be_off
+// (cut, maybe still off) and every other code (refused before the cut, or not known) do not.
+export const poeCutAfterFailure = (code: string | null): boolean => code === 'cut_on_again';
 const errCode = (e: unknown) => (e instanceof ApiError ? e.code : e instanceof FieldError ? 'invalid' : 'error');
 const isObj = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x);
 
@@ -475,7 +479,9 @@ export class PowerService {
     const req = (this.exists(c.id) ? this.saveCycle(c.id, flow, null) : null) ?? this.cycleRequest.get(c.id) ?? null;
     this.cycleRequest.delete(c.id);
     this.auditCamera(who, c, 'camera-power-cycle', state, { step: 'final', force: !!flow.force, code, reason: state === 'ok' ? null : clamp(message), cmdIds: [...flow.commandIds], ...(req ? { requestId: req.requestId } : {}) });
-    this.own(who, c, 'camera.power.cycled', { v: 1, camera: c.proxyCameraId, ok: state === 'ok', message: clamp(message) });
+    // poeCut only to a proxy whose last hello announced power-poe-cut: an older one's closed args check would refuse it.
+    const poeCut = state === 'failed' && poeCutAfterFailure(code) && !!c.proxyId && this.d.status.capabilities(c.proxyId).includes('power-poe-cut');
+    this.own(who, c, 'camera.power.cycled', { v: 1, camera: c.proxyCameraId, ok: state === 'ok', message: clamp(message), ...(poeCut ? { poeCut: true } : {}) });
     if (req) this.answer(c.accountId, req, state === 'ok', message);
   }
 

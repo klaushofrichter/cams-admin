@@ -56,6 +56,7 @@ const REASONS: Record<string, string> = {
   target_failed: 'the target failed',
   offer_expired: 'the offer expired unanswered',
   kind_not_accepted: 'the approved plan has a kind the target did not accept',
+  settings_not_in_plan: 'the approved plan leaves out settings the target asked for',
   end_transfer: 'the transfer was ended early',
   not_registered: 'the camera is not in the registry',
   internal: 'an internal error',
@@ -286,3 +287,18 @@ export function beginOutcomeText(row: { state: string; outcomeCode?: string | nu
   const code = row.outcomeCode ?? row.state;
   return `The source proxy ${row.state === 'refused' ? 'refused' : 'could not start'} the move: ${reasonText(code)}.`;
 }
+
+// The target's settings proposal (cam-proxy #240) for the move detail: what it needs set, its firewall note, and when
+// the settings are set (with the move, after the approval on the source's page). null without a proposal.
+export interface ProposalText { lead: string; settings: string[]; firewall: string | null; when: string }
+export function proposalText(m: { target: { name: string }; source: { name: string }; settingsProposal?: { settings: Record<string, unknown>; firewall: string | null } | null }): ProposalText | null {
+  const p = m.settingsProposal;
+  if (!p || !p.settings || !Object.keys(p.settings).length) return null;
+  return {
+    lead: `${m.target.name} needs these settings to take the camera:`,
+    settings: Object.entries(p.settings).map(([k, v]) => `${k}: ${String(v)}`),
+    firewall: p.firewall ? `Firewall on ${m.target.name}: ${p.firewall}` : null,
+    when: `They are set on ${m.target.name} with the move, once it is approved on ${m.source.name}'s page.`,
+  };
+}
+

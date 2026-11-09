@@ -112,7 +112,7 @@ export function summariseArgs(command: string, args: Record<string, unknown>): R
     case 'camera.remove.preview': return pick(args, ['v', 'camera']);
     case 'camera.remove': return pick(args, ['v', 'camera', 'content', 'archive']);
     case 'proxy.unenroll': return pick(args, ['v']);
-    case 'camera.power.cycled': return { v: args.v, camera: args.camera, ok: args.ok, message: clampValue(args.message) };
+    case 'camera.power.cycled': return { v: args.v, camera: args.camera, ok: args.ok, message: clampValue(args.message), ...('poeCut' in args ? { poeCut: args.poeCut } : {}) };
     case 'camera.power.cycle.result': return { v: args.v, camera: args.camera, requestId: clampValue(args.requestId), ok: args.ok, ...('reason' in args ? { reason: clampValue(args.reason) } : {}) };
   }
   if (command.startsWith('move.')) return sanitize(Object.fromEntries(Object.entries(args).filter(([k]) => !MOVE_SECRET_ARGS.includes(k)))) as Record<string, unknown>;

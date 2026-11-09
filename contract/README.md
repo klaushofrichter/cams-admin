@@ -421,7 +421,7 @@ To the proxy that operates the switch (`SWITCH_COMMANDS`):
 | `switch.read` | `{v, switch}` | `{sn, firmware, ports: PortState[]}` (`sn`, `firmware` string or null) |
 | `switch.locate` | `{v, switch, host}` | `LocateResult & {sn}` |
 | `switch.survey` | `{v, switch, cameras: [{camera: cam_id, host}]}` (1..16) | `{sn, results: (LocateResult & {camera})[]}` |
-| `switch.cycle` | `{v, switch, port, host (or null), force, camera: cam_id}` | `{verified, offAt, onAt, watts}`; failed codes `not_verified`, `no_power`, `switch_busy`, `poe_may_be_off`, `password_unset`, `switch_unknown` |
+| `switch.cycle` | `{v, switch, port, host (or null), force, camera: cam_id}` | `{verified, offAt, onAt, watts}`; failed codes `not_verified`, `no_power`, `switch_busy`, `poe_may_be_off`, `cut_on_again`, `password_unset`, `switch_unknown` |
 | `switch.poeOn` | `{v, switch, port}` | `PortState & {wasOn}` |
 | `switch.forget` | `{v, switchId}` | `{forgot}` |
 
@@ -436,13 +436,15 @@ on the camera; `camera` is the proxy camera id; every result is `{}`):
 - `camera.power.cycling {v, camera, at}`: the operator reports PoE off.
 - `camera.power.cycled {v, camera, ok, message (at most 200), poeCut?}`: PoE on again, or gave up.
   `poeCut` (optional boolean, cam-proxy #364 m6) goes with `ok: false` only: true when
-  PoE was cut and is on again although the cycle failed (for example `not_verified`
-  after the cut, or `poe_may_be_off` once it came back), so the camera is rebooting and
+  PoE was cut and is on again although the cycle failed, so the camera is rebooting and
   its proxy keeps its reboot watch running (the reboot state goes `rebooting` → `back`)
-  instead of ending it as `not-back`. Absent or false: PoE was never cut (refused before
-  the cut) or may still be off. Phased: cams-admin sends `poeCut` only to a proxy whose
-  last hello listed the capability `power-poe-cut` (cam-proxy's closed args check would
-  refuse it otherwise); today it sends none.
+  instead of ending it as `not-back`. cams-admin knows that case only from the
+  operator's `switch.cycle` failure code `cut_on_again` (phased: cam-proxy reports it
+  as `switch_error` until its `codeOf` maps a PoeSwitchError with `poeOff && turnedOn`
+  to `cut_on_again`). Absent: PoE was never cut (refused before the cut), may still be
+  off (`poe_may_be_off`), or it is not known. cams-admin sends `poeCut` only to a proxy
+  whose last hello listed the capability `power-poe-cut` (cam-proxy's closed args check
+  would refuse it otherwise).
 - `camera.power.cycle.result {v, camera, requestId (at most 64), ok, reason? (at most 200)}`: the answer to a request below.
 
 Event kind `camera.power.cycle.request {camera, requestId, askedAt?}` (proxy to
@@ -463,7 +465,9 @@ Fixtures (`$context.feature: 'poe'`): `valid-command-switch-read`,
 `valid-event-camera-power-cycle-request-asked-at`; and
 `valid-command-camera-power-cycled-poe-cut` (`$context.feature: 'power-poe-cut'`:
 the cross-check reports it `pending` until cam-proxy's `src/fleet/command-args.ts`
-names `poeCut`).
+names `poeCut`); `valid-result-switch-cycle-cut-on-again` (`$context.feature:
+'cycle-cut-on-again'`: `pending` until cam-proxy's `src/fleet/switch-commands.ts`
+names `cut_on_again`).
 
 ## Remove a camera, decommission a proxy
 
@@ -668,13 +672,19 @@ Rulings of the camera-move plan that the schemas carry:
   - Approving it: the source's plan carries the proposal's settings in
     `plan.targetSettings` (whatever `space` is; with `space: 'retention'` together with the
     retention proposal's values). `plan.targetSettings` is the existing flat path map:
-    no schema change. The target writes them with the camera.
+    no schema change; cams-admin passes it on unchanged in `move.start` and `move.go`.
+    The target writes them with the camera. cams-admin's approval check: every path of
+    the target's proposal is in `plan.targetSettings` with the same value, else the
+    approval is refused (`move-approve` refused, reason `settings_not_in_plan`, the
+    missing paths) and the move fails with both sides cancelled.
   - Phased: cams-admin relays `settingsProposal` only to a source whose last hello listed
     the capability `move-settings` (an older source's closed `move.answer` check would refuse
-    the whole answer). **Today (phase A) it relays none:** an accept with a proposal ends
-    the offer as the target's refusal, `incompatible`, the detail "the target needs
-    <path> set to <value> first; <firewall>" (audited `move-offer` refused with the
-    proposal's paths, never its values).
+    the whole answer). To an older source an accept with a proposal ends the offer as the
+    target's refusal, `incompatible`, the detail "the target needs <path> set to <value>
+    first; <firewall>" (audited `move-offer` refused with the proposal's paths, never its
+    values), and the target, which accepted and holds the offer, gets
+    `move.cancel {role: 'target', copied: 'delete'}` (asked again until it took it on).
+    The move detail in cams-admin shows a relayed proposal and its firewall note.
   - Fixtures: `valid-result-move-offer-settings-proposal`,
     `valid-event-move-approve-settings`, `valid-command-move-answer-settings-proposal`
     (`$context.feature: 'move-settings'`: `pending` in the cross-check until cam-proxy's

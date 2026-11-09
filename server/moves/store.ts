@@ -102,7 +102,8 @@ export const GIVE_UP_CLOSED = `(${abandonedAnswered('moves.source_proxy_id')} OR
 
 // A failed or cancelled move whose target owes a cancel: its automatic cancel went out (copied_choice set) or it was
 // switched over (a cancel after the switch-over stores no choice). `t`: the moves table's prefix in the query ('', 'm.').
-export const cancelOwed = (t: string) => `${t}phase IN ('failed', 'cancelled') AND (${t}copied_choice IS NOT NULL OR ${t}switched_at IS NOT NULL)`;
+// A rejected move with a copied choice: a refusal the target had accepted (a settings proposal an older source can't take).
+export const cancelOwed = (t: string) => `${t}phase IN ('failed', 'cancelled', 'rejected') AND (${t}copied_choice IS NOT NULL OR ${t}switched_at IS NOT NULL)`;
 // The target took that cancel on (its move.cancel answered done).
 export const targetCancelDone = (t: string) => `EXISTS (SELECT 1 FROM commands c WHERE c.proxy_id = ${t}target_proxy_id AND c.command = 'move.cancel' AND c.state = 'done' AND json_extract(c.args, '$.moveId') = ${t}id)`;
 
