@@ -269,6 +269,9 @@ describe('scoped writes', () => {
     const r = await bearer('post', path, t.token);
     expect(r.status, JSON.stringify(r.body)).toBe(200);
     expect(r.body).toMatchObject({ changed: true, proxy: { caFingerprints: [fp] } });
+    // #126: keepPrevious is a body key the token may send; any other is outside its scope.
+    expect((await bearer('post', path, t.token, { keepPrevious: true })).status).toBe(200);
+    expect((await bearer('post', path, t.token, { other: 1 })).status).toBe(403);
     expect(auditOf('proxy-update').at(-1)!.actor).toBe(t.actor);
   });
 

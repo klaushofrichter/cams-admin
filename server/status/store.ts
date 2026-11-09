@@ -85,6 +85,11 @@ export class StatusStore {
     for (const r of d.db.prepare('SELECT * FROM proxy_status').all() as Row[]) this.mem.set(r.proxy_id as string, { ...toStatus(r), connected: false });
   }
 
+  // Whether the proxy's last heartbeat (and so its reported values) is recent: within the offline limit.
+  reportFresh(proxyId: string): boolean {
+    return heartbeatFresh(this.row(proxyId), this.d.clock.now(), this.d.offlineAfterMs);
+  }
+
   row(proxyId: string): StatusRow | null {
     const r = this.mem.get(proxyId);
     return r ? { ...r } : null;
