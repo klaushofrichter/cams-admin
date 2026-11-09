@@ -53,7 +53,9 @@ describe('diag camera lookup by id', () => {
     expect((await bearer('/diag', token)).body.routes).toContain('/diag/cameras/:cameraId');
   });
 
-  it('unknown id answers 404', async () => {
+  it('unknown id answers 404 from the lookup route (a known id on the same path answers 200)', async () => {
+    const cam = a.registry.listCameras(acc).find((c) => c.camsId === 'porch')!;
+    expect((await bearer(`/diag/cameras/${cam.id}`, token)).status).toBe(200);
     const r = await bearer('/diag/cameras/cam_doesnotexist', token);
     expect(r.status).toBe(404);
     expect(r.body).toEqual({ error: 'not_found' });

@@ -486,6 +486,7 @@ export class Registry {
       const old = this.getCamera(accountId, id);
       // Behind a proxy the camera holds its name (camera name sync design 2026-11-06): a new name is
       // the rename command's, and the record follows the proxy's next report. Nothing else is applied.
+      // The hint (the answer's `message`) is the route that renames it: a script can call it as it is.
       if (f.name !== undefined && f.name !== old.name && old.proxyId && old.proxyCameraId) {
         throw new ApiError(409, 'rename_at_camera', 'name', `POST /api/v1/accounts/${accountId}/proxies/${old.proxyId}/cameras/${old.proxyCameraId}/name`);
       }
