@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { backedOffText, ceilingOf, EFFECT, nameError, renameError, renameOutcome, waitCommand, widens, groupPaths, isRemoteSettable, narrowNote, narrowOk, parseValue, rollbackable, stateLine, valueText, type ConfigView } from './config';
+import { backedOffText, ceilingOf, EFFECT, inheritedOf, nameError, renameError, renameOutcome, waitCommand, widens, groupPaths, isRemoteSettable, narrowNote, narrowOk, parseValue, rollbackable, stateLine, valueText, type ConfigView } from './config';
 
 const view: ConfigView = {
   revision: `sha256:${'a'.repeat(64)}`, schema: 1, cameras: ['cam1'], omittedCameras: [], fetchedAt: 1, cmdId: 'cmd_0123456789ABCDEFGHJK',
@@ -66,6 +66,18 @@ describe('config (Settings UI)', () => {
     expect(narrowNote('analytics.googleVision.dailyCap')).toBe('only lower from cams-admin (spending)');
     expect(narrowNote('cameras.cam1.stills.intervalS')).toBe('only shorter from cams-admin (captures no less often)');
     expect(narrowOk('events.poll.intervalS', 10, 60)).toBe(false);
+    // a camera's unset stills.intervalS counts as the host's (cam-proxy #396)
+    const iv = { paths: { 'stills.intervalS': { v: 30, s: 'default' as const }, 'cameras.cam1.stills.intervalS': { s: 'default' as const } } };
+    expect(inheritedOf(iv, 'cameras.cam1.stills.intervalS')).toBe(30);
+    expect(inheritedOf(iv, 'stills.intervalS')).toBeUndefined();
+    expect(narrowOk('cameras.cam1.stills.intervalS', undefined, 10, undefined, 30)).toBe(true);
+    expect(narrowOk('cameras.cam1.stills.intervalS', undefined, 60, undefined, 30)).toBe(false);
+    expect(narrowOk('cameras.cam1.stills.intervalS', 60, undefined, undefined, 30)).toBe(true);
+    expect(narrowOk('cameras.cam1.stills.intervalS', 10, undefined, undefined, 30)).toBe(false);
+    expect(narrowOk('cameras.cam1.stills.intervalS', undefined, 10)).toBe(false);
+    expect(narrowOk('stills.intervalS', undefined, 10, undefined, 30)).toBe(false);
+    expect(widens({ path: 'stills.intervalS', from: 10, to: 60, sourceFrom: 'override', sourceTo: 'default' })).toBe('restores the local value: captures less often');
+    expect(widens({ path: 'cameras.cam1.stills.intervalS', from: 10, to: undefined, sourceFrom: 'override', sourceTo: 'default' })).toBeNull(); // the host's value: the proxy checked it
     expect(narrowNote('storage.maxPercent')).toBe('storage settings are local only');
     expect(narrowNote('cameras.cam1.storage.sharePercent')).toBe('storage settings are local only');
     expect(narrowNote('sse.pingS')).toBeNull();

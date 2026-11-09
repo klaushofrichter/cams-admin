@@ -97,6 +97,22 @@ describe('the P3 API', () => {
     expect((await call('POST', `${q.base}/config/refresh`, {})).body).toEqual({ error: 'not_allowed_on_proxy' });
   });
 
+  it("#20: a camera's stills interval from unset and its Reset are checked against the host's (cam-proxy #396)", async () => {
+    const p = await proxy();
+    await withView(p.base);
+    // the reference proxy: stills.intervalS 10 (default), cameras.cam1.stills.intervalS unset
+    expect((await call('POST', `${p.base}/config/preview`, { set: { 'cameras.cam1.stills.intervalS': 5 } })).status).toBe(202);
+    expect((await call('POST', `${p.base}/config/preview`, { set: { 'cameras.cam1.stills.intervalS': 10 } })).status).toBe(202);
+    expect((await call('POST', `${p.base}/config/preview`, { set: { 'cameras.cam1.stills.intervalS': 30 } })).body).toEqual({ error: 'widening_local_only', field: 'cameras.cam1.stills.intervalS: a remote change may only shorten the interval; a longer one is a local change' });
+    expect((await call('POST', `${p.base}/config/preview`, { unset: ['cameras.cam1.stills.intervalS'] })).status).toBe(202);
+    expect((await call('POST', `${p.base}/config/preview`, { set: { 'stills.intervalS': 30 } })).body.error).toBe('widening_local_only');
+    // a camera interval shorter than the host's: its Reset would lengthen it
+    p.ref.localEdit({ 'cameras.cam1.stills.intervalS': 5 });
+    await finalOf(p.base, (await call('POST', `${p.base}/config/refresh`, {})).body.commandId);
+    await until(async () => (await call('GET', `${p.base}/config`)).body.view?.paths['cameras.cam1.stills.intervalS']?.v === 5, 5000, 'local edit');
+    expect((await call('POST', `${p.base}/config/preview`, { unset: ['cameras.cam1.stills.intervalS'] })).body.error).toBe('widening_local_only');
+  });
+
   it('actions: GET available; camera-test 202; disruptive needs confirm; rename 202; restart 202 / 400 confirm_required', async () => {
     const p = await proxy();
     const av = (await call('GET', `${p.base}/actions`)).body;

@@ -15,6 +15,9 @@ const UNSET_IS_NO_CAP = new Set(['stills.maxGB', 'previews.maxGB', 'ftp.maxGB'])
 const ZERO_IS_NO_CAP = new Set(['analytics.googleVision.dailyCap', 'analytics.googleVision.perCameraDailyCap']);
 // The capture intervals (narrow `less`: never longer from cams-admin, #20).
 const INTERVAL = /\.intervalS$/;
+// A camera setting whose unset value is the host's (cam-proxy #396): its effective value then.
+const INHERITS: Readonly<Record<string, string>> = { 'cameras.*.stills.intervalS': 'stills.intervalS' };
+export const inheritedPathOf = (pattern: string): string | null => (Object.hasOwn(INHERITS, pattern) ? INHERITS[pattern] : null);
 export const STORAGE_LOCAL_ONLY = /^(storage\.|cameras\.[^.]+\.storage\.)/;
 
 // cameras.<id>.<leaf> → cameras.*.<leaf>
@@ -34,10 +37,16 @@ const isCeilingKind = (dir: NarrowKind | undefined) => dir === 'ceiling' || dir 
 // Reset restores; the proxy decides). The ceiling kinds pass a value at or
 // below the current one, or within `ceiling` (the proxy's local ceiling, from
 // the last view) when it is known; with no known ceiling (or a Reset) the
-// proxy decides (above_local_ceiling).
-export function narrowingOk(pattern: string, from: unknown, to: unknown, ceiling?: unknown): boolean {
+// proxy decides (above_local_ceiling). `inherited`: for a camera setting whose
+// unset value is the host's (inheritedPathOf), the host's value from the last
+// view; an unset side takes it (from: before, to: after the change).
+export function narrowingOk(pattern: string, from: unknown, to: unknown, ceiling?: unknown, inherited?: unknown): boolean {
   const dir = REMOTE_SETTABLE.narrow[pattern];
   if (!dir) return true;
+  if (inheritedPathOf(pattern) !== null) {
+    if (from === undefined) from = inherited;
+    if (to === undefined) to = inherited;
+  }
   if (isCeilingKind(dir)) {
     if (to === undefined) return true;
     const known = typeof ceiling === 'number' && Number.isFinite(ceiling);
@@ -74,6 +83,6 @@ export function narrowReason(pattern: string, ceiling?: unknown): string | null 
   const dir = REMOTE_SETTABLE.narrow[pattern];
   if (dir === 'ceilingGated') return `cams-admin may not switch it on: no ceiling at the proxy (${ceilingPathOf(pattern)} is ${typeof ceiling === 'number' ? ceiling : 0})`;
   if (dir === 'ceiling') return `cams-admin may allow up to ${typeof ceiling === 'number' ? ceiling : 0} (${ceilingPathOf(pattern)})`;
-  if (dir === 'less' && INTERVAL.test(pattern)) return 'a remote change may only shorten the interval';
+  if (dir === 'less' && INTERVAL.test(pattern)) return 'a remote change may only shorten the interval; a longer one is a local change';
   return dir === 'less' ? 'a remote change may only lower spending' : dir === 'more' ? 'a remote change may only keep data longer' : null;
 }

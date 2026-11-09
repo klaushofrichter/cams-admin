@@ -9,7 +9,7 @@ import { enrolled, makeClient, resetAccounts, startServer, until, type Running }
 import { readEpoch } from '../server/db/open';
 import { RefProxyConfig } from '../test-client/config';
 import type { ProxyClient } from '../test-client/client';
-import { ceilingPathOf, isRemoteSettable, narrowCode, narrowingOk, narrowReason, patternOf } from '../server/config/narrow';
+import { ceilingPathOf, inheritedPathOf, isRemoteSettable, narrowCode, narrowingOk, narrowReason, patternOf } from '../server/config/narrow';
 
 const ACTOR = 'admin@example.com';
 const ACTOR2 = 'other@example.com';
@@ -90,9 +90,29 @@ describe('narrow.ts: the contract rules for the pre-check', () => {
       expect(narrowingOk(path, 60, 30), path).toBe(true);
       expect(narrowingOk(path, 60, 600), path).toBe(false);
       expect(narrowingOk(path, 60, undefined), path).toBe(false);
-      expect(narrowReason(path), path).toBe('a remote change may only shorten the interval');
+      expect(narrowReason(path), path).toBe('a remote change may only shorten the interval; a longer one is a local change');
     }
     expect(isRemoteSettable('cameras.cam1.stills.intervalS', { 'cameras.*.stills.intervalS': { type: 'integer' } })).toBe(true);
+  });
+  it("#20: a camera's unset stills.intervalS counts as the host's (cam-proxy #396): its first interval and its Reset", () => {
+    const C = 'cameras.*.stills.intervalS';
+    expect(inheritedPathOf(C)).toBe('stills.intervalS');
+    expect(inheritedPathOf('stills.intervalS')).toBeNull();
+    // first interval (from unset): up to the host's
+    expect(narrowingOk(C, undefined, 10, undefined, 30)).toBe(true);
+    expect(narrowingOk(C, undefined, 30, undefined, 30)).toBe(true);
+    expect(narrowingOk(C, undefined, 60, undefined, 30)).toBe(false);
+    // Reset (to unset): passes when the host's is not longer
+    expect(narrowingOk(C, 60, undefined, undefined, 30)).toBe(true);
+    expect(narrowingOk(C, 30, undefined, undefined, 30)).toBe(true);
+    expect(narrowingOk(C, 10, undefined, undefined, 30)).toBe(false);
+    expect(narrowingOk(C, undefined, undefined, undefined, 30)).toBe(true);
+    // the host's unknown: refused (the proxy decides on a direct call)
+    expect(narrowingOk(C, undefined, 10)).toBe(false);
+    expect(narrowingOk(C, 60, undefined)).toBe(false);
+    // the global intervals are always set on the proxy; unset stays unknown
+    expect(narrowingOk('stills.intervalS', undefined, 10, undefined, 30)).toBe(false);
+    expect(narrowingOk('events.poll.intervalS', 10, undefined, undefined, 5)).toBe(false);
   });
   it('the Vision ceiling (ceiling, ceilingGated): lower always, higher within the known ceiling, an unknown ceiling left to the proxy', () => {
     const L = 'analytics.googleVision.monthlyLimit';
