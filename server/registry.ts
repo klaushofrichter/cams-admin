@@ -98,6 +98,9 @@ function versionOf(patch: Row): number {
   return v as number;
 }
 
+// How many refused reported names syncCameraNames remembers as already warned about.
+const UNSYNCED_NAMES_MAX = 1000;
+
 export class Registry {
   // Reported names the camera rules refuse, already warned about (proxy, camera, name; syncCameraNames).
   private unsyncedNames = new Set<string>();
@@ -530,6 +533,8 @@ export class Registry {
       if (problem === null) { names.set(c.ref, c.name); continue; }
       const key = JSON.stringify([proxyId, c.ref, c.name]);
       if (this.unsyncedNames.has(key)) continue;
+      // Bounded: past this many it starts again (a warning may then repeat once), never grows without end.
+      if (this.unsyncedNames.size >= UNSYNCED_NAMES_MAX) this.unsyncedNames.clear();
       this.unsyncedNames.add(key);
       log?.warn({ proxyId, proxyCameraId: c.ref, name: c.name, problem }, 'camera_name_not_synced');
     }

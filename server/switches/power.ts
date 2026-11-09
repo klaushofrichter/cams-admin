@@ -200,12 +200,13 @@ export class PowerService {
     else if (this.lastCycle.get(c.id)?.state === 'running') out = this.refuse('busy', CYCLE_RUNNING);
     else if (this.d.clock.now() - (this.lastRequest.get(c.id) ?? -Infinity) < PROXY_REQUEST_GAP_MS) out = this.refuse('too_soon', TOO_SOON);
     else {
-      this.lastRequest.set(c.id, this.d.clock.now());
       try {
         out = this.startCycle(who, c.id, {}, req);
       } catch (e) {
         out = this.refuse(errCode(e), e instanceof ApiError && e.hint ? e.hint : errCode(e));
       }
+      // Only a cycle that started counts toward the gap: one refused at once (power unknown, not PoE) blocks nothing (#166).
+      if (out.ok) this.lastRequest.set(c.id, this.d.clock.now());
     }
     audit(c, out);
     if (!out.ok) this.answer(accountId, req, false, out.reason);

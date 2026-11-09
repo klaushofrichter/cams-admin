@@ -292,6 +292,9 @@ test('Start move is disabled, with the reason, while a move is open on the proxy
   await expect(page.getByTestId('start-move-submit')).toBeDisabled();
   await expect(page.getByTestId('start-move-submit')).toHaveAttribute('title', /A move is open on Old proxy/);
   await expect(page.getByTestId('start-move-show')).toBeVisible();
+  // A list reload (a live event) can still be in the handler when the test ends: its fetch then fails ("Response has
+  // been disposed") and fails the test. Wait for running handlers, ignore their errors.
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
 });
 
 test('a double click on Start move sends one request, the button busy until it settles', async ({ page }, info) => {

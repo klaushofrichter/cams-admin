@@ -256,5 +256,5 @@ describe('database write budget: returns', () => {
     expect(readEpoch(s.built.db) - start).toBe(0);
     expect(s.built.moves.store.get(copyingId)!.phase).toBe('returning');
     expect(cmds(waitingId, 'move.return.open')).toHaveLength(1);
-  });
+  }, 60_000); // a day of ticks is CPU work: several seconds alone, past the 20 s default on a busy machine
 });

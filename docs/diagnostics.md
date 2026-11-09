@@ -49,7 +49,7 @@ A signed-in sysadmin's browser session works on the same routes.
 | `/diag/proxies` | registry fields (url, TLS site and server name, CA fingerprints), state, version, pin, clock skew, the problem items of the last summary, reported site / CA fingerprints / commands policy / allow list / token counts / profile (`reported.profile`, `reported.profileUnreadable`), last heartbeat, reconcile, the stored Vision figures (`vision`: `{fetchedAt, result: {v, at, providers: [{id, name, enabled, key, monthlyLimit, remoteMaxMonthly, dailyCap, month, today, paused, lastError, cameras}]}}` from the last Refresh, or null; `key` says where the key comes from, never the key) |
 | `/diag/proxies/:proxyId/unregistered` | the cameras the proxy reports and the registry lacks: `{proxyId, accountId, reported, items: [{ref, name, model, online, proposedCamsId}]}` (`reported` false until a summary arrived); what the adopt route takes ([onboarding-a-camera.md](onboarding-a-camera.md)) |
 | `/diag/proxies/:proxyId/profile` | the proxy's latest reported profile, as `GET /api/v1/proxies/:proxyId/profile` answers it (see "Proxy profile" below) |
-| `/diag/cams-instances` | state, accounts, routes, the last report: mode, applied vs current revision, held changes and held proxies, kept-old, shadow, token counts, problems (code, account, detail) |
+| `/diag/cams-instances` | state, accounts, routes, the last report: mode, applied vs current revision, held changes and held proxies, kept-old, shadow, token counts, problems (code, account, detail). The last report is kept across a restart (#58); until the instance reports again after a restart, `reportAt` is when that report's content last changed, not when it was last received |
 | `/diag/cameras` | registry fields (cams id, model, proxy, proxy camera id, host, protocol, TLS name), move id, online |
 | `/diag/cameras/:cameraId` | one camera by its registry id (`cam_…`): `{id, name, model, proxyId, proxyCameraId, camsId, online}`; `name` is what the camera holds (see "Camera names" below), `online` comes from the proxy's last report (null without a proxy); 404 `not_found` for an unknown id |
 | `/diag/cameras/:camsId/onboarding?accountId=` | one camera's onboarding: `{camera, proxy, proxyCameraId, online, reported, detail, viewers, ready, missing, optional}`; `:camsId` is a cams id or a registry id (`cam_…`); a cams id in several accounts is 409 `ambiguous` unless `accountId` names one; 409 `no_proxy` for a camera without a proxy (see below) |
@@ -489,8 +489,8 @@ The camera holds its name; the registry follows it.
 - **The camera's name rules:** 1 to 31 characters; ASCII letters, digits, space
   and `- ( ) + = [ ] { }`; no leading or trailing space (so no `_`). They apply
   to every name entered in cams-admin (create, edit, adopt, import). A reported
-  name that breaks them leaves the record as it is and is logged once
-  (`camera_name_not_synced`).
+  name that breaks them leaves the record as it is and is logged once per
+  process (`camera_name_not_synced`; again after a restart).
 - **Renaming:** `PATCH` of a camera mapped to a proxy that changes `name` is
   409 `rename_at_camera`; the `message` is the rename endpoint,
   `POST /api/v1/accounts/:accountId/proxies/:proxyId/cameras/:camera/name`

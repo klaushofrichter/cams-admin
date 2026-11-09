@@ -17,10 +17,12 @@ let clock: FakeClock;
 const clients: ProxyClient[] = [];
 let n = 0;
 
+// The server waits the default 15 s for an answer, so the answers here never race a short wait on a busy machine;
+// only the timeout test shortens it.
 beforeEach(async () => {
   resetAccounts();
   clock = fakeClock(Date.now());
-  s = await startServer(dir, { HEARTBEAT_MIN_GAP_MS: '0', LIMIT_MSG_PER_MIN: '10000', LIMIT_HELLO_PER_PROXY: '1000', TICK_MS: '60000', MOVE_SUMMARY_WAIT_MS: '400' }, 0, clock);
+  s = await startServer(dir, { HEARTBEAT_MIN_GAP_MS: '0', LIMIT_MSG_PER_MIN: '10000', LIMIT_HELLO_PER_PROXY: '1000', TICK_MS: '60000' }, 0, clock);
 });
 afterEach(async () => {
   for (const c of clients.splice(0)) await c.stop('shutdown');
@@ -120,6 +122,7 @@ describe('move.summary before a move', () => {
     const src = await proxy();
     const cam = camera(src);
     src.client.dropCommands = 1;
+    (s.built.moves.summaries as unknown as { d: { waitMs?: number } }).d.waitMs = 400;
     const t = Date.now();
     expect(await ask(src.accountId, cam.id)).toMatchObject({ status: 504, body: { error: 'timeout' } });
     expect(Date.now() - t).toBeLessThan(3000);

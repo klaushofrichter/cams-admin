@@ -199,8 +199,9 @@ function cameraNameOf(b: Obj, required: boolean): string | undefined {
 }
 // The camera user: ≤ 64 characters, no control or format characters (NUL,
 // newlines, bidi overrides): it is a login name, and shown in the audit log.
+// No user is null ("" becomes null); a blank one is refused, never stored as "" (#120).
 const CONTROL_RE = /[\p{Cc}\p{Cf}]/u;
-function cameraUserOf(b: Obj, min = 0): string | null | undefined {
+function cameraUserOf(b: Obj, min = 1): string | null | undefined {
   const v = str(b, 'cameraUser', { min, max: 64 });
   if (typeof v === 'string' && CONTROL_RE.test(v)) throw new FieldError('cameraUser', 'format');
   return v;
@@ -239,7 +240,7 @@ export function cameraOverrideInput(raw: unknown): CameraOverrideFields & { vers
   for (const k of Object.keys(b)) if (!['host', 'cameraUser', 'version'].includes(k)) throw new FieldError(k, 'unknown');
   const host = str(b, 'host', { max: 253 }) ?? null;
   if (host !== null) checkCameraHost(host);
-  const cameraUser = cameraUserOf(b, 1) ?? null;
+  const cameraUser = cameraUserOf(b) ?? null;
   if (host === null && cameraUser === null) throw new FieldError('host', 'required: host or cameraUser');
   if (b.version !== undefined && !Number.isInteger(b.version)) throw new FieldError('version');
   return { host, cameraUser, version: b.version as number | undefined };

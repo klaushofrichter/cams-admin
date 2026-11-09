@@ -264,8 +264,8 @@ export class Moves {
     // switch-over stores no choice): a cancel that could not be queued is derived again.
     const ended = (stmt(this.d.db, `SELECT id FROM moves WHERE ended_at >= ? AND ${cancelOwed('')}`).all(now - ENDED_RETRY_MS) as { id: string }[]).map((r) => r.id);
     const activeIds = new Set(active.map((m) => m.id));
+    // The resume times kept at the end of the tick: the moves swept here, with the pending cleanups (#92).
     const ids = new Set([...activeIds, ...ended]);
-    for (const id of this.resumedAt.keys()) if (!ids.has(id)) this.resumedAt.delete(id);
     for (const id of this.prog.keys()) if (!activeIds.has(id)) this.prog.delete(id);
     // At most once per RESUME_GAP_MS per key (noted when due); a step's error is logged, the sweep goes on.
     const due = (key: string) => {
@@ -298,10 +298,12 @@ export class Moves {
     // Done moves whose source cleanup has not landed (ruling b): worked on only while the source is online (nothing is queued to an absent one).
     // (Each step reads its move again.)
     for (const m of this.store.where('cleanup_pending = 1')) {
+      ids.add(m.id);
       if (this.online(m.sourceProxyId) && due(m.id)) guarded(m.id, () => this.cleanupStep(m));
     }
     // Done moves whose target finish has not landed: likewise, only while the target is online.
     for (const m of this.store.where('target_cleanup_pending = 1')) {
+      ids.add(`t:${m.id}`);
       if (this.online(m.targetProxyId) && due(`t:${m.id}`)) guarded(m.id, () => this.targetCleanupStep(m));
     }
     // Given-up returns whose finishes were not queued or went unanswered: derived again.
@@ -323,6 +325,7 @@ export class Moves {
         if (m) this.ensureCancels(m);
       });
     }
+    for (const id of this.resumedAt.keys()) if (!ids.has(id)) this.resumedAt.delete(id);
   }
 
   // Deletes the ended moves past their keep time, with one audit row {count, ids}; writes nothing when none is due.
