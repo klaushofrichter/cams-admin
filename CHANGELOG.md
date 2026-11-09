@@ -7,4 +7,5 @@ then empties it on `main`.
 
 ### Fixed
 - Camera moves: a done move whose cleanup is still pending is resumed at most once every 10 seconds again (each tick used to forget when it last resumed).
+- Cameras: a camera user of only spaces is refused (400) instead of being stored as an empty user; an empty one still means no user.
 
