@@ -70,9 +70,9 @@ describe('registry: camera records follow the reported name', () => {
     expect(s.warnings[0].obj).toMatchObject({ proxyId: s.prx.id, proxyCameraId: 'cam1', problem: 'not allowed: _' });
   });
 
-  it('two records mapped to the same proxy camera both follow', () => {
-    // The table forbids this (UNIQUE (proxy_id, proxy_camera_id)), so the case
-    // cannot arise; the sync still updates per row, never only the first.
+  it('each camera of the proxy follows its own reported name (a second record of the same proxy camera is refused)', () => {
+    // The table forbids two records of one proxy camera (UNIQUE (proxy_id, proxy_camera_id));
+    // the sync updates every mapped row of the report, never only the first.
     const s = setup();
     expect(() => s.reg.createCamera(ACTOR, s.acc.id, { camsId: 'garage2', name: 'Garage 2', kind: 'camera', proxyId: s.prx.id, proxyCameraId: 'cam1' })).toThrow();
     const c2 = s.reg.createCamera(ACTOR, s.acc.id, { camsId: 'yard', name: 'Yard', kind: 'camera', proxyId: s.prx.id, proxyCameraId: 'cam2' });
@@ -81,6 +81,16 @@ describe('registry: camera records follow the reported name', () => {
     ]);
     expect(changed.map((c) => [c.id, c.name]).sort()).toEqual([[s.cam.id, 'Garage door'], [c2.id, 'Backyard']].sort());
     expect(s.synced().map((a) => a.targetId).sort()).toEqual([s.cam.id, c2.id].sort());
+  });
+
+  it('a ref reported twice in one report: the last valid name counts, one update and one audit row', () => {
+    const s = setup();
+    const changed = s.reg.syncCameraNames(s.prx.id, [
+      { ref: 'cam1', name: 'First', nameSource: 'camera' }, { ref: 'cam1', name: 'Second', nameSource: 'camera' }, { ref: 'cam1', name: 'bad_name', nameSource: 'camera' },
+    ]);
+    expect(changed.map((c) => c.name)).toEqual(['Second']);
+    expect(s.reg.getCamera(s.acc.id, s.cam.id)).toMatchObject({ name: 'Second', version: 2 });
+    expect(s.synced()).toHaveLength(1);
   });
 
   it('cameras without a proxy are never touched', () => {
@@ -139,6 +149,12 @@ describe('registry: camera name rules and renames at the camera', () => {
   it('PATCH name of an unmapped camera works (record only)', () => {
     const s = setup();
     expect(s.reg.updateCamera(ACTOR, s.acc.id, s.direct.id, { name: 'Front porch', version: 1 })).toMatchObject({ name: 'Front porch', version: 2 });
+  });
+
+  it('PATCH that unmaps a camera and renames it in one go is 409 rename_at_camera; nothing changes (unmap first, then rename)', () => {
+    const s = setup();
+    expect(() => s.reg.updateCamera(ACTOR, s.acc.id, s.mapped.id, { proxyId: null, proxyCameraId: null, name: 'Shed', version: 1 })).toThrow(expect.objectContaining({ status: 409, code: 'rename_at_camera' }));
+    expect(s.reg.getCamera(s.acc.id, s.mapped.id)).toMatchObject({ name: 'Garage', proxyId: s.prx.id, version: 1 });
   });
 
   it('create with a mapping takes the typed name as a placeholder', () => {
