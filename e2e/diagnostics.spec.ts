@@ -5,8 +5,10 @@ import { BASE } from './env';
 test.beforeEach(async ({ context }) => signIn(context));
 
 test('a diagnostics token is shown once with the save command, reads /diag without a session, and stops after revoke', async ({ page }, info) => {
-  // Room under the live-token cap whatever earlier runs left.
-  for (const t of (await api(page, 'GET', '/diag-tokens')).items) if (t.state === 'active') await api(page, 'POST', `/diag-tokens/${t.id}/revoke`);
+  // Room under the live-token cap: this project's leftovers of an earlier attempt only (#53: the other project runs the
+  // same test at the same time, and revoking its token failed it).
+  const mine = uniq(info, 'diag').slice(0, 'diag-'.length + 1);
+  for (const t of (await api(page, 'GET', '/diag-tokens')).items) if (t.state === 'active' && t.name.startsWith(mine)) await api(page, 'POST', `/diag-tokens/${t.id}/revoke`);
   const name = uniq(info, 'diag').slice(0, 64);
   await page.goto('/#/diagnostics');
   await page.getByTestId('diag-name').fill(name);
@@ -36,8 +38,10 @@ test('a diagnostics token is shown once with the save command, reads /diag witho
 });
 
 test('an operations token is shown once with its scopes, listed as active, and revoked', async ({ page }, info) => {
-  // Room under the live-token cap whatever earlier runs left.
-  for (const t of (await api(page, 'GET', '/ops-tokens')).items) if (t.state === 'active') await api(page, 'POST', `/ops-tokens/${t.id}/revoke`);
+  // Room under the live-token cap: this project's leftovers of an earlier attempt only (#53: the other project runs the
+  // same test at the same time, and revoking its token failed it).
+  const mine = uniq(info, 'ops').slice(0, 'ops-'.length + 1);
+  for (const t of (await api(page, 'GET', '/ops-tokens')).items) if (t.state === 'active' && t.name.startsWith(mine)) await api(page, 'POST', `/ops-tokens/${t.id}/revoke`);
   const name = uniq(info, 'ops').slice(0, 64);
   await page.goto('/#/diagnostics');
   await page.getByTestId('ops-name').fill(name);

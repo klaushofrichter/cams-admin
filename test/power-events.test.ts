@@ -212,6 +212,9 @@ describe('power-cycle requests from proxies', () => {
     op.client.dropCommands = 1; // the switch.cycle stays sent
     ask(own, cam.proxyCameraId, 'rq-s');
     await until(() => s.built.db.prepare(`SELECT 1 FROM commands WHERE command = 'switch.cycle' AND state = 'sent'`).get() !== undefined, 5000, 'cycle sent');
+    // The own proxy's camera.power.cycling answered before the restart: one still `sent` would hold that proxy's queue
+    // (commands go one at a time) until its re-send, which waits on the fake clock, so the result never went out.
+    await until(() => s.built.db.prepare(`SELECT 1 FROM commands WHERE command = 'camera.power.cycling' AND state = 'done'`).get() !== undefined, 5000, 'cycling answered');
     const cmdId = (s.built.db.prepare(`SELECT id FROM commands WHERE command = 'switch.cycle'`).get() as { id: string }).id;
     return { own, op, cam, a, cmdId };
   }
