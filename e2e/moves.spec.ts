@@ -215,6 +215,26 @@ test('a move the target refused names the target, the reason in words and its de
   await expect(d.getByTestId('move-delete')).toBeVisible();
 });
 
+test("a move waiting for approval shows the target's settings proposal and its firewall note", async ({ page }, info) => {
+  const { acc, a, b } = await twoProxies(page, info, 'sp');
+  const id = insertMove(acc.id, a.id, b.id, 'awaiting-approval', 18);
+  // The target's move.offer result with a settings proposal (cam-proxy #240), as the command row keeps it.
+  const db = new DatabaseSync(ENV.DB_FILE);
+  db.exec('PRAGMA busy_timeout = 5000');
+  const proposal = { settings: { 'ftp.passive': '30000-30029' }, firewall: 'open TCP 2121 and 30000-30029 for 192.0.2.10 in the host firewall' };
+  db.prepare(`INSERT INTO commands (id,account_id,proxy_id,actor,command,args,state,result,created_at,finished_at) VALUES (?,?,?,?,?,?,?,?,?,?)`).run(
+    `cmd_${id.slice(3)}`, acc.id, b.id, 'system', 'move.offer', JSON.stringify({ v: 1, moveId: id }), 'done',
+    JSON.stringify({ body: { status: 'ok', result: { accept: true, probeBps: 1, space: { needed: 1, available: 2, fits: true, perKind: {}, retentionProposal: null }, settingsProposal: proposal } } }), Date.now(), Date.now());
+  db.close();
+  await page.goto('/#/moves');
+  // A move under way shows its detail without a click.
+  const d = page.getByTestId(`move-detail-${id}`);
+  await expect(d.getByTestId('move-proposal')).toContainText('New proxy needs these settings to take the camera:');
+  await expect(d.getByTestId('move-proposal-setting')).toHaveText('ftp.passive: 30000-30029');
+  await expect(d.getByTestId('move-proposal-firewall')).toHaveText('Firewall on New proxy: open TCP 2121 and 30000-30029 for 192.0.2.10 in the host firewall');
+  await expect(d.getByTestId('move-proposal')).toContainText("They are set on New proxy with the move, once it is approved on Old proxy's page.");
+});
+
 test('the content checklist of a copying move shows the copy progress per kind', async ({ page }, info) => {
   const { acc, a, b } = await twoProxies(page, info, 'ml');
   const id = insertMove(acc.id, a.id, b.id, 'copying', 8);

@@ -19,6 +19,8 @@ import type { CamsInstances } from '../cams/instances';
 import { moveToken, targetAddress, type Resolve } from './token';
 import { Returns, type ReturnKey } from './returns';
 import { moveContent } from './view';
+import { answerProposal, proposalSettings } from './common';
+export { answerProposal, proposalSettings };
 import { answered, backoffDue, FINAL_STATES, sourceRef, sourceTlsName, unanswered, verifiedDone, type Who } from './common';
 import { isCount } from '../validate';
 import type { MoveCheck, MoveApproveEvent, MoveKind, MoveCameraConn, MoveCancelEvent, MoveEvent, MovePhaseEvent, MoveProgressEvent, MoveRequestEvent, MoveTargetsEvent } from './types';
@@ -164,10 +166,13 @@ export function kindsNotAccepted(plan: unknown, offerResult: unknown): string[] 
   return kinds.filter((k) => !accepted.includes(k)).map(String);
 }
 
-// A target's settingsProposal (cam-proxy #240): its settings when it names any, else null (the payload check validated the shape).
-export function proposalSettings(x: unknown): Record<string, unknown> | null {
-  const st = (x as { settings?: unknown } | null | undefined)?.settings;
-  return st && typeof st === 'object' && !Array.isArray(st) && Object.keys(st).length ? (st as Record<string, unknown>) : null;
+// The proposal's paths an approved plan does not carry with the same value (plan.targetSettings, whatever its space choice).
+export function proposalNotInPlan(plan: unknown, offerResult: unknown): string[] {
+  const proposal = proposalSettings((offerResult as { settingsProposal?: unknown } | null)?.settingsProposal);
+  if (!proposal) return [];
+  const ts = (plan as { targetSettings?: unknown } | null)?.targetSettings;
+  const have = (ts && typeof ts === 'object' && !Array.isArray(ts) ? ts : {}) as Record<string, unknown>;
+  return Object.keys(proposal).filter((k) => !(k in have) || canonical(have[k]) !== canonical(proposal[k])).sort();
 }
 // The proposal in words, as the refusal's detail: what the target needs set first, and its firewall note.
 export function proposalText(settings: Record<string, unknown>, x: unknown): string | null {
@@ -642,18 +647,24 @@ export class Moves {
       // kinds is read on its own: an unreadable one is not relayed, never a reason to fail the move.
       const { kinds: rawKinds, ...rest } = res;
       if (!space || !isCount(res.probeBps) || !validateResultPayload('move.offer', rest)) return this.fail(m, 'bad_result', 'target_failed');
-      // A settings proposal (cam-proxy #240) is not relayed to the source yet (contract phase A): the target cannot take the
-      // camera without it, so the offer ends as the target's refusal, the proposal in words (the audit names its paths only).
-      const proposal = proposalSettings(res.settingsProposal);
-      if (proposal) return this.reject(m, 'incompatible', proposalText(proposal, res.settingsProposal), { settingsProposal: Object.keys(proposal).sort() });
+      const sourceCaps = this.d.status.capabilities(m.sourceProxyId);
+      // A settings proposal (cam-proxy #240) goes to a source whose last hello announced move-settings (its page shows it and
+      // waits for a person). An older source's closed move.answer check would refuse it: there the offer ends as the target's
+      // refusal, the proposal in words, and the target (which accepted and holds the offer) gets a cancel. Audits name the paths only.
+      const proposal = answerProposal(res.settingsProposal);
+      if (proposal && !sourceCaps.includes('move-settings')) {
+        return this.reject(m, 'incompatible', proposalText(proposal.settings, proposal), { settingsProposal: Object.keys(proposal.settings).sort() }, true);
+      }
       const est = estimateS(m.summary, res.probeBps);
       const kinds = answerKinds(rawKinds);
       // Only a source whose last hello announced move-ptz takes kinds: an older one's closed move.answer check would refuse the answer.
-      const sourceCaps = this.d.status.capabilities(m.sourceProxyId);
       tx(this.d.db, () => {
-        const a = this.answer(m, { accept: true, space, estimateS: est, ...(kinds && sourceCaps.includes('move-ptz') ? { kinds } : {}) });
+        const a = this.answer(m, { accept: true, space, estimateS: est, ...(kinds && sourceCaps.includes('move-ptz') ? { kinds } : {}), ...(proposal ? { settingsProposal: proposal } : {}) });
         const mv = this.store.setPhase(m.id, 'awaiting-approval', { rateBps: res.probeBps as number, etaS: est, bytesTotal: bytesOf(m.summary) });
-        this.audit(mv, 'move-offer', 'ok', { phase: 'awaiting-approval', accept: true, estimateS: est, fits: space.fits, probeBps: res.probeBps, kinds, ...(a ? {} : { answer: 'not_queued' }) });
+        this.audit(mv, 'move-offer', 'ok', {
+          phase: 'awaiting-approval', accept: true, estimateS: est, fits: space.fits, probeBps: res.probeBps, kinds,
+          ...(proposal ? { settingsProposal: Object.keys(proposal.settings).sort() } : {}), ...(a ? {} : { answer: 'not_queued' }),
+        });
       });
       return;
     }
@@ -681,10 +692,19 @@ export class Moves {
         return;
       }
       // Defence in depth (the source owns this): move.start and move.go carry this plan, so a kind the target's offer did not accept stops here.
-      const notAccepted = kindsNotAccepted(ev.plan, this.lastCommand(m, m.targetProxyId, 'move.offer')?.result);
+      const offerResult = this.lastCommand(m, m.targetProxyId, 'move.offer')?.result;
+      const notAccepted = kindsNotAccepted(ev.plan, offerResult);
       if (notAccepted.length) {
         this.audit(m, 'move-approve', 'refused', { reason: 'kind_not_accepted', phase: m.phase, kinds: notAccepted }, { actorType: 'proxy', actor: proxyId });
         this.failMoveIn(m, 'kind_not_accepted');
+        return;
+      }
+      // The target's settings proposal (cam-proxy #240): the plan carries each of its settings with the same value in
+      // targetSettings, whatever the space choice (the target checks the same at move.start). The paths only in the audit.
+      const missing = proposalNotInPlan(ev.plan, offerResult);
+      if (missing.length) {
+        this.audit(m, 'move-approve', 'refused', { reason: 'settings_not_in_plan', phase: m.phase, settings: missing }, { actorType: 'proxy', actor: proxyId });
+        this.failMoveIn(m, 'settings_not_in_plan');
         return;
       }
       // The plan as the source approved it, unchanged: move.go must carry exactly this one (plan_mismatch otherwise).
@@ -934,6 +954,8 @@ export class Moves {
   // move ended (the source's `cancelled` came first, or an automatic cancel):
   // the target must let go of the camera (the ended sweep, ENDED_RETRY_MS).
   private ensureCancels(m: Move): void {
+    // A refusal the target had accepted (reject with cancelTarget): the source has its answer, only the target is cancelled.
+    if (m.phase === 'rejected') return this.targetCancel(m, this.cancelRetry(m));
     const cancelling = m.phase === 'cancelling';
     if (cancelling && !this.online(m.sourceProxyId)) return;
     const { unsent, failedAgain } = this.cancelRetry(m);
@@ -1327,11 +1349,14 @@ export class Moves {
   // --- endings ---------------------------------------------------------------------------------
 
   // The target refused the offer: final. Its detail (its own words, absent from older proxies) is kept and passed on to the source.
-  private reject(m: Move, reason: string, detail: string | null = null, extra: Record<string, unknown> = {}): void {
+  // cancelTarget: the target accepted (and holds the offer) but cams-admin turned it into this refusal: the target gets a
+  // cancel (copied 'delete': nothing was copied), derived again until it took it on (cancelOwed); the source only the answer.
+  private reject(m: Move, reason: string, detail: string | null = null, extra: Record<string, unknown> = {}, cancelTarget = false): void {
     tx(this.d.db, () => {
       this.answer(m, { accept: false, reason, ...answerDetail(detail) });
-      const mv = this.store.setPhase(m.id, 'rejected', { reason, detail });
-      this.audit(mv, 'move-offer', 'refused', { phase: 'rejected', accept: false, reason, ...(detail ? { detail } : {}), ...extra });
+      const mv = this.store.setPhase(m.id, 'rejected', { reason, detail, ...(cancelTarget ? { copiedChoice: 'delete' } : {}) });
+      this.audit(mv, 'move-offer', 'refused', { phase: 'rejected', accept: false, reason, ...(detail ? { detail } : {}), ...extra, ...(cancelTarget ? { cancel: 'target' } : {}) });
+      if (cancelTarget) this.ensureCancels(mv);
     });
   }
 
@@ -1349,7 +1374,7 @@ export class Moves {
     return mv;
   }
 
-  private answer(m: Move, a: { accept: boolean; reason?: string; detail?: string; space?: Record<string, unknown>; estimateS?: number; kinds?: MoveKind[] }): boolean {
+  private answer(m: Move, a: { accept: boolean; reason?: string; detail?: string; space?: Record<string, unknown>; estimateS?: number; kinds?: MoveKind[]; settingsProposal?: { settings: Record<string, unknown>; firewall?: string } }): boolean {
     const t = this.d.registry.proxyById(m.targetProxyId);
     return this.send(m.accountId, m.sourceProxyId, 'move.answer', { v: 1, moveId: m.id, requestId: m.requestId, target: { proxyId: m.targetProxyId, name: t?.name ?? m.targetProxyId }, ...a }).ok;
   }

@@ -5,10 +5,10 @@ then empties it on `main`.
 
 ## [Unreleased]
 
+### Added
+- Camera moves: a target that needs a setting changed to take the camera (today a too narrow FTP passive port range) can now propose it. cams-admin passes the proposal on to a source proxy that supports it; the source's page shows it and waits for a person to approve. The move detail in cams-admin shows the settings and the firewall note. The approved plan must carry the proposed settings, or the approval is refused.
+- PoE power-cycle: when a cycle failed after PoE was cut and turned on again, cams-admin tells the camera's proxy (`poeCut`), so the proxy keeps watching the camera reboot. Needs a cam-proxy that reports this case (`cut_on_again`) and announces `power-poe-cut`.
+
 ### Fixed
-- Account page: a burst of changes elsewhere in the fleet (each command's progress is one) no longer reloads the page once per change. It reloads at most once a second. The per-change reloads could exceed the session's request limit, and the page then showed "Too many requests" (for example as the result of a power-cycle). The viewer token list reloads only on token or account changes.
-### Changed
-- Contract (cam-proxy #364, #240; first step of a phased change, cams-admin sends nothing new yet): a switch survey or locate may answer a camera with `switch_error` and a short `detail` (the switch failed for that camera; the survey goes on with the others); `camera.power.cycled` takes an optional `poeCut` (PoE was cut and is on again although the cycle failed: the proxy keeps watching the camera come back); a proxy's power-cycle request may carry `askedAt`; a move target may accept with a `settingsProposal` (for example a wider `ftp.passive`, with a firewall note) that the source approves in `plan.targetSettings`.
-- PoE switches: the Switches tab's survey line says why a camera was not found in words ("no traffic on any port", "the switch answered with an error: …") instead of the reason code.
-- PoE switches: a power-cycle request from a proxy that was asked more than 5 minutes ago (the proxy no longer waits for it) is ignored and audited instead of cutting the camera's power late.
-- Camera moves: a target that accepts only with a settings change (`settingsProposal`) is shown as its refusal for now, with what it needs ("the target needs ftp.passive set to 30000-30029 first; …"), until sources can approve such a change with the move.
+- Camera moves: when cams-admin refuses a target's settings proposal for an older source proxy, the target now gets a cancel too. Before, it kept the offer and answered "busy" to other moves for about 35 minutes.
+
