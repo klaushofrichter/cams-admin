@@ -96,6 +96,14 @@ describe('cameras and sims', () => {
   });
   it('a partial update without a name keeps it out', () => expect(cameraInput({ host: 'h.example.net' }, true)).not.toHaveProperty('name'));
   it('a null name is refused on update', () => expect(field(() => cameraInput({ name: null }, true))).toBe('name'));
+  // #120: no camera user is null, never an empty string (cams turned "" into a credentials entry with user "").
+  it('an empty camera user is unset (null); a blank one is refused', () => {
+    expect(cameraInput({ ...ok, cameraUser: '' }, false).cameraUser).toBeNull();
+    expect(cameraInput({ cameraUser: '' }, true).cameraUser).toBeNull();
+    expect(field(() => cameraInput({ ...ok, cameraUser: '   ' }, false))).toBe('cameraUser');
+    expect(field(() => cameraInput({ cameraUser: ' ' }, true))).toBe('cameraUser');
+    expect(cameraInput({ cameraUser: ' admin ' }, true).cameraUser).toBe('admin');
+  });
   it('sims need a known runsOn', () => {
     expect(simInput({ runsOn: 'mac' })).toMatchObject({ runsOn: 'mac' });
     expect(field(() => simInput({ runsOn: 'phone' }))).toBe('runsOn');
