@@ -123,6 +123,11 @@ export class SwitchService {
     const s = this.find(id);
     const patch = switchInput(raw, true) as SwitchPatch;
     if (patch.proxyId !== undefined) throw new FieldError('proxyId', 'invalid', 'a move changes the operating proxy');
+    // Fewer ports than a mapped camera's port would hide that mapping from the port table (#166): unmap it first.
+    if (patch.ports !== undefined) {
+      const beyond = this.store.camerasOnSwitch(s.id).filter((m) => 'port' in m.power && m.power.port > patch.ports!);
+      if (beyond.length) throw new ApiError(409, 'ports_in_use', 'ports', `${beyond.map((m) => `${m.camsId} is on port ${'port' in m.power ? m.power.port : '?'}`).join(', ')}: change its power first`);
+    }
     if (patch.host === undefined || patch.host === s.host || s.state === 'pending') {
       const out = this.store.updateSwitch(c.actor, s.accountId, s.id, patch, typeOf(c.actor));
       this.publish(s.id);
@@ -224,6 +229,11 @@ export class SwitchService {
     if (r.command === 'switch.poeOn' && r.state !== 'done') {
       this.d.audit.write({ actorType: typeOf(p.actor), actor: p.actor, action: 'switch-delete', accountId: p.accountId, targetType: 'switch', targetId: p.switchId, outcome: 'failed',
         detail: { step: 'poeOn', cmdId: r.id, port: r.args.port ?? null, state: r.state, code: r.outcomeCode } });
+    }
+    // A failed forget doesn't stop the removal either, but the operator still holds the password: audited (#166).
+    if (r.command === 'switch.forget' && r.state !== 'done') {
+      this.d.audit.write({ actorType: typeOf(p.actor), actor: p.actor, action: 'switch-delete', accountId: p.accountId, targetType: 'switch', targetId: p.switchId, outcome: 'failed',
+        detail: { step: 'forget', cmdId: r.id, proxyId: r.proxyId, state: r.state, code: r.outcomeCode } });
     }
     if (p.open!.size > 0 || p.abort) return;
     if (!this.d.db.prepare('SELECT 1 FROM switches WHERE id = ?').get(p.switchId)) return;
