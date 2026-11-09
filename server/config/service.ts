@@ -25,11 +25,21 @@ export interface ConfigView {
   revision: string; schema: number | null; cameras: string[]; omittedCameras: string[]; paths: Record<string, ConfigPath>; settable: Record<string, Settable>;
   fetchedAt: number; cmdId: string; clampedPaths?: number;
 }
-export interface ConfigState { view: ConfigView | null; reportedRevision: string | null; changedOnProxy: boolean; fetching: string | null; allow: string[] }
+export interface ConfigState {
+  view: ConfigView | null; reportedRevision: string | null; changedOnProxy: boolean; fetching: string | null; allow: string[];
+  // Automatic reads backed off (#20 M10): how many in a row, and the earliest next one; null while they go once a minute.
+  backedOff: { reads: number; nextAt: number } | null;
+}
 export type ConfigInput = { set: Record<string, Leaf> } | { unset: string[] };
 
 export const PREVIEW_MAX_AGE_MS = 10 * 60_000;
 export const AUTO_EVERY_MS = 60_000;
+// #20 (M10): after AUTO_STREAK automatic reads in a row (the proxy's settings keep changing, or its config.get keeps
+// failing) the gap doubles per read, up to AUTO_MAX_MS; a write of cams-admin's own, or AUTO_QUIET_MS without a need
+// to read, starts over. Memory only (no write).
+export const AUTO_STREAK = 5;
+export const AUTO_MAX_MS = 30 * 60_000;
+const AUTO_QUIET_MS = 60 * 60_000;
 export const MAX_VIEW_BYTES = 262_144;
 const VIEW_BUDGET = MAX_VIEW_BYTES - 8_192; // room for the envelope fields around the paths
 const MAX_PATHS = 4096;
@@ -95,6 +105,7 @@ export class ProxyConfig {
   private views = new Map<string, ConfigView | null>(); // read-through cache of proxy_config
   private lastAuto = new Map<string, number>(); // proxyId → when the last automatic config.get was queued
   private deferred = new Set<string>(); // proxies whose automatic read waits for the minute cap
+  private streak = new Map<string, number>(); // proxyId → automatic reads in a row (#20 M10)
 
   constructor(private d: ProxyConfigDeps) {
     d.commands.onFinal((r) => this.onFinal(r));
@@ -121,7 +132,14 @@ export class ProxyConfig {
     return {
       view, reportedRevision, changedOnProxy: !!view && !!reportedRevision && reportedRevision !== view.revision,
       fetching: this.d.commands.openId(proxyId, 'config.get'), allow: [...(rep?.commands?.allow ?? [])],
+      backedOff: (this.streak.get(proxyId) ?? 0) > AUTO_STREAK ? { reads: this.streak.get(proxyId)!, nextAt: (this.lastAuto.get(proxyId) ?? 0) + this.gap(proxyId) } : null,
     };
+  }
+
+  // The least time between two automatic reads of this proxy.
+  private gap(proxyId: string): number {
+    const k = this.streak.get(proxyId) ?? 0;
+    return k <= AUTO_STREAK ? AUTO_EVERY_MS : Math.min(AUTO_MAX_MS, AUTO_EVERY_MS * 2 ** (k - AUTO_STREAK));
   }
 
   // R3-17 (d): Reload.
@@ -213,7 +231,7 @@ export class ProxyConfig {
 
   tick(): void {
     for (const proxyId of [...this.deferred]) {
-      if (this.d.clock.now() - (this.lastAuto.get(proxyId) ?? 0) < AUTO_EVERY_MS) continue;
+      if (this.d.clock.now() - (this.lastAuto.get(proxyId) ?? 0) < this.gap(proxyId)) continue;
       this.deferred.delete(proxyId);
       this.onHeartbeat(proxyId);
     }
@@ -224,7 +242,8 @@ export class ProxyConfig {
   private autoRefresh(proxyId: string, capped: boolean): void {
     if (this.d.commands.hasOpen(proxyId, 'config.get')) return;
     const now = this.d.clock.now();
-    if (capped && now - (this.lastAuto.get(proxyId) ?? -Infinity) < AUTO_EVERY_MS) {
+    const last = this.lastAuto.get(proxyId) ?? -Infinity;
+    if (capped && now - last < this.gap(proxyId)) {
       this.deferred.add(proxyId);
       return;
     }
@@ -233,6 +252,8 @@ export class ProxyConfig {
     try {
       this.d.commands.create('system', px.accountId, proxyId, 'config.get', { v: 1 });
       this.lastAuto.set(proxyId, now);
+      if (!capped) this.streak.delete(proxyId);
+      else this.streak.set(proxyId, now - last > AUTO_QUIET_MS ? 1 : (this.streak.get(proxyId) ?? 0) + 1);
     } catch (e) {
       if (e instanceof ApiError) this.d.log.debug({ proxyId, code: e.code }, 'config_get_skipped');
       else throw e;

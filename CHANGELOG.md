@@ -12,4 +12,9 @@ then empties it on `main`.
 - Operations tokens: a write made with one is audited with the token's name as well as its hash prefix (actor `ops-token:1a2b3c4d (mac script)`; it was `ops-token:1a2b3c4d`). `/diag/ops-tokens` keeps showing the names.
 - PoE switches: Force power-cycle asks for the typed word `power-cycle` too, as the plain power-cycle does (it is the riskier of the two).
 - PoE switches: a camera deleted while a power-cycle its proxy asked for is running: the proxy still gets the answer (it used to wait for its 5-minute timeout).
+### Changed
+- Proxy settings: the capture intervals (`stills.intervalS`, `events.poll.intervalS`, a camera's `stills.intervalS`) can only be made shorter from cams-admin (a longer interval thins out capture); a longer one is set at the proxy. cam-proxy follows in its next contract update.
+
+### Fixed
+- Proxy settings: a proxy whose settings keep changing, or whose settings can't be read, is re-read less often after 5 automatic reads in a row (every 2, 4, 8 … up to 30 minutes), and its Settings card says so; a change made from cams-admin, or an hour without changes, starts over. Reload still reads at once.
 

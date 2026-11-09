@@ -13,6 +13,8 @@ const REMOTE = new Set(REMOTE_SETTABLE.remote);
 // Size caps: unset means no cap. Google Vision caps: 0 means no cap.
 const UNSET_IS_NO_CAP = new Set(['stills.maxGB', 'previews.maxGB', 'ftp.maxGB']);
 const ZERO_IS_NO_CAP = new Set(['analytics.googleVision.dailyCap', 'analytics.googleVision.perCameraDailyCap']);
+// The capture intervals (narrow `less`: never longer from cams-admin, #20).
+const INTERVAL = /\.intervalS$/;
 export const STORAGE_LOCAL_ONLY = /^(storage\.|cameras\.[^.]+\.storage\.)/;
 
 // cameras.<id>.<leaf> → cameras.*.<leaf>
@@ -72,5 +74,6 @@ export function narrowReason(pattern: string, ceiling?: unknown): string | null 
   const dir = REMOTE_SETTABLE.narrow[pattern];
   if (dir === 'ceilingGated') return `cams-admin may not switch it on: no ceiling at the proxy (${ceilingPathOf(pattern)} is ${typeof ceiling === 'number' ? ceiling : 0})`;
   if (dir === 'ceiling') return `cams-admin may allow up to ${typeof ceiling === 'number' ? ceiling : 0} (${ceilingPathOf(pattern)})`;
+  if (dir === 'less' && INTERVAL.test(pattern)) return 'a remote change may only shorten the interval';
   return dir === 'less' ? 'a remote change may only lower spending' : dir === 'more' ? 'a remote change may only keep data longer' : null;
 }
