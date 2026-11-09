@@ -406,7 +406,13 @@ field required unless marked optional.
 `SwitchRef` = `{id /^sw_[A-Za-z0-9]{20}$/, model 'sscpoe-web', host (host or
 IPv4, at most 253), ports 1..64, offSeconds 1..120}`; `PortState` = `{port, poe,
 watts, link (boolean or null), tx, rx}`; `LocateResult` = `{found, port?, poe?,
-watts?, link?, reason? (not_reachable | ambiguous | no_traffic), ratio?}`.
+watts?, link?, reason? (not_reachable | ambiguous | no_traffic | switch_error), ratio?,
+detail?}`. `switch_error` (cam-proxy #364 m3): the operator could not read the
+switch for this camera; `detail` (optional, 1–200 characters) says what failed in
+words. A survey answers it per camera and goes on with the others instead of
+failing the whole command. cams-admin shows it as "the switch answered with an
+error: <detail>" (Switches tab survey line, verify/search reasons) and treats it
+like `not_reachable`: the camera's mapping is left as it is (no `notSeen`).
 
 To the proxy that operates the switch (`SWITCH_COMMANDS`):
 
@@ -428,16 +434,36 @@ on the camera; `camera` is the proxy camera id; every result is `{}`):
 
 - `camera.power.set {v, camera, power: {kind (poe | data-only | adapter | unknown), switchName?, port?, watts?, verifiedAt?, notSeen?}}`
 - `camera.power.cycling {v, camera, at}`: the operator reports PoE off.
-- `camera.power.cycled {v, camera, ok, message (at most 200)}`: PoE on again, or gave up.
+- `camera.power.cycled {v, camera, ok, message (at most 200), poeCut?}`: PoE on again, or gave up.
+  `poeCut` (optional boolean, cam-proxy #364 m6) goes with `ok: false` only: true when
+  PoE was cut and is on again although the cycle failed (for example `not_verified`
+  after the cut, or `poe_may_be_off` once it came back), so the camera is rebooting and
+  its proxy keeps its reboot watch running (the reboot state goes `rebooting` → `back`)
+  instead of ending it as `not-back`. Absent or false: PoE was never cut (refused before
+  the cut) or may still be off. Phased: cams-admin sends `poeCut` only to a proxy whose
+  last hello listed the capability `power-poe-cut` (cam-proxy's closed args check would
+  refuse it otherwise); today it sends none.
 - `camera.power.cycle.result {v, camera, requestId (at most 64), ok, reason? (at most 200)}`: the answer to a request below.
 
-Event kind `camera.power.cycle.request {camera, requestId}` (proxy to cams-admin;
-the one non-move proxy event, `PROXY_EVENT_KINDS`; no `force` from a proxy;
-validated by `validateProxyEvent`).
+Event kind `camera.power.cycle.request {camera, requestId, askedAt?}` (proxy to
+cams-admin; the one non-move proxy event, `PROXY_EVENT_KINDS`; no `force` from a
+proxy; validated by `validateProxyEvent`). cam-proxy's `requestId` is `pc_<ULID>`
+whose ULID time is when the page asked (not when the event was sent: after a
+reconnect the envelope `ts` is fresh). `askedAt` (optional, ms) says the same
+explicitly and wins over the ULID. **cams-admin ignores a request asked more than 5
+minutes ago** (cam-proxy #364 m5; the proxy stops waiting for its answer after 5
+minutes): no cycle, no `camera.power.cycle.result`, audited `camera-power-cycle`
+refused with `code: 'stale'` and `ageS`. A request whose age is unknown (another
+`requestId`, no `askedAt`) runs as before.
 
 Fixtures (`$context.feature: 'poe'`): `valid-command-switch-read`,
 `valid-command-switch-cycle-force`, `refused-switch-cycle-bad-id`,
-`valid-event-camera-power-cycle-request`.
+`valid-event-camera-power-cycle-request`, `valid-command-camera-power-cycled`,
+`valid-result-switch-survey-switch-error`,
+`valid-event-camera-power-cycle-request-asked-at`; and
+`valid-command-camera-power-cycled-poe-cut` (`$context.feature: 'power-poe-cut'`:
+the cross-check reports it `pending` until cam-proxy's `src/fleet/command-args.ts`
+names `poeCut`).
 
 ## Remove a camera, decommission a proxy
 
@@ -629,6 +655,30 @@ Rulings of the camera-move plan that the schemas carry:
     `valid-event-move-approve-ptz-only`, `valid-event-move-progress-ptz`,
     `valid-event-move-phase-check-ptz`, `drift-event-move-request-summary-ptz` (a
     sixth summary key: lenient takes it, strict refuses).
+- **A target's settings proposal (`settingsProposal`, cam-proxy #240).** A target that
+  can take the camera only with a setting changed (today: `ftp.passive` too narrow for
+  one more FTP camera, which it refuses as `incompatible` with a detail) may instead
+  accept with a proposal: `settingsProposal = {settings, firewall?}`, where `settings`
+  is a flat map of 1–8 config paths (`PATH_PATTERN`) to leaf values (for example
+  `{"ftp.passive": "30000-30029"}`) and `firewall` (optional, 1–300 characters) says
+  what the target's host firewall must allow, in words (the panel shows it next to the
+  approval: the proxy cannot open its host firewall itself).
+  - Where: optional in the `move.offer` accept branch (`{accept: true, space, probeBps,
+    kinds?, settingsProposal?}`) and in `move.answer` (cams-admin relays it to the source).
+  - Approving it: the source's plan carries the proposal's settings in
+    `plan.targetSettings` (whatever `space` is; with `space: 'retention'` together with the
+    retention proposal's values). `plan.targetSettings` is the existing flat path map:
+    no schema change. The target writes them with the camera.
+  - Phased: cams-admin relays `settingsProposal` only to a source whose last hello listed
+    the capability `move-settings` (an older source's closed `move.answer` check would refuse
+    the whole answer). **Today (phase A) it relays none:** an accept with a proposal ends
+    the offer as the target's refusal, `incompatible`, the detail "the target needs
+    <path> set to <value> first; <firewall>" (audited `move-offer` refused with the
+    proposal's paths, never its values).
+  - Fixtures: `valid-result-move-offer-settings-proposal`,
+    `valid-event-move-approve-settings`, `valid-command-move-answer-settings-proposal`
+    (`$context.feature: 'move-settings'`: `pending` in the cross-check until cam-proxy's
+    `src/fleet/command-args.ts` names `settingsProposal`).
 
 ## cams-v1 (P4: the cams service API)
 

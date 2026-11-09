@@ -94,6 +94,20 @@ beforeEach(() => {
 const view = (id: string) => moveView(s.built.db, s.built.moves.store.get(id)!);
 
 describe('the target refuses with a detail', () => {
+  it("a target that accepts with a settingsProposal (cam-proxy #240): not relayed yet (phase A), refused as incompatible with the proposal in words; no answer carries settingsProposal", async () => {
+    const src = await proxy();
+    const tgt = await proxy();
+    camera(src);
+    const settingsProposal = { settings: { 'ftp.passive': '30000-30029' }, firewall: 'open TCP 2121 and 30000-30029 for 192.0.2.10 in the host firewall' };
+    tgt.client.moveResults['move.offer'] = { status: 'ok', result: { accept: true, space: { needed: 1000, available: 5000, fits: true, perKind: {}, retentionProposal: null }, probeBps: 50_000_000, settingsProposal } };
+    const a = await answerOf(src, request(src, tgt.proxyId));
+    const want = 'the target needs ftp.passive set to 30000-30029 first; open TCP 2121 and 30000-30029 for 192.0.2.10 in the host firewall';
+    expect(a).toEqual({ v: 1, moveId: a.moveId, requestId: a.requestId, target: { proxyId: tgt.proxyId, name: expect.any(String) }, accept: false, reason: 'incompatible', detail: want });
+    expect(moves()[0]).toMatchObject({ phase: 'rejected', reason: 'incompatible', detail: want });
+    expect(JSON.parse(auditFor('move-offer').at(-1)!.detail)).toMatchObject({ phase: 'rejected', reason: 'incompatible', detail: want, settingsProposal: ['ftp.passive'] });
+    expect(got(src.client, 'move.answer').some((m) => 'settingsProposal' in m.body.args)).toBe(false);
+  });
+
   it('move.answer forwards the detail to the source, for a target refusal and a cams-admin refusal', async () => {
     const src = await proxy();
     const tgt = await proxy();

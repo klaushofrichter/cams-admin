@@ -38,6 +38,13 @@ export function auditId(now: number): string {
 }
 // A ULID-shaped id (26 characters) for envelope ids.
 export const ulid = (now: number): string => timeChars(now) + randomChars(16);
+// The time (ms) of a ULID (its first 10 characters); null when `s` is no ULID.
+export function ulidTime(s: string): number | null {
+  if (!new RegExp(`^[${CROCKFORD}]{26}$`).test(s)) return null;
+  let ms = 0;
+  for (const ch of s.slice(0, 10)) ms = ms * 32 + CROCKFORD.indexOf(ch);
+  return ms;
+}
 
 // A proxy's enrollment code is CAE1-…, a cams instance's CAC1-… (P4): neither
 // enroll endpoint accepts the other's.

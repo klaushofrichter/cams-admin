@@ -376,6 +376,26 @@ describe('camera power', () => {
     expect((await power(cams[1].id)).power).toEqual({ kind: 'poe', switchId: a.id, port: 2, watts: 4, verifiedAt: clock.now() });
   });
 
+  it('switch_error (cam-proxy #364 m3): a survey reports it per camera with its detail and goes on (no notSeen); a locate names it in the reasons', async () => {
+    const p = await proxy();
+    const c1 = await camera(p, '10.0.1.1');
+    const c2 = await camera(p, '10.0.1.2');
+    const a = await sw(p, 'Alpha');
+    setPower(c2.id, { kind: 'poe', switchId: a.id, port: 5, watts: 4 });
+    p.client.switchResults.set('switch.survey', (x) => ({ status: 'ok', result: { sn: null, results: x.cameras.map((c: { camera: string }) =>
+      c.camera === c1.id ? { camera: c.camera, found: true, port: 1, poe: true, watts: 3 } : { camera: c.camera, found: false, reason: 'switch_error', detail: 'the switch answered HTTP 500' }) } }));
+    await call('POST', `/switches/${a.id}/survey`);
+    await until(async () => (await call('GET', `/switches/${a.id}/survey`)).body.state === 'done', 5000, 'survey done');
+    const view = (await call('GET', `/switches/${a.id}/survey`)).body;
+    expect(view.results.find((x: { cameraId: string }) => x.cameraId === c2.id)).toEqual({ cameraId: c2.id, camsId: c2.camsId, found: false, reason: 'switch_error', detail: 'the switch answered HTTP 500' });
+    expect((await power(c1.id)).power).toMatchObject({ kind: 'poe', switchId: a.id, port: 1 });
+    expect((await power(c2.id)).power).toEqual({ kind: 'poe', switchId: a.id, port: 5, watts: 4 });
+    p.client.switchResults.set('switch.locate', { status: 'ok', result: { sn: null, found: false, reason: 'switch_error', detail: 'timeout after 5 s' } });
+    await call('POST', `/cameras/${c2.id}/power/verify`);
+    await checkDone(c2.id);
+    expect((await power(c2.id)).lastCheck.reason).toMatch(/Alpha: the switch answered with an error: timeout after 5 s/);
+  });
+
   it('a simulated camera (kind sim) is on no switch: never surveyed, nor in the survey results; verify and search refuse', async () => {
     const p = await proxy();
     const real = await camera(p, '10.0.1.1');
