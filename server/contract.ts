@@ -93,6 +93,7 @@ import camsReportRequest from '../contract/cams-v1/report-request.schema.json';
 import camsReportResponse from '../contract/cams-v1/report-response.schema.json';
 import camsFleetResponse from '../contract/cams-v1/fleet-response.schema.json';
 import camsError from '../contract/cams-v1/error.schema.json';
+import camsReportRequestStrict from '../contract/cams-v1/strict/report-request.schema.json';
 import summarySchema from '../contract/v1/health-summary.schema.json';
 import truncatedSchema from '../contract/v1/health-summary-truncated.schema.json';
 
@@ -249,6 +250,15 @@ const vCams: Record<CamsSchema, ValidateFunction> = {
   'tokens-request': compile(camsTokensRequest), 'tokens-response': compile(camsTokensResponse), 'retire-request': compile(camsRetireRequest),
   'retire-response': compile(camsRetireResponse), 'report-request': compile(camsReportRequest), 'report-response': compile(camsReportResponse), 'fleet-response': compile(camsFleetResponse), error: compile(camsError),
 };
+// #60: a cams report as the strict shape names it: a copy with every property the strict schema does not list
+// removed (ajv removeAdditional on the closed objects). What is stored; the lenient check still decides acceptance.
+const vCamsReportPick = new Ajv2020({ strict: false, allErrors: true, removeAdditional: true }).compile(camsReportRequestStrict);
+export function pickCamsReport<T>(value: T): T {
+  const copy = structuredClone(value);
+  vCamsReportPick(copy);
+  return copy;
+}
+
 export function validateCams(name: CamsSchema, value: unknown): { ok: true } | { ok: false; detail: string } {
   const v = vCams[name];
   if (!v) return { ok: false, detail: `no schema ${name}` };
