@@ -2,7 +2,7 @@
   import { keepEdits } from '../lib/edits';
   import { onMount } from 'svelte';
   import { api, errorText } from '../lib/api';
-  import { live } from '../lib/live';
+  import { coalesced, live } from '../lib/live';
   import { camClass } from '../lib/format';
   import { hostLabel } from '../lib/proxy';
   import { nameError, renameError, renameOutcome, waitCommand } from '../lib/config';
@@ -72,7 +72,9 @@
   }
   onMount(() => {
     load();
-    return live({ registry: () => load(), status: (s) => { const p = proxies.find((x) => x.id === s.proxyId); if (p) p.status = { ...p.status, state: s.state, cameras: s.cameras }; } });
+    // A busy fleet sends many registry events (every command's change is one): a burst is one reload a second, not one per event.
+    const soon = coalesced(load, 1000);
+    return live({ registry: soon, status: (s) => { const p = proxies.find((x) => x.id === s.proxyId); if (p) p.status = { ...p.status, state: s.state, cameras: s.cameras }; } });
   });
   const go = (t: string) => (location.hash = `#/accounts/${accountId}/${t}`);
   const admins = $derived(users.filter((u) => u.role === 'admin' && !u.disabled).length);
