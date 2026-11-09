@@ -26,7 +26,8 @@ const bearer = (method: M, path: string, token: string, body?: unknown) => {
 };
 const issue = (scopes: OpsScope[], name = 'script') => {
   const { token, item } = a.ops.issue('admin@example.com', { name, scopes, days: 1 });
-  return { token, prefix: item.hashPrefix, id: item.id };
+  // #53: the audit actor names the token: its hash prefix and its name.
+  return { token, prefix: item.hashPrefix, id: item.id, actor: `ops-token:${item.hashPrefix} (${name})` };
 };
 const auditOf = (action: string) => a.db.prepare('SELECT * FROM audit_log WHERE action = ? ORDER BY id').all(action) as { actor: string; detail: string; outcome: string; target_id: string }[];
 // Audit rows other than the (throttled) refusals.
@@ -91,7 +92,7 @@ describe('the scope table', () => {
     const have = new Set(routes.map((r) => `${r.method} ${r.path}`));
     for (const o of OPS_ROUTES) expect(have.has(`${o.method} ${o.path}`), `${o.method} ${o.path}`).toBe(true);
     const inTable = new Set(OPS_ROUTES.map((o) => `${o.method} ${o.path}`));
-    const { token, prefix } = issue([...OPS_SCOPES], 'all');
+    const { token, actor } = issue([...OPS_SCOPES], 'all');
     const before = auditCount();
     for (const r of routes) {
       if (inTable.has(`${r.method} ${r.path}`)) continue;
@@ -101,7 +102,7 @@ describe('the scope table', () => {
     }
     // Nothing but one throttled refusal for the token.
     expect(auditCount()).toBe(before);
-    expect(scopeRefusals(`ops-token:${prefix}`)).toHaveLength(1);
+    expect(scopeRefusals(actor)).toHaveLength(1);
   });
 });
 
@@ -127,8 +128,8 @@ describe('scoped writes', () => {
     expect(r.status, JSON.stringify(r.body)).toBe(200);
     expect((a.db.prepare('SELECT state FROM proxy_tokens WHERE id = ?').get(tok) as { state: string }).state).toBe('revoked');
     const rec = auditOf('token-revoke').find((x) => JSON.parse(x.detail).tokenId === tok)!;
-    expect(rec.actor).toBe(`ops-token:${t.prefix}`);
-    expect(rec.actor).toMatch(/^ops-token:[0-9a-f]{8}$/);
+    expect(rec.actor).toBe(t.actor);
+    expect(rec.actor).toMatch(/^ops-token:[0-9a-f]{8} \(script\)$/);
   });
 
   it('a tokens token may not set a route; a routes token sets and deletes one', async () => {
@@ -143,7 +144,7 @@ describe('scoped writes', () => {
     expect(a.camsInstances.routes(inst)).toHaveLength(1);
     expect((await bearer('delete', path, r.token)).status).toBe(204);
     expect(a.camsInstances.routes(inst)).toHaveLength(0);
-    expect(auditOf('route-update').slice(-2).map((x) => x.actor)).toEqual([`ops-token:${r.prefix}`, `ops-token:${r.prefix}`]);
+    expect(auditOf('route-update').slice(-2).map((x) => x.actor)).toEqual([r.actor, r.actor]);
   });
 
   // The registry edits Klaus otherwise makes by hand: a proxy's TLS site and CA
@@ -165,8 +166,8 @@ describe('scoped writes', () => {
     const c = await bearer('patch', `/accounts/${acc}/cameras/${cam}`, t.token, { version: cv, host: '10.43.61.52', tlsServername: 'cam9.cluster.internal', webUiUrl: null });
     expect(c.status, JSON.stringify(c.body)).toBe(200);
     expect(c.body).toMatchObject({ host: '10.43.61.52', tlsServername: 'cam9.cluster.internal', webUiUrl: null });
-    expect(auditOf('proxy-update').at(-1)!.actor).toBe(`ops-token:${t.prefix}`);
-    expect(auditOf('camera-update').at(-1)!.actor).toBe(`ops-token:${t.prefix}`);
+    expect(auditOf('proxy-update').at(-1)!.actor).toBe(t.actor);
+    expect(auditOf('camera-update').at(-1)!.actor).toBe(t.actor);
     // Creating stays with a sign-in; deleting needs the offboard scope.
     expect((await bearer('delete', `/accounts/${acc}/cameras/${cam}`, t.token)).status).toBe(403);
   });
@@ -182,7 +183,7 @@ describe('scoped writes', () => {
     expect(r.status, JSON.stringify(r.body)).toBe(200);
     expect(r.body).toMatchObject({ id: p, name: 'renamed', displayName: 'After', adminUiUrl: 'https://proxy.example.net:8480', version: version + 1 });
     const rec = auditOf('proxy-update').at(-1)!;
-    expect(rec.actor).toBe(`ops-token:${t.prefix}`);
+    expect(rec.actor).toBe(t.actor);
     expect(rec.target_id).toBe(p);
     expect(JSON.parse(rec.detail)).toMatchObject({ fields: ['name', 'displayName', 'adminUiUrl'], nameTo: 'renamed', displayNameTo: 'After' });
     // Refused, nothing changed: a stale version, a taken or malformed name, an emptied name, a bad address.
@@ -220,7 +221,7 @@ describe('scoped writes', () => {
     expect(ok.status, JSON.stringify(ok.body)).toBe(200);
     expect(ok.body).toMatchObject({ id: i, name: 'cms-after', displayName: 'After', baseUrl: 'https://cams.example.net', notes: 'by a script', accounts: [served] });
     const rec = auditOf('cams-instance-update').at(-1)!;
-    expect(rec.actor).toBe(`ops-token:${t.prefix}`);
+    expect(rec.actor).toBe(t.actor);
     expect(JSON.parse(rec.detail)).toMatchObject({ fields: ['name', 'displayName', 'baseUrl', 'notes'], nameTo: 'cms-after', displayNameTo: 'After' });
     expect((await bearer('patch', path, t.token, { baseUrl: 'ftp://cams.example.net', version: rowVersion() })).status).toBe(400);
     expect((await bearer('patch', path, t.token, { displayName: 'Stale', version: rowVersion() - 1 })).status).toBe(409);
@@ -237,7 +238,7 @@ describe('scoped writes', () => {
     }
     expect(shape()).toEqual(was);
     expect(auditCount()).toBe(before);
-    const refused = scopeRefusals(`ops-token:${narrow.prefix}`);
+    const refused = scopeRefusals(narrow.actor);
     expect(refused).toHaveLength(1);
     expect(JSON.parse(refused[0].detail)).toEqual({ method: 'PATCH', scope: 'registry' });
     for (const leak of [i, served, added, 'Mixed']) expect(JSON.stringify(refused)).not.toContain(leak);
@@ -268,7 +269,7 @@ describe('scoped writes', () => {
     const r = await bearer('post', path, t.token);
     expect(r.status, JSON.stringify(r.body)).toBe(200);
     expect(r.body).toMatchObject({ changed: true, proxy: { caFingerprints: [fp] } });
-    expect(auditOf('proxy-update').at(-1)!.actor).toBe(`ops-token:${t.prefix}`);
+    expect(auditOf('proxy-update').at(-1)!.actor).toBe(t.actor);
   });
 
   // Onboarding by script: adopting a camera the proxy reports (host from-proxy, model from the report).
@@ -287,7 +288,7 @@ describe('scoped writes', () => {
     const r = await bearer('post', path, t.token, { proxyCameraId: 'cam1', camsId: 'frontdoor', name: 'Front door' });
     expect(r.status, JSON.stringify(r.body)).toBe(201);
     expect(r.body).toMatchObject({ camsId: 'frontdoor', name: 'Front door', proxyId: p, proxyCameraId: 'cam1', host: 'from-proxy', model: 'RLC-1224A' });
-    expect(auditOf('camera-adopt').at(-1)!.actor).toBe(`ops-token:${t.prefix}`);
+    expect(auditOf('camera-adopt').at(-1)!.actor).toBe(t.actor);
     // A camera the proxy doesn't report is refused by the handler, as for a session.
     expect((await bearer('post', path, t.token, { proxyCameraId: 'cam9' })).body).toMatchObject({ error: 'not_reported' });
     // A plain create stays session-only, whatever the scopes.
@@ -335,7 +336,7 @@ describe('scoped writes', () => {
     }
     expect(commandCount(p)).toBe(3);
     const rows = auditOf('command-create').filter((x) => x.target_id === p);
-    expect(rows.map((x) => x.actor)).toEqual(Array(3).fill(`ops-token:${t.prefix}`));
+    expect(rows.map((x) => x.actor)).toEqual(Array(3).fill(t.actor));
   });
 
   it('an actions token refreshes onboarding and sets the time; an offboard token may not', async () => {
@@ -357,7 +358,7 @@ describe('scoped writes', () => {
     for (const [path, body] of cases) expect((await bearer('post', path, t.token, body)).status, path).toBe(202);
     const made = a.db.prepare('SELECT command, args FROM commands WHERE proxy_id = ? ORDER BY rowid').all(p) as { command: string; args: string }[];
     expect(made.map((x) => [x.command, JSON.parse(x.args)])).toEqual([['camera.onboarding.get', { v: 1, camera: 'cam1' }], ['camera.action', { v: 1, camera: 'cam1', action: 'camera-time-set' }]]);
-    expect(auditOf('command-create').filter((x) => x.target_id === p).map((x) => x.actor)).toEqual(Array(2).fill(`ops-token:${t.prefix}`));
+    expect(auditOf('command-create').filter((x) => x.target_id === p).map((x) => x.actor)).toEqual(Array(2).fill(t.actor));
     // The typed confirm still applies to a token.
     expect((await bearer('post', `${base}/actions`, t.token, { camera: 'cam2', action: 'camera-time-set' })).body).toEqual({ error: 'confirm_required', field: 'confirm' });
     expect(cases.map((c) => c[2])).toEqual(made.map((x) => x.command));
@@ -389,7 +390,7 @@ describe('scoped writes', () => {
     // The rollback routes reach their handlers too.
     expect((await bearer('post', `${base}/config/rollback/preview`, c.token, { cmdId: 'nope' })).body).toEqual({ error: 'invalid', field: 'cmdId' });
     expect((await bearer('post', `${base}/config/rollback/apply`, c.token, { previewId: 'nope' })).body).toEqual({ error: 'invalid', field: 'previewId' });
-    expect(auditOf('command-create').filter((x) => x.target_id === p && x.actor !== 'system').map((x) => x.actor)).toEqual(Array(3).fill(`ops-token:${c.prefix}`));
+    expect(auditOf('command-create').filter((x) => x.target_id === p && x.actor !== 'system').map((x) => x.actor)).toEqual(Array(3).fill(c.actor));
     expect(a.registry.getProxy(acct, p).id).toBe(p);
   });
 
@@ -404,7 +405,7 @@ describe('scoped writes', () => {
     expect((await bearer('delete', `/accounts/${acc}/cameras/${cam}`, t.token)).status).toBe(204);
     expect(a.registry.listCameras(acc).some((c) => c.id === cam)).toBe(false);
     const rec = auditOf('camera-delete').at(-1)!;
-    expect(rec.actor).toBe(`ops-token:${t.prefix}`);
+    expect(rec.actor).toBe(t.actor);
     expect(rec.target_id).toBe(cam);
   });
 
@@ -447,7 +448,7 @@ describe('scoped writes', () => {
     expect(ok.status, JSON.stringify(ok.body)).toBe(202);
     expect(ok.body).toMatchObject({ commandId: expect.any(String), fixed: [{ rule: 'routed', instanceId: ci, proxyId: t }] });
     expect(cmds()).toBe(1);
-    expect(auditOf('move-begin').at(-1)!.actor).toBe(`ops-token:${mt.prefix}`);
+    expect(auditOf('move-begin').at(-1)!.actor).toBe(mt.actor);
   });
 
   it('every other table route reaches its handler with a token in scope', async () => {
@@ -462,7 +463,7 @@ describe('scoped writes', () => {
     a.camsInstances.setOverride('admin@example.com', inst, cam, { host: 'from-proxy', cameraUser: 'proxy' });
     const mv = seedMove();
     const t = issue([...OPS_SCOPES]);
-    const actor = `ops-token:${t.prefix}`;
+    const actor = t.actor;
     const cases: [M, string, unknown, number, string][] = [
       ['post', `/accounts/${acc}/proxies/${p2}/tokens/${tok}/retire`, { hours: 24 }, 200, 'token-retire'],
       ['post', `/accounts/${acc}/proxies/${p2}/tokens/apply`, {}, 202, 'command-create'],
@@ -511,7 +512,7 @@ describe('review focus', () => {
     expect(auditCount()).toBe(before);
     expect(live()).toBe(tokensBefore);
     // One throttled refusal for the three: the method and the scope needed, never the path's ids or the body.
-    const rec = scopeRefusals(`ops-token:${t.prefix}`);
+    const rec = scopeRefusals(t.actor);
     expect(rec).toHaveLength(1);
     expect(rec[0].outcome).toBe('refused');
     expect(JSON.parse(rec[0].detail)).toEqual({ method: 'POST', scope: null });
@@ -526,14 +527,14 @@ describe('review focus', () => {
     expect(r.status).toBe(403);
     expect(r.body).toEqual({ error: 'scope' });
     expect((a.db.prepare('SELECT state FROM proxy_tokens WHERE id = ?').get(tok) as { state: string }).state).toBe('active');
-    const rec = scopeRefusals(`ops-token:${t.prefix}`);
+    const rec = scopeRefusals(t.actor);
     expect(rec).toHaveLength(1);
     expect(JSON.parse(rec[0].detail)).toEqual({ method: 'POST', scope: 'tokens' });
     expect(JSON.stringify(rec)).not.toContain(tok);
     // Each token has its own throttle window: another one is recorded too.
     const u = issue(['routes'], 'other');
     await bearer('post', `/accounts/${acc}/proxies/${px}/tokens/${tok}/revoke`, u.token);
-    expect(scopeRefusals(`ops-token:${u.prefix}`)).toHaveLength(1);
+    expect(scopeRefusals(u.actor)).toHaveLength(1);
   });
 
   it('3: an expired, revoked or diag token on a write is 401; an ops token on the diag API is 401', async () => {
@@ -579,7 +580,7 @@ describe('review focus', () => {
     // In scope: the token is the actor, not the session's e-mail.
     const m = issue(['moves']);
     expect((await withBoth(m.token)).status).toBe(202);
-    expect(auditOf('move-cancel').at(-1)!.actor).toBe(`ops-token:${m.prefix}`);
+    expect(auditOf('move-cancel').at(-1)!.actor).toBe(m.actor);
   });
 
   it('the import route refuses a token before it reads the big body', async () => {

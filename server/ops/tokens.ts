@@ -35,10 +35,10 @@ export class OpsTokens extends BearerTokens<OpsTokenView> {
 
   protected viewExtra(r: Row) { return { scopes: this.scopesOf(r) }; }
 
-  verifyScoped(token: string): { id: string; hashPrefix: string; scopes: OpsScope[] } | null {
+  verifyScoped(token: string): { id: string; hashPrefix: string; name: string; scopes: OpsScope[] } | null {
     const r = this.find(token);
     const scopes = r ? this.scopesOf(r) : [];
     if (!r || scopes.length === 0) return null;
-    return { id: r.id as string, hashPrefix: (r.hash as string).slice(7, 15), scopes };
+    return { id: r.id as string, hashPrefix: (r.hash as string).slice(7, 15), name: r.name as string, scopes };
   }
 }

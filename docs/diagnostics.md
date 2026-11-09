@@ -157,7 +157,7 @@ journalled like the diagnostics token's, so a restore can't bring it back.
 Issue and revoke are audited (`ops-token-issue`, `ops-token-revoke`); a
 refused token is audited as `ops-auth-refused` and a token outside its scopes
 as `ops-scope-refused` (both throttled). A write by a token is audited with the
-actor `ops-token:<8 hex>`. The list is also at `/diag/ops-tokens`.
+actor `ops-token:<8 hex> (<name>)`: the token's hash prefix and its name (before 2026-11-09: the prefix only). The list is also at `/diag/ops-tokens`, with the names unmasked (a name is not a secret; it is how a sysadmin tells the tokens apart).
 
 | Scope | Method and path (relative to `/api/v1`) |
 |---|---|

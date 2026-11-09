@@ -82,7 +82,7 @@ describe('OpsTokens', () => {
 
   it('verifyScoped gives the scopes of a live token and null for anything else', () => {
     const { token, item } = ops.issue('admin@example.com', { name: 'x', scopes: ['tokens', 'moves'] });
-    expect(ops.verifyScoped(token)).toEqual({ id: item.id, hashPrefix: item.hashPrefix, scopes: ['tokens', 'moves'] });
+    expect(ops.verifyScoped(token)).toEqual({ id: item.id, hashPrefix: item.hashPrefix, name: 'x', scopes: ['tokens', 'moves'] });
     expect(ops.verify(token)).toBe(item.id);
     expect(ops.verifyScoped('cao_' + 'A'.repeat(43))).toBeNull();
     expect(ops.verifyScoped('cad_' + 'A'.repeat(43))).toBeNull();
