@@ -3,7 +3,7 @@
   // the outcome is read from the switch (`last`) every 2 s, for at most 60 s.
   import { onMount } from 'svelte';
   import { api, ApiFailure, errorText } from '../lib/api';
-  import { chainedText, lastText, operatingProxies, passwordHint, poll, removeText, trunkText } from '../lib/switches';
+  import { chainedText, lastText, operatingProxies, passwordHint, poll, removeText, surveyMissText, trunkText } from '../lib/switches';
   import Ago from './Ago.svelte';
   import Confirm from './Confirm.svelte';
 
@@ -87,7 +87,7 @@
       if (!v) results = { ...results, [s.id]: 'No answer yet: look again in a minute.' };
       else {
         const found = v.results.filter((r: any) => r.found).length;
-        const missing = v.results.filter((r: any) => !r.found).map((r: any) => `${r.camsId}${r.reason ? ` (${r.reason})` : ''}`);
+        const missing = v.results.filter((r: any) => !r.found).map(surveyMissText);
         const trunks = (v.trunks ?? []).map((t: any) => `port ${t.port}: ${t.cameras.map((c: any) => c.camsId).join(', ')}`);
         results = { ...results, [s.id]: `Survey: ${found} found${missing.length ? `; not found: ${missing.join(', ')}` : ''}${trunks.length ? `; not mapped (another switch chained on ${trunks.join('; ')})` : ''}` };
       }

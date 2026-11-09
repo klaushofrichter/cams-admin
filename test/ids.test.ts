@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { auditId, codeHash, newCamsEnrollmentCode, newEnrollmentCode, newId, normaliseCamsCode, normaliseCode, ulid } from '../server/ids';
+import { auditId, codeHash, newCamsEnrollmentCode, newEnrollmentCode, newId, normaliseCamsCode, normaliseCode, ulid, ulidTime } from '../server/ids';
 
 const B32 = '[0-9A-HJKMNP-TV-Z]';
 
@@ -23,6 +23,12 @@ describe('ids', () => {
   it('ulids are 26 characters and sort by time', () => {
     expect(ulid(5)).toMatch(new RegExp(`^${B32}{26}$`));
     expect(ulid(5) < ulid(6)).toBe(true);
+  });
+  it('ulidTime reads the time back; null for anything that is no ULID', () => {
+    expect(ulidTime(ulid(1_794_265_638_123))).toBe(1_794_265_638_123);
+    expect(ulidTime('01K6000000000000000000000A')).toBe(ulidTime('01K60000000000000000000000'));
+    expect(ulidTime('rq-1')).toBeNull();
+    expect(ulidTime('01K6000000000000000000000I')).toBeNull();
   });
 });
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { codeText } from './api';
-import { flowDone, flowText, forceCycleText, lastText, passwordHint, poll, powerLine, powerManaged, removeText, chainedText, trunkText, operatingProxies } from './switches';
+import { flowDone, flowText, forceCycleText, lastText, passwordHint, poll, powerLine, powerManaged, removeText, chainedText, trunkText, operatingProxies, surveyMissText } from './switches';
 
 const NOW = 1_000_000_000;
 
@@ -132,5 +132,15 @@ describe('the add-switch Operating proxy (no silent default)', () => {
     expect(operatingProxies([px('cam2', 'cluster'), px('een', 'local-host'), px('pi', 'local-host')])).toEqual({ list: [px('een', 'local-host'), px('pi', 'local-host'), px('cam2', 'cluster')], preset: '' });
     expect(operatingProxies([px('cam2', 'cluster')])).toEqual({ list: [px('cam2', 'cluster')], preset: '' });
     expect(operatingProxies([])).toEqual({ list: [], preset: '' });
+  });
+});
+
+describe('surveyMissText', () => {
+  it('a camera the survey did not find: its reason in words; switch_error with the detail (cam-proxy #364 m3)', () => {
+    expect(surveyMissText({ camsId: 'porch', reason: 'no_traffic' })).toBe('porch (no traffic on any port)');
+    expect(surveyMissText({ camsId: 'porch', reason: 'switch_error', detail: 'the switch answered HTTP 500' })).toBe('porch (the switch answered with an error: the switch answered HTTP 500)');
+    expect(surveyMissText({ camsId: 'porch', reason: 'switch_error' })).toBe('porch (the switch answered with an error)');
+    expect(surveyMissText({ camsId: 'porch', reason: 'camera host unknown in cams-admin' })).toBe('porch (camera host unknown in cams-admin)');
+    expect(surveyMissText({ camsId: 'porch' })).toBe('porch');
   });
 });

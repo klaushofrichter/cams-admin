@@ -267,3 +267,23 @@ test("Add camera with a proxy: host, protocol and TLS name from the proxy's repo
     await c.stop();
   }
 });
+
+// A busy fleet (or a full e2e run) publishes many registry events: the account page reloads at most once a second for a
+// burst, not once per event (each reload is 6+ requests; per event, a burst ran into the session's 1200 requests a
+// minute and the page showed "Too many requests", e2e/switches.spec.ts:12).
+test('the account page coalesces a burst of registry events into few reloads, and still shows the change', async ({ page }, info) => {
+  const acc = await api(page, 'POST', '/accounts', { name: uniq(info, 'burst'), displayName: 'Burst' });
+  const other = await api(page, 'POST', '/accounts', { name: uniq(info, 'noise'), displayName: 'Noise' });
+  await page.goto(`/#/accounts/${acc.id}`);
+  await expect(page.getByTestId('account-title')).toHaveText('Burst');
+  let reloads = 0;
+  page.on('request', (r) => { if (r.method() === 'GET' && r.url().endsWith(`/api/v1/accounts/${acc.id}`)) reloads++; });
+  const t0 = Date.now();
+  let v = other.version;
+  for (let i = 0; i < 40; i++) v = (await api(page, 'PATCH', `/accounts/${other.id}`, { displayName: `Noise ${i}`, version: v })).version;
+  await api(page, 'PATCH', `/accounts/${acc.id}`, { displayName: 'Burst renamed', version: acc.version });
+  await expect(page.getByTestId('account-title')).toHaveText('Burst renamed');
+  const seconds = Math.ceil((Date.now() - t0) / 1000);
+  expect(reloads).toBeGreaterThan(0);
+  expect(reloads).toBeLessThanOrEqual(seconds + 2);
+});

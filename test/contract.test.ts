@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { existsSync, readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
 import Ajv2020 from 'ajv/dist/2020';
-import { DECOMMISSION_COMMANDS, REMOVE_CONTENT, CAMERA_REMOVE_FAILURES, PROXY_UNENROLL_FAILURES, POWER_COMMANDS, PROXY_EVENT_KINDS, SWITCH_COMMANDS, DISRUPTIVE_COMMANDS, ABOVE_LOCAL_CEILING, ALLOW_ENTRIES, ANALYTICS_COMMANDS, NARROW_KINDS, ONBOARDING_CAMERAS_MAX, ONBOARDING_COMMANDS, ONBOARDING_REQUIRED, ONBOARDING_STEPS, ONBOARDING_STEP_LEN, WIRE_COMMANDS, FILE_KINDS, MOVE_KINDS, MOVE_LEFTOVERS_MAX, MOVE_LEFTOVER_ITEMS_MAX, MOVE_LEFTOVER_ITEM_LEN, JOURNAL_BUDGET_ACTIONS, buildSchemas, DISRUPTIVE_ACTIONS, LOCAL_ONLY, NEVER_REMOTE_ACTIONS, P3_COMMANDS, PATH_PATTERN, REMOTE_ACTIONS, REMOTE_SETTABLE, SECRET_KEY_PATTERN, CAMERA_NAME_PATTERN } from '../contract/build';
+import { DECOMMISSION_COMMANDS, REMOVE_CONTENT, CAMERA_REMOVE_FAILURES, PROXY_UNENROLL_FAILURES, POWER_COMMANDS, PROXY_EVENT_KINDS, SWITCH_COMMANDS, DISRUPTIVE_COMMANDS, ABOVE_LOCAL_CEILING, ALLOW_ENTRIES, ANALYTICS_COMMANDS, NARROW_KINDS, ONBOARDING_CAMERAS_MAX, ONBOARDING_COMMANDS, ONBOARDING_REQUIRED, ONBOARDING_STEPS, ONBOARDING_STEP_LEN, WIRE_COMMANDS, FILE_KINDS, MOVE_KINDS, MOVE_LEFTOVERS_MAX, MOVE_LEFTOVER_ITEMS_MAX, MOVE_LEFTOVER_ITEM_LEN, JOURNAL_BUDGET_ACTIONS, buildSchemas, DISRUPTIVE_ACTIONS, LOCAL_ONLY, NEVER_REMOTE_ACTIONS, P3_COMMANDS, PATH_PATTERN, REMOTE_ACTIONS, REMOTE_SETTABLE, SECRET_KEY_PATTERN, CAMERA_NAME_PATTERN, LOCATE_REASONS, SETTINGS_PROPOSAL_MAX } from '../contract/build';
 import { fixtures } from '../contract/make';
 import { validateProxyEvent, validateCommandArgs, validateEnroll, validateMessage, validateResultPayload, validateSummary } from '../server/contract';
 import { publicFromB64, verifyEnvelope } from '../server/crypto/ed25519';
@@ -583,6 +583,39 @@ describe('the v1 contract', () => {
     expect(validateProxyEvent({ ...ev, kind: 'move.targets' })).toMatchObject({ ok: false });
     expect(validateProxyEvent({ ...ev, cmdId: 'cmd_0123456789ABCDEFGHJK' })).toMatchObject({ ok: false });
     expect(fixture('refused-switch-cycle-bad-id').$expect.runtime).toBe('invalid_args');
+  });
+
+  it('phase A of cam-proxy #364/#240: switch_error with detail, poeCut, askedAt, settingsProposal (all optional, bounded)', () => {
+    const CAM = 'cam_0123456789ABCDEFGHJK';
+    const args = (c: string) => strictValidator(`commands/${c}.args`);
+    const res = (c: string) => strictValidator(`commands/${c}.result`);
+    // m3: a per-camera switch error, its detail 1-200 characters.
+    expect(LOCATE_REASONS).toContain('switch_error');
+    expect(res('switch.survey')({ sn: null, results: [{ camera: CAM, found: false, reason: 'switch_error', detail: 'HTTP 500' }] })).toBe(true);
+    expect(res('switch.survey')({ sn: null, results: [{ camera: CAM, found: false, reason: 'switch_error', detail: 'x'.repeat(201) }] })).toBe(false);
+    expect(res('switch.locate')({ sn: null, found: false, reason: 'switch_error', detail: '' })).toBe(false);
+    expect(res('switch.locate')({ sn: null, found: false, reason: 'switch_error' })).toBe(true);
+    // m6: poeCut optional boolean on camera.power.cycled.
+    expect(args('camera.power.cycled')({ v: 1, camera: 'cam1', ok: false, message: 'm', poeCut: true })).toBe(true);
+    expect(args('camera.power.cycled')({ v: 1, camera: 'cam1', ok: false, message: 'm' })).toBe(true);
+    expect(args('camera.power.cycled')({ v: 1, camera: 'cam1', ok: false, message: 'm', poeCut: 'yes' })).toBe(false);
+    // m5: askedAt optional integer on the request event.
+    const ev = fixture('valid-event-camera-power-cycle-request-asked-at').message.body;
+    expect(validateProxyEvent(ev)).toEqual({ ok: true });
+    expect(validateProxyEvent({ ...ev, askedAt: 'now' })).toMatchObject({ ok: false });
+    expect(validateProxyEvent({ ...ev, askedAt: -1 })).toMatchObject({ ok: false });
+    // #240: settingsProposal {settings (1-8 paths of leaf values), firewall?} in the offer's accept branch and in move.answer.
+    const offer = fixture('valid-result-move-offer-settings-proposal').message.body.result;
+    expect(res('move.offer')(offer)).toBe(true);
+    expect(res('move.offer')({ ...offer, settingsProposal: { settings: {} } })).toBe(false);
+    expect(res('move.offer')({ ...offer, settingsProposal: { settings: Object.fromEntries(Array.from({ length: SETTINGS_PROPOSAL_MAX + 1 }, (_, i) => [`ftp.p${i}`, 1])) } })).toBe(false);
+    expect(res('move.offer')({ ...offer, settingsProposal: { settings: { 'ftp.passive': { a: 1 } } } })).toBe(false);
+    expect(res('move.offer')({ ...offer, settingsProposal: { settings: { 'ftp.passive': '30000-30029' } } })).toBe(true);
+    expect(res('move.offer')({ accept: false, reason: 'incompatible', settingsProposal: offer.settingsProposal })).toBe(false);
+    const answer = fixture('valid-command-move-answer-settings-proposal');
+    expect(answer.$context.feature).toBe('move-settings');
+    expect(validateCommandArgs('move.answer', answer.message.body.args)).toEqual({ ok: true });
+    expect(fixture('valid-command-camera-power-cycled-poe-cut').$context.feature).toBe('power-poe-cut');
     expect(readFileSync(join(__dirname, '../contract/README.md'), 'utf8')).toContain('## PoE switches');
   });
   it('remove a camera, decommission a proxy: three commands, two disruptive, strict args and results', () => {

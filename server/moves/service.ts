@@ -164,6 +164,18 @@ export function kindsNotAccepted(plan: unknown, offerResult: unknown): string[] 
   return kinds.filter((k) => !accepted.includes(k)).map(String);
 }
 
+// A target's settingsProposal (cam-proxy #240): its settings when it names any, else null (the payload check validated the shape).
+export function proposalSettings(x: unknown): Record<string, unknown> | null {
+  const st = (x as { settings?: unknown } | null | undefined)?.settings;
+  return st && typeof st === 'object' && !Array.isArray(st) && Object.keys(st).length ? (st as Record<string, unknown>) : null;
+}
+// The proposal in words, as the refusal's detail: what the target needs set first, and its firewall note.
+export function proposalText(settings: Record<string, unknown>, x: unknown): string | null {
+  const firewall = (x as { firewall?: unknown }).firewall;
+  const needs = Object.entries(settings).map(([k, v]) => `${k} set to ${String(v)}`).join(', ');
+  return detailOf(`the target needs ${needs} first${typeof firewall === 'string' && firewall.trim() ? `; ${firewall.trim()}` : ''}`);
+}
+
 // The offer result's space, as the answer's strict schema takes it.
 function answerSpace(x: unknown): Record<string, unknown> | null {
   const s = x as Record<string, unknown> | null;
@@ -630,6 +642,10 @@ export class Moves {
       // kinds is read on its own: an unreadable one is not relayed, never a reason to fail the move.
       const { kinds: rawKinds, ...rest } = res;
       if (!space || !isCount(res.probeBps) || !validateResultPayload('move.offer', rest)) return this.fail(m, 'bad_result', 'target_failed');
+      // A settings proposal (cam-proxy #240) is not relayed to the source yet (contract phase A): the target cannot take the
+      // camera without it, so the offer ends as the target's refusal, the proposal in words (the audit names its paths only).
+      const proposal = proposalSettings(res.settingsProposal);
+      if (proposal) return this.reject(m, 'incompatible', proposalText(proposal, res.settingsProposal), { settingsProposal: Object.keys(proposal).sort() });
       const est = estimateS(m.summary, res.probeBps);
       const kinds = answerKinds(rawKinds);
       // Only a source whose last hello announced move-ptz takes kinds: an older one's closed move.answer check would refuse the answer.
@@ -1311,11 +1327,11 @@ export class Moves {
   // --- endings ---------------------------------------------------------------------------------
 
   // The target refused the offer: final. Its detail (its own words, absent from older proxies) is kept and passed on to the source.
-  private reject(m: Move, reason: string, detail: string | null = null): void {
+  private reject(m: Move, reason: string, detail: string | null = null, extra: Record<string, unknown> = {}): void {
     tx(this.d.db, () => {
       this.answer(m, { accept: false, reason, ...answerDetail(detail) });
       const mv = this.store.setPhase(m.id, 'rejected', { reason, detail });
-      this.audit(mv, 'move-offer', 'refused', { phase: 'rejected', accept: false, reason, ...(detail ? { detail } : {}) });
+      this.audit(mv, 'move-offer', 'refused', { phase: 'rejected', accept: false, reason, ...(detail ? { detail } : {}), ...extra });
     });
   }
 

@@ -14,6 +14,16 @@ export interface SwitchProblem { code: 'chained_switch'; port: number; cameras: 
 export const chainedText = (p: SwitchProblem): string =>
   `Configuration issue: another switch is chained on port ${p.port} (${p.cameras} cameras behind it). Connect each PoE switch directly to its proxy's network instead of through another PoE switch.`;
 export const trunkText = (cameras: number): string => `trunk (${cameras} cameras)`;
+// A camera the survey did not find, with why: the operator's reason codes in words (switch_error with its detail,
+// cam-proxy #364 m3); cams-admin's own reasons are words already.
+const LOCATE_TEXT: Record<string, string> = {
+  not_reachable: 'camera not reachable from the operator', ambiguous: 'no clear port (ambiguous)', no_traffic: 'no traffic on any port', switch_error: 'the switch answered with an error',
+};
+export function surveyMissText(r: { camsId: string; reason?: string; detail?: string }): string {
+  if (!r.reason) return r.camsId;
+  const t = LOCATE_TEXT[r.reason] ?? r.reason;
+  return `${r.camsId} (${r.detail ? `${t}: ${r.detail}` : t})`;
+}
 export interface Last { op: string; outcome: 'ok' | 'refused' | 'failed'; code: string | null; at: number }
 export interface Flow { op: string; state: 'running' | 'ok' | 'failed'; code: string | null; reason: string | null; requestedAt: number; commandIds: string[]; finishedAt: number | null; force?: boolean }
 
