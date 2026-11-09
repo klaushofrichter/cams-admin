@@ -21,6 +21,10 @@ interface Backup { paths: Record<string, Step>; rolledBack: boolean }
 const CAMERA_WRITES = ['camera-ftp-setup', 'camera-ntp-set', 'camera-cert-push', 'camera-time-set'];
 const LESS_REASON = 'a remote change may only lower spending';
 const MORE_REASON = 'a remote change may only keep data longer';
+const INTERVAL_REASON = 'a remote change may only shorten the interval; a longer one is a local change';
+const reasonOf = (pattern: string) => (/\.intervalS$/.test(pattern) ? INTERVAL_REASON : REMOTE_SETTABLE.narrow[pattern] === 'less' ? LESS_REASON : MORE_REASON);
+// A camera setting whose unset value is the host's (cam-proxy #396).
+const INHERITS: Record<string, string> = { 'cameras.*.stills.intervalS': 'stills.intervalS' };
 // Google Vision caps where 0 means "no cap".
 const ZERO_IS_NO_CAP = ['analytics.googleVision.dailyCap', 'analytics.googleVision.perCameraDailyCap'];
 
@@ -33,10 +37,15 @@ const ceilingReason = (pattern: string, ceilingPath: string, ceiling: number) =>
   : `cams-admin may allow up to ${ceiling} calls a month (${ceilingPath})`);
 
 // The contract's narrow rule: may `from` → `to` happen remotely on this path? `ceiling`: the value of the
-// path's local ceiling (REMOTE_SETTABLE.ceilings), for the ceiling kinds.
-export function narrowOk(pattern: string, from: Leaf | undefined, to: Leaf | undefined, ceiling = 0): boolean {
+// path's local ceiling (REMOTE_SETTABLE.ceilings), for the ceiling kinds. `inherited`: the host's value an
+// unset camera setting takes effect as (INHERITS), for either side.
+export function narrowOk(pattern: string, from: Leaf | undefined, to: Leaf | undefined, ceiling = 0, inherited?: Leaf): boolean {
   const dir = REMOTE_SETTABLE.narrow[pattern];
   if (!dir) return true;
+  if (INHERITS[pattern]) {
+    from ??= inherited;
+    to ??= inherited;
+  }
   // ceilingGated: off always; on only while the ceiling is above 0.
   if (dir === 'ceilingGated') return to === false || to === from || (to === true && ceiling > 0);
   // ceiling: at or below the current value, or at or below the ceiling.
@@ -57,6 +66,7 @@ export class RefProxyConfig {
   private backups = new Map<string, Backup>();
   // Optional settings with no value (a size cap unset = no cap).
   private optional = ['stills.maxGB', 'ftp.maxGB'];
+  // A camera's stills.intervalS: unset = the host's.
   private settableBounds: Record<string, Partial<Settable>> = { 'sse.pingS': { min: 5, max: 300 }, 'sse.maxClients': { min: 1, max: 1000 }, 'stills.quality': { min: 1, max: 31 } };
 
   constructor(o: { cameras?: string[]; settings?: Record<string, Leaf>; envHeld?: string[] } = {}) {
@@ -66,12 +76,14 @@ export class RefProxyConfig {
     d('sse.pingS', 30); d('sse.maxClients', 20); f('stills.quality', 5);
     d('retention.stillsDays', 30); d('retention.eventsDays', 30); d('retention.auditDays', 90); d('retention.clipsDays', 30);
     d('analytics.googleVision.monthlyLimit', 1000); d('analytics.googleVision.enabled', false); d('analytics.googleVision.remoteMaxMonthly', 0);
+    d('stills.intervalS', 10); d('events.poll.intervalS', 5);
     d('storage.maxPercent', 90); f('camsAdmin.url', 'https://cams-admin.example.org');
     for (const c of this.cameras) {
       f(`cameras.${c}.name`, c === 'cam1' ? 'Front door' : c);
       f(`cameras.${c}.host`, '192.0.2.10');
       d(`cameras.${c}.statusPollS`, 30);
       d(`cameras.${c}.storage.sharePercent`, 100);
+      this.optional.push(`cameras.${c}.stills.intervalS`);
     }
     for (const [p, v] of Object.entries(o.settings ?? {})) f(p, v);
     // retention.clipsDays is held as an override above its default.
@@ -83,6 +95,12 @@ export class RefProxyConfig {
   revision(): string {
     const o = Object.fromEntries([...this.overrides].sort(([a], [b]) => (a < b ? -1 : 1)));
     return `sha256:${createHash('sha256').update(jcs(o), 'utf8').digest('hex')}`;
+  }
+
+  // The host's value an unset camera setting takes effect as (INHERITS), else undefined.
+  private inherited(path: string): Leaf | undefined {
+    const host = INHERITS[patternOf(path)];
+    return host ? this.current(host) : undefined;
   }
 
   current(path: string): Leaf | undefined {
@@ -107,7 +125,7 @@ export class RefProxyConfig {
 
   private settable(): Record<string, Settable> {
     const out: Record<string, Settable> = {};
-    for (const p of this.optional) out[p] = { type: 'integer', min: 1, max: 100_000, optional: true, ...(REMOTE_SETTABLE.narrow[p] ? { dir: REMOTE_SETTABLE.narrow[p] } : {}) };
+    for (const p of this.optional.map(patternOf)) out[p] = { type: 'integer', min: 1, max: 100_000, optional: true, ...(REMOTE_SETTABLE.narrow[p] ? { dir: REMOTE_SETTABLE.narrow[p] } : {}) };
     for (const [p, b] of this.base) {
       const pat = patternOf(p);
       if (!REMOTE_SETTABLE.remote.includes(pat) || out[pat]) continue;
@@ -171,7 +189,7 @@ export class RefProxyConfig {
     const narrow = step('widening_local_only', (p, v) => {
       const to = v === undefined ? resetTo(p)?.v : v;
       if (isCeilingKind(patternOf(p))) return false;
-      return narrowOk(patternOf(p), this.current(p), to) ? false : REMOTE_SETTABLE.narrow[patternOf(p)] === 'less' ? LESS_REASON : MORE_REASON;
+      return narrowOk(patternOf(p), this.current(p), to, 0, this.inherited(p)) ? false : reasonOf(patternOf(p));
     });
     if (narrow) return narrow;
     // The ceiling kinds (Vision management): above the proxy's local ceiling → above_local_ceiling, the detail names it.
@@ -245,10 +263,10 @@ export class RefProxyConfig {
     if (b.rolledBack) return { status: 'failed', code: 'already_rolled_back', result: { paths: [] } };
     const since = Object.entries(b.paths).filter(([p, s]) => this.overrides.get(p) !== s.after).map(([p]) => p);
     if (since.length) return this.conflict(since);
-    const widening = Object.entries(b.paths).filter(([p, st]) => !isCeilingKind(patternOf(p)) && !narrowOk(patternOf(p), this.current(p), st.before ?? this.base.get(p)?.v));
+    const widening = Object.entries(b.paths).filter(([p, st]) => !isCeilingKind(patternOf(p)) && !narrowOk(patternOf(p), this.current(p), st.before ?? this.base.get(p)?.v, 0, this.inherited(p)));
     const aboveCeiling = Object.entries(b.paths).flatMap(([p, st]) => { const d = this.ceilingRefusal(p, st.before ?? this.base.get(p)?.v); return d ? [{ path: p, code: ABOVE_LOCAL_CEILING, detail: d }] : []; });
     if (!widening.length && aboveCeiling.length) return { status: 'failed', code: ABOVE_LOCAL_CEILING, result: { paths: aboveCeiling } };
-    if (widening.length) return { status: 'failed', code: 'widening_local_only', result: { paths: widening.map(([p]) => ({ path: p, code: 'widening_local_only', detail: REMOTE_SETTABLE.narrow[patternOf(p)] === 'less' ? LESS_REASON : MORE_REASON })) } };
+    if (widening.length) return { status: 'failed', code: 'widening_local_only', result: { paths: widening.map(([p]) => ({ path: p, code: 'widening_local_only', detail: reasonOf(patternOf(p)) })) } };
     const baseRevision = this.revision();
     const changes = Object.entries(b.paths).map(([p, s]) => {
       const base = this.base.get(p);

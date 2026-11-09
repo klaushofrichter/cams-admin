@@ -270,7 +270,11 @@ for `dailyCap` and `perCameraDailyCap`), every retention period and size cap
 only up (`more`; an unset size cap = no cap), so cams-admin can never make a
 proxy delete data. The capture intervals `stills.intervalS`,
 `events.poll.intervalS` and `cameras.*.stills.intervalS` only get shorter
-(`less`, #20: a longer interval thins out capture without switching it off).
+(`less`, #20: a longer interval thins out capture without switching it off);
+a camera's unset `stills.intervalS` counts as the host's `stills.intervalS`
+(for the value before and after the change), so its first interval may be any
+value up to the host's and its `config.unset` passes unless the host's is
+longer.
 `storage.*` and `cameras.*.storage.*` are local only.
 How a raised cap meets cam-proxy's shared storage budget (#20 M9, checked
 against cam-proxy `src/storage.ts`, 2026-11-09): the recordings cache
