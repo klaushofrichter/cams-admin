@@ -299,6 +299,12 @@ export function buildSchemas(mode: Mode): Record<string, S> {
     transfer: bool, kinds: arr(kindEn, MOVE_KINDS.length, { uniqueItems: true }), space: en(MOVE_SPACE_CHOICES as unknown as string[]), maxBudgetS: int(60, { maximum: 604800 }),
   });
   const moveSpace = all({ needed: int(), available: int(), fits: bool, perKind: optionalOnly(kindMap(int(), FILE_KINDS)), retentionProposal: nullable(pathMap) });
+  // Settings the target needs to take the camera (cam-proxy #240: a wider ftp.passive), proposed with its accept and approved
+  // with the plan (plan.targetSettings then carries them); firewall: what the target's host firewall must allow, in words.
+  const settingsProposal = obj({
+    settings: { type: 'object', propertyNames: { pattern: PATH_PATTERN }, additionalProperties: leafValue, minProperties: 1, maxProperties: SETTINGS_PROPOSAL_MAX },
+    firewall: str(300, { minLength: 1 }),
+  }, ['settings'], ['firewall']);
   // What the camera is, as the target needs it to add it (never a password: those travel sealed, never in cams-admin's messages).
   const connectionFields: Record<string, S> = { name: cameraName, host: str(255, { minLength: 1 }), protocol: en(['https', 'http']), user: str(64), onvifPort: port, rtspPort: port, baichuanPort: port };
   const moveCameraEvent = all({ proxyCameraId: camId, ...connectionFields });
@@ -324,8 +330,8 @@ export function buildSchemas(mode: Mode): Record<string, S> {
       camera: moveCameraOffer, summary: moveSummary, settings: moveSettings,
     }),
     'move.answer': obj({
-      ...mv, requestId, target: all({ proxyId: prxId, name: nameS }), accept: bool, reason: answerReason, detail: refusalDetail, space: moveSpace, estimateS: int(), kinds: acceptedKinds,
-    }, ['v', 'moveId', 'requestId', 'target', 'accept'], ['reason', 'detail', 'space', 'estimateS', 'kinds']),
+      ...mv, requestId, target: all({ proxyId: prxId, name: nameS }), accept: bool, reason: answerReason, detail: refusalDetail, space: moveSpace, estimateS: int(), kinds: acceptedKinds, settingsProposal,
+    }, ['v', 'moveId', 'requestId', 'target', 'accept'], ['reason', 'detail', 'space', 'estimateS', 'kinds', 'settingsProposal']),
     'move.start': all({ ...mv, plan: movePlan, settings: moveSettings, done: arr(chunkId, 512) }),
     'move.go': all({ ...mv, plan: movePlan, targetPublicKey: x25519, expectedLeaf: fp }),
     'move.release': all(mv),
@@ -352,7 +358,7 @@ export function buildSchemas(mode: Mode): Record<string, S> {
     'move.targets': empty, 'move.open': empty, 'move.answer': empty, 'move.go': empty, 'move.release': empty, 'move.cancel': empty, 'move.return.start': empty,
     'move.return.open': all({ chunks: int(), bytes: int() }),
     // kinds (optional): the move kinds the target accepts; a target before ptz sends none (= the five file kinds).
-    'move.offer': { anyOf: [obj({ accept: { const: true }, space: moveSpace, probeBps: int(), kinds: acceptedKinds }, ['accept', 'space', 'probeBps'], ['kinds']), obj({ accept: { const: false }, reason: offerReason, detail: refusalDetail }, ['accept', 'reason'], ['detail'])] },
+    'move.offer': { anyOf: [obj({ accept: { const: true }, space: moveSpace, probeBps: int(), kinds: acceptedKinds, settingsProposal }, ['accept', 'space', 'probeBps'], ['kinds', 'settingsProposal']), obj({ accept: { const: false }, reason: offerReason, detail: refusalDetail }, ['accept', 'reason'], ['detail'])] },
     'move.start': all({ publicKey: x25519, leafFingerprint: fp }),
     // Only the five file kinds: the recordings cache is not content, and ptz positions are rows, not files.
     'move.finish': all({ deleted: optionalOnly(kindMap(all({ files: int(), bytes: int() }), FILE_KINDS)) }),
@@ -420,8 +426,9 @@ export function buildSchemas(mode: Mode): Record<string, S> {
   const hostName = str(253, { minLength: 1 });
   const switchRef = all({ id: swId, model: en([...SWITCH_MODELS]), host: hostName, ports: portNo, offSeconds: int(1, { maximum: 120 }) });
   const portState = all({ port: portNo, poe: bool, watts: num, link: nullable(bool), tx: num, rx: num });
-  const locateProps: Record<string, S> = { found: bool, port: portNo, poe: bool, watts: num, link: nullable(bool), reason: en([...LOCATE_REASONS]), ratio: num };
-  const locateOptional = ['port', 'poe', 'watts', 'link', 'reason', 'ratio'];
+  // detail (optional, 1-200): what went wrong in words, with reason switch_error (cam-proxy #364 m3); older proxies send none.
+  const locateProps: Record<string, S> = { found: bool, port: portNo, poe: bool, watts: num, link: nullable(bool), reason: en([...LOCATE_REASONS]), ratio: num, detail: str(TEXT, { minLength: 1 }) };
+  const locateOptional = ['port', 'poe', 'watts', 'link', 'reason', 'ratio', 'detail'];
   const sn = nullable(str(64));
   const swCamId = id('cam');
   const switchArgs: Record<(typeof SWITCH_COMMANDS)[number], S> = {
@@ -444,7 +451,9 @@ export function buildSchemas(mode: Mode): Record<string, S> {
   const powerArgs: Record<(typeof POWER_COMMANDS)[number], S> = {
     'camera.power.set': all({ v: { const: 1 }, camera: camId, power }),
     'camera.power.cycling': all({ v: { const: 1 }, camera: camId, at: int() }),
-    'camera.power.cycled': all({ v: { const: 1 }, camera: camId, ok: bool, message: str() }),
+    // poeCut (optional, cam-proxy #364 m6): with ok false, true when PoE was cut and is on again (the camera is rebooting,
+    // the proxy keeps watching for it). Phased: cams-admin sends it only to a proxy that announced the capability power-poe-cut.
+    'camera.power.cycled': obj({ v: { const: 1 }, camera: camId, ok: bool, message: str(), poeCut: bool }, ['v', 'camera', 'ok', 'message'], ['poeCut']),
     'camera.power.cycle.result': obj({ v: { const: 1 }, camera: camId, requestId: str(64, { minLength: 1 }), ok: bool, reason: str() }, ['v', 'camera', 'requestId', 'ok'], ['reason']),
   };
   const switchSchemas: Record<string, S> = {};
@@ -492,12 +501,13 @@ export function buildSchemas(mode: Mode): Record<string, S> {
   const moveCheck = all({ complete: bool, missing: counts, recovered: counts, failed: counts, expired: counts });
   const moveEvent = (kind: (typeof MOVE_EVENT_KINDS)[number], props: Record<string, S>, optional: string[] = []): S =>
     obj({ proxyId: prxId, connId: id('con'), kind: { const: kind }, ...props }, ['proxyId', 'connId', 'kind', ...Object.keys(props).filter((k) => !optional.includes(k))], optional);
-  const proxyEvent = (kind: (typeof PROXY_EVENT_KINDS)[number], props: Record<string, S>): S =>
-    obj({ proxyId: prxId, connId: id('con'), kind: { const: kind }, ...props }, ['proxyId', 'connId', 'kind', ...Object.keys(props)]);
+  const proxyEvent = (kind: (typeof PROXY_EVENT_KINDS)[number], props: Record<string, S>, optional: string[] = []): S =>
+    obj({ proxyId: prxId, connId: id('con'), kind: { const: kind }, ...props }, ['proxyId', 'connId', 'kind', ...Object.keys(props).filter((k) => !optional.includes(k))], optional);
   const eventBody: S = {
     anyOf: [
       doneEvent,
-      proxyEvent('camera.power.cycle.request', { camera: camId, requestId: str(64, { minLength: 1 }) }),
+      // askedAt (optional, cam-proxy #364 m5): when the page asked (ms); cams-admin ignores a request asked over 5 minutes ago.
+      proxyEvent('camera.power.cycle.request', { camera: camId, requestId: str(64, { minLength: 1 }), askedAt: int() }, ['askedAt']),
       moveEvent('move.targets', { requestId, camera: camId }),
       moveEvent('move.request', {
         requestId, camera: moveCameraEvent, target: prxId, actor: all({ origin: en(['local', 'managed']), label }), summary: moveSummary, settings: moveSettings, bounds: nullable(moveBounds),
@@ -598,6 +608,8 @@ export const MOVE_LEFTOVER_ITEM_LEN = 80;
 export const CAMERA_ID_PATTERN = '^[a-z0-9][a-z0-9-]{0,31}$';
 export const MOVE_ID_PATTERN = '^mv_[0-9A-HJKMNP-TV-Z]{20}$';
 export const MOVE_OFFER_REASONS = ['moves_not_allowed', 'camera_unreachable', 'camera_limit', 'id_taken', 'busy', 'incompatible', 'no_site_ca', 'ca_does_not_cover_camera', 'external_cert'] as const;
+// A target's settingsProposal names at most this many settings (cam-proxy #240).
+export const SETTINGS_PROPOSAL_MAX = 8;
 export const MOVE_ANSWER_REASONS = [...MOVE_OFFER_REASONS, 'other_account', 'target_offline', 'not_routed', 'host_overridden', 'target_failed', 'offer_expired', 'not_registered', 'internal'] as const;
 export const MOVE_PHASES = ['opened', 'switching', 'switched', 'released', 'copying', 'copied', 'finished', 'cancelled', 'failed'] as const;
 // `failed` = copied with failures.
@@ -642,7 +654,8 @@ export const DISRUPTIVE_COMMANDS = ['switch.cycle', 'camera.remove', 'proxy.unen
 export const SWITCH_ID_PATTERN = '^sw_[A-Za-z0-9]{20}$';
 export const SWITCH_MODELS = ['sscpoe-web'] as const;
 export const POWER_KINDS = ['poe', 'data-only', 'adapter', 'unknown'] as const;
-export const LOCATE_REASONS = ['not_reachable', 'ambiguous', 'no_traffic'] as const;
+// switch_error (cam-proxy #364 m3): the operator could not read the switch for this camera (a survey goes on with the others).
+export const LOCATE_REASONS = ['not_reachable', 'ambiguous', 'no_traffic', 'switch_error'] as const;
 export const SWITCH_PORTS_MAX = 64;
 export const SWITCH_SURVEY_MAX = 16;
 // Failure codes of switch.cycle (status failed).

@@ -8,6 +8,7 @@ import type { LiveHub } from '../live';
 import type { Logger } from '../log';
 import { FieldError } from '../validate';
 import { tx } from '../db/open';
+import { ulidTime } from '../ids';
 import { SWITCH_SURVEY_MAX } from '../../contract/build';
 import type { CameraPower, PowerActorType, Switch, SwitchProblem } from './store';
 import type { SwitchService } from './service';
@@ -35,6 +36,13 @@ export const CYCLE_RUNNING = 'a power-cycle is already running';
 export const TOO_SOON = 'too soon';
 // At most one request per camera in this time from proxies (memory).
 export const PROXY_REQUEST_GAP_MS = 60_000;
+// A proxy's request asked longer ago than this is ignored (cam-proxy #364 m5): the proxy stopped waiting for its answer
+// after 5 minutes (ASK_TIMEOUT_MS), so a cut now would come unasked. Its age: askedAt, else the time of a pc_<ULID> requestId.
+export const PROXY_REQUEST_MAX_AGE_MS = 5 * 60_000;
+export const askedAtOf = (ev: { requestId: string; askedAt?: unknown }): number | null => {
+  if (typeof ev.askedAt === 'number' && Number.isSafeInteger(ev.askedAt)) return ev.askedAt;
+  return ev.requestId.startsWith('pc_') ? ulidTime(ev.requestId.slice(3)) : null;
+};
 interface CycleRequest { requestId: string; proxyId: string; proxyCameraId: string }
 
 export type PowerOutcome = { ok: true; commandId: string } | { ok: false; code: string; reason: string };
@@ -48,7 +56,8 @@ export interface PowerView {
   lastCheck: PowerFlow | null; lastCycle: PowerFlow | null;
 }
 // trunk: found on a port where the survey found two or more cameras (not mapped from there).
-export interface SurveyResultView { cameraId: string; camsId: string; found: boolean; port?: number; kind?: CameraPower['kind']; reason?: string; trunk?: boolean }
+// detail: the operator's words with reason switch_error (cam-proxy #364 m3).
+export interface SurveyResultView { cameraId: string; camsId: string; found: boolean; port?: number; kind?: CameraPower['kind']; reason?: string; detail?: string; trunk?: boolean }
 export interface TrunkView { port: number; cameras: { cameraId: string; camsId: string }[] }
 // trunks and problems: what this survey saw (problems: the configuration problems it found, chained_switch per trunk port).
 export interface SurveyView { switchId: string; at: number; state: 'running' | 'done'; commandIds: string[]; results: SurveyResultView[]; trunks: TrunkView[]; problems: SwitchProblem[] }
@@ -72,7 +81,14 @@ export const bareHost = (a: string): string => {
 };
 const ref = (s: Switch) => ({ id: s.id, model: s.model, host: s.host, ports: s.ports, offSeconds: s.offSeconds });
 const clamp = (s: string) => (s.length > 200 ? s.slice(0, 199) + '…' : s);
-const LOCATE_TEXT: Record<string, string> = { not_reachable: 'camera not reachable from the operator', ambiguous: 'no clear port (ambiguous)', no_traffic: 'no traffic on any port' };
+const LOCATE_TEXT: Record<string, string> = {
+  not_reachable: 'camera not reachable from the operator', ambiguous: 'no clear port (ambiguous)', no_traffic: 'no traffic on any port', switch_error: 'the switch answered with an error',
+};
+// A locate or survey answer's reason in words; switch_error with the operator's detail.
+const locateText = (res: Record<string, unknown>): string => {
+  const t = LOCATE_TEXT[String(res.reason)] ?? 'not found';
+  return res.reason === 'switch_error' && typeof res.detail === 'string' && res.detail ? clamp(`${t}: ${res.detail}`) : t;
+};
 const CYCLE_TEXT: Record<string, string> = {
   not_verified: "the camera's traffic is not on the mapped port",
   no_power: 'the port has PoE off or draws 0 W',
@@ -189,7 +205,7 @@ export class PowerService {
 
   // A camera's own proxy asks (camera.power.cycle.request): an unforced cycle as the proxy, answered with
   // camera.power.cycle.result {ok, reason?} when it is final (refusals right away). Audited camera-power-cycle.
-  requestFromProxy(proxyId: string, accountId: string, ev: { camera: string; requestId: string }): void {
+  requestFromProxy(proxyId: string, accountId: string, ev: { camera: string; requestId: string; askedAt?: number }): void {
     const req: CycleRequest = { requestId: ev.requestId, proxyId, proxyCameraId: ev.camera };
     const who: Who = { actor: proxyId, sysadmin: true, proxy: true };
     const audit = (c: Camera | null, out: PowerOutcome) => this.d.audit.write({
@@ -198,6 +214,16 @@ export class PowerService {
     });
     const row = this.d.db.prepare('SELECT id FROM cameras WHERE account_id = ? AND proxy_id = ? AND proxy_camera_id = ?').get(accountId, proxyId, ev.camera) as { id: string } | undefined;
     const c = row ? this.camera(row.id) : null;
+    const askedAt = askedAtOf(ev);
+    const ageMs = askedAt === null ? null : this.d.clock.now() - askedAt;
+    if (ageMs !== null && ageMs > PROXY_REQUEST_MAX_AGE_MS) {
+      // Ignored, not answered: the proxy no longer waits for this request.
+      this.d.audit.write({
+        actorType: 'proxy', actor: proxyId, action: 'camera-power-cycle', accountId, targetType: 'camera', targetId: c?.id ?? null, targetLabel: c?.camsId ?? null,
+        outcome: 'refused', detail: { requestId: req.requestId, camera: req.proxyCameraId, code: 'stale', reason: 'asked over 5 minutes ago: ignored', ageS: Math.floor(ageMs / 1000) },
+      });
+      return;
+    }
     let out: PowerOutcome;
     if (!c) out = this.refuse('not_in_admin', NOT_IN_ADMIN);
     else if (this.lastCycle.get(c.id)?.state === 'running') out = this.refuse('busy', CYCLE_RUNNING);
@@ -371,7 +397,7 @@ export class PowerService {
           if (res && res.found === true && Number.isSafeInteger(res.port) && !trunk) {
             return done({ sw, port: res.port as number, watts: typeof res.watts === 'number' ? res.watts : 0, poe: res.poe !== false });
           }
-          notes.push(`${sw.name}: ${trunk ? `trunk port ${trunk.port} (${trunk.cameras} cameras)` : res ? LOCATE_TEXT[String(res.reason)] ?? 'not found' : r.outcomeCode ? CYCLE_TEXT[r.outcomeCode] ?? r.outcomeCode : r.state}`);
+          notes.push(`${sw.name}: ${trunk ? `trunk port ${trunk.port} (${trunk.cameras} cameras)` : res ? locateText(res) : r.outcomeCode ? CYCLE_TEXT[r.outcomeCode] ?? r.outcomeCode : r.state}`);
           if (this.locateChain(who, c, host, list, k + 1, notes, flow, done) === null) done(null);
         });
       } catch (e) {
@@ -606,7 +632,8 @@ export class PowerService {
           continue;
         }
         const reason = typeof res.reason === 'string' ? res.reason : 'not found';
-        view.results.push({ cameraId: c.id, camsId: c.camsId, found: false, reason });
+        const detail = reason === 'switch_error' && typeof res.detail === 'string' && res.detail ? clamp(res.detail) : null;
+        view.results.push({ cameraId: c.id, camsId: c.camsId, found: false, reason, ...(detail ? { detail } : {}) });
         // notSeen only when the operator saw no traffic or no clear port (not_reachable: reported only).
         if (reason !== 'no_traffic' && reason !== 'ambiguous') continue;
         const cur = this.camera(c.id).power;

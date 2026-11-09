@@ -61,7 +61,14 @@ const ONBOARDING_STARTED = implemented('camera.onboarding.get');
 const VISION_STARTED = implemented('analytics.usage.get');
 // decommission: camera.remove.preview, camera.remove and proxy.unenroll, pending until cam-proxy implements camera.remove.
 const DECOMMISSION_STARTED = implemented('camera.remove');
-const FEATURE_STARTED: Record<string, boolean> = { 'move-ptz': PTZ_STARTED, onboarding: ONBOARDING_STARTED, vision: VISION_STARTED, decommission: DECOMMISSION_STARTED };
+// Phased contract additions (cam-proxy #364, #240): pending until cam-proxy's command args check names the new field.
+const argsSource = existsSync(file('src/fleet/command-args.ts')) ? readFileSync(file('src/fleet/command-args.ts'), 'utf8') : '';
+const POE_CUT_STARTED = argsSource.includes('poeCut');
+const MOVE_SETTINGS_STARTED = argsSource.includes('settingsProposal');
+const FEATURE_STARTED: Record<string, boolean> = {
+  'move-ptz': PTZ_STARTED, onboarding: ONBOARDING_STARTED, vision: VISION_STARTED, decommission: DECOMMISSION_STARTED,
+  'power-poe-cut': POE_CUT_STARTED, 'move-settings': MOVE_SETTINGS_STARTED,
+};
 const DIR = join(__dirname, '../../contract/v1/fixtures');
 const ctxOf = (c: Ctx, journal: (id: string) => unknown = () => undefined) => {
   const seen = new SeenIds();

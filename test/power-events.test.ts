@@ -8,6 +8,7 @@ import { enrolled, makeClient, resetAccounts, startServer, until, type Running }
 import type { ProxyClient } from '../test-client/client';
 import { POWER_COMMANDS, SWITCH_COMMANDS } from '../contract/build';
 import type { CameraPower } from '../server/switches/store';
+import { ulid } from '../server/ids';
 
 const ACTOR = 'admin@example.com';
 const ALL = [...SWITCH_COMMANDS, ...POWER_COMMANDS];
@@ -276,5 +277,26 @@ describe('power-cycle requests from proxies', () => {
     await until(() => own.client.state === 'connected', 8000, 'own reconnected');
     await settle();
     expect(results(own)).toHaveLength(1);
+  });
+  it('a request asked over 5 minutes ago (its pc_<ULID> time, or askedAt) is ignored: no cycle, no answer, audited (#364 m5)', async () => {
+    const p = await proxy();
+    const { cam } = await poeCamera(p);
+    const now = clock.now();
+    // pc_<ULID>: the ULID's time is when the page asked; askedAt (optional) wins over it.
+    expect(p.client.emitEvent({ kind: 'camera.power.cycle.request', camera: cam.proxyCameraId, requestId: `pc_${ulid(now - 5 * 60_000 - 1)}` })).toBe(true);
+    expect(p.client.emitEvent({ kind: 'camera.power.cycle.request', camera: cam.proxyCameraId, requestId: `pc_${ulid(now)}`, askedAt: now - 6 * 60_000 })).toBe(true);
+    await until(() => audits('camera-power-cycle').length === 2, 5000, 'stale audits');
+    await settle();
+    expect(sent(p, 'switch.cycle')).toEqual([]);
+    expect(results(p)).toEqual([]);
+    expect(audits('camera-power-cycle')).toEqual([
+      expect.objectContaining({ actorType: 'proxy', actor: p.prx, outcome: 'refused', targetId: cam.id, code: 'stale', ageS: 300 }),
+      expect.objectContaining({ actorType: 'proxy', actor: p.prx, outcome: 'refused', targetId: cam.id, code: 'stale', ageS: 360 }),
+    ]);
+    // A young one (ULID time 4 minutes ago, or a requestId that is no pc_<ULID> without askedAt) runs; the ignored ones started no 60 s gap.
+    ask(p, cam.proxyCameraId, `pc_${ulid(now - 4 * 60_000)}`);
+    await until(() => results(p).length === 1, 5000, 'young result');
+    expect(results(p)[0]).toMatchObject({ ok: true });
+    expect(sent(p, 'switch.cycle')).toHaveLength(1);
   });
 });

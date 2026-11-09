@@ -32,7 +32,7 @@ export interface HubDeps {
   // A verified, strictly valid move event from a proxy (no cmdId). Duplicates are normal: the receiver dedupes.
   onProxyEvent?: (proxyId: string, accountId: string, body: MoveEvent) => void;
   // A verified, strictly valid camera.power.cycle.request from a proxy (PowerService.requestFromProxy).
-  onProxyPowerEvent?: (proxyId: string, accountId: string, body: { camera: string; requestId: string }) => void;
+  onProxyPowerEvent?: (proxyId: string, accountId: string, body: { camera: string; requestId: string; askedAt?: number }) => void;
   // A proxy's connection is live (after its welcome): a move it takes part in re-derives its next step.
   onProxyLive?: (proxyId: string) => void;
 }

@@ -154,6 +154,7 @@ export function fixtures(): Record<string, unknown> {
   const settings = { name: 'Garage Süd', statusPollS: 30, ftp: { enabled: true, stream: 'main' }, stills: { stream: 'sub', intervalS: 1 }, storage: { sharePercent: 40 }, events: { poll: { enabled: true } } };
   const plan = { transfer: true, kinds: ['clips', 'events', 'checks'], space: 'all', targetSettings: null, budgetS: 7200, estimateS: 1800 };
   const space = { needed: 52_428_800, available: 10_737_418_240, fits: true, perKind: { clips: 50_000_000, events: 2_428_800 }, retentionProposal: null };
+  const settingsProposal = { settings: { 'ftp.passive': '30000-30029' }, firewall: 'open TCP 2121 and 30000-30029 for 192.0.2.10 in the host firewall' };
   const camConn = { name: 'Garage Süd', host: '192.0.2.10', protocol: 'https', user: 'cams', onvifPort: 8000, rtspPort: 554, baichuanPort: 9000 };
   const offerArgs = {
     v: 1, moveId: MV, token: 'example-move-token-not-a-secret',
@@ -233,6 +234,13 @@ export function fixtures(): Record<string, unknown> {
     }, 'a ptz chunk: the positions as one chunk (no files)'),
     'valid-event-move-phase-check-ptz': moveEvent(3, { kind: 'move.phase', moveId: MV, role: 'target', phase: 'copied', ok: false, check: { complete: false, missing: {}, recovered: {}, failed: { ptz: 1 }, expired: {} }, keepDays: 30 },
       'the completeness check counts ptz too'),
+    // --- a target's settings proposal (cam-proxy #240, phased). $context.feature 'move-settings': the cross-check treats the
+    // command fixture as pending while cam-proxy's move.answer check does not take settingsProposal.
+    'valid-result-move-offer-settings-proposal': { $note: 'the target accepts if the plan also widens its FTP passive range (optional; firewall says what its host firewall must allow)', $command: 'move.offer', schema: 'result',
+      message: result(5, { phase: 'done', status: 'ok', result: { accept: true, space, probeBps: 12_500_000, settingsProposal } }) },
+    'valid-command-move-answer-settings-proposal': { ...moveValid('move.answer', ['move.send'], { v: 1, moveId: MV, requestId: RQ, target: { proxyId: PRX_T, name: 'Pi' }, accept: true, space, estimateS: 1800, settingsProposal },
+      "the target's settings proposal, relayed only to a source whose hello announced move-settings"), $context: { ...ctx({ allow: ['move.send'] }), feature: 'move-settings' } },
+    'valid-event-move-approve-settings': moveEvent(3, { kind: 'move.approve', moveId: MV, plan: { ...plan, targetSettings: settingsProposal.settings } }, "a plan that approves the target's settings proposal: targetSettings carries its settings"),
     'drift-event-move-request-summary-ptz': drift('event', signed(env('event', 3, {
       proxyId: PRX, connId: CON, kind: 'move.request', requestId: RQ, camera: { proxyCameraId: 'cam1', ...camConn }, target: PRX_T, actor: { origin: 'local', label: 'admin' },
       summary: { ...summary, ptz: { files: 0, bytes: 0, rows: 3, oldest: null, newest: null } }, settings,
@@ -332,6 +340,15 @@ export function fixtures(): Record<string, unknown> {
       'a switch id is sw_ and 20 letters or digits (strict args refuse)')),
     'valid-event-camera-power-cycle-request': poe(valid('event', signed(env('event', 3, { proxyId: PRX, connId: CON, kind: 'camera.power.cycle.request', camera: 'cam1', requestId: 'req-0123456789' }), PROXY),
       "the camera's proxy asks cams-admin to power-cycle the camera through its switch (no force from a proxy)")),
+    // cam-proxy #364 (phased): a survey's per-camera switch error, poeCut on camera.power.cycled, askedAt on a request.
+    'valid-result-switch-survey-switch-error': poe(p3Result('switch.survey', 'one camera found, one whose switch read failed (switch_error, detail in words): the survey goes on', {
+      status: 'ok', result: { sn: 'SN-EXAMPLE', results: [{ camera: CAMID, found: true, port: 8, poe: true, watts: 4.2, link: true, ratio: 12.5 }, { camera: 'cam_1123456789ABCDEFGHJK', found: false, reason: 'switch_error', detail: 'the switch answered HTTP 500' }] },
+    })),
+    'valid-command-camera-power-cycled': poe(p3Valid('PoE is on again: the power-cycle is over', ['camera.power.cycled'], 'camera.power.cycled', { v: 1, camera: 'cam1', ok: true, message: 'power-cycled on Switch port 8' })),
+    'valid-command-camera-power-cycled-poe-cut': { ...p3Valid('the power-cycle failed after PoE was cut and turned on again (poeCut, optional): the camera is rebooting, the proxy keeps watching', ['camera.power.cycled'], 'camera.power.cycled',
+      { v: 1, camera: 'cam1', ok: false, message: 'PoE may still be off on the port: check the switch', poeCut: true }), $context: { ...ctx({ allow: ['camera.power.cycled'] }), feature: 'power-poe-cut' } },
+    'valid-event-camera-power-cycle-request-asked-at': poe(valid('event', signed(env('event', 3, { proxyId: PRX, connId: CON, kind: 'camera.power.cycle.request', camera: 'cam1', requestId: 'pc_01K6000000000000000000000A', askedAt: NOW - 1000 }), PROXY),
+      'a request with askedAt (optional): when the page asked; cams-admin ignores one asked over 5 minutes ago')),
   };
 
   // --- remove a camera, decommission a proxy (decommission spec 2026-11-08). $context.feature: the cross-check treats these

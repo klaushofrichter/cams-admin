@@ -207,7 +207,7 @@ export class Connection {
     if (!row) return refuse('unknown_proxy');
     if (power) {
       try {
-        d.onProxyPowerEvent!(this.proxyId!, row.account_id, { camera: b.camera as string, requestId: b.requestId as string });
+        d.onProxyPowerEvent!(this.proxyId!, row.account_id, { camera: b.camera as string, requestId: b.requestId as string, ...(typeof b.askedAt === 'number' ? { askedAt: b.askedAt } : {}) });
       } catch (e) {
         d.log.error({ err: e, proxyId: this.proxyId }, 'power_event_handler_failed');
       }

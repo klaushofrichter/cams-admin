@@ -21,7 +21,7 @@ const resign = (m: Record<string, any>) => { const { sig: _s, ...rest } = m; ret
 
 describe('the reference proxy check agrees with every proxy fixture', () => {
   const cases = all.filter((x) => x.$expect?.receiver === 'proxy' || (x.schema === 'command' && x.name.startsWith('valid-')));
-  it('covers 81 fixtures (P2 17, P3 24, moves 22, onboarding 3, vision 4, poe 3, decommission 8)', () => expect(cases).toHaveLength(81));
+  it('covers 84 fixtures (P2 17, P3 24, moves 23, onboarding 3, vision 4, poe 5, decommission 8)', () => expect(cases).toHaveLength(84));
   for (const f of cases) {
     it(f.name, () => {
       const c = f.$context;
@@ -429,7 +429,7 @@ describe('move commands', () => {
   });
   it('move fixtures: the valid ones pass their args schema; the refused ones fail it or the allow check', () => {
     const names = readdirSync(DIR).map((f) => f.replace(/\.json$/, '')).filter((n) => /-move-/.test(n));
-    expect(names.filter((n) => n.startsWith('valid-command-move-') && n !== 'valid-command-move-begin-no-bounds' && n !== 'valid-command-move-finish-return' && n !== 'valid-command-move-answer-refused-detail' && n !== 'valid-command-move-answer-kinds').sort()).toEqual(MOVE.map((c) => `valid-command-${c.replaceAll('.', '-')}`).sort());
+    expect(names.filter((n) => n.startsWith('valid-command-move-') && n !== 'valid-command-move-begin-no-bounds' && n !== 'valid-command-move-finish-return' && n !== 'valid-command-move-answer-refused-detail' && n !== 'valid-command-move-answer-kinds' && n !== 'valid-command-move-answer-settings-proposal').sort()).toEqual(MOVE.map((c) => `valid-command-${c.replaceAll('.', '-')}`).sort());
     for (const f of all.filter((x) => /^valid-command-move-/.test(x.name))) expect(argsOk(f.message.body.command, f.message.body.args), f.name).toBe(true);
     expect(names.filter((n) => n.startsWith('valid-command-move-begin')).sort()).toEqual(['valid-command-move-begin', 'valid-command-move-begin-no-bounds']);
     const ns = all.find((x) => x.name === 'refused-move-summary-not-allowed')!;
