@@ -340,7 +340,7 @@ describe('ProxyConfig', () => {
     const bad = C().preview(ACTOR, p.acc, p.prx, { set: { 'sse.pingS': 8 } });
     await final(p.acc, p.prx, bad.commandId);
     for (const id of [pv.commandId, get, bad.commandId]) expect(() => C().rollbackPreview(ACTOR, p.acc, p.prx, id), id).toThrow(/not_rollbackable/);
-    p.client.refuseNext = { code: 'paused' };
+    p.client.refuseNext = { code: 'paused', command: 'config.set' }; // not an automatic config.get that may come first
     const refused = cmds().create(ACTOR, p.acc, p.prx, 'config.set', { v: 1, dryRun: false, baseRevision: p.ref.revision(), set: { 'sse.pingS': 9 } });
     await final(p.acc, p.prx, refused.id);
     expect(() => C().rollbackPreview(ACTOR, p.acc, p.prx, refused.id)).toThrow(/not_rollbackable/);
@@ -458,7 +458,7 @@ describe('ProxyConfig', () => {
     await viewed(p.acc, p.prx);
     const pv = C().preview(ACTOR, p.acc, p.prx, { set: { 'sse.pingS': 7 } });
     await final(p.acc, p.prx, pv.commandId);
-    p.client.refuseNext = { code: 'rate_limited', retryAfterS: 20 };
+    p.client.refuseNext = { code: 'rate_limited', retryAfterS: 20, command: 'config.set' };
     const a1 = C().apply(ACTOR, p.acc, p.prx, pv.commandId);
     expect(await final(p.acc, p.prx, a1.commandId)).toMatchObject({ state: 'refused', outcomeCode: 'rate_limited', previewOf: null });
     expect(cmds().usedPreview(pv.commandId)).toBe(false);
