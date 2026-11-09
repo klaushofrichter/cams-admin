@@ -5,6 +5,7 @@ import { jcs } from '../crypto/jcs';
 import { sha256hex, signEnvelope } from '../crypto/ed25519';
 import { ApiError } from '../registry';
 import { SITE_PATTERN } from '../../contract/build';
+import { pinTransportOk } from './pinTransport';
 
 // The signed per-instance configuration snapshot (contract cams-v1, M §9.3,
 // rulings R4-1, R4-3). Every field is mapped one by one from an explicit
@@ -36,8 +37,9 @@ type Row = Record<string, unknown>;
 // "r:" + 16 hex over the instance, its version, its served accounts' revisions and the signing key (R4-1).
 // The snapshot's format: bump it whenever the server changes what a snapshot
 // says for the same database rows, so the revision moves and every cams
-// fetches the new one instead of getting 304 on the old (2: #48; 3: cameras[].move; 4: accounts[].viewerTokens; 5: viewerTokens[].role).
-export const SNAPSHOT_FORMAT = 5;
+// fetches the new one instead of getting 304 on the old (2: #48; 3: cameras[].move; 4: accounts[].viewerTokens; 5: viewerTokens[].role;
+// 6: no caFingerprints with a plain-http, non-loopback URL, #106).
+export const SNAPSHOT_FORMAT = 6;
 // How long a move attestation holds, from the switch-over.
 export const MOVE_ATTEST_MS = 24 * 3600_000;
 // Phases in which the camera is on the target for good (a cancel puts it back).
@@ -74,7 +76,10 @@ export function buildSnapshot(d: SnapshotDeps, instanceId: string): Snapshot {
       .map((p): SnapProxy => ({
         id: p.id as string, name: p.name as string, displayName: p.display_name as string, url: p.url as string | null, adminUiUrl: p.admin_ui_url as string | null,
         // A TLS name only goes with an https URL: a route's plain-http override (cams on the proxy's own host) drops it, or cams refuses the account part.
-        tlsServername: typeof p.url === 'string' && p.url.startsWith('https:') ? (p.tls_servername as string | null) : null, caFingerprints: (JSON.parse(p.ca_fingerprints as string) as unknown[]).filter((x): x is string => typeof x === 'string'),
+        tlsServername: typeof p.url === 'string' && p.url.startsWith('https:') ? (p.tls_servername as string | null) : null,
+        // Pins only where cams takes them (#106): a plain-http, non-loopback route (cams in the cluster reaching its proxy
+        // in-cluster) gets none, else cams refuses the whole account part; the pin keeps guarding the https paths.
+        caFingerprints: pinTransportOk(p.url as string | null) ? (JSON.parse(p.ca_fingerprints as string) as unknown[]).filter((x): x is string => typeof x === 'string') : [],
         tokens: (q(`SELECT id, kind, state, retire_at FROM proxy_tokens WHERE proxy_id = ? AND holder = ?
           AND (state IN ('pending','active','retiring') OR (state = 'revoked' AND revoked_at > ?)) ORDER BY created_at, id`).all(p.id as string, instanceId, now - REVOKED_KEEP_MS) as Row[])
           .map((t) => ({ id: t.id as string, kind: t.kind as SnapToken['kind'], state: t.state as SnapToken['state'], retireAt: t.retire_at as number | null })),
@@ -118,4 +123,14 @@ export function encodeSnapshot(s: Snapshot, maxBytes = MAX_SNAPSHOT_BYTES): Buff
   const b = Buffer.from(JSON.stringify(s), 'utf8');
   if (b.length > maxBytes) throw new ApiError(500, 'snapshot_too_large');
   return b;
+}
+
+// #106: the cams instances that reach this proxy over a plain-http, non-loopback URL (a visible route with its own
+// URL, or the registered URL): their snapshot carries no CA pins for it. Shown next to the pins (proxy page, /diag/proxies).
+export interface PlainHttpRoute { instanceId: string; name: string; displayName: string; url: string }
+export function plainHttpRoutes(db: Db, proxyId: string): PlainHttpRoute[] {
+  return (db.prepare(`SELECT i.id, i.name, i.display_name, COALESCE(r.url, p.url) url FROM cams_instance_routes r JOIN cams_instances i ON i.id = r.instance_id
+    JOIN proxies p ON p.id = r.proxy_id WHERE r.proxy_id = ? AND r.hidden = 0 ORDER BY i.name`).all(proxyId) as Row[])
+    .filter((r) => typeof r.url === 'string' && !pinTransportOk(r.url))
+    .map((r) => ({ instanceId: r.id as string, name: r.name as string, displayName: r.display_name as string, url: r.url as string }));
 }
