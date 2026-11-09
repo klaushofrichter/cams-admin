@@ -3,6 +3,7 @@ import { tmpDir } from './helpers/tmp';
 import { startServer, type Running } from './helpers/server';
 import { enrollCamsKey, signedFetch, type CamsKeyT } from './helpers/cams';
 import { readEpoch } from '../server/db/open';
+import { strictCamsErrors, strictCamsValidator } from './helpers/contract';
 
 const REPORT = { v: 1, mode: 'cams-admin', version: '2026.10.07.1', appliedRevision: null, cacheVerifiedAt: null, lastPullAt: null, held: [], keptOld: [], shadow: null, tokens: { managed: 0, pending: 0, legacy: 0 }, problems: [] };
 
@@ -54,9 +55,12 @@ describe('cams status reports (POST /cams/v1/report)', () => {
 
   it('report with heldProxies is stored and shown in the instance view data', async () => {
     const px = 'prx_' + '0'.repeat(20);
-    const r = await post({ ...REPORT, heldProxies: [{ accountId: acc.id, proxyId: px, fields: ['url', 'tlsServername'] }] });
+    // The contract's field names (#42 T7): the strict schema takes them.
+    const body = { ...REPORT, heldProxies: [{ accountId: acc.id, proxyId: px, fields: ['proxyUrl', 'proxyTlsServername'] }] };
+    expect(strictCamsValidator('report-request')(body), strictCamsErrors()).toBe(true);
+    const r = await post(body);
     expect(r.status).toBe(200);
-    expect(s.built.camsInstances.live(inst.id).report).toMatchObject({ heldProxies: [{ accountId: acc.id, proxyId: px, fields: ['url', 'tlsServername'] }] });
+    expect(s.built.camsInstances.live(inst.id).report).toMatchObject({ heldProxies: [{ accountId: acc.id, proxyId: px, fields: ['proxyUrl', 'proxyTlsServername'] }] });
     const d = await s.api('GET', '/dashboard');
     expect(d.cams[0]).toMatchObject({ held: 1, heldProxies: 1 });
     expect(await post({ ...REPORT, heldProxies: [{ accountId: acc.id, proxyId: px, fields: [], extra: 1 }] })).toEqual({ status: 400, json: { error: 'invalid', field: 'heldProxies' } });

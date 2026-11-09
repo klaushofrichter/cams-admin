@@ -72,7 +72,7 @@
   <Confirm title="Declare {camera.name} a power adapter" body="This camera was verified on a PoE port. Declared as an adapter, it is no longer power-cycled from here and surveys skip it." ok="Declare adapter" onconfirm={adapter} oncancel={() => (confirmAdapter = false)} />
 {/if}
 {#if confirmForce && power?.kind === 'poe'}
-  <Confirm title="Force power-cycle" body={forceCycleText(sw?.name ?? 'the switch', power.port)} ok="Cut power" onconfirm={force} oncancel={() => (confirmForce = false)} />
+  <Confirm title="Force power-cycle" body={forceCycleText(sw?.name ?? 'the switch', power.port)} typed={CYCLE_TYPED} ok="Cut power" onconfirm={force} oncancel={() => (confirmForce = false)} />
 {/if}
 
 <style>

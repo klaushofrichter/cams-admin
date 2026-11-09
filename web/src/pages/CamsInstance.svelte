@@ -12,6 +12,7 @@
   import Confirm from '../components/Confirm.svelte';
   import DeleteLines from '../components/DeleteLines.svelte';
   import { instanceDeleteLines } from '../lib/deletes';
+  import { routePinWarning } from '../lib/pins';
 
   let { instanceId }: { instanceId: string } = $props();
   let inst = $state<any>(null);
@@ -193,7 +194,8 @@
                 <td>{p.displayName} <span class="mono muted">{p.accountName}/{p.name}</span></td>
                 <td class="hide-phone mono">{p.url ?? '—'}</td>
                 <td><input type="checkbox" bind:checked={edit[p.id].visible} data-testid="route-visible-{p.name}" /> <span class="muted" data-testid="route-state-{p.name}">{routeOf(p) && !routeOf(p).hidden ? 'visible' : 'not visible'}</span></td>
-                <td><input class="mono" bind:value={edit[p.id].url} placeholder="(registered URL)" data-testid="route-url-{p.name}" disabled={!edit[p.id].visible} /></td>
+                <td><input class="mono" bind:value={edit[p.id].url} placeholder="(registered URL)" data-testid="route-url-{p.name}" disabled={!edit[p.id].visible} />
+                  {#if edit[p.id].visible && routePinWarning(p.caFingerprints ?? [], edit[p.id].url, p.url)}<div class="warn-text" data-testid="route-pin-warning-{p.name}">{routePinWarning(p.caFingerprints ?? [], edit[p.id].url, p.url)}</div>{/if}</td>
                 <td class="row"><button class="btn" data-testid="route-save-{p.name}" onclick={() => saveRoute(p)}>Save</button></td>
               </tr>
             {/if}
@@ -278,6 +280,7 @@
 {/if}
 
 <style>
+  .warn-text { color: var(--warning); }
   h2, h3 { margin: 0; }
   h3 { margin-top: 8px; font-size: 16px; }
   .two { grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }

@@ -115,7 +115,7 @@ describe('the cams snapshot (GET /cams/v1/config)', () => {
   it('revision changes with the snapshot format: a server change to what the snapshot says reaches every cams (no 304 on the old one)', () => {
     expect(snapshotRevision(d.db, cluster.id, FP(), SNAPSHOT_FORMAT)).toBe(snapshotRevision(d.db, cluster.id, FP()));
     expect(snapshotRevision(d.db, cluster.id, FP(), SNAPSHOT_FORMAT + 1)).not.toBe(snapshotRevision(d.db, cluster.id, FP()));
-    expect(SNAPSHOT_FORMAT).toBe(5); // 2: no TLS name with a plain-http URL (#48); 3: cameras[].move attestation; 4: accounts[].viewerTokens; 5: viewerTokens[].role
+    expect(SNAPSHOT_FORMAT).toBe(6); // 2: no TLS name with a plain-http URL (#48); 3: cameras[].move attestation; 4: accounts[].viewerTokens; 5: viewerTokens[].role; 6: no pins over plain http (#106)
   });
 
   it('revision changes on a user role change, a route change, a token state change, served accounts, rotate-now, a key change, and not on a heartbeat', async () => {
@@ -186,6 +186,18 @@ describe('the cams snapshot (GET /cams/v1/config)', () => {
     const direct = buildSnapshot(d, cluster.id).accounts.find((a) => a.name === 'home')!.proxies.find((x) => x.name === 'pi')!;
     expect([direct.url, direct.tlsServername]).toEqual(['https://proxy.example.net:8480', 'proxy.pi.internal']);
     s.built.db.prepare('UPDATE proxies SET tls_servername = NULL WHERE id = ?').run(piProxy.id);
+  });
+
+  it('#106: a plain-http, non-loopback route URL carries no CA pins (cams refuses the pair); loopback http and https keep them', async () => {
+    await s.api('PUT', `/cams-instances/${cluster.id}/routes/${piProxy.id}`, { url: 'http://cam-proxy.cam-proxy.svc.cluster.local:8480', hidden: false });
+    const plain = buildSnapshot(d, cluster.id);
+    const viaHttp = plain.accounts.find((a) => a.name === 'home')!.proxies.find((x) => x.name === 'pi')!;
+    expect([viaHttp.url, viaHttp.caFingerprints]).toEqual(['http://cam-proxy.cam-proxy.svc.cluster.local:8480', []]);
+    expect(strictCamsValidator('snapshot')(plain), strictCamsErrors()).toBe(true);
+    const loop = buildSnapshot(d, pi.id).accounts[0].proxies.find((x) => x.name === 'pi')!;
+    expect([loop.url, loop.caFingerprints]).toEqual(['http://127.0.0.1:8480', ['SHA256:' + 'AB'.repeat(32)]]);
+    await s.api('PUT', `/cams-instances/${cluster.id}/routes/${piProxy.id}`, { url: null, hidden: false });
+    expect(buildSnapshot(d, cluster.id).accounts.find((a) => a.name === 'home')!.proxies.find((x) => x.name === 'pi')!.caFingerprints).toEqual(['SHA256:' + 'AB'.repeat(32)]);
   });
 
   it('snapshot carries proxy site and camera moveId', () => {

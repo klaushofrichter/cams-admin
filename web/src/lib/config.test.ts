@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ceilingOf, EFFECT, nameError, renameError, renameOutcome, waitCommand, widens, groupPaths, isRemoteSettable, narrowNote, narrowOk, parseValue, rollbackable, stateLine, valueText, type ConfigView } from './config';
+import { backedOffText, ceilingOf, EFFECT, nameError, renameError, renameOutcome, waitCommand, widens, groupPaths, isRemoteSettable, narrowNote, narrowOk, parseValue, rollbackable, stateLine, valueText, type ConfigView } from './config';
 
 const view: ConfigView = {
   revision: `sha256:${'a'.repeat(64)}`, schema: 1, cameras: ['cam1'], omittedCameras: [], fetchedAt: 1, cmdId: 'cmd_0123456789ABCDEFGHJK',
@@ -64,6 +64,8 @@ describe('config (Settings UI)', () => {
     expect(narrowNote('retention.clipsDays')).toBe('only higher from cams-admin (keeps data longer)');
     expect(narrowNote('ftp.maxGB')).toBe('only higher from cams-admin (keeps data longer)');
     expect(narrowNote('analytics.googleVision.dailyCap')).toBe('only lower from cams-admin (spending)');
+    expect(narrowNote('cameras.cam1.stills.intervalS')).toBe('only shorter from cams-admin (captures no less often)');
+    expect(narrowOk('events.poll.intervalS', 10, 60)).toBe(false);
     expect(narrowNote('storage.maxPercent')).toBe('storage settings are local only');
     expect(narrowNote('cameras.cam1.storage.sharePercent')).toBe('storage settings are local only');
     expect(narrowNote('sse.pingS')).toBeNull();
@@ -149,5 +151,13 @@ describe('config (Settings UI)', () => {
   it('every disruptive action and proxy.restart has an effect sentence', () => {
     for (const a of ['restart', 'camera-reboot', 'camera-powercycle', 'camera-ftp-setup', 'camera-ntp-set', 'camera-cert-push', 'camera-time-set', 'proxy.restart']) expect(EFFECT[a], a).toMatch(/\.$/);
     expect(EFFECT['camera-ftp-off']).toBeUndefined(); // never remote (cam-proxy #196)
+  });
+});
+
+describe('#20: automatic reads backed off', () => {
+  it('says how many reads in a row and when the next one is', () => {
+    expect(backedOffText(null, 0)).toBe('');
+    expect(backedOffText({ reads: 6, nextAt: 120_000 }, 0)).toBe("The proxy's settings changed (or could not be read) 6 times in a row, so cams-admin reads them less often now: next in about 2 minutes. Reload reads them at once.");
+    expect(backedOffText({ reads: 7, nextAt: 10_000 }, 0)).toContain('next in about 1 minute.');
   });
 });

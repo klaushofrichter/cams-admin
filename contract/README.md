@@ -268,7 +268,17 @@ never remote-settable, whatever a proxy reports. `narrow` paths move one way
 only from cams-admin: Google Vision spending only down (`less`; 0 = no cap
 for `dailyCap` and `perCameraDailyCap`), every retention period and size cap
 only up (`more`; an unset size cap = no cap), so cams-admin can never make a
-proxy delete data. `storage.*` and `cameras.*.storage.*` are local only.
+proxy delete data. The capture intervals `stills.intervalS`,
+`events.poll.intervalS` and `cameras.*.stills.intervalS` only get shorter
+(`less`, #20: a longer interval thins out capture without switching it off).
+`storage.*` and `cameras.*.storage.*` are local only.
+How a raised cap meets cam-proxy's shared storage budget (#20 M9, checked
+against cam-proxy `src/storage.ts`, 2026-11-09): the recordings cache
+(`recordings.cacheMB`) is a cache and goes first under the budget, so a larger
+cache never pushes other files out. A raised `ftp.maxGB` or `previews.maxGB`
+lets that kind grow, and over the budget the oldest hours go in the order
+stills, clips, previews (never a camera's newest `storage.keepHours`); the
+budget itself (`storage.*`, the proxy profile) stays local only.
 A `config.rollback` that would lower a raise-only value, raise spending, or
 touch a local-only path fails `widening_local_only` (cam-proxy #196: no
 longer exempt from `narrow`).

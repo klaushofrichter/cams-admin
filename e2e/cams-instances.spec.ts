@@ -7,7 +7,7 @@ test.beforeEach(async ({ context }) => signIn(context));
 test('a cams instance: served accounts, routes default-deny (one loopback route), a code shown once with both commands, rotate, block', async ({ page }, info) => {
   const accA = await api(page, 'POST', '/accounts', { name: uniq(info, 'ca'), displayName: 'Cams A' });
   const accB = await api(page, 'POST', '/accounts', { name: uniq(info, 'cb'), displayName: 'Cams B' });
-  await api(page, 'POST', `/accounts/${accA.id}/proxies`, { name: 'pi', displayName: 'Pi', runsOn: 'local-host', url: 'https://proxy.example.net:8480' });
+  await api(page, 'POST', `/accounts/${accA.id}/proxies`, { name: 'pi', displayName: 'Pi', runsOn: 'local-host', url: 'https://proxy.example.net:8480', caFingerprints: [`SHA256:${'AB'.repeat(32)}`] });
   await api(page, 'POST', `/accounts/${accA.id}/proxies`, { name: 'cluster', displayName: 'Cluster', runsOn: 'cluster' });
   const name = uniq(info, 'cms');
   await page.goto('/#/cams-instances');
@@ -27,7 +27,12 @@ test('a cams instance: served accounts, routes default-deny (one loopback route)
   // Routes are default-deny: nothing is visible until routed; the Pi over loopback, the cluster proxy left out.
   await expect(page.getByTestId('route-state-pi')).toHaveText('not visible');
   await page.getByTestId('route-visible-pi').check();
+  // #106: the pinned Pi over plain, non-loopback http would get no pins: a warning; loopback http keeps them.
+  await expect(page.getByTestId('route-pin-warning-pi')).toHaveCount(0);
+  await page.getByTestId('route-url-pi').fill('http://cam-proxy.cam-proxy.svc.cluster.local:8480');
+  await expect(page.getByTestId('route-pin-warning-pi')).toContainText('without its CA pins');
   await page.getByTestId('route-url-pi').fill('http://127.0.0.1:8480');
+  await expect(page.getByTestId('route-pin-warning-pi')).toHaveCount(0);
   await page.getByTestId('route-save-pi').click();
   await expect(page.getByTestId('route-state-pi')).toHaveText('visible');
   await expect(page.getByTestId('route-state-cluster')).toHaveText('not visible');

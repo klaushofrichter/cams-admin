@@ -15,7 +15,7 @@ import type { Tokens } from '../tokens/service';
 import type { CamsInstances } from '../cams/instances';
 import type { Importer } from '../import/importer';
 import { exportForInstance } from '../import/export';
-import { snapshotRevision } from '../cams/snapshot';
+import { plainHttpRoutes, snapshotRevision } from '../cams/snapshot';
 import type { ProxyConfig } from '../config/service';
 import type { Vision } from '../vision/service';
 import type { SwitchService } from '../switches/service';
@@ -83,7 +83,7 @@ export function apiRouter(d: ApiDeps): express.Router {
   r.use('/accounts/:accountId/import', sessionBeforeBody(d), express.json({ limit: 1024 * 1024 }));
   r.use(express.json({ limit: 64 * 1024 }));
   r.use(...requireAuth(d));
-  // The e-mail of the session, or ops-token:<8hex> (set by requireAuth).
+  // The e-mail of the session, or ops-token:<8hex> (<name>) (set by requireAuth).
   const actor = (res: Response): string => {
     if (typeof res.locals.actor !== 'string') throw new Error('no actor');
     return res.locals.actor;
@@ -244,7 +244,7 @@ export function apiRouter(d: ApiDeps): express.Router {
     return keyView(k);
   }));
   // The proxy's reported site-CA pins into the registry (a change is held in each cams viewer until confirmed).
-  r.post(`${proxyBase}/pins/from-report`, h((req, res) => d.pins.take(actor(res), p(req, 'accountId'), p(req, 'proxyId'))));
+  r.post(`${proxyBase}/pins/from-report`, h((req, res) => d.pins.take(actor(res), p(req, 'accountId'), p(req, 'proxyId'), req.body)));
   r.post(`${proxyBase}/block`, h((req, res) => {
     const px = d.registry.blockProxy(actor(res), p(req, 'accountId'), p(req, 'proxyId'));
     d.hub.closeProxy(px.id, 4403);
@@ -564,6 +564,8 @@ export function proxyDetail(d: ApiDeps, accountId: string, proxyId: string) {
     keys: d.registry.listKeys(accountId, proxyId).map(keyView),
     enrollment: d.enrollment.liveCode(proxyId),
     connected: d.hub.connected(proxyId),
+    // #106: cams instances that reach this proxy over plain http (not loopback): they get it without its CA pins.
+    plainHttpRoutes: plainHttpRoutes(d.db, proxyId),
   };
 }
 

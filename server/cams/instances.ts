@@ -6,7 +6,7 @@ import { stmt, tx, type Db } from '../db/open';
 import { codeHash, newCamsEnrollmentCode, newId } from '../ids';
 import { ApiError, type Registry } from '../registry';
 import { cameraOverrideInput, checkUrl, FieldError } from '../validate';
-import { validateCams } from '../contract';
+import { pickCamsReport, validateCams } from '../contract';
 import { fieldOf } from '../tokens/service';
 import { overridesOf, snapshotRevision } from './snapshot';
 import type { RevocationEntry } from './revocations';
@@ -522,10 +522,12 @@ export class CamsInstances {
   private storeReport(id: string, r: CamsReport, now: number): void {
     const row = this.q('SELECT last_report FROM cams_instances WHERE id = ?').get(id) as Row | undefined;
     if (!row) return;
+    // Only the fields the strict shape names (#60): the lenient check lets extra properties through.
+    const picked = pickCamsReport(r);
     let same = false;
-    try { same = typeof row.last_report === 'string' && CamsInstances.reportKey(JSON.parse(row.last_report)) === CamsInstances.reportKey(r); } catch { /* corrupt: rewrite */ }
+    try { same = typeof row.last_report === 'string' && CamsInstances.reportKey(JSON.parse(row.last_report)) === CamsInstances.reportKey(picked); } catch { /* corrupt: rewrite */ }
     if (same) return;
-    tx(this.d.db, () => void this.q('UPDATE cams_instances SET last_report = ?, last_report_at = ? WHERE id = ?').run(JSON.stringify(r), now, id));
+    tx(this.d.db, () => void this.q('UPDATE cams_instances SET last_report = ?, last_report_at = ? WHERE id = ?').run(JSON.stringify(picked), now, id));
   }
 
   // The report falls back to the stored one (its time is when it last changed)

@@ -764,6 +764,8 @@ export const REMOTE_SETTABLE: { v: 1; remote: string[]; narrow: Record<string, N
     'retention.stillsDays': 'more', 'retention.previewsDays': 'more', 'retention.clipsDays': 'more', 'retention.eventsDays': 'more',
     'retention.auditDays': 'more', 'retention.streamLogDays': 'more',
     'stills.maxGB': 'more', 'previews.maxGB': 'more', 'ftp.maxGB': 'more',
+    // #20 (follow-up to I4): a raised capture interval thins out capture without switching it off.
+    'stills.intervalS': 'less', 'events.poll.intervalS': 'less', 'cameras.*.stills.intervalS': 'less',
   },
   ceilings: {
     'analytics.googleVision.enabled': 'analytics.googleVision.remoteMaxMonthly',

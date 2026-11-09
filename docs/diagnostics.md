@@ -46,7 +46,7 @@ A signed-in sysadmin's browser session works on the same routes.
 | Route | Answer |
 |---|---|
 | `/diag` | version, server time, the route list |
-| `/diag/proxies` | registry fields (url, TLS site and server name, CA fingerprints), state, version, pin, clock skew, the problem items of the last summary, reported site / CA fingerprints / commands policy / allow list / token counts / profile (`reported.profile`, `reported.profileUnreadable`), last heartbeat, reconcile, the stored Vision figures (`vision`: `{fetchedAt, result: {v, at, providers: [{id, name, enabled, key, monthlyLimit, remoteMaxMonthly, dailyCap, month, today, paused, lastError, cameras}]}}` from the last Refresh, or null; `key` says where the key comes from, never the key) |
+| `/diag/proxies` | registry fields (url, TLS site and server name, CA fingerprints), state, version, pin, clock skew, the problem items of the last summary, reported site / CA fingerprints / commands policy / allow list / token counts / profile (`reported.profile`, `reported.profileUnreadable`), last heartbeat, reconcile, the stored Vision figures (`vision`: `{fetchedAt, result: {v, at, providers: [{id, name, enabled, key, monthlyLimit, remoteMaxMonthly, dailyCap, month, today, paused, lastError, cameras}]}}` from the last Refresh, or null; `key` says where the key comes from, never the key), `pinsNotSentTo` (#106: with CA fingerprints set, the cams instances that reach the proxy over a plain-http, non-loopback URL and so get it without the pins: `[{instanceId, name, url}]`, else `[]`) |
 | `/diag/proxies/:proxyId/unregistered` | the cameras the proxy reports and the registry lacks: `{proxyId, accountId, reported, items: [{ref, name, model, online, proposedCamsId}]}` (`reported` false until a summary arrived); what the adopt route takes ([onboarding-a-camera.md](onboarding-a-camera.md)) |
 | `/diag/proxies/:proxyId/profile` | the proxy's latest reported profile, as `GET /api/v1/proxies/:proxyId/profile` answers it (see "Proxy profile" below) |
 | `/diag/cams-instances` | state, accounts, routes, the last report: mode, applied vs current revision, held changes and held proxies, kept-old, shadow, token counts, problems (code, account, detail). The last report is kept across a restart (#58); until the instance reports again after a restart, `reportAt` is when that report's content last changed, not when it was last received |
@@ -157,7 +157,7 @@ journalled like the diagnostics token's, so a restore can't bring it back.
 Issue and revoke are audited (`ops-token-issue`, `ops-token-revoke`); a
 refused token is audited as `ops-auth-refused` and a token outside its scopes
 as `ops-scope-refused` (both throttled). A write by a token is audited with the
-actor `ops-token:<8 hex>`. The list is also at `/diag/ops-tokens`.
+actor `ops-token:<8 hex> (<name>)`: the token's hash prefix and its name (before 2026-11-09: the prefix only). The list is also at `/diag/ops-tokens`, with the names unmasked (a name is not a secret; it is how a sysadmin tells the tokens apart).
 
 | Scope | Method and path (relative to `/api/v1`) |
 |---|---|
@@ -175,7 +175,7 @@ actor `ops-token:<8 hex>`. The list is also at `/diag/ops-tokens`.
 | `registry` | `PATCH /accounts/:accountId/proxies/:proxyId` |
 | `registry` | `PATCH /accounts/:accountId/cameras/:cameraId` |
 | `registry` | `PATCH /cams-instances/:instanceId` (only `name`, `displayName`, `baseUrl`, `notes`, `version`) |
-| `registry` | `POST /accounts/:accountId/proxies/:proxyId/pins/from-report` |
+| `registry` | `POST /accounts/:accountId/proxies/:proxyId/pins/from-report` (body only `keepPrevious`) |
 | `onboard` | `POST /accounts/:accountId/proxies/:proxyId/adopt` |
 | `actions` | `POST /accounts/:accountId/proxies/:proxyId/actions` |
 | `actions` | `POST /accounts/:accountId/proxies/:proxyId/cameras/:camera/name` |

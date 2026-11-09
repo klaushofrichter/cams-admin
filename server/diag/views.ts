@@ -1,7 +1,7 @@
 import type { ApiDeps } from '../api/router';
 import { reconcile } from '../status/derive';
 import { ApiError } from '../registry';
-import { snapshotRevision } from '../cams/snapshot';
+import { plainHttpRoutes, snapshotRevision } from '../cams/snapshot';
 import { createHash } from 'crypto';
 import type { AuditFilter } from '../audit';
 import { chunkCounts, moveView } from '../moves/view';
@@ -54,6 +54,8 @@ export function diagProxies(d: ApiDeps) {
         // Vision management: the stored analytics.usage.get answer (cleaned field by field; never a key).
         vision: d.vision.stored(px.id),
         reconcile: reconcile(px, accCams.filter((c) => c.proxyId === px.id), new Set(accCams.map((c) => c.camsId)), row),
+        // #106: with pins set, the cams instances that get this proxy without them (a plain-http, non-loopback URL).
+        pinsNotSentTo: px.caFingerprints.length ? plainHttpRoutes(d.db, px.id).map((r) => ({ instanceId: r.instanceId, name: r.name, url: r.url })) : [],
       };
     }),
   };

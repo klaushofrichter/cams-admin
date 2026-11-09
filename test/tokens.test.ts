@@ -33,9 +33,9 @@ afterEach(async () => {
   await s.stop();
 });
 
-async function proxy(allow = ['tokens.apply', 'tokens.apply.admin']) {
+async function proxy(allow = ['tokens.apply', 'tokens.apply.admin'], o: Parameters<typeof makeClient>[1] = {}) {
   const p = await enrolled(s, `tok${n++}`);
-  const client = makeClient(p.key, { commands: { allow } });
+  const client = makeClient(p.key, { commands: { allow }, ...o });
   clients.push(client);
   client.start();
   await until(() => !!s.built.status.row(p.proxyId)?.reported?.commands, 5000, 'commands report');
@@ -208,12 +208,31 @@ describe('tokens', () => {
   });
 
   it('restore: a stale answer at our own revision (another set with the same number) also asks for the confirmation, never auto-confirms', async () => {
-    const { acc, prx, client } = await proxy();
+    // One heartbeat at the start only: a heartbeat at revision 2 between our send and the stale answer would confirm
+    // it as a lost done (by design: the lost-done test below); the heartbeat after the answer is the next test.
+    const { acc, prx, client } = await proxy(undefined, { heartbeatS: 3600 });
     const a = T().issue(ACTOR, acc, prx, { kind: 'client', label: 'a' });
     await until(() => tokenState(acc, prx, a.tokenId) === 'active');
     client.tokensRevision = 2; // the proxy already has a revision 2 we never sent
     T().retire(ACTOR, acc, prx, a.tokenId, 24); // our revision 2
     await until(() => T().list(acc, prx).ahead === 2);
+    expect(T().list(acc, prx).appliedRevision).toBe(1);
+  });
+
+  // The heartbeat path (onHeartbeat) is called directly: a real heartbeat lands at any point, which made the test
+  // above flaky under load (the heartbeat confirmed the proxy's own revision 2 as ours, clearing the guard).
+  it('restore: a heartbeat at our own revision after a stale answer keeps the guard (never auto-confirms)', async () => {
+    const { acc, prx, client } = await proxy();
+    const a = T().issue(ACTOR, acc, prx, { kind: 'client', label: 'a' });
+    await until(() => tokenState(acc, prx, a.tokenId) === 'active');
+    client.tokensRevision = 2;
+    T().retire(ACTOR, acc, prx, a.tokenId, 24);
+    await until(() => T().list(acc, prx).ahead === 2);
+    T().onHeartbeat(prx, { revision: 2 });
+    expect(T().list(acc, prx)).toMatchObject({ ahead: 2, appliedRevision: 1 });
+    // After a restart the guard (in memory) is gone; the stale answer stored with the command still keeps it unconfirmed.
+    (T() as unknown as { ahead: Map<string, number> }).ahead.delete(prx);
+    T().onHeartbeat(prx, { revision: 2 });
     expect(T().list(acc, prx).appliedRevision).toBe(1);
   });
 

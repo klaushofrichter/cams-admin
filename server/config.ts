@@ -1,4 +1,5 @@
 import { viewerLinkBase } from './viewerTokens/crypto';
+import { isLoopbackHost } from './cams/pinTransport';
 import { dirname } from 'path';
 
 // Everything the process reads from its environment (spec §14). Secrets
@@ -83,7 +84,6 @@ export function wsUrl(base: string): string {
 }
 
 // http only where nothing leaves the host or the cluster network.
-const isLoopback = (h: string) => h === 'localhost' || h === '[::1]' || /^127(\.\d{1,3}){3}$/.test(h);
 const inCluster = (h: string) => /^[a-z0-9-]+(\.[a-z0-9-]+)*\.svc\.cluster\.local$/.test(h);
 
 function internalOrigins(raw: string | undefined): string[] {
@@ -98,7 +98,7 @@ function internalOrigins(raw: string | undefined): string[] {
     const bad = (why: string) => new Error(`config: INTERNAL_URLS: ${JSON.stringify(x)} ${why}`);
     if (u.protocol !== 'http:' && u.protocol !== 'https:') throw bad('must be http(s)');
     if (u.username || u.password || u.pathname !== '/' || u.search || u.hash || /[?#]/.test(x)) throw bad('must be an origin (no path, query or credentials)');
-    if (u.protocol === 'http:' && !isLoopback(u.hostname) && !inCluster(u.hostname)) throw bad('may use http only for *.svc.cluster.local or loopback');
+    if (u.protocol === 'http:' && !isLoopbackHost(u.hostname) && !inCluster(u.hostname)) throw bad('may use http only for *.svc.cluster.local or loopback');
     return u.origin;
   });
 }

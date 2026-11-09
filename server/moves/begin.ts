@@ -80,9 +80,16 @@ export function begin(d: BeginDeps, actor: string, body: unknown): BeginResult {
     return tx(d.db, () => run(d, actor, input));
   } catch (e) {
     if (!(e instanceof Refused)) throw e;
-    if (e.audit) d.audit.write(e.audit);
+    if (e.audit) writeRefusal(d, actor, e.audit);
     return e.r;
   }
+}
+
+// A refusal's row: each one for a person; one per operations token per 10 minutes (audit.throttled, the rest
+// counted), so a script retrying a begin that can't pass does not fill the audit log (#60).
+function writeRefusal(d: BeginDeps, actor: string, e: AuditEntry): void {
+  if (actor.startsWith('ops-token:')) d.audit.throttled(`move-begin-refused:${actor}`, e);
+  else d.audit.write(e);
 }
 
 function run(d: BeginDeps, actor: string, input: BeginInput): BeginResult {
@@ -167,7 +174,7 @@ function run(d: BeginDeps, actor: string, input: BeginInput): BeginResult {
 
   const r2 = precheckReport(d, cand);
   if (!r2.ok) {
-    d.audit.write(refusedRow(r2));
+    writeRefusal(d, actor, refusedRow(r2));
     return { ok: false, status: 409, error: 'precheck', reason: r2.reason, report: r2, fixed: fixes };
   }
   // An ApiError here (paused, rate limited) rolls the fixes back with it.

@@ -3,7 +3,8 @@
   import { onMount } from 'svelte';
   import { api, errorText, ApiFailure } from '../lib/api';
   import { coalesced, live } from '../lib/live';
-  import { blockingMove, cancelable, etaText, phaseClass, phaseReason, phaseText, presummaryErrorText, presummaryLines, presummarySpaceText, progressText, refusalLine, refusalText, startBody, cameraLabel } from '../lib/moves';
+  import { blockingMove, cancelable, etaText, phaseClass, phaseReason, phaseText, presummaryErrorText, presummaryLines, presummarySpaceText, progressText, refusalLine, refusalText, startBody, cameraLabel, beginOutcomeText } from '../lib/moves';
+  import { waitCommand } from '../lib/config';
   import MoveDetail from '../components/MoveDetail.svelte';
   import FirewallLines from '../components/FirewallLines.svelte';
   import { moveFirewall } from '../lib/profile';
@@ -90,6 +91,12 @@
       const fixed = (out.fixed ?? []).length ? ` cams-admin fixed: ${out.fixed.map((f: any) => f.rule).join(', ')}.` : '';
       startOk = `Move requested.${fixed}`;
       await load();
+      // The source's answer: a begin that never reached it, or that it refused, starts no move (#60).
+      const acc = accountId;
+      void waitCommand(() => api('GET', `/accounts/${acc}/commands/${out.commandId}`), 16 * 60_000, 3000).then((row) => {
+        const text = beginOutcomeText(row);
+        if (text) { startOk = ''; startError = text; }
+      }).catch(() => {});
     } catch (err) { startError = err instanceof ApiFailure && err.body ? refusalText(err.body) : errorText(err); }
     finally { sending = false; }
   }

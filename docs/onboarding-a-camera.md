@@ -131,7 +131,13 @@ with a person on purpose: enrolling the proxy, and switching auto-adopt on.
    site-CA fingerprints it reports on its next heartbeat (audit
    `system:proxy-report`). A change of existing pins is never automatic: the
    proxy page's "Use the reported pins", or
-   `POST …/proxies/prx_…/pins/from-report` with a `registry` token.
+   `POST …/proxies/prx_…/pins/from-report` with a `registry` token (#126:
+   body `{}` or `{"keepPrevious": true}`, which keeps the current pin as the
+   second one after a CA rotation so viewers still meeting the old CA keep
+   working; answers `{proxy, changed}`, 409 `no_reported_pins` when nothing
+   usable is reported, 409 `report_stale` when the proxy has not reported
+   within the offline limit). A rotation script can call it right after
+   `tls-ca-rotate`.
 3. **Optional steps, as each proxy allows** (scope `actions`): the full
    status `POST …/proxies/prx_…/cameras/cam2/onboarding/refresh`; the time
    (`camera-time-set`) and the camera's FTP target (`camera-ftp-setup`) as

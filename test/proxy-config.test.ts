@@ -84,6 +84,16 @@ describe('narrow.ts: the contract rules for the pre-check', () => {
     expect(narrowReason('analytics.googleVision.checksPerDay')).toBe('a remote change may only lower spending');
     expect(narrowCode('retention.clipsDays')).toBe('widening_local_only');
   });
+
+  it('#20: capture intervals only get shorter from cams-admin (a raised interval thins out capture)', () => {
+    for (const path of ['stills.intervalS', 'events.poll.intervalS', 'cameras.*.stills.intervalS']) {
+      expect(narrowingOk(path, 60, 30), path).toBe(true);
+      expect(narrowingOk(path, 60, 600), path).toBe(false);
+      expect(narrowingOk(path, 60, undefined), path).toBe(false);
+      expect(narrowReason(path), path).toBe('a remote change may only shorten the interval');
+    }
+    expect(isRemoteSettable('cameras.cam1.stills.intervalS', { 'cameras.*.stills.intervalS': { type: 'integer' } })).toBe(true);
+  });
   it('the Vision ceiling (ceiling, ceilingGated): lower always, higher within the known ceiling, an unknown ceiling left to the proxy', () => {
     const L = 'analytics.googleVision.monthlyLimit';
     const E = 'analytics.googleVision.enabled';
@@ -150,6 +160,56 @@ describe('ProxyConfig', () => {
     expect(C().state(p.acc, p.prx).changedOnProxy).toBe(false);
     expect(count('SELECT count(*) n FROM commands WHERE command = ?', 'config.get')).toBe(2);
     expect((s.built.db.prepare(`SELECT actor FROM commands WHERE command = 'config.get'`).all() as { actor: string }[]).map((x) => x.actor)).toEqual(['system', 'system']);
+  });
+
+  it('#20 M10: a proxy whose settings keep changing is re-read less often after 5 reads in a row, shown in the state; a write of ours starts over', async () => {
+    const p = await proxy();
+    await viewed(p.acc, p.prx);
+    const reads = () => count('SELECT count(*) n FROM commands WHERE command = ?', 'config.get');
+    const edit = async (v: number) => {
+      p.ref.localEdit({ 'sse.pingS': v });
+      await until(() => C().state(p.acc, p.prx).changedOnProxy, 5000, `changed ${v}`);
+    };
+    const reread = (v: number) => until(() => C().state(p.acc, p.prx).view?.paths['sse.pingS'].v === v, 5000, `re-read ${v}`);
+    for (let v = 10; v < 14; v++) { await edit(v); nextMinute(); await reread(v); }
+    expect(reads()).toBe(5); // the first read and 4 re-reads, a minute apart
+    expect(C().state(p.acc, p.prx).backedOff).toBeNull();
+    await edit(14); nextMinute(); await reread(14); // the 6th read in a row
+    expect(C().state(p.acc, p.prx).backedOff).toMatchObject({ reads: 6, nextAt: clock.now() + 2 * 60_000 });
+    await edit(15);
+    nextMinute();
+    await new Promise((r) => setTimeout(r, 300));
+    expect(reads()).toBe(6); // a minute is not enough any more
+    nextMinute();
+    await reread(15);
+    expect(reads()).toBe(7);
+    expect(C().state(p.acc, p.prx).backedOff).toMatchObject({ reads: 7, nextAt: clock.now() + 4 * 60_000 });
+    // A write of cams-admin's own: its re-read goes at once, and the count starts over.
+    const pv = C().preview(ACTOR, p.acc, p.prx, { set: { 'sse.pingS': 20 } });
+    expect((await final(p.acc, p.prx, pv.commandId)).state).toBe('done');
+    const ap = C().apply(ACTOR, p.acc, p.prx, pv.commandId);
+    expect((await final(p.acc, p.prx, ap.commandId)).state).toBe('done');
+    await reread(20);
+    expect(C().state(p.acc, p.prx).backedOff).toBeNull();
+  });
+
+  it('#20: a config.get that always fails is retried less often too', async () => {
+    const p = await proxy();
+    await viewed(p.acc, p.prx);
+    const reads = () => count('SELECT count(*) n FROM commands WHERE command = ?', 'config.get');
+    p.ref.localEdit({ 'sse.pingS': 9 });
+    await until(() => C().state(p.acc, p.prx).changedOnProxy, 5000, 'changed');
+    for (let i = 2; i <= 6; i++) {
+      p.client.refuseNext = { code: 'internal', command: 'config.get' };
+      nextMinute();
+      await until(() => reads() === i, 5000, `read ${i}`);
+      await until(() => C().state(p.acc, p.prx).fetching === null, 5000, `failed ${i}`);
+    }
+    expect(C().state(p.acc, p.prx).backedOff).toMatchObject({ reads: 6 });
+    p.client.refuseNext = { code: 'internal', command: 'config.get' };
+    nextMinute();
+    await new Promise((r) => setTimeout(r, 300));
+    expect(reads()).toBe(6);
   });
 
   it('Reload: refresh by a person; 409 already_fetching while one is open', async () => {
