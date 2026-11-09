@@ -134,6 +134,10 @@ describe('config (Settings UI)', () => {
   it('renameError: a rename that failed after other fields were saved says so', () => {
     expect(renameError(false, 'The camera is offline; try again when it is online.')).toBe('The camera is offline; try again when it is online.');
     expect(renameError(true, 'The camera is offline; try again when it is online.')).toBe('Other changes saved; the camera is offline; try again when it is online.');
+    // #156: a word that isn't a plain capitalised one (an error class, a label) is kept as it is.
+    expect(renameError(true, 'TypeError: failed to fetch')).toBe('Other changes saved; TypeError: failed to fetch');
+    expect(renameError(true, 'Error: boom')).toBe('Other changes saved; Error: boom');
+    expect(renameError(true, 'HTTP 502')).toBe('Other changes saved; HTTP 502');
   });
   it('waitCommand polls until the row is final, or gives up', async () => {
     const states = ['queued', 'sent', 'received', 'done'];

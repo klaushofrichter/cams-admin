@@ -489,8 +489,8 @@ The camera holds its name; the registry follows it.
 - **The camera's name rules:** 1 to 31 characters; ASCII letters, digits, space
   and `- ( ) + = [ ] { }`; no leading or trailing space (so no `_`). They apply
   to every name entered in cams-admin (create, edit, adopt, import). A reported
-  name that breaks them leaves the record as it is and is logged once
-  (`camera_name_not_synced`).
+  name that breaks them leaves the record as it is and is logged once per
+  process (`camera_name_not_synced`; again after a restart).
 - **Renaming:** `PATCH` of a camera mapped to a proxy that changes `name` is
   409 `rename_at_camera`; the `message` is the rename endpoint,
   `POST /api/v1/accounts/:accountId/proxies/:proxyId/cameras/:camera/name`

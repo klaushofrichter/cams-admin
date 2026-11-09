@@ -111,8 +111,10 @@ export function renameOutcome(row: { state: string; outcomeCode: string | null; 
 }
 
 // A rename that failed after the same save stored the other fields: say those are kept.
+// Only a plain capitalised first word is lowered ("The camera …"); "TypeError: …" or "HTTP 502" stay as they are.
 export function renameError(otherSaved: boolean, text: string): string {
-  return otherSaved && text ? `Other changes saved; ${text[0].toLowerCase()}${text.slice(1)}` : text;
+  if (!otherSaved || !text) return text;
+  return `Other changes saved; ${/^[A-Z][a-z]*(?![A-Za-z:])/.test(text) ? text[0].toLowerCase() + text.slice(1) : text}`;
 }
 
 // A proxy's `pattern` is never run here (M4:

@@ -80,7 +80,9 @@ export class StatusStore {
   constructor(private d: { db: Db; clock: Clock; registry: Registry; live: LiveHub; offlineAfterMs: number; snapshotMs?: number }) {
     this.snapshotMs = d.snapshotMs ?? 600_000;
     this.lastFlush = d.clock.now();
-    for (const r of d.db.prepare('SELECT * FROM proxy_status').all() as Row[]) this.mem.set(r.proxy_id as string, toStatus(r));
+    // No proxy is connected in a new process until it says hello (the stored flag is the last run's; a graceful
+    // shutdown never ran disconnected()). Memory only: the row is written with the next transition.
+    for (const r of d.db.prepare('SELECT * FROM proxy_status').all() as Row[]) this.mem.set(r.proxy_id as string, { ...toStatus(r), connected: false });
   }
 
   row(proxyId: string): StatusRow | null {
