@@ -344,6 +344,11 @@ export function fixtures(): Record<string, unknown> {
     'valid-result-switch-survey-switch-error': poe(p3Result('switch.survey', 'one camera found, one whose switch read failed (switch_error, detail in words): the survey goes on', {
       status: 'ok', result: { sn: 'SN-EXAMPLE', results: [{ camera: CAMID, found: true, port: 8, poe: true, watts: 4.2, link: true, ratio: 12.5 }, { camera: 'cam_1123456789ABCDEFGHJK', found: false, reason: 'switch_error', detail: 'the switch answered HTTP 500' }] },
     })),
+    // cam-proxy #364 m6 (phased): a switch.cycle that cut PoE, turned it on again and still failed. $context.feature
+    // 'cycle-cut-on-again': the cross-check treats it as pending until cam-proxy's src/fleet/switch-commands.ts names cut_on_again.
+    'valid-result-switch-cycle-cut-on-again': { ...p3Result('switch.cycle', 'PoE was cut and is on again, but the cycle failed (cut_on_again): the camera is rebooting; cams-admin sends poeCut on camera.power.cycled', {
+      status: 'failed', code: 'cut_on_again',
+    }), $context: { feature: 'cycle-cut-on-again' } },
     'valid-command-camera-power-cycled': poe(p3Valid('PoE is on again: the power-cycle is over', ['camera.power.cycled'], 'camera.power.cycled', { v: 1, camera: 'cam1', ok: true, message: 'power-cycled on Switch port 8' })),
     'valid-command-camera-power-cycled-poe-cut': { ...p3Valid('the power-cycle failed after PoE was cut and turned on again (poeCut, optional): the camera is rebooting, the proxy keeps watching', ['camera.power.cycled'], 'camera.power.cycled',
       { v: 1, camera: 'cam1', ok: false, message: 'PoE may still be off on the port: check the switch', poeCut: true }), $context: { ...ctx({ allow: ['camera.power.cycled'] }), feature: 'power-poe-cut' } },

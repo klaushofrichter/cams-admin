@@ -421,6 +421,15 @@ for example `registry host 192.0.2.10, source reports 192.0.2.11`,
 detail. The detail also goes to the source in `move.answer` (cam-proxy
 v2026.10.25.1 and later show it with the refusal).
 
+A target that needs a setting changed (today a too narrow `ftp.passive`)
+accepts with a settings proposal (cam-proxy #240). A source that announced
+`move-settings` gets it in `move.answer`; the move then waits for approval
+and `/diag/moves` shows `settingsProposal` (`{settings, firewall}`; `null`
+without one). To an older source the offer ends `rejected`, reason
+`incompatible`, the proposal in the detail, and the target gets a
+`move.cancel`. An approval whose `plan.targetSettings` lacks a proposed
+setting fails the move with reason `settings_not_in_plan`.
+
 cams-admin's own refusals get a move row only when the camera is in the
 registry and the target is another proxy of the same account
 (`not_registered` and `other_account` are audit rows only, as before).

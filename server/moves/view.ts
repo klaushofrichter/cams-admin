@@ -3,6 +3,7 @@ import type { MoveBounds, MoveCheck } from './types';
 import type { Move, ChunkState, ChunkStateName } from './store';
 import type { SpaceCheck } from './space';
 import { isCount } from '../validate';
+import { answerProposal } from './common';
 
 // What the API shows of a move. Never the token, its hash, the target's
 // public key, the leaf fingerprint or the target's address: fields are named
@@ -18,6 +19,9 @@ export interface MoveView {
   returnOf: string | null; returnId: string | null; check: MoveCheck | null; archivePending: boolean; endRequested: boolean; keepDays: number | null;
   // The space the move needs against the target's profile when the request arrived (null: the target reported none).
   space: SpaceCheck | null;
+  // The settings the target asked for with its accept (cam-proxy #240) and its firewall note; null when none (or refused:
+  // a refusal's detail says it in words).
+  settingsProposal: { settings: Record<string, unknown>; firewall: string | null } | null;
 }
 export type ChunkCounts = Record<ChunkStateName, number>;
 
@@ -37,7 +41,23 @@ export function moveView(db: Db, m: Move, archivePending = false): MoveView {
     rateBps: m.rateBps, etaS: m.etaS, budgetExceeded: m.budgetExceededAt !== null, cleanupPending: m.cleanupPending, targetCleanupPending: m.targetCleanupPending, autoApprove: m.bounds !== null, bounds: m.bounds, createdAt: m.createdAt, updatedAt: m.updatedAt, endedAt: m.endedAt,
     returnOf: m.returnOf, returnId: ret?.id ?? null, check: m.check, archivePending, endRequested: m.endRequested !== null, keepDays: m.keepDays,
     space: m.space ?? null,
+    settingsProposal: m.phase === 'rejected' ? null : offerProposal(db, m),
   };
+}
+
+// The target's settings proposal from its move.offer result (the newest), as the view shows it.
+function offerProposal(db: Db, m: Move): MoveView['settingsProposal'] {
+  const r = stmt(db, `SELECT json_extract(result, '$.body.result.settingsProposal') AS p FROM commands WHERE proxy_id = ? AND command = 'move.offer' AND json_extract(args, '$.moveId') = ? AND state = 'done' ORDER BY rowid DESC LIMIT 1`)
+    .get(m.targetProxyId, m.id) as { p: string | null } | undefined;
+  if (!r?.p) return null;
+  let raw: unknown;
+  try {
+    raw = JSON.parse(r.p);
+  } catch {
+    return null;
+  }
+  const p = answerProposal(raw);
+  return p ? { settings: p.settings, firewall: p.firewall ?? null } : null;
 }
 
 export function chunkCounts(chunks: ChunkState[]): ChunkCounts {

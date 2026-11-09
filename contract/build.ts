@@ -658,8 +658,9 @@ export const POWER_KINDS = ['poe', 'data-only', 'adapter', 'unknown'] as const;
 export const LOCATE_REASONS = ['not_reachable', 'ambiguous', 'no_traffic', 'switch_error'] as const;
 export const SWITCH_PORTS_MAX = 64;
 export const SWITCH_SURVEY_MAX = 16;
-// Failure codes of switch.cycle (status failed).
-export const SWITCH_CYCLE_FAILURES = ['not_verified', 'no_power', 'switch_busy', 'poe_may_be_off', 'password_unset', 'switch_unknown'] as const;
+// Failure codes of switch.cycle (status failed). cut_on_again (cam-proxy #364 m6, phased): PoE was cut and is on again
+// but the cycle failed (the camera is rebooting); cams-admin then sends poeCut on camera.power.cycled.
+export const SWITCH_CYCLE_FAILURES = ['not_verified', 'no_power', 'switch_busy', 'poe_may_be_off', 'cut_on_again', 'password_unset', 'switch_unknown'] as const;
 
 // --- remove a camera, decommission a proxy (decommission spec 2026-11-08) -------------------------
 // Each its own allow entry. camera.remove.preview is a read (on by default on cam-proxy, like camera.onboarding.get);

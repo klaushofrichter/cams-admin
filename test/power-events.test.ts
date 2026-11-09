@@ -28,9 +28,9 @@ afterEach(async () => {
   await s.stop();
 });
 
-async function proxy(allow: string[] = ALL) {
+async function proxy(allow: string[] = ALL, capabilities?: string[]) {
   const p = await enrolled(s, `pe${n++}`);
-  const client = makeClient(p.key, { commands: { allow } });
+  const client = makeClient(p.key, { commands: { allow }, ...(capabilities ? { capabilities } : {}) });
   clients.push(client);
   client.start();
   await until(() => !!s.built.status.row(p.proxyId)?.reported?.commands && client.state === 'connected', 5000, 'commands report');
@@ -298,5 +298,40 @@ describe('power-cycle requests from proxies', () => {
     await until(() => results(p).length === 1, 5000, 'young result');
     expect(results(p)[0]).toMatchObject({ ok: true });
     expect(sent(p, 'switch.cycle')).toHaveLength(1);
+  });
+});
+
+// cam-proxy #364 m6 (contract phase C): poeCut on a failed camera.power.cycled, only when the switch said PoE was cut
+// and is on again (switch.cycle failed cut_on_again), and only to a proxy whose hello announced power-poe-cut.
+describe('poeCut on camera.power.cycled', () => {
+  const cycled = async (caps: string[] | undefined, code: string) => {
+    const p = await proxy(ALL, caps);
+    const { cam } = await poeCamera(p);
+    p.client.switchResults.set('switch.cycle', { status: 'failed', code });
+    expect((await call('POST', `/cameras/${cam.id}/power/cycle`, {})).status).toBe(202);
+    await until(() => sent(p, 'camera.power.cycled').length > 0, 5000, 'cycled');
+    return { p, cam, args: sent(p, 'camera.power.cycled').at(-1)! };
+  };
+
+  it('cut_on_again to a proxy with power-poe-cut: ok false, poeCut true, the reason in words', async () => {
+    const { cam, args } = await cycled(['power-poe-cut'], 'cut_on_again');
+    expect(args).toEqual({ v: 1, camera: cam.proxyCameraId, ok: false, message: 'PoE was cut and is on again, but the cycle failed: the camera is rebooting', poeCut: true });
+    // The stored command's args (what a person sees) keep poeCut.
+    const row = s.built.db.prepare(`SELECT args FROM commands WHERE command = 'camera.power.cycled' ORDER BY created_at DESC LIMIT 1`).get() as { args: string };
+    expect(JSON.parse(row.args)).toMatchObject({ poeCut: true });
+  });
+
+  it('cut_on_again to a proxy without power-poe-cut: no poeCut (its closed args check would refuse it)', async () => {
+    const { args } = await cycled(['status'], 'cut_on_again');
+    expect(args).toMatchObject({ ok: false });
+    expect('poeCut' in args).toBe(false);
+  });
+
+  it('other failures never carry poeCut, also to a proxy with power-poe-cut (PoE never cut, or may still be off)', async () => {
+    for (const code of ['poe_may_be_off', 'switch_busy', 'switch_auth']) {
+      const { args } = await cycled(['power-poe-cut'], code);
+      expect(args, code).toMatchObject({ ok: false });
+      expect('poeCut' in args, code).toBe(false);
+    }
   });
 });

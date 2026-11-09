@@ -94,7 +94,7 @@ beforeEach(() => {
 const view = (id: string) => moveView(s.built.db, s.built.moves.store.get(id)!);
 
 describe('the target refuses with a detail', () => {
-  it("a target that accepts with a settingsProposal (cam-proxy #240): not relayed yet (phase A), refused as incompatible with the proposal in words; no answer carries settingsProposal", async () => {
+  it("a target that accepts with a settingsProposal (cam-proxy #240), the source without move-settings: refused as incompatible with the proposal in words, the target cancelled", async () => {
     const src = await proxy();
     const tgt = await proxy();
     camera(src);
@@ -106,6 +106,33 @@ describe('the target refuses with a detail', () => {
     expect(moves()[0]).toMatchObject({ phase: 'rejected', reason: 'incompatible', detail: want });
     expect(JSON.parse(auditFor('move-offer').at(-1)!.detail)).toMatchObject({ phase: 'rejected', reason: 'incompatible', detail: want, settingsProposal: ['ftp.passive'] });
     expect(got(src.client, 'move.answer').some((m) => 'settingsProposal' in m.body.args)).toBe(false);
+    // The target accepted and holds the offer: it gets a cancel (else it answers busy for ~35 minutes); the source only the refusal.
+    const id = moves()[0].id;
+    await until(() => got(tgt.client, 'move.cancel').length === 1, 5000, 'target cancel');
+    expect(got(tgt.client, 'move.cancel')[0].body.args).toEqual({ v: 1, moveId: id, role: 'target', copied: 'delete' });
+    await new Promise((r) => setTimeout(r, 250));
+    expect(got(src.client, 'move.cancel')).toHaveLength(0);
+    expect(view(id)).toMatchObject({ phase: 'rejected', refusedBy: 'target', reason: 'incompatible', settingsProposal: null });
+  });
+
+  it('that refusal\'s target cancel is derived again by the tick until the target took it on (target away at first)', async () => {
+    const src = await proxy();
+    const tgt = await proxy();
+    camera(src);
+    tgt.client.moveResults['move.offer'] = { status: 'ok', result: { accept: true, space: { needed: 1000, available: 5000, fits: true, perKind: {}, retentionProposal: null }, probeBps: 50_000_000, settingsProposal: { settings: { 'ftp.passive': '30000-30029' } } } };
+    tgt.client.moveResults['move.cancel'] = { status: 'failed', code: 'internal' };
+    await answerOf(src, request(src, tgt.proxyId));
+    const id = moves()[0].id;
+    await until(() => got(tgt.client, 'move.cancel').length === 1, 5000, 'first cancel');
+    const pending = () => s.built.db.prepare(`SELECT id FROM moves WHERE ${'phase'} = 'rejected' AND copied_choice = 'delete'`).all();
+    expect(pending()).toHaveLength(1);
+    // The failed cancel is asked again after the backoff (the ended sweep), and taken on now.
+    delete tgt.client.moveResults['move.cancel'];
+    clock.advance(10 * 60_000);
+    s.built.moves.tick();
+    await until(() => got(tgt.client, 'move.cancel').length === 2, 5000, 'second cancel');
+    expect(got(src.client, 'move.cancel')).toHaveLength(0);
+    expect(s.built.moves.store.get(id)!.phase).toBe('rejected');
   });
 
   it('move.answer forwards the detail to the source, for a target refusal and a cams-admin refusal', async () => {

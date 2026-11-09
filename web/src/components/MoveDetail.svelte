@@ -2,7 +2,7 @@
   // One move: who refused it and why (a rejected move, with Delete), the content checklist, chunk counts, the check, the cleanup note, the copy back;
   // Cancel move…, End transfer… (after Archive when it is still copying) and Give up behind typed confirms. Delete (a rejected record, it holds no content) behind a plain Delete / Keep confirm.
   import { api, errorText } from '../lib/api';
-  import { boundsText, canDelete, canGiveUp, cancelable, checkText, contentBasisText, contentLine, endLabel, phaseReason, phaseText, refusalReason, refusedByText, type ContentKind } from '../lib/moves';
+  import { boundsText, canDelete, canGiveUp, cancelable, checkText, contentBasisText, contentLine, endLabel, phaseReason, phaseText, proposalText, refusalReason, refusedByText, type ContentKind } from '../lib/moves';
   import Confirm from './Confirm.svelte';
   import { spaceText } from '../lib/profile';
 
@@ -33,6 +33,7 @@
   }
   // After the switch-over (copying) a cancel copies the camera's content back; before it there is a choice for what was copied.
   const copyBack = $derived(move.phase === 'copying');
+  const proposal = $derived(proposalText(move));
   const CHUNK_ORDER = ['pending', 'copied', 'verified', 'skipped', 'failed', 'abandoned'];
 </script>
 
@@ -48,6 +49,14 @@
       {#if move.detail}<p class="small" data-testid="move-refusal-detail">Detail: <span class="verbatim">{move.detail}</span></p>
       {:else}<p class="muted small" data-testid="move-refusal-no-detail">No detail given{move.refusedBy === 'target' ? ` (${move.target.name} may need the cam-proxy update)` : ''}.</p>{/if}
       <p class="muted small">A refusal is final: start the move again once the cause is fixed.</p>
+    </div>
+  {/if}
+  {#if proposal}
+    <div class="proposal" data-testid="move-proposal">
+      <p class="small">{proposal.lead}</p>
+      <ul>{#each proposal.settings as line}<li class="small verbatim" data-testid="move-proposal-setting">{line}</li>{/each}</ul>
+      {#if proposal.firewall}<p class="small warn" data-testid="move-proposal-firewall">{proposal.firewall}</p>{/if}
+      <p class="muted small">{proposal.when}</p>
     </div>
   {/if}
   <p class="muted small" data-testid="move-bounds">{boundsText(move.bounds ?? null)}</p>
@@ -127,6 +136,8 @@
   .choice { border: 0; padding: 0; margin: 0; display: grid; gap: 6px; }
   .check { display: flex; flex-direction: row; align-items: center; gap: 6px; color: var(--text); }
   .refusal { border-left: 3px solid var(--danger); padding: 4px 0 4px 10px; display: grid; gap: 4px; }
+  .proposal { border-left: 3px solid var(--warning); padding: 4px 0 4px 10px; display: grid; gap: 4px; }
+  .proposal ul { margin: 0; padding-left: 18px; }
   .verbatim { font-family: var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
   .content ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; font-size: 13px; }
   .content li.out { color: var(--muted); }

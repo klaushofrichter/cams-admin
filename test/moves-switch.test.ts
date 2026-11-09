@@ -16,6 +16,8 @@ import { snapshotRevision } from '../server/cams/snapshot';
 import { readEpoch } from '../server/db/open';
 import { OFFER_EXPIRY_MS } from '../server/moves/service';
 
+import { moveView } from '../server/moves/view';
+
 const ACTOR = 'admin@example.com';
 const fx = (name: string) => JSON.parse(readFileSync(join(__dirname, '../contract/v1/fixtures', name), 'utf8')).message.body as Record<string, any>;
 const CROCK = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
@@ -45,11 +47,11 @@ afterEach(async () => {
 });
 
 interface Px { proxyId: string; accountId: string; client: ProxyClient; name: string; ip: string; site: string }
-async function proxy(): Promise<Px> {
+async function proxy(caps?: string[]): Promise<Px> {
   const name = `sw${n++}`;
   const p = await enrolled(s, name, 'home');
   const site = `site-${name}`;
-  const client = makeClient(p.key, { commands: { allow: ['move.send', 'move.receive'] }, proxyInfo: () => makeProxyInfo({ now: Date.now(), site, caFingerprint: [FP] }) });
+  const client = makeClient(p.key, { commands: { allow: ['move.send', 'move.receive'] }, proxyInfo: () => makeProxyInfo({ now: Date.now(), site, caFingerprint: [FP] }), ...(caps ? { capabilities: caps } : {}) });
   clients.push(client);
   client.start();
   await until(() => client.state === 'connected' && !!s.built.status.row(p.proxyId)?.reported?.commands, 5000, 'connected');
@@ -66,10 +68,13 @@ const cmdRows = (moveId: string, command: string) => (s.built.db.prepare(`SELECT
 const settle = () => new Promise((r) => setTimeout(r, 250));
 
 // A move up to awaiting-approval: the source asked, the target accepted.
-async function awaiting(offerKinds?: string[]) {
-  const src = await proxy();
+async function awaiting(offerKinds?: string[], o: { settingsProposal?: Record<string, unknown>; srcCaps?: string[] } = {}) {
+  const src = await proxy(o.srcCaps);
   const tgt = await proxy();
-  if (offerKinds) tgt.client.moveResults['move.offer'] = { status: 'ok', result: { accept: true, space: { needed: 1000, available: 5000, fits: true, perKind: {}, retentionProposal: null }, probeBps: 50_000_000, kinds: offerKinds } };
+  if (offerKinds || o.settingsProposal) {
+    tgt.client.moveResults['move.offer'] = { status: 'ok', result: { accept: true, space: { needed: 1000, available: 5000, fits: true, perKind: {}, retentionProposal: null }, probeBps: 50_000_000,
+      ...(offerKinds ? { kinds: offerKinds } : {}), ...(o.settingsProposal ? { settingsProposal: o.settingsProposal } : {}) } };
+  }
   const cam = s.built.registry.createCamera(ACTOR, src.accountId, { camsId: 'cam1', name: 'Cam 1', kind: 'camera', proxyId: src.proxyId, proxyCameraId: 'cam1', host: '192.0.2.10', protocol: 'https' });
   const { proxyId: _p, connId: _c, ...rest } = fx('valid-event-move-request.json');
   const requestId = rq();
@@ -93,6 +98,54 @@ async function switched() {
   await until(() => got(a.src.client, 'move.release', a.m.id).length === 1, 5000, 'move.release');
   return a;
 }
+
+// cam-proxy #240 (contract phase C): a target's settingsProposal is relayed to a source that announced move-settings;
+// the approved plan must carry the proposal's settings (any space choice), passed on unchanged in move.start and move.go.
+const PROPOSAL = { settings: { 'ftp.passive': '30000-30029' }, firewall: 'open TCP 2121 and 30000-30029 for 192.0.2.10 in the host firewall' };
+describe('a target settings proposal', () => {
+  it('relayed in move.answer to a source with move-settings; the move waits for approval; the audit names the paths', async () => {
+    const { src, m } = await awaiting(undefined, { settingsProposal: PROPOSAL, srcCaps: ['move-settings'] });
+    await until(() => got(src.client, 'move.answer', m.id).length === 1, 5000, 'answer');
+    expect(got(src.client, 'move.answer', m.id)[0].body.args).toMatchObject({ accept: true, settingsProposal: PROPOSAL });
+    expect(auditFor('move-offer').at(-1)!.d).toMatchObject({ phase: 'awaiting-approval', accept: true, settingsProposal: ['ftp.passive'] });
+    expect(JSON.stringify(auditFor('move-offer').at(-1)!.d)).not.toContain('30000-30029');
+    // The move detail shows it (settings and the firewall note).
+    expect(moveView(s.built.db, move(m.id)).settingsProposal).toEqual({ settings: PROPOSAL.settings, firewall: PROPOSAL.firewall });
+  });
+
+  for (const space of ['all', 'retention', 'fit']) {
+    it(`a plan with the proposal's settings (space ${space}) goes on: move.start and move.go carry targetSettings unchanged`, async () => {
+      const { src, tgt, m } = await awaiting(undefined, { settingsProposal: PROPOSAL, srcCaps: ['move-settings'] });
+      const targetSettings = space === 'retention' ? { ...PROPOSAL.settings, 'storage.maxGB': 20 } : { ...PROPOSAL.settings };
+      const plan = { ...PLAN, space, targetSettings };
+      approve(src, m.id, plan);
+      await until(() => got(tgt.client, 'move.start', m.id).length === 1, 5000, 'move.start');
+      expect(got(tgt.client, 'move.start', m.id)[0].body.args.plan).toEqual(plan);
+      expect(move(m.id).plan).toEqual(plan);
+      expect(auditFor('move-approve').at(-1)!.d.plan).toMatchObject({ targetSettings: Object.keys(targetSettings).sort() });
+    });
+  }
+
+  for (const [label, targetSettings] of [['none', null], ['another value', { 'ftp.passive': '30000-30009' }], ['another path', { 'storage.maxGB': 20 }]] as const) {
+    it(`a plan without the proposal's settings (${label}) is refused: no move.start, the move fails settings_not_in_plan, both cancelled`, async () => {
+      const { src, tgt, m } = await awaiting(undefined, { settingsProposal: PROPOSAL, srcCaps: ['move-settings'] });
+      approve(src, m.id, { ...PLAN, space: 'all', targetSettings });
+      await until(() => move(m.id).phase === 'failed', 5000, 'failed');
+      expect(move(m.id)).toMatchObject({ reason: 'settings_not_in_plan', plan: null });
+      expect(got(tgt.client, 'move.start')).toHaveLength(0);
+      await until(() => got(src.client, 'move.cancel', m.id).length === 1 && got(tgt.client, 'move.cancel', m.id).length === 1, 5000, 'cancels');
+      expect(auditFor('move-approve').map((a) => [a.outcome, a.d.reason, a.d.settings])).toEqual([['refused', 'settings_not_in_plan', ['ftp.passive']]]);
+    });
+  }
+
+  it('without a proposal, any targetSettings pass through unchanged for any space (no proposal to check)', async () => {
+    const { src, tgt, m } = await awaiting();
+    const plan = { ...PLAN, space: 'all', targetSettings: { 'storage.maxGB': 20 } };
+    approve(src, m.id, plan);
+    await until(() => got(tgt.client, 'move.start', m.id).length === 1, 5000, 'move.start');
+    expect(got(tgt.client, 'move.start', m.id)[0].body.args.plan).toEqual(plan);
+  });
+});
 
 describe('approval', () => {
   it('approve from a proxy that is not the source is refused', async () => {

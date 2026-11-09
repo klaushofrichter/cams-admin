@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { blockingMove, cancelable, etaText, phaseClass, phaseText, progressText, reasonText, boundsText, startBody, refusalText, cameraLabel, activeMoves, activeLine, checkText, endLabel, canGiveUp, phaseReason, refusedByText, refusalLine, contentLine, contentBasisText, canDelete, presummaryLines, presummarySpaceText, presummaryErrorText, beginOutcomeText } from './moves';
+import { blockingMove, cancelable, etaText, phaseClass, phaseText, progressText, reasonText, boundsText, startBody, refusalText, cameraLabel, activeMoves, activeLine, checkText, endLabel, canGiveUp, phaseReason, refusedByText, refusalLine, contentLine, contentBasisText, canDelete, presummaryLines, presummarySpaceText, presummaryErrorText, beginOutcomeText, proposalText } from './moves';
 
 const PHASES = ['requested', 'offered', 'awaiting-approval', 'approved', 'switching', 'copying', 'cleaning', 'done', 'rejected', 'cancelling', 'cancelled', 'failed', 'returning', 'returned'];
 
@@ -299,5 +299,20 @@ describe('#60: a move.begin that ends without starting the move', () => {
     expect(beginOutcomeText({ state: 'expired' })).toContain('did not reach the source proxy in time');
     expect(beginOutcomeText({ state: 'refused', outcomeCode: 'moves_not_allowed' })).toBe('The source proxy refused the move: the proxy does not allow camera moves.');
     expect(beginOutcomeText({ state: 'failed', outcomeCode: 'internal' })).toBe('The source proxy could not start the move: an internal error.');
+  });
+});
+
+describe("the target's settings proposal (cam-proxy #240)", () => {
+  it('worded plainly: the settings, the firewall note, when they are set', () => {
+    const p = { settings: { 'ftp.passive': '30000-30029' }, firewall: 'open TCP 2121 and 30000-30029 for 192.0.2.10 in the host firewall' };
+    expect(proposalText({ target: { name: 'Pi' }, source: { name: 'een' }, settingsProposal: p })).toEqual({
+      lead: 'Pi needs these settings to take the camera:',
+      settings: ['ftp.passive: 30000-30029'],
+      firewall: 'Firewall on Pi: open TCP 2121 and 30000-30029 for 192.0.2.10 in the host firewall',
+      when: "They are set on Pi with the move, once it is approved on een's page.",
+    });
+    expect(proposalText({ target: { name: 'Pi' }, source: { name: 'een' }, settingsProposal: { settings: { 'ftp.passive': '1-2' }, firewall: null } })?.firewall).toBeNull();
+    expect(proposalText({ target: { name: 'Pi' }, source: { name: 'een' }, settingsProposal: null })).toBeNull();
+    expect(reasonText('settings_not_in_plan')).toBe('the approved plan leaves out settings the target asked for');
   });
 });

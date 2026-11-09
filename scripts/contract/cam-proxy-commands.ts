@@ -65,9 +65,12 @@ const DECOMMISSION_STARTED = implemented('camera.remove');
 const argsSource = existsSync(file('src/fleet/command-args.ts')) ? readFileSync(file('src/fleet/command-args.ts'), 'utf8') : '';
 const POE_CUT_STARTED = argsSource.includes('poeCut');
 const MOVE_SETTINGS_STARTED = argsSource.includes('settingsProposal');
+// cut_on_again (switch.cycle's failure code, #364 m6): pending until cam-proxy's switch commands map to it.
+const switchSource = existsSync(file('src/fleet/switch-commands.ts')) ? readFileSync(file('src/fleet/switch-commands.ts'), 'utf8') : '';
+const CUT_ON_AGAIN_STARTED = switchSource.includes('cut_on_again');
 const FEATURE_STARTED: Record<string, boolean> = {
   'move-ptz': PTZ_STARTED, onboarding: ONBOARDING_STARTED, vision: VISION_STARTED, decommission: DECOMMISSION_STARTED,
-  'power-poe-cut': POE_CUT_STARTED, 'move-settings': MOVE_SETTINGS_STARTED,
+  'power-poe-cut': POE_CUT_STARTED, 'move-settings': MOVE_SETTINGS_STARTED, 'cycle-cut-on-again': CUT_ON_AGAIN_STARTED,
 };
 const DIR = join(__dirname, '../../contract/v1/fixtures');
 const ctxOf = (c: Ctx, journal: (id: string) => unknown = () => undefined) => {
@@ -105,6 +108,17 @@ for (const f of cmds) {
     continue;
   }
   report(got === want, f.name, `cam-proxy says ${got}, the contract ${want}`);
+}
+// Failure codes the contract adds for a feature (a result fixture with status failed and a $context.feature): cam-proxy's
+// switch commands must name the code once the feature started; pending before.
+for (const f of fixtures.filter((x) => x.schema === 'result' && x.$context?.feature === 'cycle-cut-on-again')) {
+  const code = f.message.body.code as string;
+  if (!CUT_ON_AGAIN_STARTED) {
+    pending++;
+    console.log(`pending ${f.name} (cam-proxy does not have cycle-cut-on-again yet)`);
+    continue;
+  }
+  report(switchSource.includes(`'${code}'`), f.name, `cam-proxy's src/fleet/switch-commands.ts does not name the failure code ${code}`);
 }
 if (pending) console.log(`${pending} fixture(s) pending until cam-proxy implements them`);
 // Step 6 before step 7: a journaled cmdId is a duplicate even when paused.
