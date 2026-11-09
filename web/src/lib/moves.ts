@@ -221,11 +221,12 @@ export function endLabel(m: { archivePending: boolean; endRequested: boolean }):
   return m.archivePending ? 'End after Archive…' : 'End transfer…';
 }
 
-// What the request was pre-approved within (the bounds it carried), for the move detail.
+// The bounds the request carried, for the move detail. Worded as bounds, not as an outcome: the source may still have
+// waited for a person (it does not say why, #60).
 export function boundsText(b: { transfer: boolean; kinds: string[]; space: string; maxBudgetS: number } | null): string {
   if (!b) return 'Approval on the source proxy';
   const what = b.transfer ? `${b.kinds.map((k) => (k === 'ptz' ? KIND_LABEL.ptz : k)).join(', ')}; space ${b.space}` : 'no content';
-  return `Auto-approved within: ${what}; at most ${Math.ceil(b.maxBudgetS / 60)} min`;
+  return `Auto-approve bounds: ${what}; at most ${Math.ceil(b.maxBudgetS / 60)} min`;
 }
 
 // The Start move form: the request body with the default bounds (copy everything, space as it fits, one day).
@@ -274,4 +275,14 @@ export function activeMoves<T extends { endedAt: number | null }>(items: T[] | u
 export function activeLine(m: { cameraName?: string | null; camsId: string; source: { name: string }; target: { name: string }; phase: string; bytesDone: number | null; bytesTotal: number | null }): string {
   const pct = (m.phase === 'copying' || m.phase === 'returning') && m.bytesTotal ? ` ${Math.min(100, Math.round(((m.bytesDone ?? 0) / m.bytesTotal) * 100))}%` : '';
   return `${m.cameraName || m.camsId}: ${m.source.name} → ${m.target.name}, ${phaseText(m.phase)}${pct}`;
+}
+
+// #60: how the source's answer to a move.begin ends, in words for the Start move card ('' while it is fine:
+// the move shows in the list once the source asks for it).
+export function beginOutcomeText(row: { state: string; outcomeCode?: string | null } | null): string {
+  if (!row || row.state === 'done' || ['queued', 'sent', 'received'].includes(row.state)) return '';
+  if (row.state === 'unknown') return 'The source proxy did not answer within 15 minutes, so the move did not start. Check that the proxy is online, then start the move again.';
+  if (row.state === 'expired') return 'The request did not reach the source proxy in time (it was offline), so the move did not start. Start it again once the proxy is online.';
+  const code = row.outcomeCode ?? row.state;
+  return `The source proxy ${row.state === 'refused' ? 'refused' : 'could not start'} the move: ${reasonText(code)}.`;
 }

@@ -17,4 +17,8 @@ then empties it on `main`.
 
 ### Fixed
 - Proxy settings: a proxy whose settings keep changing, or whose settings can't be read, is re-read less often after 5 automatic reads in a row (every 2, 4, 8 … up to 30 minutes), and its Settings card says so; a change made from cams-admin, or an hour without changes, starts over. Reload still reads at once.
+- Moves: after Start move, the card follows the source proxy's answer; a request that never reached the source, got no answer within 15 minutes, or was refused says so ("The source proxy did not answer within 15 minutes, so the move did not start. …") instead of leaving "Move requested.".
+- Moves: the move detail shows the request's bounds as "Auto-approve bounds: …" (it said "Auto-approved within: …" also when the source then waited for a person).
+- Moves: a start refused by the precheck and made with an operations token is audited once per token per 10 minutes (the rest are counted), so a retrying script does not fill the audit log; a person's refusals are each still recorded.
+- cams instances: the stored last report keeps only the fields the contract names.
 

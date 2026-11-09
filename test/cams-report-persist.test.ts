@@ -50,6 +50,19 @@ describe('the last cams report is persisted (#58)', () => {
     expect(item.report.held).toEqual(rep.held);
   });
 
+  it('#60: the stored report keeps only the fields the strict shape names (extra properties a lenient check let through are dropped)', () => {
+    const { b, acc, inst } = setup(tmpDir());
+    const rep = { ...REPORT, extraMarker: 'x', held: [{ accountId: acc, camsId: 'porch', fields: ['host'], extraMarker: 'y' }], problems: [{ code: 'token_retire_failed', accountId: acc, extraMarker: 'z' }] };
+    b.camsInstances.report(inst.id, rep, 1_000);
+    const stored = row(b, inst.id).last_report!;
+    expect(stored).not.toContain('extraMarker');
+    expect(JSON.parse(stored)).toEqual({ ...REPORT, held: [{ accountId: acc, camsId: 'porch', fields: ['host'] }], problems: [{ code: 'token_retire_failed', accountId: acc }] });
+    // The same report again: the comparison is on the picked fields too, so nothing is written.
+    const before = readEpoch(b.db);
+    b.camsInstances.report(inst.id, rep, 2_000);
+    expect(readEpoch(b.db)).toBe(before);
+  });
+
   it('falls back to the stored report when live holds only pull data; a newer in-memory report wins', () => {
     const { b, inst } = setup(tmpDir());
     b.camsInstances.report(inst.id, REPORT, 1_000);

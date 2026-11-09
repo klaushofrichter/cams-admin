@@ -206,6 +206,18 @@ describe('move.begin from cams-admin', () => {
     expect(commandsOf('move.begin')).toHaveLength(0);
   });
 
+  it('#60: refusals of begins made with an operations token are throttled (one row per token per 10 min); a person\'s each get a row', async () => {
+    const src = await proxy();
+    const tgt = await proxy({ site: 'beta-2', registrySite: 'old' });
+    camera(src);
+    const body = { sourceProxyId: src.proxyId, targetProxyId: tgt.proxyId, cameraId: 'porch-cam1', bounds: BOUNDS };
+    const token = 'ops-token:abcdef01 (move script)';
+    for (let i = 0; i < 3; i++) expect(s.built.moves.begin(token, body)).toMatchObject({ ok: false, error: 'precheck' });
+    expect(auditFor('move-begin').filter((r) => r.actor === token)).toHaveLength(1);
+    for (let i = 0; i < 2; i++) begin(src, tgt);
+    expect(auditFor('move-begin').filter((r) => r.actor === ACTOR)).toHaveLength(2);
+  });
+
   it('a hidden target route is not unhidden', async () => {
     const src = await proxy();
     const tgt = await proxy();

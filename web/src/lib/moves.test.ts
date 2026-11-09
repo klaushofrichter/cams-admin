@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { blockingMove, cancelable, etaText, phaseClass, phaseText, progressText, reasonText, boundsText, startBody, refusalText, cameraLabel, activeMoves, activeLine, checkText, endLabel, canGiveUp, phaseReason, refusedByText, refusalLine, contentLine, contentBasisText, canDelete, presummaryLines, presummarySpaceText, presummaryErrorText } from './moves';
+import { blockingMove, cancelable, etaText, phaseClass, phaseText, progressText, reasonText, boundsText, startBody, refusalText, cameraLabel, activeMoves, activeLine, checkText, endLabel, canGiveUp, phaseReason, refusedByText, refusalLine, contentLine, contentBasisText, canDelete, presummaryLines, presummarySpaceText, presummaryErrorText, beginOutcomeText } from './moves';
 
 const PHASES = ['requested', 'offered', 'awaiting-approval', 'approved', 'switching', 'copying', 'cleaning', 'done', 'rejected', 'cancelling', 'cancelled', 'failed', 'returning', 'returned'];
 
@@ -68,9 +68,9 @@ describe('moves (UI text)', () => {
 describe('boundsText', () => {
   it('says what the request was approved within', () => {
     expect(boundsText(null)).toBe('Approval on the source proxy');
-    expect(boundsText({ transfer: true, kinds: ['clips', 'stills'], space: 'fit', maxBudgetS: 3600 })).toBe('Auto-approved within: clips, stills; space fit; at most 60 min');
-    expect(boundsText({ transfer: false, kinds: [], space: 'all', maxBudgetS: 90 })).toBe('Auto-approved within: no content; at most 2 min');
-    expect(boundsText({ transfer: true, kinds: ['clips', 'ptz'], space: 'fit', maxBudgetS: 3600 })).toBe('Auto-approved within: clips, PTZ positions; space fit; at most 60 min');
+    expect(boundsText({ transfer: true, kinds: ['clips', 'stills'], space: 'fit', maxBudgetS: 3600 })).toBe('Auto-approve bounds: clips, stills; space fit; at most 60 min');
+    expect(boundsText({ transfer: false, kinds: [], space: 'all', maxBudgetS: 90 })).toBe('Auto-approve bounds: no content; at most 2 min');
+    expect(boundsText({ transfer: true, kinds: ['clips', 'ptz'], space: 'fit', maxBudgetS: 3600 })).toBe('Auto-approve bounds: clips, PTZ positions; space fit; at most 60 min');
   });
 });
 
@@ -287,5 +287,17 @@ describe('blockingMove', () => {
     expect(blockingMove([ended], 'a', 'b')).toBeNull();
     expect(blockingMove([open], 'c', 'd')).toBeNull();
     expect(blockingMove([open], '', '')).toBeNull();
+  });
+});
+
+describe('#60: a move.begin that ends without starting the move', () => {
+  it('names what happened and what to do', () => {
+    expect(beginOutcomeText(null)).toBe('');
+    expect(beginOutcomeText({ state: 'sent' })).toBe('');
+    expect(beginOutcomeText({ state: 'done' })).toBe('');
+    expect(beginOutcomeText({ state: 'unknown' })).toContain('did not answer within 15 minutes');
+    expect(beginOutcomeText({ state: 'expired' })).toContain('did not reach the source proxy in time');
+    expect(beginOutcomeText({ state: 'refused', outcomeCode: 'moves_not_allowed' })).toBe('The source proxy refused the move: the proxy does not allow camera moves.');
+    expect(beginOutcomeText({ state: 'failed', outcomeCode: 'internal' })).toBe('The source proxy could not start the move: an internal error.');
   });
 });
