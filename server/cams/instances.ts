@@ -202,6 +202,13 @@ export class CamsInstances {
           this.q('DELETE FROM cams_camera_overrides WHERE instance_id = ? AND camera_id = ?').run(id, o.camera_id as string);
           this.d.audit.write({ actorType: 'sysadmin', actor, action: 'camera-override-clear', accountId: o.account_id as string, targetType: 'cams-instance', targetId: id, targetLabel: old.name, outcome: 'ok', detail: { camera: o.cams_id, host: o.host, cameraUser: o.camera_user, reason: 'account-not-served' } });
         }
+        // Likewise its routes to that account's proxies: a re-serve starts default-deny, and no list shows a route the instance can't use.
+        const routes = this.q(`SELECT r.proxy_id, p.name, p.account_id FROM cams_instance_routes r JOIN proxies p ON p.id = r.proxy_id
+          WHERE r.instance_id = ? ORDER BY p.name`).all(id) as Row[];
+        for (const rt of routes.filter((x) => !accounts.includes(x.account_id as string))) {
+          this.q('DELETE FROM cams_instance_routes WHERE instance_id = ? AND proxy_id = ?').run(id, rt.proxy_id as string);
+          this.d.audit.write({ actorType: 'sysadmin', actor, action: 'route-update', accountId: rt.account_id as string, targetType: 'cams-instance', targetId: id, targetLabel: old.name, outcome: 'ok', detail: { proxyId: rt.proxy_id, proxy: rt.name, removed: true, reason: 'account-not-served' } });
+        }
       }
       const now = this.get(id);
       this.log(actor, 'cams-instance-update', { id, name: old.name }, { fields, ...(accounts ? { accounts } : {}), ...nameChanges(old, now, ['name', 'displayName']) });
