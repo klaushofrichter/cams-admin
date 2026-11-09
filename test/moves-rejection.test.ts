@@ -128,9 +128,14 @@ describe('the target refuses with a detail', () => {
     expect(pending()).toHaveLength(1);
     // The failed cancel is asked again after the backoff (the ended sweep), and taken on now.
     delete tgt.client.moveResults['move.cancel'];
-    clock.advance(10 * 60_000);
-    s.built.moves.tick();
-    await until(() => got(tgt.client, 'move.cancel').length === 2, 5000, 'second cancel');
+    // The first cancel's failed answer arrives asynchronously: keep the clock and the tick going until the
+    // repeat goes out (a single tick could run before that answer was recorded and then nothing repeats).
+    await until(() => {
+      clock.advance(10 * 60_000);
+      s.built.moves.tick();
+      return got(tgt.client, 'move.cancel').length >= 2;
+    }, 5000, 'second cancel');
+    expect(got(tgt.client, 'move.cancel').length).toBeGreaterThanOrEqual(2);
     expect(got(src.client, 'move.cancel')).toHaveLength(0);
     expect(s.built.moves.store.get(id)!.phase).toBe('rejected');
   });
