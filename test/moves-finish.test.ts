@@ -4,7 +4,7 @@
 // approval) with the registry back to the source, end transfer (A9: abandoned
 // chunks), a failure after the switch-over ending the transfer, and the
 // automatic commands that tick derives again until they are queued.
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { randomInt } from 'crypto';
 import { readFileSync } from 'fs';
 import { join } from 'path';
@@ -548,6 +548,29 @@ describe('end transfer', () => {
     await until(() => move(a.m.id).phase === 'done', 5000, 'done');
     expect(move(a.m.id).cleanupPending).toBe(true);
     expect(auditFor('move-done')[0].d).toMatchObject({ failure: 'target:disk_full', cleanup: 'pending' });
+  });
+
+  it('tick resumes pending cleanups at most once per RESUME_GAP_MS (#92)', async () => {
+    const a = await copying();
+    await offline(a.src);
+    phase(a.tgt, a.m.id, 'target', 'failed', false, 'disk_full');
+    await until(() => move(a.m.id).phase === 'done', 5000, 'done');
+    s.built.db.prepare('UPDATE moves SET target_cleanup_pending = 1 WHERE id = ?').run(a.m.id);
+    expect(move(a.m.id)).toMatchObject({ cleanupPending: true, targetCleanupPending: true });
+    const mv = s.built.moves as any;
+    vi.spyOn(mv, 'online').mockReturnValue(true);
+    const src = vi.spyOn(mv, 'cleanupStep').mockImplementation(() => {});
+    const tgt = vi.spyOn(mv, 'targetCleanupStep').mockImplementation(() => {});
+    mv.tick();
+    expect([src.mock.calls.length, tgt.mock.calls.length]).toEqual([1, 1]);
+    // Two ticks within the gap: no resend.
+    clock.advance(RESUME_GAP_MS / 2);
+    mv.tick();
+    expect([src.mock.calls.length, tgt.mock.calls.length]).toEqual([1, 1]);
+    clock.advance(RESUME_GAP_MS / 2);
+    mv.tick();
+    expect([src.mock.calls.length, tgt.mock.calls.length]).toEqual([2, 2]);
+    vi.restoreAllMocks();
   });
 
   it('end transfer with the source online sends move.finish abandoned to both roles', async () => {
