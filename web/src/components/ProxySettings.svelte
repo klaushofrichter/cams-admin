@@ -5,13 +5,14 @@
   import { api, ApiFailure, errorText } from '../lib/api';
   import { commandsText } from '../lib/commands';
   import { when } from '../lib/format';
-  import { ceilingOf, groupPaths, narrowNote, narrowOk, parseValue, patternOf, stateLine, valueText, waitCommand, type Change, type ConfigView, type Leaf } from '../lib/config';
+  import { backedOffText, ceilingOf, groupPaths, narrowNote, narrowOk, parseValue, patternOf, stateLine, valueText, waitCommand, type Change, type ConfigView, type Leaf } from '../lib/config';
   import DiffTable from './DiffTable.svelte';
+  import { clock } from '../lib/clock.svelte';
 
   let { accountId, proxyId, policy, refresh }: { accountId: string; proxyId: string; policy: string; refresh: number } = $props();
   const base = $derived(`/accounts/${accountId}/proxies/${proxyId}`);
 
-  let st = $state<{ view: ConfigView | null; changedOnProxy: boolean; fetching: string | null; allow: string[] } | null>(null);
+  let st = $state<{ view: ConfigView | null; changedOnProxy: boolean; fetching: string | null; allow: string[]; backedOff?: { reads: number; nextAt: number } | null } | null>(null);
   let edits = $state<Record<string, string>>({});
   let phase = $state<'edit' | 'busy' | 'review' | 'conflict'>('edit');
   let busyText = $state('');
@@ -161,6 +162,7 @@
         <button class="btn" data-testid="settings-reload" onclick={reload} disabled={!allowed}>Reload</button>
       </div>
     {/if}
+    {#if st.backedOff}<p class="muted" data-testid="settings-backed-off">{backedOffText(st.backedOff, clock.now)}</p>{/if}
     {#if view.clampedPaths}<p class="muted">{view.clampedPaths} settings were too many to show.</p>{/if}
     {#if !canWrite}<p class="muted" data-testid="settings-read-only">Read only: the proxy does not allow config.set.</p>{/if}
     {#each groups as g (g.camera ? `cam:${g.camera}` : g.group)}

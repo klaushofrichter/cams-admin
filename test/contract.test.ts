@@ -423,7 +423,9 @@ describe('the v1 contract', () => {
     // Vision management: the monthly limit only up to the proxy's local ceiling; the switch on only with a ceiling above 0.
     expect(r.narrow['analytics.googleVision.monthlyLimit']).toBe('ceiling');
     expect(r.narrow['analytics.googleVision.enabled']).toBe('ceilingGated');
-    expect(Object.keys(r.narrow)).toHaveLength(14);
+    // #20: the capture intervals only shorter from cams-admin.
+    for (const p of ['stills.intervalS', 'events.poll.intervalS', 'cameras.*.stills.intervalS']) expect(r.narrow[p], p).toBe('less');
+    expect(Object.keys(r.narrow)).toHaveLength(17);
     for (const k of Object.values(r.narrow)) expect(NARROW_KINDS as readonly string[]).toContain(k);
     // Every ceiling kind names its ceiling; a ceiling path is local only (denied, never remote) and is not itself narrow.
     const ceilingKinds = Object.keys(r.narrow).filter((p) => ['ceiling', 'ceilingGated'].includes(r.narrow[p]));

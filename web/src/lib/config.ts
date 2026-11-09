@@ -44,6 +44,7 @@ export function narrowNote(path: string): string | null {
   const dir = NARROW[patternOf(path)];
   if (dir === 'ceiling') return "only up to the proxy's local ceiling from cams-admin";
   if (dir === 'ceilingGated') return "on from cams-admin only when the proxy sets a ceiling";
+  if (dir === 'less' && /\.intervalS$/.test(path)) return 'only shorter from cams-admin (captures no less often)';
   return dir === 'more' ? 'only higher from cams-admin (keeps data longer)' : dir === 'less' ? 'only lower from cams-admin (spending)' : null;
 }
 
@@ -188,3 +189,10 @@ export const EFFECT: Record<string, string> = {
   'camera-time-set': "Writes the proxy's time zone and daylight saving rule into the camera.",
   'proxy.restart': "Restarts the proxy process: every camera's stream and events pause until it is back.",
 };
+
+// #20 (M10): automatic reads backed off; the line under the settings header.
+export function backedOffText(b: { reads: number; nextAt: number } | null | undefined, now: number): string {
+  if (!b) return '';
+  const min = Math.max(1, Math.ceil((b.nextAt - now) / 60_000));
+  return `The proxy's settings changed (or could not be read) ${b.reads} times in a row, so cams-admin reads them less often now: next in about ${min} minute${min === 1 ? '' : 's'}. Reload reads them at once.`;
+}
