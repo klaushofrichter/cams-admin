@@ -7,6 +7,7 @@
   import { addressInfo } from '../lib/address';
   import { keepEdits } from '../lib/edits';
   import { proxyForm, proxyPatch, validProxyName } from '../lib/proxy';
+  import { pinsNotSentText } from '../lib/pins';
   import { summaryLeaves } from '../lib/summaryTree';
   import { proxyDeleteLines, type DeleteLines as Lines } from '../lib/deletes';
   import StateChip from '../components/StateChip.svelte';
@@ -275,6 +276,7 @@
       <label>TLS site<input bind:value={f.tlsSite} /></label>
       <label>TLS server name<input bind:value={f.tlsServername} /></label>
       <label class="wide">Site CA fingerprints (cams's pins; 0–2; taken from the proxy's report on its first heartbeat, a change with "Use the reported pins" above)<textarea rows="2" class="mono" bind:value={f.fps} data-testid="proxy-fingerprints"></textarea></label>
+      {#if pinsNotSentText(f.fps ?? '', d.plainHttpRoutes ?? [])}<p class="warn-text wide" data-testid="proxy-pins-not-sent">{pinsNotSentText(f.fps ?? '', d.plainHttpRoutes ?? [])}</p>{/if}
       <label class="wide">Notes<textarea rows="2" bind:value={f.notes}></textarea></label>
       <p class="muted wide">The name is the short label in lists, audit records and the suggested id of a camera whose id is taken. The proxy, its keys, tokens, routes and moves go by the proxy id, so a rename is safe: cams shows it from its next snapshot, and a move already running keeps the old name in its messages.</p>
       {#if !nameOk}<p class="error wide" data-testid="proxy-name-error">Name: lower-case letters, digits and hyphens, starting with a letter or digit, at most 32 characters.</p>{/if}
@@ -312,6 +314,7 @@
 {/if}
 
 <style>
+  .warn-text { color: var(--warning); }
   h2, h3 { margin: 0; }
   .two { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
   .wide { grid-column: 1 / -1; }

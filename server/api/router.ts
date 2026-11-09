@@ -15,7 +15,7 @@ import type { Tokens } from '../tokens/service';
 import type { CamsInstances } from '../cams/instances';
 import type { Importer } from '../import/importer';
 import { exportForInstance } from '../import/export';
-import { snapshotRevision } from '../cams/snapshot';
+import { plainHttpRoutes, snapshotRevision } from '../cams/snapshot';
 import type { ProxyConfig } from '../config/service';
 import type { Vision } from '../vision/service';
 import type { SwitchService } from '../switches/service';
@@ -564,6 +564,8 @@ export function proxyDetail(d: ApiDeps, accountId: string, proxyId: string) {
     keys: d.registry.listKeys(accountId, proxyId).map(keyView),
     enrollment: d.enrollment.liveCode(proxyId),
     connected: d.hub.connected(proxyId),
+    // #106: cams instances that reach this proxy over plain http (not loopback): they get it without its CA pins.
+    plainHttpRoutes: plainHttpRoutes(d.db, proxyId),
   };
 }
 
