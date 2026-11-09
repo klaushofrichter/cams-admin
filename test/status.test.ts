@@ -70,6 +70,17 @@ describe('status store', () => {
     expect(seen('key_p')).toBeNull();
   });
 
+  // #156: after a restart no proxy is connected until it says hello again (a graceful shutdown never ran disconnected()).
+  it('a new process starts with every stored proxy disconnected, without a write', () => {
+    const s = setup(dir);
+    s.store.hello(s.prx.id, V, s.clock.now(), ['status']);
+    s.hb();
+    expect((s.db.prepare('SELECT connected FROM proxy_status WHERE proxy_id = ?').get(s.prx.id) as { connected: number }).connected).toBe(1);
+    const again = new StatusStore({ db: s.db, clock: s.clock, registry: s.reg, live: s.live, offlineAfterMs: 90_000 });
+    expect(again.row(s.prx.id)).toMatchObject({ connected: false });
+    expect(again.row(s.prx.id)?.lastHelloAt).not.toBeNull();
+    expect((s.db.prepare('SELECT connected FROM proxy_status WHERE proxy_id = ?').get(s.prx.id) as { connected: number }).connected).toBe(1);
+  });
   it('a reconnect inside the window shows no outage', () => {
     const s = setup(dir);
     s.store.hello(s.prx.id, V, s.clock.now());
