@@ -301,6 +301,18 @@ describe('RefProxyConfig: the reference proxy for the P3 commands', () => {
     expect([w.status, w.code]).toEqual(['failed', 'widening_local_only']);
     expect((w.result as any).paths[0].detail).toBe('a remote change may only keep data longer');
   });
+  it("capture intervals only shorter; a camera's unset stills.intervalS is the host's (cam-proxy #396)", () => {
+    const r = new RefProxyConfig({ cameras: ['cam1'] });
+    const run = (cmd: 'config.set' | 'config.unset', a: Record<string, unknown>) => { const x = r.handle(cmd, { v: 1, dryRun: true, baseRevision: r.revision(), ...a }, who(1)); return [x.status, x.code, (x.result as any)?.paths?.[0]?.detail]; };
+    expect(r.current('stills.intervalS')).toBe(10);
+    expect(r.current('cameras.cam1.stills.intervalS')).toBeUndefined();
+    expect(run('config.set', { set: { 'cameras.cam1.stills.intervalS': 5 } })).toEqual(['ok', undefined, undefined]);
+    expect(run('config.set', { set: { 'cameras.cam1.stills.intervalS': 30 } })).toEqual(['failed', 'widening_local_only', 'a remote change may only shorten the interval; a longer one is a local change']);
+    expect(run('config.set', { set: { 'stills.intervalS': 30 } })[1]).toBe('widening_local_only');
+    expect(run('config.unset', { paths: ['cameras.cam1.stills.intervalS'] })[0]).toBe('ok');
+    r.localEdit({ 'cameras.cam1.stills.intervalS': 5 });
+    expect(run('config.unset', { paths: ['cameras.cam1.stills.intervalS'] })[1]).toBe('widening_local_only');
+  });
   it('the Vision ceiling: lower always, higher and on only within remoteMaxMonthly (local only); analytics.usage.get never names a key', () => {
     const r = new RefProxyConfig({ cameras: ['cam1'] });
     const L = 'analytics.googleVision.monthlyLimit';

@@ -9,7 +9,7 @@ import type { CommandRow, Commands, WireCommand } from '../commands/service';
 import { sanitize } from '../contract';
 import { REMOTE_SETTABLE } from '../../contract/build';
 import { SECRET_RE } from './redact';
-import { ceilingPathOf, isRemoteSettable, narrowCode, narrowingOk, narrowReason, PATH_RE, patternOf, STORAGE_LOCAL_ONLY, type Leaf, type Settable } from './narrow';
+import { ceilingPathOf, inheritedPathOf, isRemoteSettable, narrowCode, narrowingOk, narrowReason, PATH_RE, patternOf, STORAGE_LOCAL_ONLY, type Leaf, type Settable } from './narrow';
 
 // A proxy's settings as cams-admin knows them (migration spec §8; P3 plan
 // Task 4): the last reported view per proxy (proxy_config), read by
@@ -174,7 +174,8 @@ export class ProxyConfig {
       const pat = patternOf(p);
       const cp = ceilingPathOf(pat);
       const ceiling = cp ? view.paths[cp]?.v : undefined;
-      if (!narrowingOk(pat, view.paths[p]?.v, to, ceiling)) throw new ApiError(400, narrowCode(pat), `${p}: ${narrowReason(pat, ceiling)}`);
+      const ip = inheritedPathOf(pat);
+      if (!narrowingOk(pat, view.paths[p]?.v, to, ceiling, ip ? view.paths[ip]?.v : undefined)) throw new ApiError(400, narrowCode(pat), `${p}: ${narrowReason(pat, ceiling)}`);
     }
     const base = { v: 1, dryRun: true, baseRevision: view.revision };
     const row = 'set' in parsed

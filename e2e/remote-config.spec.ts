@@ -65,6 +65,28 @@ test('settings: change, review the diff, apply; roll back from Commands; a local
   }
 });
 
+test("settings (#20): a camera's first stills interval may be up to the host's, not longer", async ({ page }, info) => {
+  const { acc, px, c, ref } = await proxyWith(page, uniq(info, 'iv'), SETTINGS);
+  try {
+    await page.goto(`/#/accounts/${acc.id}/proxies/${px.id}`);
+    const P = 'cameras.cam1.stills.intervalS';
+    await expect(page.getByTestId(`settings-value-${P}`)).toHaveText('unset');
+    await expect(page.getByTestId(`settings-why-${P}`)).toHaveText("only shorter from cams-admin (unset: the host's interval)");
+    // the host's stills.intervalS is 10: longer is refused at the input, shorter goes through
+    await setValue(page, P, '30');
+    await expect(page.getByTestId(`settings-input-error-${P}`)).toContainText('only shorter from cams-admin');
+    await setValue(page, P, '5');
+    await expect(page.getByTestId(`settings-input-error-${P}`)).toHaveCount(0);
+    await page.getByTestId('settings-review').click();
+    await expect(page.getByTestId(`diff-row-${P}`)).toContainText('5');
+    await page.getByTestId('settings-apply').click();
+    await expect(page.getByTestId(`settings-value-${P}`)).toHaveText('5');
+    expect(ref.current(P)).toBe(5);
+  } finally {
+    await c.stop('shutdown');
+  }
+});
+
 test('settings: a local edit between Review and Apply shows the conflict; Use mine re-previews', async ({ page }, info) => {
   const { acc, px, c, ref } = await proxyWith(page, uniq(info, 'cfl'), SETTINGS);
   try {

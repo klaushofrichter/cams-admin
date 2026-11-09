@@ -39,21 +39,36 @@ export function ceilingOf(view: { paths: Record<string, ConfigPath> }, path: str
   return Object.hasOwn(CEILINGS, pat) ? view.paths[CEILINGS[pat]]?.v : undefined;
 }
 
+// A camera setting whose unset value is the host's (cam-proxy #396).
+const INHERITS: Record<string, string> = { 'cameras.*.stills.intervalS': 'stills.intervalS' };
+const INTERVAL = /\.intervalS$/;
+
+// The host's value an unset camera setting takes effect as, from the view (undefined: none, or unknown).
+export function inheritedOf(view: { paths: Record<string, ConfigPath> }, path: string): unknown {
+  const pat = patternOf(path);
+  return Object.hasOwn(INHERITS, pat) ? view.paths[INHERITS[pat]]?.v : undefined;
+}
+
 export function narrowNote(path: string): string | null {
   if (STORAGE.test(path)) return 'storage settings are local only';
   const dir = NARROW[patternOf(path)];
   if (dir === 'ceiling') return "only up to the proxy's local ceiling from cams-admin";
   if (dir === 'ceilingGated') return "on from cams-admin only when the proxy sets a ceiling";
-  if (dir === 'less' && /\.intervalS$/.test(path)) return 'only shorter from cams-admin (captures no less often)';
+  if (dir === 'less' && INTERVAL.test(path)) return 'only shorter from cams-admin (captures no less often)';
   return dir === 'more' ? 'only higher from cams-admin (keeps data longer)' : dir === 'less' ? 'only lower from cams-admin (spending)' : null;
 }
 
 // The contract's narrow rule (same as the server's pre-check). ceiling: the proxy's local ceiling (ceilingOf),
-// for the ceiling kinds; unknown → the proxy decides.
-export function narrowOk(path: string, from: unknown, to: unknown, ceiling?: unknown): boolean {
+// for the ceiling kinds; unknown → the proxy decides. inherited: the host's value (inheritedOf) an unset
+// camera setting takes effect as, for either side.
+export function narrowOk(path: string, from: unknown, to: unknown, ceiling?: unknown, inherited?: unknown): boolean {
   const pat = patternOf(path);
   const dir = NARROW[pat];
   if (!dir) return true;
+  if (Object.hasOwn(INHERITS, pat)) {
+    if (from === undefined) from = inherited;
+    if (to === undefined) to = inherited;
+  }
   if (isCeilingKind(dir)) {
     if (to === undefined) return true;
     const known = typeof ceiling === 'number' && Number.isFinite(ceiling);
@@ -77,6 +92,7 @@ function why(path: string, p: ConfigPath, settable: Record<string, Settable>): {
   if (!isRemoteSettable(path, settable)) return { editable: false, why: 'never remote (addresses, ports, files, trust, users)' };
   const dir = NARROW[patternOf(path)];
   if (isCeilingKind(dir)) return { editable: true, why: "only up to the proxy's local ceiling from cams-admin" };
+  if (dir === 'less' && INTERVAL.test(path)) return { editable: true, why: Object.hasOwn(INHERITS, patternOf(path)) ? "only shorter from cams-admin (unset: the host's interval)" : 'only shorter from cams-admin' };
   return dir ? { editable: true, why: dir === 'less' ? 'only lower from cams-admin' : 'only higher from cams-admin' } : { editable: true };
 }
 
@@ -138,8 +154,12 @@ export function parseValue(s: Settable, text: string): { ok: true; value: Leaf }
 
 // M6: a change a remote write could not make (a rollback restores the local value): say which way.
 export function widens(c: Change): string | null {
-  const dir = NARROW[patternOf(c.path)];
+  const pat = patternOf(c.path);
+  const dir = NARROW[pat];
+  // An unset camera interval is the host's, not known here: the proxy has checked it.
+  if (Object.hasOwn(INHERITS, pat) && (c.from === undefined || c.to === undefined)) return null;
   if (!dir || narrowOk(c.path, c.from, c.to)) return null;
+  if (dir === 'less' && INTERVAL.test(c.path)) return 'restores the local value: captures less often';
   return dir === 'more' ? 'restores the local value: keeps less data' : 'restores the local value: more spending';
 }
 
