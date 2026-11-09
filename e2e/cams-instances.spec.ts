@@ -21,6 +21,9 @@ test('a cams instance: served accounts, routes default-deny (one loopback route)
   await page.getByTestId(`cms-serve-${accB.name}`).check();
   await page.getByTestId('cms-served-save').click();
   await expect(page.getByTestId(`cms-serve-${accB.name}`)).toBeChecked();
+  // Saved on the server before the route save below (the box is checked locally at once; a route save landing first
+  // bumps the instance version and the accounts save then answers conflict).
+  await expect.poll(async () => (await api(page, 'GET', '/cams-instances')).items.find((i: any) => i.name === name)?.accounts.length).toBe(2);
   // Routes are default-deny: nothing is visible until routed; the Pi over loopback, the cluster proxy left out.
   await expect(page.getByTestId('route-state-pi')).toHaveText('not visible');
   await page.getByTestId('route-visible-pi').check();
