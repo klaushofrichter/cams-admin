@@ -50,6 +50,9 @@ test('add a switch, test it, survey it, see the camera on its port, and force a 
     await page.getByTestId('confirm-cancel').click();
     expect(cycles).toHaveLength(0);
     await page.getByTestId('power-force-garage').click();
+    // The riskier action needs the typed word too (#166).
+    await expect(page.getByTestId('confirm-ok')).toBeDisabled();
+    await page.getByTestId('confirm-input').fill('power-cycle');
     await page.getByTestId('confirm-ok').click();
     await expect(page.getByTestId('power-result-garage')).toHaveText('Power-cycled.', { timeout: 15_000 });
     expect(cycles).toHaveLength(1);

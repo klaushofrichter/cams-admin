@@ -56,7 +56,8 @@ async function sw(p: P, name: string) {
 const setPower = (camId: string, power: CameraPower) => s.built.switches.store.setPower(camId, power, ACTOR, 'sysadmin', 'test');
 const power = async (camId: string) => (await call('GET', `/cameras/${camId}/power`)).body;
 const sent = (p: P, command: string) => p.client.receivedCommands.filter((m) => m.body.command === command).map((m) => m.body.args);
-const results = (p: P) => sent(p, 'camera.power.cycle.result');
+// Once per command: a result still unanswered when the clock jumps and the commands tick is re-sent (same cmdId).
+const results = (p: P) => [...new Map(p.client.receivedCommands.filter((m) => m.body.command === 'camera.power.cycle.result').map((m) => [m.body.cmdId, m.body.args])).values()];
 const audits = (action: string) => (s.built.db.prepare('SELECT actor_type, actor, outcome, target_id, detail FROM audit_log WHERE action = ? ORDER BY id').all(action) as { actor_type: string; actor: string; outcome: string; target_id: string | null; detail: string }[])
   .map((x) => ({ actorType: x.actor_type, actor: x.actor, outcome: x.outcome, targetId: x.target_id, ...JSON.parse(x.detail ?? '{}') }));
 const ask = (p: P, camera: string, requestId: string, o: { forge?: boolean } = {}) => expect(p.client.emitEvent({ kind: 'camera.power.cycle.request', camera, requestId }, o)).toBe(true);
@@ -161,6 +162,20 @@ describe('power-cycle requests from proxies', () => {
     await until(() => results(p).length === 4, 5000, 'result 3');
     expect(results(p)[3]).toMatchObject({ requestId: 'rq-3', ok: true });
     expect(audits('camera-power-cycle').filter((a) => a.actorType === 'proxy' && a.step !== 'final').map((a) => [a.requestId, a.outcome])).toEqual([['rq-busy', 'refused'], ['rq-1', 'ok'], ['rq-2', 'refused'], ['rq-3', 'ok']]);
+  });
+
+  it('a camera deleted while its requested cycle runs: the request still gets its answer (#166)', async () => {
+    const p = await proxy();
+    const op = await proxy();
+    const { cam } = await poeCamera(p, op);
+    op.client.dropCommands = 1; // the switch.cycle stays sent
+    ask(p, cam.proxyCameraId, 'rq-gone');
+    await until(() => (s.built.db.prepare("SELECT count(*) n FROM commands WHERE command = 'switch.cycle' AND state = 'sent'").get() as { n: number }).n === 1, 5000, 'cycle sent');
+    expect((await call('DELETE', `/accounts/${p.acc}/cameras/${cam.id}`)).status).toBe(204);
+    clock.advance(10_000);
+    s.built.commands.tick();
+    await until(() => results(p).length > 0, 5000, 'result');
+    expect(results(p)).toEqual([{ v: 1, camera: cam.proxyCameraId, requestId: 'rq-gone', ok: true }]);
   });
 
   it('a proxy without camera.power.cycle.result allowed: the cycle runs, no result is sent', async () => {
