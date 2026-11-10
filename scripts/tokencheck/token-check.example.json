@@ -1,0 +1,25 @@
+{
+  "camsAdmin": {
+    "url": "https://cams-admin.example.net",
+    "diagTokenFile": "~/.config/cams-admin/diag-token",
+    "opsTokenFile": "~/.config/cams-admin/ops-token",
+    "signingKeyFile": "~/.config/cams-admin/signing-key.pem"
+  },
+  "accounts": { "home": "acc_REPLACEWITHHOMEID", "demo": "acc_REPLACEWITHDEMOID" },
+  "hosts": [
+    { "name": "gateway", "ssh": "ops@192.0.2.10", "root": "/srv/cam-proxy", "proxy": "gateway" },
+    { "name": "pi", "ssh": "pi@192.0.2.20", "root": "/srv/cam-proxy", "proxy": "pi", "cams": { "instance": "pi", "root": "/srv/cam-proxy/cams" } },
+    { "name": "cluster", "proxy": "cluster-proxy", "cams": { "instance": "cluster" } }
+  ],
+  "mac": {
+    "adminTokens": { "gateway": "~/.config/cam-proxy/gateway-admin-token", "pi": "~/.config/cam-proxy/pi-admin-token" },
+    "copies": [
+      { "path": "~/src/cam-proxy/.env", "host": "pi", "label": "cam-proxy/.env",
+        "vars": ["CAMPROXY_ADMIN_TOKEN", "CAMPROXY_TOKENS", "CAMPROXY_FTP_PASSWORD", "CAMPROXY_GOOGLE_VISION_KEY"] },
+      { "path": "~/src/cam-proxy/.env", "label": "cam-proxy/.env", "vars": ["SWITCH_PASSWORD"] },
+      { "path": "~/secrets/front-door-admin.pw", "camera": "front-door", "user": "admin", "label": "front-door admin" }
+    ]
+  },
+  "expiringDays": 7,
+  "sshTimeoutS": 20
+}
