@@ -74,6 +74,14 @@ not in the database and so not in its backups) and replays it at every
 start: what was revoked is revoked again, with `system` audit records
 marked `replayed`. Nothing newer is touched (the journal names exact ids).
 
+Viewer tokens share the journal: a revoke, a delete and a validity change
+(the newest per token wins), and every access reduction made after the
+backup (`viewer-token-access`: an account removed, admin lowered to viewer;
+audit `viewer-token-accounts` / `viewer-token-role`, `replayed`). Only
+reductions are journaled: an account added or a raise to admin after the
+backup is not, so a restore takes it back (repeat it from the audit log). A
+replay never grants access.
+
 - **Same volume** (the usual restore): nothing to do; check the audit log
   for `replayed` records.
 - **Fresh volume** (the journal is gone too): in the audit log of the old

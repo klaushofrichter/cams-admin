@@ -136,7 +136,7 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
   const viewerEntries: Parameters<ViewerTokens['replay']>[0] = [];
   for (const r of journal.read()) {
     try {
-      if (r.kind === 'viewer-token') viewerEntries.push(r);
+      if (r.kind === 'viewer-token' || r.kind === 'viewer-token-access') viewerEntries.push(r);
       else if (r.kind === 'diag-token') diag.replay(r.tokenId);
       else if (r.kind === 'ops-token') ops.replay(r.tokenId);
       else camsInstances.replay(r, (t) => tokens.revokeReplayed(t));

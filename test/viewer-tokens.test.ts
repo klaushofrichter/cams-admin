@@ -174,6 +174,58 @@ describe('replay after a restore', () => {
     expect(vt.get(r3.item.id).expiresAt).toBe(later + DAY);
   });
 
+  it('access reductions are journaled: an account removed, a role lowered; additions and raises are not', () => {
+    const r = vt.create(ACTOR, { name: 'narrowed', accountIds: [home], role: 'viewer' });
+    journal.length = 0;
+    vt.setAccounts(ACTOR, r.item.id, { accountIds: [home, away], version: vt.get(r.item.id).version });
+    vt.setRole(ACTOR, r.item.id, { role: 'admin' });
+    expect(journal).toEqual([]);
+    vt.setAccounts(ACTOR, r.item.id, { accountIds: [home], version: vt.get(r.item.id).version });
+    expect(journal).toEqual([{ kind: 'viewer-token-access', tokenId: r.item.id, change: 'accounts-removed', accountIds: [away] }]);
+    vt.setRole(ACTOR, r.item.id, { role: 'viewer' });
+    expect(journal.at(-1)).toEqual({ kind: 'viewer-token-access', tokenId: r.item.id, change: 'role', role: 'viewer' });
+    expect(journal.length).toBe(2);
+  });
+
+  it('an account removal and a demotion after the backup are applied again; a revoke before them is kept', () => {
+    // The "backup": a token in both accounts, as admin.
+    const r = vt.create(ACTOR, { name: 'restored', accountIds: [home, away], role: 'admin' });
+    const later = clock.now() + 1000;
+    const w = rev(away);
+    vt.replay([
+      { at: later - 20, kind: 'viewer-token', tokenId: r.item.id, change: 'revoked' },
+      { at: later - 10, kind: 'viewer-token-access', tokenId: r.item.id, change: 'accounts-removed', accountIds: [away] },
+      { at: later, kind: 'viewer-token-access', tokenId: r.item.id, change: 'role', role: 'viewer' },
+    ]);
+    const t = vt.get(r.item.id);
+    expect(t.accounts.map((x) => x.name)).toEqual(['home']);
+    expect(t.role).toBe('viewer');
+    expect(t.state).toBe('revoked');
+    expect(rev(away)).toBeGreaterThan(w);
+    expect(a.audit.list({ action: 'viewer-token-accounts' }).items[0]).toMatchObject({ actorType: 'system', detail: expect.objectContaining({ replayed: true, removed: [away] }) });
+    expect(a.audit.list({ action: 'viewer-token-role' }).items[0]).toMatchObject({ actorType: 'system', detail: expect.objectContaining({ replayed: true, role: 'viewer', from: 'admin' }) });
+  });
+
+  it('an access entry never grants: an admin entry does not raise a viewer; a removal of an account not held changes nothing', () => {
+    const r = vt.create(ACTOR, { name: 'kept', accountIds: [home], role: 'viewer' });
+    const before = vt.get(r.item.id);
+    vt.replay([
+      { at: clock.now() + 10, kind: 'viewer-token-access', tokenId: r.item.id, change: 'role', role: 'admin' },
+      { at: clock.now() + 20, kind: 'viewer-token-access', tokenId: r.item.id, change: 'accounts-removed', accountIds: [away] },
+    ]);
+    expect(vt.get(r.item.id)).toEqual(before);
+  });
+
+  it('an access entry older than the row is left alone', () => {
+    const r = vt.create(ACTOR, { name: 'newer2', accountIds: [home, away], role: 'admin' });
+    vt.replay([
+      { at: clock.now() - 1, kind: 'viewer-token-access', tokenId: r.item.id, change: 'accounts-removed', accountIds: [away] },
+      { at: clock.now() - 1, kind: 'viewer-token-access', tokenId: r.item.id, change: 'role', role: 'viewer' },
+    ]);
+    expect(vt.get(r.item.id).role).toBe('admin');
+    expect(vt.get(r.item.id).accounts.map((x) => x.name)).toEqual(['away', 'home']);
+  });
+
   it('a row changed after the entry is left alone', () => {
     const r = vt.create(ACTOR, { name: 'newer', accountIds: [home] });
     vt.replay([{ at: clock.now() - 1, kind: 'viewer-token', tokenId: r.item.id, change: 'revoked' }]);
