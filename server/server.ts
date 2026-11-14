@@ -146,7 +146,7 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
   camsInstances.onViewerTokenUse = (instanceId, used) => viewerTokens.noteUse(
     (db.prepare('SELECT account_id FROM cams_instance_accounts WHERE instance_id = ?').all(instanceId) as { account_id: string }[]).map((x) => x.account_id), used);
   try { viewerTokens.replay(viewerEntries); } catch (e) { log.error({ err: e }, 'viewer_token_replay_failed'); }
-  const importer = new Importer({ db, clock, audit, registry, instances: camsInstances, status });
+  const importer = new Importer({ db, clock, audit, registry, instances: camsInstances, status, power });
   const camsAuth = new CamsAuth({ db, clock, audit, instances: camsInstances, signingKey: signing.key, limits: cfg.limits, log });
   const camsEnrollment = new CamsEnrollment({ db, clock, audit, instances: camsInstances, cfg, serverKeys: [signing.publicKeyB64], serverKeyFingerprints: [signing.fingerprint] });
 
