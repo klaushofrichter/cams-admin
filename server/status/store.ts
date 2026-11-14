@@ -37,7 +37,8 @@ const toStatus = (r: Row): StatusRow => ({
 });
 
 const safeInt = (x: unknown): number | null => (isCount(x) ? x : null);
-const strList = (v: unknown, max: number, len: number): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string').slice(0, max).map((x) => x.slice(0, len)) : []);
+// The strings of a list, at most max of them, each cut to len (no cut by default).
+const strList = (v: unknown, max: number, len = Infinity): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string').slice(0, max).map((x) => x.slice(0, len)) : []);
 
 // P2 heartbeat fields, clamped whatever a proxy sends (they live in memory
 // and the status snapshot; never a reason to refuse the heartbeat).
@@ -53,8 +54,6 @@ export function parseTokensInfo(x: unknown): TokensInfo | null {
   return { revision: x.revision as number, client: safeInt(x.client) ?? 0, admin: safeInt(x.admin) ?? 0, blocked: strList(x.blocked, 64, 40) };
 }
 export const parseConfigRevision = (x: unknown): string | null => (typeof x === 'string' && /^sha256:[0-9a-f]{64}$/.test(x) ? x : null);
-
-const asStrArray = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string').slice(0, 2) : []);
 
 const emptyRow = (proxyId: string): StatusRow => ({
   proxyId, connected: false, connectedSince: null, lastHelloAt: null, lastHeartbeatAt: null, closedReason: null, stopped: false, proxyVersion: null,
@@ -181,7 +180,7 @@ export class StatusStore {
       const v = validateSummary(body.summary, body.truncated === true);
       const info = (body.proxy && typeof body.proxy === 'object' ? body.proxy : {}) as Record<string, unknown>;
       const tls = (info.tls && typeof info.tls === 'object' ? info.tls : null) as Record<string, unknown> | null;
-      const reportedFps = asStrArray(tls?.caFingerprint);
+      const reportedFps = strList(tls?.caFingerprint, 2);
       const rawFps = tls?.caFingerprint;
       const fpsUnreadable = rawFps !== undefined && rawFps !== null && (!Array.isArray(rawFps) || rawFps.length > 2 || rawFps.some((x) => typeof x !== 'string'));
       const pin = pinState(proxy.caFingerprints, reportedFps);
