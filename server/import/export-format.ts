@@ -1,5 +1,5 @@
 import { ApiError } from '../registry';
-import { checkUrl, FieldError, isCameraUser, normaliseFingerprint } from '../validate';
+import { checkUrl, FieldError, isCameraUser, isObj, normaliseFingerprint } from '../validate';
 
 // The redacted export of a cams cameras.json (cams `export-config`, M §11.1):
 // every camera field but the password; tokens only as {sha256: <hex>}; the
@@ -19,7 +19,6 @@ export interface CamsExport {
 const ID_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const HOST_RE = /^[A-Za-z0-9.-]{1,253}$/;
 const MAX_CAMERAS = 256;
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const bad = (field: string): never => { throw new ApiError(400, 'invalid', field); };
 
 // A key named like a secret anywhere in the file refuses it (never quoted back).

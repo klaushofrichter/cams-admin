@@ -9,6 +9,8 @@ import { online, precheckReport, siteOf, unseen, type PrecheckDeps, type Prechec
 import type { MoveBounds } from './types';
 import { sourceTlsName } from './common';
 import type { Clock } from '../clock';
+import { isObj } from '../validate';
+import { OPEN_SQL } from '../commands/states';
 
 // A move started from cams-admin (move.begin plan Task 3, rulings R3, A4–A10):
 // a second start for a camera whose move is on its way refused first (409
@@ -38,7 +40,6 @@ const ID_MAX = 64;
 const ANY_PROXY = 'prx_0123456789ABCDEFGHJK';
 // How long a move.begin the source answered holds the camera while its move.request has not made the move yet.
 export const ANSWERED_HOLD_MS = 60_000;
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 export function beginInput(body: unknown): BeginInput {
   const b = isObj(body) ? body : {};
@@ -57,7 +58,7 @@ export function beginInput(body: unknown): BeginInput {
 function pending(d: BeginDeps, sourceProxyId: string, cameraId: string, proxyCameraId: string | null): 'requested' | 'open' | null {
   if (d.db.prepare('SELECT 1 FROM moves WHERE camera_id = ? AND ended_at IS NULL').get(cameraId)) return 'open';
   if (!proxyCameraId) return null;
-  const rows = d.db.prepare(`SELECT state, args, result FROM commands WHERE proxy_id = ? AND command = 'move.begin' AND (state IN ('queued','sent','received') OR (state = 'done' AND finished_at >= ?))`)
+  const rows = d.db.prepare(`SELECT state, args, result FROM commands WHERE proxy_id = ? AND command = 'move.begin' AND (state IN ${OPEN_SQL} OR (state = 'done' AND finished_at >= ?))`)
     .all(sourceProxyId, d.clock.now() - ANSWERED_HOLD_MS) as { state: string; args: string; result: string | null }[];
   for (const r of rows) {
     if ((JSON.parse(r.args) as { camera?: unknown }).camera !== proxyCameraId) continue;

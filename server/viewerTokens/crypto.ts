@@ -1,6 +1,7 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'crypto';
 import { readFileSync, statSync } from 'fs';
 import { log } from '../log';
+import { sha256Hex } from '../ids';
 
 // Viewer tokens (design 2026-11-05-viewer-tokens-design.md): the token, the
 // fingerprint the viewers get, the sign-in link, and the encryption at rest.
@@ -82,7 +83,7 @@ export function loadViewerKey(file: string | null, warn: (msg: string) => void =
   const text = readFileSync(file, 'utf8').trim();
   const key = /^[A-Za-z0-9+/]+={0,2}$/.test(text) ? Buffer.from(text, 'base64') : Buffer.alloc(0);
   if (key.length !== 32) throw new Error('viewer token key: must be 32 bytes as base64 (openssl rand -base64 32)');
-  return { key, keyId: createHash('sha256').update(key).digest('hex').slice(0, 8) };
+  return { key, keyId: sha256Hex(key).slice(0, 8) };
 }
 
 // "v1:<keyId>:<iv>:<ciphertext+tag>", AES-256-GCM, the row id as additional data (a ciphertext can't move rows).

@@ -5,6 +5,7 @@ import type { CommandRow, Commands } from '../commands/service';
 import { validateResultPayload } from '../contract';
 import { PROXY_UPDATE_SINCE } from './types';
 import type { SpaceCheck } from './space';
+import { isObj } from '../validate';
 
 // The content summary before a move (the Start move form): move.summary to the camera's proxy (read only, entry
 // move.send), and the answer within a short wait. Until now cams-admin first learned the content when the source
@@ -32,8 +33,6 @@ export class SummaryRefused extends Error {
     super(body.error);
   }
 }
-
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 export class MoveSummaries {
   private kept = new Map<string, { at: number; summary: Record<string, unknown> }>();

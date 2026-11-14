@@ -2,7 +2,8 @@ import type { KeyObject } from 'crypto';
 import type { Clock } from '../clock';
 import type { Db } from '../db/open';
 import { jcs } from '../crypto/jcs';
-import { sha256hex, signEnvelope } from '../crypto/ed25519';
+import { signEnvelope } from '../crypto/ed25519';
+import { sha256Hex } from '../ids';
 import { ApiError } from '../registry';
 import { SITE_PATTERN } from '../../contract/build';
 import { pinTransportOk } from './pinTransport';
@@ -50,7 +51,7 @@ export function snapshotRevision(db: Db, instanceId: string, keyFp: string, form
   const inst = db.prepare('SELECT version FROM cams_instances WHERE id = ?').get(instanceId) as { version: number } | undefined;
   const a = (db.prepare(`SELECT c.account_id id, c.revision rev FROM config_revision c JOIN cams_instance_accounts s ON s.account_id = c.account_id
     WHERE s.instance_id = ? ORDER BY c.account_id`).all(instanceId) as { id: string; rev: number }[]).map((r) => [r.id, r.rev]);
-  return 'r:' + sha256hex(jcs({ i: instanceId, iv: inst?.version ?? 0, a, k: keyFp, f: format })).slice(0, 16);
+  return 'r:' + sha256Hex(jcs({ i: instanceId, iv: inst?.version ?? 0, a, k: keyFp, f: format })).slice(0, 16);
 }
 
 // camera id → the instance's override of host and camera user (migration 7; null = the camera's value).

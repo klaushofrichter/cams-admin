@@ -16,8 +16,20 @@ export function checkEpoch(db: Db, file: string): 'fresh' | 'same' | 'restored' 
   return readEpoch(db) < fromFile ? 'restored' : 'same';
 }
 
-export function writeEpochFile(db: Db, file: string): void {
+export function writeEpochFile(db: Db, file: string): number {
+  const epoch = readEpoch(db);
   const tmp = `${file}.${randomBytes(6).toString('hex')}.tmp`;
-  writeFileSync(tmp, String(readEpoch(db)));
+  writeFileSync(tmp, String(epoch));
   renameSync(tmp, file);
+  return epoch;
+}
+
+// The tick's writer: writes the file only when the epoch moved since its last write (the
+// epoch moves on real transactions only), or when forced (start, close).
+export function epochFileWriter(db: Db, file: string): (force?: boolean) => void {
+  let written: number | null = null;
+  return (force = false) => {
+    if (!force && written !== null && readEpoch(db) === written) return;
+    written = writeEpochFile(db, file);
+  };
 }

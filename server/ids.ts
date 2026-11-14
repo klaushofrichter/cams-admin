@@ -65,6 +65,7 @@ export function normaliseCode(input: unknown, tag: string = CODE_TAG): string | 
 }
 export const normaliseCamsCode = (input: unknown): string | null => normaliseCode(input, CAMS_CODE_TAG);
 
-export const sha256Hex = (v: string): string => createHash('sha256').update(v).digest('hex');
+// Lower-case hex SHA-256 over the bytes (a string as UTF-8).
+export const sha256Hex = (v: Buffer | string): string => createHash('sha256').update(v).digest('hex');
 // 100 bits of entropy: a fast hash is enough.
 export const codeHash = sha256Hex;

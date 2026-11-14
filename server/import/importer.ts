@@ -4,7 +4,7 @@ import { tx, type Db } from '../db/open';
 import { ApiError, type Proxy, type Registry } from '../registry';
 import type { StatusStore } from '../status/store';
 import type { CamsInstances } from '../cams/instances';
-import { sha256hex } from '../crypto/ed25519';
+import { sha256Hex } from '../ids';
 import { jcs } from '../crypto/jcs';
 import { randomBytes } from 'crypto';
 import { newId } from '../ids';
@@ -65,7 +65,7 @@ export interface ImporterDeps { db: Db; clock: Clock; audit: Audit; registry: Re
 
 const INFO = new Set(['proxy-matched', 'registry-only', 'camera-kept']);
 const prefix = (hex: string) => `sha256:${hex.slice(0, 8)}`;
-const mismatchId = (what: string, proxyId: string, camsId = '') => sha256hex(`${what}|${proxyId}|${camsId}`).slice(0, 12);
+const mismatchId = (what: string, proxyId: string, camsId = '') => sha256Hex(`${what}|${proxyId}|${camsId}`).slice(0, 12);
 const sameList = (a: string[], b: string[]) => a.length === b.length && a.every((x, i) => x === b[i]);
 
 interface Group { key: string; url: string; proxy: ExportProxy; cameras: ExportCamera[]; target: Proxy | null; newName: string | null }
@@ -335,7 +335,7 @@ export class Importer {
         if (k === 'host' && typeof v === 'string') hostOr400(v, `cameras[${idx}].host`);
         diff[k] = { from: was, to: v };
       }
-      if (shared.length) mismatches.push({ id: mismatchId('shared-change', old.id, sha256hex(shared.join('|')).slice(0, 16)), camsId: c.id, what: 'shared-change', detail: `${c.id}: ${shared.join(', ')} changes the camera also for cams instance ${st.join(', ')}` });
+      if (shared.length) mismatches.push({ id: mismatchId('shared-change', old.id, sha256Hex(shared.join('|')).slice(0, 16)), camsId: c.id, what: 'shared-change', detail: `${c.id}: ${shared.join(', ')} changes the camera also for cams instance ${st.join(', ')}` });
       if (Object.keys(kept).length) changes.push({ kind: 'camera-kept', cameraId: old.id, camsId: c.id, fields: kept, servedTo: st });
       if (Object.keys(diff).length) changes.push({ kind: 'camera-change', cameraId: old.id, camsId: c.id, fields: diff });
       if (Object.keys(odiff).length) changes.push({ kind: 'camera-override', cameraId: old.id, camsId: c.id, instance: instance.name, fields: odiff });
@@ -348,7 +348,7 @@ export class Importer {
     const noChanges = changes.every((c) => INFO.has(c.kind));
     const result: ImportResult = { dryRun: !o.apply, account: account.name, instance: instance.name, changes, mismatches, blockers, blocked, applied: false, noChanges, looksLike: [...looksLike].sort() };
     // What the person saw: the changes, the mismatches and blockers, and the options that shape them.
-    const planHash = sha256hex(jcs({ accountId, instanceId, changes: changes as unknown as object[], mismatches: mismatches.map((m) => m.id), blockers, createProxies: o.createProxies, hideUnlisted: o.hideUnlisted }));
+    const planHash = sha256Hex(jcs({ accountId, instanceId, changes: changes as unknown as object[], mismatches: mismatches.map((m) => m.id), blockers, createProxies: o.createProxies, hideUnlisted: o.hideUnlisted }));
     if (bound && bound.hash !== planHash) throw new ApiError(409, 'plan_changed');
     if (!o.apply) {
       const planId = randomBytes(16).toString('base64url');

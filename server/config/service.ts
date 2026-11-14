@@ -10,6 +10,7 @@ import { sanitize } from '../contract';
 import { REMOTE_SETTABLE } from '../../contract/build';
 import { SECRET_RE } from './redact';
 import { ceilingPathOf, inheritedPathOf, isRemoteSettable, narrowCode, narrowingOk, narrowReason, PATH_RE, patternOf, STORAGE_LOCAL_ONLY, type Leaf, type Settable } from './narrow';
+import { isObj, PROXY_CAMERA_ID_RE } from '../validate';
 
 // A proxy's settings as cams-admin knows them (migration spec §8; P3 plan
 // Task 4): the last reported view per proxy (proxy_config), read by
@@ -44,13 +45,11 @@ export const MAX_VIEW_BYTES = 262_144;
 const VIEW_BUDGET = MAX_VIEW_BYTES - 8_192; // room for the envelope fields around the paths
 const MAX_PATHS = 4096;
 const REV_RE = /^sha256:[0-9a-f]{64}$/;
-const CAM_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const CMD_RE = /^cmd_[0-9A-HJKMNP-TV-Z]{20}$/;
 const SOURCES = ['default', 'file', 'override', 'env'];
 const WRITES = ['config.set', 'config.unset', 'config.rollback'];
 const REMOTE = new Set(REMOTE_SETTABLE.remote);
 
-const isObj = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x);
 const isLeaf = (x: unknown): x is Leaf => typeof x === 'boolean' || Number.isSafeInteger(x) || (typeof x === 'string' && x.length <= 512);
 const isValue = (x: unknown) => x === null || typeof x === 'boolean' || typeof x === 'string' || (typeof x === 'number' && Number.isFinite(x));
 
@@ -274,7 +273,7 @@ export class ProxyConfig {
       this.d.log.warn({ proxyId, cmdId }, 'config_view_unreadable');
       return;
     }
-    const cams = (x: unknown) => (Array.isArray(x) ? [...new Set(x.filter((c): c is string => typeof c === 'string' && CAM_RE.test(c)))].slice(0, 256) : []);
+    const cams = (x: unknown) => (Array.isArray(x) ? [...new Set(x.filter((c): c is string => typeof c === 'string' && PROXY_CAMERA_ID_RE.test(c)))].slice(0, 256) : []);
     const settable = Object.fromEntries(Object.entries(raw.settable).flatMap(([k, v]) => {
       const s = REMOTE.has(k) ? cleanSettable(v) : null; // a hostile or newer proxy can't widen the editor
       return s ? [[k, s]] : [];

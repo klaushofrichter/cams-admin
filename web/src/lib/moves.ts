@@ -1,4 +1,5 @@
 // Camera moves between two proxies of one account: text for the Moves page.
+import { isOpen } from '../../../server/commands/states';
 import { bytes } from './format';
 import { NO_PROFILE, PROFILE_SINCE, size, type SpaceCheck } from './profile';
 
@@ -281,7 +282,7 @@ export function activeLine(m: { cameraName?: string | null; camsId: string; sour
 // #60: how the source's answer to a move.begin ends, in words for the Start move card ('' while it is fine:
 // the move shows in the list once the source asks for it).
 export function beginOutcomeText(row: { state: string; outcomeCode?: string | null } | null): string {
-  if (!row || row.state === 'done' || ['queued', 'sent', 'received'].includes(row.state)) return '';
+  if (!row || row.state === 'done' || isOpen(row.state)) return '';
   if (row.state === 'unknown') return 'The source proxy did not answer within 15 minutes, so the move did not start. Check that the proxy is online, then start the move again.';
   if (row.state === 'expired') return 'The request did not reach the source proxy in time (it was offline), so the move did not start. Start it again once the proxy is online.';
   const code = row.outcomeCode ?? row.state;

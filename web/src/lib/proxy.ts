@@ -1,5 +1,7 @@
 // The proxy page's registry form: strings while typing, and what really changed for the PATCH.
 
+import { PROXY_NAME_RE } from '../../../server/validate';
+
 export type ProxyForm = {
   displayName: string; name: string; runsOn: string; hostKind: string; url: string; adminUiUrl: string;
   dnsName: string; tlsSite: string; tlsServername: string; fps: string; notes: string;
@@ -14,8 +16,8 @@ export const proxyForm = (p: ProxyRow): ProxyForm => ({
   dnsName: p.dnsName ?? '', tlsSite: p.tlsSite ?? '', tlsServername: p.tlsServername ?? '', fps: p.caFingerprints.join('\n'), notes: p.notes ?? '',
 });
 
-// As the server's name rule (PROXY_NAME_RE; test/proxy-rename.test.ts holds them together).
-export const validProxyName = (name: string): boolean => /^[a-z0-9][a-z0-9-]{0,31}$/.test(name.trim());
+// The server's name rule (PROXY_NAME_RE), on the trimmed input.
+export const validProxyName = (name: string): boolean => PROXY_NAME_RE.test(name.trim());
 
 const fingerprints = (s: string) => s.split(/[\s,]+/).filter(Boolean);
 

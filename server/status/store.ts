@@ -1,13 +1,13 @@
 import type { Clock } from '../clock';
 import type { Db } from '../db/open';
-import { tx } from '../db/open';
+import { stmt, tx } from '../db/open';
 import type { Proxy, Registry } from '../registry';
 import type { LiveHub } from '../live';
 import { validateSummary } from '../contract';
 import { parseProfile } from './profile';
 import { parseMoveLeftovers } from './leftovers';
 import { parseOnboarding } from './onboarding';
-import { isCount } from '../validate';
+import { isCount, isObj } from '../validate';
 import { cameraStates, deriveCommands, deriveProxyState, type CommandsPolicy, heartbeatFresh, pinState, SKEW_PROBLEM_MS, type CommandsInfo, type PinState, type ProxyState, type Reported, type StatusRow, type TokensInfo } from './derive';
 
 // The latest state of each proxy and its transitions, fed by the channel
@@ -36,26 +36,24 @@ const toStatus = (r: Row): StatusRow => ({
   ok: r.ok === null ? null : r.ok === 1, problemCount: r.problem_count as number | null, reported: r.reported ? JSON.parse(r.reported as string) : null, online: r.online === 1,
 });
 
-const isRecord = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x);
 const safeInt = (x: unknown): number | null => (isCount(x) ? x : null);
-const strList = (v: unknown, max: number, len: number): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string').slice(0, max).map((x) => x.slice(0, len)) : []);
+// The strings of a list, at most max of them, each cut to len (no cut by default).
+const strList = (v: unknown, max: number, len = Infinity): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string').slice(0, max).map((x) => x.slice(0, len)) : []);
 
 // P2 heartbeat fields, clamped whatever a proxy sends (they live in memory
 // and the status snapshot; never a reason to refuse the heartbeat).
 export function parseCommandsInfo(x: unknown): CommandsInfo | null {
-  if (!isRecord(x)) return null;
+  if (!isObj(x)) return null;
   return {
     enabled: x.enabled === true, paused: x.paused === true, pauseReason: typeof x.pauseReason === 'string' ? x.pauseReason.slice(0, 200) : null,
     allow: strList(x.allow, 64, 64), seenWindow: safeInt(x.seenWindow) ?? 0,
   };
 }
 export function parseTokensInfo(x: unknown): TokensInfo | null {
-  if (!isRecord(x) || safeInt(x.revision) === null) return null;
+  if (!isObj(x) || safeInt(x.revision) === null) return null;
   return { revision: x.revision as number, client: safeInt(x.client) ?? 0, admin: safeInt(x.admin) ?? 0, blocked: strList(x.blocked, 64, 40) };
 }
 export const parseConfigRevision = (x: unknown): string | null => (typeof x === 'string' && /^sha256:[0-9a-f]{64}$/.test(x) ? x : null);
-
-const asStrArray = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string').slice(0, 2) : []);
 
 const emptyRow = (proxyId: string): StatusRow => ({
   proxyId, connected: false, connectedSince: null, lastHelloAt: null, lastHeartbeatAt: null, closedReason: null, stopped: false, proxyVersion: null,
@@ -102,7 +100,7 @@ export class StatusStore {
   }
 
   private persist(r: StatusRow): void {
-    this.d.db.prepare(`INSERT INTO proxy_status (proxy_id, connected, connected_since, last_hello_at, last_heartbeat_at, closed_reason, stopped, proxy_version, clock_skew_ms, summary, summary_at, ok, problem_count, reported, online)
+    stmt(this.d.db, `INSERT INTO proxy_status (proxy_id, connected, connected_since, last_hello_at, last_heartbeat_at, closed_reason, stopped, proxy_version, clock_skew_ms, summary, summary_at, ok, problem_count, reported, online)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(proxy_id) DO UPDATE SET connected = excluded.connected, connected_since = excluded.connected_since,
       last_hello_at = excluded.last_hello_at, last_heartbeat_at = excluded.last_heartbeat_at, closed_reason = excluded.closed_reason, stopped = excluded.stopped,
       proxy_version = excluded.proxy_version, clock_skew_ms = excluded.clock_skew_ms, summary = excluded.summary, summary_at = excluded.summary_at, ok = excluded.ok,
@@ -111,7 +109,7 @@ export class StatusStore {
         r.summary === null ? null : JSON.stringify(r.summary), r.summaryAt, r.ok === null ? null : r.ok ? 1 : 0, r.problemCount, r.reported ? JSON.stringify(r.reported) : null, r.online ? 1 : 0);
     // Only the active key said that hello: a pending key (redeemed, never
     // used) is not seen, whatever the proxy did with its previous key.
-    if (r.lastHelloAt !== null) this.d.db.prepare('UPDATE proxy_keys SET last_seen_at = ? WHERE proxy_id = ? AND revoked_at IS NULL AND confirmed_at IS NOT NULL AND confirmed_at <= ? AND (last_seen_at IS NULL OR last_seen_at < ?)').run(r.lastHelloAt, r.proxyId, r.lastHelloAt, r.lastHelloAt);
+    if (r.lastHelloAt !== null) stmt(this.d.db, 'UPDATE proxy_keys SET last_seen_at = ? WHERE proxy_id = ? AND revoked_at IS NULL AND confirmed_at IS NOT NULL AND confirmed_at <= ? AND (last_seen_at IS NULL OR last_seen_at < ?)').run(r.lastHelloAt, r.proxyId, r.lastHelloAt, r.lastHelloAt);
     this.dirty.delete(r.proxyId);
   }
 
@@ -128,11 +126,11 @@ export class StatusStore {
   }
 
   private exists(proxyId: string): boolean {
-    return !!this.d.db.prepare('SELECT 1 FROM proxies WHERE id = ?').get(proxyId);
+    return !!stmt(this.d.db, 'SELECT 1 FROM proxies WHERE id = ?').get(proxyId);
   }
 
   private event(proxyId: string, kind: string, cameraRef: string | null, detail: Record<string, unknown> | null): void {
-    this.d.db.prepare('INSERT INTO status_events (proxy_id, camera_ref, at, kind, detail) VALUES (?,?,?,?,?)').run(proxyId, cameraRef, this.d.clock.now(), kind, detail ? JSON.stringify(detail).slice(0, 2048) : null);
+    stmt(this.d.db, 'INSERT INTO status_events (proxy_id, camera_ref, at, kind, detail) VALUES (?,?,?,?,?)').run(proxyId, cameraRef, this.d.clock.now(), kind, detail ? JSON.stringify(detail).slice(0, 2048) : null);
   }
 
   // Runs fn on the in-memory row, then publishes the new state. A proxy that
@@ -182,7 +180,7 @@ export class StatusStore {
       const v = validateSummary(body.summary, body.truncated === true);
       const info = (body.proxy && typeof body.proxy === 'object' ? body.proxy : {}) as Record<string, unknown>;
       const tls = (info.tls && typeof info.tls === 'object' ? info.tls : null) as Record<string, unknown> | null;
-      const reportedFps = asStrArray(tls?.caFingerprint);
+      const reportedFps = strList(tls?.caFingerprint, 2);
       const rawFps = tls?.caFingerprint;
       const fpsUnreadable = rawFps !== undefined && rawFps !== null && (!Array.isArray(rawFps) || rawFps.length > 2 || rawFps.some((x) => typeof x !== 'string'));
       const pin = pinState(proxy.caFingerprints, reportedFps);

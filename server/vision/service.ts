@@ -10,6 +10,7 @@ import type { CommandRow, Commands } from '../commands/service';
 import type { ProxyConfig } from '../config/service';
 import { sanitize } from '../contract';
 import { ANALYTICS_PROVIDER_PATTERN, ANALYTICS_PROVIDERS_MAX } from '../../contract/build';
+import { isObj, PROXY_CAMERA_ID_RE } from '../validate';
 
 // Vision management (design 2026-11-05-vision-management-design.md, cams-admin 1–4): what each proxy of an
 // account reports of its vision providers (analytics.usage.get, stored per proxy in proxy_analytics: the
@@ -39,11 +40,9 @@ export interface VisionItem {
   fetchedAt: number | null; result: Usage | null; saves: Record<string, SaveState>; lastRefusal: string | null;
 }
 
-const isObj = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x);
 const count = (x: unknown) => (Number.isSafeInteger(x) && (x as number) >= 0 ? (x as number) : 0);
 const text = (x: unknown, max: number) => (typeof x === 'string' ? x.slice(0, max) : '');
 const PROVIDER_RE = new RegExp(ANALYTICS_PROVIDER_PATTERN);
-const CAM_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
 
 // An analytics.usage.get result, field by field (the contract's names only; strings clamped). Never a key:
 // `key` is where the key comes from (env | manual | none), anything else becomes "unknown". null when unreadable.
@@ -53,7 +52,7 @@ export function cleanUsage(raw: unknown): Usage | null {
   const providers = r.providers.filter(isObj).filter((p) => typeof p.id === 'string' && PROVIDER_RE.test(p.id)).slice(0, ANALYTICS_PROVIDERS_MAX).map((p): UsageProvider => {
     const paused = isObj(p.paused) ? { reason: text(p.paused.reason, 64) || 'unknown', until: Number.isSafeInteger(p.paused.until) ? (p.paused.until as number) : null } : null;
     const lastError = isObj(p.lastError) ? { at: count(p.lastError.at), message: text(p.lastError.message, 200) } : null;
-    const cams = Array.isArray(p.cameras) ? p.cameras.filter(isObj).filter((c) => typeof c.id === 'string' && CAM_RE.test(c.id)).slice(0, 64) : [];
+    const cams = Array.isArray(p.cameras) ? p.cameras.filter(isObj).filter((c) => typeof c.id === 'string' && PROXY_CAMERA_ID_RE.test(c.id)).slice(0, 64) : [];
     return {
       id: p.id as string, name: text(p.name, 64) || (p.id as string), enabled: p.enabled === true,
       key: ['env', 'manual', 'none'].includes(p.key as string) ? (p.key as string) : 'unknown',

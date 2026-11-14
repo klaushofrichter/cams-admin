@@ -1,4 +1,3 @@
-import { createHash } from 'crypto';
 import type { Clock } from '../clock';
 import { stmt, tx, type Db } from '../db/open';
 import type { Audit, AuditAction } from '../audit';
@@ -24,6 +23,7 @@ export { answerProposal, proposalSettings };
 import { answered, backoffDue, FINAL_STATES, sourceRef, sourceTlsName, unanswered, verifiedDone, type Who } from './common';
 import { isCount } from '../validate';
 import type { MoveCheck, MoveApproveEvent, MoveKind, MoveCameraConn, MoveCancelEvent, MoveEvent, MovePhaseEvent, MoveProgressEvent, MoveRequestEvent, MoveTargetsEvent } from './types';
+import { fingerprint } from '../crypto/ed25519';
 
 // The move job, its start (plan Task 4; S §4, §6, §7, §8.1): a source's
 // move.targets and move.request events, cams-admin's precheck, move.open to the
@@ -116,8 +116,6 @@ function planForAudit(plan: unknown): Record<string, unknown> {
   };
 }
 const samePlan = (a: unknown, b: unknown) => a !== null && a !== undefined && canonical(a) === canonical(b);
-// The fingerprint of the target's X25519 public key (as cam-proxy audits it): never the key itself in an audit record.
-const keyFingerprint = (spkiB64: string) => `SHA256:${createHash('sha256').update(Buffer.from(spkiB64, 'base64')).digest('hex').toUpperCase()}`;
 // The camera's TLS name on a proxy of this site.
 const cameraTlsName = (proxyCameraId: string, site: string) => `${proxyCameraId}.${site}.internal`;
 // Who asked, as the move row keeps it.
@@ -463,8 +461,8 @@ export class Moves {
 
   private async onRequest(proxyId: string, accountId: string, ev: MoveRequestEvent): Promise<void> {
     if (this.store.byRequest(proxyId, ev.requestId) || !this.once(`r:${proxyId}:${ev.requestId}`)) return;
-    const cam = this.cameraOnProxy(accountId, proxyId, ev.camera.proxyCameraId);
-    const ctx = { proxyId, accountId, ev, cameraId: cam?.id ?? null, camsId: cam?.cams_id ?? null };
+    const cam = this.d.registry.cameraOnProxy(accountId, proxyId, ev.camera.proxyCameraId);
+    const ctx = { proxyId, accountId, ev, cameraId: cam?.id ?? null, camsId: cam?.camsId ?? null };
     // Not in the registry: no move row can name it; the source is told so at once (not_registered), not left to wait.
     if (!cam) return this.refuse(ctx, 'not_registered');
     // The offer hands the target the camera's address and protocol as the source reports them: they must be the
@@ -557,11 +555,11 @@ export class Moves {
     // Attributed like its ok row: the requester (the command's actor) and the camera.
     if (r.command === 'move.begin') {
       const ok = r.state === 'done';
-      const cam = this.cameraOnProxy(r.accountId, r.proxyId, String(r.args.camera));
+      const cam = this.d.registry.cameraOnProxy(r.accountId, r.proxyId, String(r.args.camera));
       // The link from the command to its move: the source answered {requestId}, the move.request carries the same id.
       const requestId = typeof r.result?.requestId === 'string' ? r.result.requestId : null;
       this.d.audit.write({
-        actorType: 'sysadmin', actor: r.actor, action: 'move-begin', accountId: r.accountId, targetType: 'camera', targetId: cam?.id ?? null, targetLabel: cam?.cams_id ?? null, outcome: ok ? 'ok' : 'failed',
+        actorType: 'sysadmin', actor: r.actor, action: 'move-begin', accountId: r.accountId, targetType: 'camera', targetId: cam?.id ?? null, targetLabel: cam?.camsId ?? null, outcome: ok ? 'ok' : 'failed',
         detail: { cmdId: r.id, source: r.proxyId, ...(ok ? { requestId } : { code: r.outcomeCode ?? r.state }) },
       });
       return;
@@ -742,7 +740,7 @@ export class Moves {
     const leaf = res.leafFingerprint;
     tx(this.d.db, () => {
       const mv = this.store.setPhase(m.id, 'switching', { targetPublicKey: publicKey, leafFingerprint: leaf });
-      this.audit(mv, 'move-phase', 'ok', { phase: 'switching', leafFingerprint: leaf, publicKeyFingerprint: keyFingerprint(publicKey) });
+      this.audit(mv, 'move-phase', 'ok', { phase: 'switching', leafFingerprint: leaf, publicKeyFingerprint: fingerprint(publicKey) });
       this.queueStep(mv, 'go', () => this.sendGo(mv));
     });
   }
@@ -1386,12 +1384,6 @@ export class Moves {
   // The move's camera's id on the proxy that holds it (null: not known).
   private proxyCameraId(m: Move): string | null {
     return (stmt(this.d.db, 'SELECT proxy_camera_id FROM cameras WHERE id = ?').get(m.cameraId) as { proxy_camera_id: string | null } | undefined)?.proxy_camera_id ?? null;
-  }
-
-  // The camera a proxy names by its own camera id, in that proxy's account.
-  private cameraOnProxy(accountId: string, proxyId: string | null, proxyCameraId: string) {
-    return stmt(this.d.db, 'SELECT id, cams_id, host, protocol FROM cameras WHERE account_id = ? AND proxy_id = ? AND proxy_camera_id = ?')
-      .get(accountId, proxyId, proxyCameraId) as { id: string; cams_id: string; host: string | null; protocol: string | null } | undefined;
   }
 
   // Detail: moveId, camsId, source, target, reason (never a token or its hash).
