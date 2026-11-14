@@ -95,11 +95,11 @@ describe('viewer-token access reductions survive a restore', () => {
     const journal = join(s.dir, 'cams-revocations.jsonl');
     appendFileSync(journal, JSON.stringify({ at: Date.now(), kind: 'viewer-token', tokenId: old.id, change: 'revoked' }) + '\n');
     await restore(backup);
-    const got = await s.api('GET', '/viewer-tokens');
-    const after = got.items.find((x: { id: string }) => x.id === t.id);
-    expect(after.accounts.map((x: { name: string }) => x.name)).toEqual(['home']);
-    expect(after.role).toBe('viewer');
-    expect(got.items.find((x: { id: string }) => x.id === old.id).state).toBe('revoked');
+    // From the database: a keep-alive socket to the stopped server may be closed under a fetch.
+    const q = (sql: string, ...args: string[]) => s.built.db.prepare(sql).all(...args);
+    expect(q('SELECT account_id FROM viewer_token_accounts WHERE token_id = ?', t.id)).toEqual([{ account_id: home.id }]);
+    expect(q('SELECT role FROM viewer_tokens WHERE id = ?', t.id)).toEqual([{ role: 'viewer' }]);
+    expect(q('SELECT revoked_at IS NOT NULL r FROM viewer_tokens WHERE id = ?', old.id)).toEqual([{ r: 1 }]);
     expect(s.built.audit.list({ action: 'viewer-token-accounts', limit: 5 }).items[0]).toMatchObject({ actorType: 'system', detail: expect.objectContaining({ replayed: true }) });
     expect(s.built.audit.list({ action: 'viewer-token-role', limit: 5 }).items[0]).toMatchObject({ actorType: 'system', detail: expect.objectContaining({ replayed: true }) });
   });
