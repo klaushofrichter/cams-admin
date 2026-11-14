@@ -6,6 +6,7 @@ import { validateResultPayload } from '../contract';
 import { PROXY_UPDATE_SINCE } from './types';
 import type { SpaceCheck } from './space';
 import { isObj } from '../validate';
+import { isOldProxyAnswer } from '../commands/old-proxy';
 
 // The content summary before a move (the Start move form): move.summary to the camera's proxy (read only, entry
 // move.send), and the answer within a short wait. Until now cams-admin first learned the content when the source
@@ -15,8 +16,6 @@ import { isObj } from '../validate';
 
 export const SUMMARY_WAIT_MS = 15_000;
 export const SUMMARY_KEEP_MS = 30_000;
-// What an older proxy answers for a command it does not know (check order step 8), or args it can't read.
-const OLD_PROXY_CODES = new Set(['not_allowed', 'not_implemented', 'unsupported_version', 'invalid_args']);
 const ID_MAX = 64;
 
 export interface SummaryDeps {
@@ -87,7 +86,7 @@ export class MoveSummaries {
       return summary;
     }
     const code = fin.outcomeCode ?? '';
-    if (fin.state === 'refused' && OLD_PROXY_CODES.has(code)) throw new SummaryRefused(424, { error: 'proxy_update_needed', detail: `the proxy needs cam-proxy ${PROXY_UPDATE_SINCE} or later` });
+    if (isOldProxyAnswer(fin)) throw new SummaryRefused(424, { error: 'proxy_update_needed', detail: `the proxy needs cam-proxy ${PROXY_UPDATE_SINCE} or later` });
     if (fin.state === 'refused' && code === 'paused') throw new SummaryRefused(409, { error: 'paused_on_proxy' });
     if (fin.state === 'refused' && code === 'rate_limited') throw new SummaryRefused(429, { error: 'rate_limited' });
     if (fin.state === 'refused' && code === 'busy') throw new SummaryRefused(409, { error: 'busy' });

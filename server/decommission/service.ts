@@ -3,6 +3,7 @@ import type { Audit } from '../audit';
 import { ApiError, type Registry } from '../registry';
 import type { StatusStore } from '../status/store';
 import type { CommandRow, Commands } from '../commands/service';
+import { isOldProxyAnswer } from '../commands/old-proxy';
 import { validateResultPayload } from '../contract';
 import { REMOVE_CONTENT } from '../../contract/build';
 import { isObj, only, PROXY_CAMERA_ID_RE } from '../validate';
@@ -17,8 +18,6 @@ import { isObj, only, PROXY_CAMERA_ID_RE } from '../validate';
 // the page; a cams-admin restart before the answer leaves the command open (a later answer still deletes).
 
 export const PREVIEW_WAIT_MS = 15_000;
-// What an older proxy answers for a command it does not know (check order step 8), or args it can't read.
-const OLD_PROXY_CODES = new Set(['not_allowed', 'not_implemented', 'unsupported_version', 'invalid_args']);
 export const DECOMMISSION_SINCE = 'the cam-proxy release with camera.remove';
 
 export interface DecommissionDeps {
@@ -149,7 +148,7 @@ export class Decommission {
 
   private refusal(fin: CommandRow): ApiError {
     const code = fin.outcomeCode ?? '';
-    if (fin.state === 'refused' && OLD_PROXY_CODES.has(code)) return new ApiError(424, 'proxy_update_needed', undefined, `the proxy needs ${DECOMMISSION_SINCE}`);
+    if (isOldProxyAnswer(fin)) return new ApiError(424, 'proxy_update_needed', undefined, `the proxy needs ${DECOMMISSION_SINCE}`);
     if (fin.state === 'refused' && code === 'paused') return new ApiError(409, 'paused_on_proxy');
     if (fin.state === 'refused' && code === 'rate_limited') return new ApiError(429, 'rate_limited');
     if (fin.state === 'refused' && code === 'busy') return new ApiError(409, 'busy');
