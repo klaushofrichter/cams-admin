@@ -9,6 +9,13 @@ export { AUDIT_ACTIONS };
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 const KNOWN = new Set<string>(AUDIT_ACTIONS);
 
+// The actor of a request made with an operations token starts with this (auth/middleware.ts opsActor).
+export const OPS_ACTOR_PREFIX = 'ops-token:';
+export const isOpsActor = (actor: string): boolean => actor.startsWith(OPS_ACTOR_PREFIX);
+// The audit actor type of an actor passed on from a route: an operations token (a script) and the server itself
+// are system, a sign-in is sysadmin. Every audit record of a route's actor takes its type from here.
+export const actorTypeOf = (actor: string): 'sysadmin' | 'system' => (actor === 'system' || isOpsActor(actor) ? 'system' : 'sysadmin');
+
 export interface AuditEntry {
   actorType: 'sysadmin' | 'proxy' | 'system' | 'cams';
   actor: string;

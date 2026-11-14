@@ -1,8 +1,9 @@
 import type { Db } from '../db/open';
-import type { Audit } from '../audit';
+import { actorTypeOf, type Audit } from '../audit';
 import { ApiError, type Registry } from '../registry';
 import type { StatusStore } from '../status/store';
 import type { CommandRow, Commands } from '../commands/service';
+import { isOldProxyAnswer } from '../commands/old-proxy';
 import { validateResultPayload } from '../contract';
 import { REMOVE_CONTENT } from '../../contract/build';
 import { isObj, only, PROXY_CAMERA_ID_RE } from '../validate';
@@ -17,8 +18,6 @@ import { isObj, only, PROXY_CAMERA_ID_RE } from '../validate';
 // the page; a cams-admin restart before the answer leaves the command open (a later answer still deletes).
 
 export const PREVIEW_WAIT_MS = 15_000;
-// What an older proxy answers for a command it does not know (check order step 8), or args it can't read.
-const OLD_PROXY_CODES = new Set(['not_allowed', 'not_implemented', 'unsupported_version', 'invalid_args']);
 export const DECOMMISSION_SINCE = 'the cam-proxy release with camera.remove';
 
 export interface DecommissionDeps {
@@ -87,20 +86,20 @@ export class Decommission {
     const row = camera ? this.d.registry.cameraOnProxy(r.accountId, proxyId, camera) : null;
     const base = { cmdId: r.id, proxyId, proxyCameraId: camera, content: args.content, archive: args.archive };
     if (r.state !== 'done') {
-      this.d.audit.write({ actorType: 'sysadmin', actor: r.actor, action: 'camera-remove', accountId: r.accountId, targetType: 'camera', targetId: row?.id ?? null, targetLabel: row?.camsId ?? camera ?? '', outcome: 'failed', detail: { ...base, state: r.state, code: r.outcomeCode } });
+      this.d.audit.write({ actorType: actorTypeOf(r.actor), actor: r.actor, action: 'camera-remove', accountId: r.accountId, targetType: 'camera', targetId: row?.id ?? null, targetLabel: row?.camsId ?? camera ?? '', outcome: 'failed', detail: { ...base, state: r.state, code: r.outcomeCode } });
       return;
     }
     const res = isObj(r.result) ? r.result : {};
     const answer = { removed: res.removed, leftovers: res.leftovers, deleted: res.deleted };
     if (!row) {
       // Already gone (deleted by hand meanwhile): the answer is still recorded.
-      this.d.audit.write({ actorType: 'sysadmin', actor: r.actor, action: 'camera-remove', accountId: r.accountId, targetType: 'camera', targetId: null, targetLabel: camera ?? '', outcome: 'ok', detail: { ...base, ...answer, record: 'already gone' } });
+      this.d.audit.write({ actorType: actorTypeOf(r.actor), actor: r.actor, action: 'camera-remove', accountId: r.accountId, targetType: 'camera', targetId: null, targetLabel: camera ?? '', outcome: 'ok', detail: { ...base, ...answer, record: 'already gone' } });
       return;
     }
     try {
       this.d.registry.deleteCamera(r.actor, r.accountId, row.id, { action: 'camera-remove', detail: { ...base, ...answer } });
     } catch (e) {
-      this.d.audit.write({ actorType: 'sysadmin', actor: r.actor, action: 'camera-remove', accountId: r.accountId, targetType: 'camera', targetId: row.id, targetLabel: row.camsId, outcome: 'failed', detail: { ...base, ...answer, record: e instanceof ApiError ? e.code : 'error' } });
+      this.d.audit.write({ actorType: actorTypeOf(r.actor), actor: r.actor, action: 'camera-remove', accountId: r.accountId, targetType: 'camera', targetId: row.id, targetLabel: row.camsId, outcome: 'failed', detail: { ...base, ...answer, record: e instanceof ApiError ? e.code : 'error' } });
       return;
     }
     this.d.onCameraRemoved?.(r.accountId, row.id);
@@ -132,24 +131,24 @@ export class Decommission {
     const px = this.d.registry.proxyById(r.proxyId);
     const label = px?.name ?? r.proxyId;
     if (r.state !== 'done') {
-      this.d.audit.write({ actorType: 'sysadmin', actor: r.actor, action: 'proxy-unenroll', accountId: r.accountId, targetType: 'proxy', targetId: r.proxyId, targetLabel: label, outcome: 'failed', detail: { cmdId: r.id, state: r.state, code: r.outcomeCode } });
+      this.d.audit.write({ actorType: actorTypeOf(r.actor), actor: r.actor, action: 'proxy-unenroll', accountId: r.accountId, targetType: 'proxy', targetId: r.proxyId, targetLabel: label, outcome: 'failed', detail: { cmdId: r.id, state: r.state, code: r.outcomeCode } });
       return;
     }
     const unenrollAt = isObj(r.result) && typeof r.result.unenrollAt === 'number' ? r.result.unenrollAt : null;
-    this.d.audit.write({ actorType: 'sysadmin', actor: r.actor, action: 'proxy-unenroll', accountId: r.accountId, targetType: 'proxy', targetId: r.proxyId, targetLabel: label, outcome: 'ok', detail: { cmdId: r.id, unenrollAt } });
+    this.d.audit.write({ actorType: actorTypeOf(r.actor), actor: r.actor, action: 'proxy-unenroll', accountId: r.accountId, targetType: 'proxy', targetId: r.proxyId, targetLabel: label, outcome: 'ok', detail: { cmdId: r.id, unenrollAt } });
     if (!px) return;
     try {
       const { keyIds } = this.d.registry.deleteProxy(r.actor, r.accountId, px.id);
       this.d.onProxyDeleted?.(r.accountId, px.id, keyIds);
     } catch (e) {
       this.d.log?.warn({ err: e, proxyId: px.id }, 'decommission_delete_failed');
-      this.d.audit.write({ actorType: 'sysadmin', actor: r.actor, action: 'proxy-unenroll', accountId: r.accountId, targetType: 'proxy', targetId: px.id, targetLabel: label, outcome: 'failed', detail: { cmdId: r.id, record: e instanceof ApiError ? e.code : 'error' } });
+      this.d.audit.write({ actorType: actorTypeOf(r.actor), actor: r.actor, action: 'proxy-unenroll', accountId: r.accountId, targetType: 'proxy', targetId: px.id, targetLabel: label, outcome: 'failed', detail: { cmdId: r.id, record: e instanceof ApiError ? e.code : 'error' } });
     }
   }
 
   private refusal(fin: CommandRow): ApiError {
     const code = fin.outcomeCode ?? '';
-    if (fin.state === 'refused' && OLD_PROXY_CODES.has(code)) return new ApiError(424, 'proxy_update_needed', undefined, `the proxy needs ${DECOMMISSION_SINCE}`);
+    if (isOldProxyAnswer(fin)) return new ApiError(424, 'proxy_update_needed', undefined, `the proxy needs ${DECOMMISSION_SINCE}`);
     if (fin.state === 'refused' && code === 'paused') return new ApiError(409, 'paused_on_proxy');
     if (fin.state === 'refused' && code === 'rate_limited') return new ApiError(429, 'rate_limited');
     if (fin.state === 'refused' && code === 'busy') return new ApiError(409, 'busy');

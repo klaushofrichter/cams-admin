@@ -1,6 +1,6 @@
 import type { Clock } from '../clock';
 import type { Db } from '../db/open';
-import type { Audit } from '../audit';
+import { isOpsActor, type Audit } from '../audit';
 import { ApiError, type Camera, type Registry } from '../registry';
 import type { CommandRow, Commands, WireCommand } from '../commands/service';
 import type { StatusStore } from '../status/store';
@@ -320,7 +320,7 @@ export class PowerService {
     const accounts = this.d.db.prepare(`SELECT DISTINCT account_id FROM switches WHERE state = 'active' AND survey = 1 ORDER BY account_id`).all() as { account_id: string }[];
     for (const a of accounts) this.hook(() => this.surveyAccount(SYSTEM, a.account_id, true));
   }
-  // A camera added, or its host changed.
+  // A camera added, deleted or removed, or its host changed.
   cameraChanged(accountId: string): void {
     this.hook(() => this.surveyAccount(SYSTEM, accountId, true));
   }
@@ -820,6 +820,6 @@ export class PowerService {
     if (!who.sysadmin) throw new ApiError(403, 'forbidden');
   }
   private type(who: Who): Extract<PowerActorType, 'sysadmin' | 'system' | 'proxy'> {
-    return who.system || who.actor.startsWith('ops-token:') ? 'system' : who.proxy ? 'proxy' : 'sysadmin';
+    return who.system || isOpsActor(who.actor) ? 'system' : who.proxy ? 'proxy' : 'sysadmin';
   }
 }

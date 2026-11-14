@@ -2,7 +2,7 @@ import type { StatementSync } from 'node:sqlite';
 import { randomBytes } from 'crypto';
 import type { Clock } from '../clock';
 import { stmt, tx, type Db } from '../db/open';
-import type { Audit } from '../audit';
+import { actorTypeOf, type Audit } from '../audit';
 import { ApiError, type Registry } from '../registry';
 import type { LiveHub } from '../live';
 import type { Logger } from '../log';
@@ -113,7 +113,7 @@ export class Tokens {
   // A set that only removes tokens from the one the proxy confirmed goes as
   // revocationOnly (the proxy takes it while paused / not allowed).
   // actorType is said, never guessed from the actor text (review M7); 'system' is no email.
-  private queue(actor: string, accountId: string, proxyId: string, reason?: string, claim = true, actorType: ActorType = actor === 'system' ? 'system' : 'sysadmin'): string {
+  private queue(actor: string, accountId: string, proxyId: string, reason?: string, claim = true, actorType: ActorType = actorTypeOf(actor)): string {
     const tokens = this.currentSet(proxyId);
     const base = claim ? this.appliedSet(proxyId) : [];
     const revocationOnly = claim && tokens.every((t) => base.some((b) => b.id === t.id && b.kind === t.kind && b.hash === t.hash && b.label === t.label && b.retireAt === t.retireAt));
@@ -155,7 +155,7 @@ export class Tokens {
       const rev = this.state(proxyId).revision + 1;
       this.q(`INSERT INTO proxy_tokens (id, account_id, proxy_id, kind, holder, label, hash, state, issued_revision, created_at, created_by) VALUES (?,?,?,?, 'manual', ?,?, 'pending', ?,?,?)`)
         .run(tokenId, accountId, proxyId, kind, label, hash, rev, this.d.clock.now(), actor);
-      this.d.audit.write({ actorType: 'sysadmin', actor, action: 'token-issue', accountId, targetType: 'proxy', targetId: proxyId, targetLabel: px.name, outcome: 'ok', detail: { tokenId, kind, label, hashPrefix: hash.slice(0, HASH_PREFIX) } });
+      this.d.audit.write({ actorType: actorTypeOf(actor), actor, action: 'token-issue', accountId, targetType: 'proxy', targetId: proxyId, targetLabel: px.name, outcome: 'ok', detail: { tokenId, kind, label, hashPrefix: hash.slice(0, HASH_PREFIX) } });
       commandId = this.nextApply(actor, accountId, proxyId);
     });
     this.d.live.publishRegistry('proxy', proxyId);
@@ -171,7 +171,7 @@ export class Tokens {
 
   // Retiring: the proxy itself stops accepting it at retireAt (even with
   // cams-admin down); cams-admin marks it revoked then and cleans the set up.
-  retire(actor: string, accountId: string, proxyId: string, tokenId: string, hours: unknown, actorType: 'sysadmin' | 'cams' = 'sysadmin'): ProxyTokenView {
+  retire(actor: string, accountId: string, proxyId: string, tokenId: string, hours: unknown, actorType: 'sysadmin' | 'system' | 'cams' = actorTypeOf(actor)): ProxyTokenView {
     const h = parseHours(hours);
     const t = this.tokenRow(accountId, proxyId, tokenId);
     if (t.state !== 'active') throw new ApiError(409, 'not_active');
@@ -196,7 +196,7 @@ export class Tokens {
     tx(this.d.db, () => {
       const revision = this.bump(proxyId);
       this.q(`UPDATE proxy_tokens SET state = 'revoked', revoked_at = ?, revoked_revision = ? WHERE id = ?`).run(this.d.clock.now(), revision, tokenId);
-      this.d.audit.write({ actorType: actor === 'system' ? 'system' : 'sysadmin', actor, action: 'token-revoke', accountId, targetType: 'proxy', targetId: proxyId, outcome: 'ok', detail: { tokenId, label: t.label, reason: 'revoked', revision } });
+      this.d.audit.write({ actorType: actorTypeOf(actor), actor, action: 'token-revoke', accountId, targetType: 'proxy', targetId: proxyId, outcome: 'ok', detail: { tokenId, label: t.label, reason: 'revoked', revision } });
     });
     this.tryQueue(actor, accountId, proxyId);
     this.d.live.publishRegistry('proxy', proxyId);
@@ -263,7 +263,7 @@ export class Tokens {
         const revision = this.bump(proxyId);
         for (const t of list) {
           this.q(`UPDATE proxy_tokens SET state = 'revoked', revoked_at = ?, revoked_revision = ? WHERE id = ?`).run(this.d.clock.now(), revision, t.id as string);
-          this.d.audit.write({ actorType: actor === 'system' ? 'system' : 'sysadmin', actor, action: 'token-revoke', accountId, targetType: 'proxy', targetId: proxyId, outcome: 'ok', detail: { tokenId: t.id, label: t.label, reason: 'holder-removed', holder, revision } });
+          this.d.audit.write({ actorType: actorTypeOf(actor), actor, action: 'token-revoke', accountId, targetType: 'proxy', targetId: proxyId, outcome: 'ok', detail: { tokenId: t.id, label: t.label, reason: 'holder-removed', holder, revision } });
         }
       });
       this.tryQueue(actor, accountId, proxyId);

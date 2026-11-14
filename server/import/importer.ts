@@ -1,5 +1,5 @@
 import type { Clock } from '../clock';
-import type { Audit } from '../audit';
+import { actorTypeOf, type Audit } from '../audit';
 import { tx, type Db } from '../db/open';
 import { ApiError, type Proxy, type Registry } from '../registry';
 import type { StatusStore } from '../status/store';
@@ -61,7 +61,8 @@ export interface ImportResult {
   planId?: string;
 }
 export interface ImportOptions { apply: boolean; acceptMismatch: string[]; createProxies: boolean; hideUnlisted: boolean; planId?: string }
-export interface ImporterDeps { db: Db; clock: Clock; audit: Audit; registry: Registry; instances: CamsInstances; status: StatusStore }
+// power: a new camera or a changed host surveys the account's switches (as the camera routes do), once per apply.
+export interface ImporterDeps { db: Db; clock: Clock; audit: Audit; registry: Registry; instances: CamsInstances; status: StatusStore; power: { cameraChanged(accountId: string): void } }
 
 const INFO = new Set(['proxy-matched', 'registry-only', 'camera-kept']);
 const prefix = (hex: string) => `sha256:${hex.slice(0, 8)}`;
@@ -359,7 +360,7 @@ export class Importer {
     const counts: Record<string, number> = {};
     for (const c of changes) counts[c.kind] = (counts[c.kind] ?? 0) + 1;
     const record = (action: 'import-run' | 'import-apply', extra: Record<string, unknown> = {}) => this.d.audit.write({
-      actorType: 'sysadmin', actor, action, accountId, targetType: 'cams-instance', targetId: instanceId, targetLabel: instance.name, outcome: 'ok',
+      actorType: actorTypeOf(actor), actor, action, accountId, targetType: 'cams-instance', targetId: instanceId, targetLabel: instance.name, outcome: 'ok',
       detail: { instance: instance.name, changes: counts, mismatches: mismatches.length, blocked: result.blocked, ...extra },
     });
 
@@ -416,6 +417,7 @@ export class Importer {
       record('import-apply', { accepted: [...accepted].filter((id) => mismatches.some((m) => m.id === id)), externalTokens: externals.length });
     });
     result.applied = true;
+    if (changes.some((c) => c.kind === 'camera-new' || (c.kind === 'camera-change' && 'host' in c.fields))) this.d.power.cameraChanged(accountId);
     return result;
   }
 }

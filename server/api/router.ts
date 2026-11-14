@@ -3,7 +3,7 @@ import type { Request, Response } from 'express';
 import type { Clock } from '../clock';
 import type { Config } from '../config';
 import type { Db } from '../db/open';
-import type { Audit } from '../audit';
+import { actorTypeOf, isOpsActor, type Audit } from '../audit';
 import { ApiError, type ProxyKey, type Registry } from '../registry';
 import type { Enrollment } from '../enroll/codes';
 import type { Hub } from '../channel/hub';
@@ -122,7 +122,7 @@ export function apiRouter(d: ApiDeps): express.Router {
   });
   r.post('/sessions/end', h((_q, res) => {
     const n = d.sessions.endAll();
-    d.audit.write({ actorType: 'sysadmin', actor: actor(res), action: 'sessions-ended', outcome: 'ok', detail: { count: n } });
+    d.audit.write({ actorType: actorTypeOf(actor(res)), actor: actor(res), action: 'sessions-ended', outcome: 'ok', detail: { count: n } });
     return { ended: n };
   }));
   r.get('/dashboard', h(() => dashboard(d)));
@@ -294,7 +294,7 @@ export function apiRouter(d: ApiDeps): express.Router {
   // change is a preview + apply run server side (202 with the dry run's command id).
   // The switch and power routes also take an operations token with scope `switches`: requireAuth lets a token
   // reach them only through OPS_ROUTES, so the token counts as allowed here (audited with its own actor).
-  const sysTok = (res: Response) => ({ actor: actor(res), sysadmin: actor(res).startsWith('ops-token:') || !!res.locals.session && sysadminAllowed((res.locals.session as Session).email) });
+  const sysTok = (res: Response) => ({ actor: actor(res), sysadmin: isOpsActor(actor(res)) || !!res.locals.session && sysadminAllowed((res.locals.session as Session).email) });
   const sys = (res: Response) => ({ actor: actor(res), sysadmin: !!res.locals.session && sysadminAllowed((res.locals.session as Session).email) });
   r.get('/accounts/:accountId/vision', h((req, res) => d.vision.get(sys(res), p(req, 'accountId'))));
   r.post('/accounts/:accountId/vision/refresh', h((req, res) => { res.locals.status = 202; return d.vision.refresh(sys(res), p(req, 'accountId')); }));
@@ -389,7 +389,7 @@ export function apiRouter(d: ApiDeps): express.Router {
 
   // Sysadmin only (ruling 11): not in OPS_ROUTES, and an operations token is refused here too, fail closed.
   r.post('/moves/:moveId/give-up', h((req, res) => {
-    if (actor(res).startsWith('ops-token:')) throw new ApiError(403, 'sysadmin_only');
+    if (isOpsActor(actor(res))) throw new ApiError(403, 'sysadmin_only');
     typed(req, 'give up');
     moveOf(p(req, 'moveId'));
     res.locals.status = 202;
@@ -425,7 +425,7 @@ export function apiRouter(d: ApiDeps): express.Router {
   // A cams instance's problems for this account, in words (finding 12b: snapshot_invalid).
   r.get('/accounts/:accountId/cams-problems', h((req) => { d.registry.getAccount(p(req, 'accountId')); return { items: accountCamsProblems(d.db, d.camsInstances.list(), p(req, 'accountId')) }; }));
   r.get('/accounts/:accountId/cameras', h((req) => { d.registry.getAccount(p(req, 'accountId')); return { items: d.registry.listCameras(p(req, 'accountId')) }; }));
-  // A new camera, or a changed host: a survey of the account's switches (debounced per switch).
+  // A new camera, a changed host or a deleted camera: a survey of the account's switches (debounced per switch).
   // Host, protocol and TLS name the request leaves out come from the proxy's report of that camera (finding 12b).
   r.post('/accounts/:accountId/cameras', h((req, res) => {
     created(res);
@@ -444,7 +444,7 @@ export function apiRouter(d: ApiDeps): express.Router {
   // its done answer deletes the record (audited camera-remove).
   r.get(`${camBase}/remove-preview`, h((req, res) => d.decommission.removePreview(actor(res), p(req, 'accountId'), p(req, 'cameraId'))));
   r.post(`${camBase}/remove`, h((req, res) => accepted(res, d.decommission.remove(actor(res), p(req, 'accountId'), p(req, 'cameraId'), req.body))));
-  r.delete(camBase, h((req, res) => { d.registry.deleteCamera(actor(res), p(req, 'accountId'), p(req, 'cameraId')); reg('camera', p(req, 'cameraId')); }));
+  r.delete(camBase, h((req, res) => { d.registry.deleteCamera(actor(res), p(req, 'accountId'), p(req, 'cameraId')); reg('camera', p(req, 'cameraId')); d.power.cameraChanged(p(req, 'accountId')); }));
   r.put(`${camBase}/sim`, h((req, res) => { const s = d.registry.setSim(actor(res), p(req, 'accountId'), p(req, 'cameraId'), req.body); reg('camera', p(req, 'cameraId')); return s; }));
   r.delete(`${camBase}/sim`, h((req, res) => { d.registry.deleteSim(actor(res), p(req, 'accountId'), p(req, 'cameraId')); reg('camera', p(req, 'cameraId')); }));
   // The camera's content before a move (the Start move form): move.summary to its proxy (read only: not a write
@@ -515,7 +515,7 @@ export function apiRouter(d: ApiDeps): express.Router {
     const out = exportForInstance({ db: d.db, registry: d.registry, instances: d.camsInstances }, accountId, instanceId);
     const a = d.registry.getAccount(accountId);
     const i = d.camsInstances.get(instanceId);
-    d.audit.write({ actorType: 'sysadmin', actor: actor(res), action: 'export-run', accountId, targetType: 'cams-instance', targetId: instanceId, targetLabel: i.name, outcome: 'ok', detail: { cameras: out.cameras.length, tokens: out.tokens.length } });
+    d.audit.write({ actorType: actorTypeOf(actor(res)), actor: actor(res), action: 'export-run', accountId, targetType: 'cams-instance', targetId: instanceId, targetLabel: i.name, outcome: 'ok', detail: { cameras: out.cameras.length, tokens: out.tokens.length } });
     res.set({ 'Cache-Control': 'no-store', 'Content-Disposition': `attachment; filename="cameras-${a.name}-${i.name}.json"` });
     return out;
   }));

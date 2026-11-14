@@ -10,3 +10,9 @@ then empties it on `main`.
 
 ### Changed
 - Internal cleanup (no change in what you see): shared helpers replace copied code. A browser tab now holds one live-update stream instead of up to three, so several open tabs no longer run into the per-session stream limit; the Proxy page loads its three parts at once; the server writes its epoch file only when something changed instead of every 10 seconds.
+
+### Fixed
+- Vision: a proxy whose cam-proxy release can't report Vision use now shows "Proxy too old" instead of looking ready, and Refresh no longer keeps sending it the request. Updating the proxy clears it.
+- Move, return and Remove from proxy: a proxy that answers "not implemented" is now told apart as needing a cam-proxy update everywhere (before, the move summary and Remove showed a generic proxy failure, and a return kept retrying).
+- PoE switches: deleting a camera, and an import that adds cameras or changes a camera's address, now re-check the account's switches right away (before: only at the daily check).
+- Audit log: every change made with an operations token is recorded as "system" (a script), never as a signed-in admin; before, registry edits, adopt, camera delete, moves, routes and token changes made with a token showed as admin.

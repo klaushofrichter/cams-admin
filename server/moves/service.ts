@@ -1,6 +1,6 @@
 import type { Clock } from '../clock';
 import { stmt, tx, type Db } from '../db/open';
-import type { Audit, AuditAction } from '../audit';
+import { actorTypeOf, type Audit, type AuditAction } from '../audit';
 import { ApiError, type Registry } from '../registry';
 import type { StatusStore } from '../status/store';
 import type { Logger } from '../log';
@@ -559,7 +559,7 @@ export class Moves {
       // The link from the command to its move: the source answered {requestId}, the move.request carries the same id.
       const requestId = typeof r.result?.requestId === 'string' ? r.result.requestId : null;
       this.d.audit.write({
-        actorType: 'sysadmin', actor: r.actor, action: 'move-begin', accountId: r.accountId, targetType: 'camera', targetId: cam?.id ?? null, targetLabel: cam?.camsId ?? null, outcome: ok ? 'ok' : 'failed',
+        actorType: actorTypeOf(r.actor), actor: r.actor, action: 'move-begin', accountId: r.accountId, targetType: 'camera', targetId: cam?.id ?? null, targetLabel: cam?.camsId ?? null, outcome: ok ? 'ok' : 'failed',
         detail: { cmdId: r.id, source: r.proxyId, ...(ok ? { requestId } : { code: r.outcomeCode ?? r.state }) },
       });
       return;
@@ -1002,7 +1002,7 @@ export class Moves {
     if (m?.phase !== 'copying' && copied !== 'delete' && copied !== 'age-out') throw new ApiError(400, 'invalid_copied');
     if (!m) throw new ApiError(404, 'not_found');
     if (!CANCELLABLE.has(m.phase)) throw new ApiError(409, 'wrong_phase');
-    return tx(this.d.db, () => this.cancelIn(m, copied as 'delete' | 'age-out', { actorType: 'sysadmin', actor }));
+    return tx(this.d.db, () => this.cancelIn(m, copied as 'delete' | 'age-out', { actorType: actorTypeOf(actor), actor }));
   }
 
   // The source page's cancel (cam-proxy's POST /control/moves/:id/cancel). Only the source may; outside the phases refused (audited, throttled).
@@ -1067,7 +1067,7 @@ export class Moves {
     tx(this.d.db, () => {
       const camsId = this.camsId(m);
       this.d.audit.write({
-        actorType: 'sysadmin', actor, action: 'move-delete', accountId: m.accountId, targetType: 'camera', targetId: m.cameraId, targetLabel: camsId, outcome: 'ok',
+        actorType: actorTypeOf(actor), actor, action: 'move-delete', accountId: m.accountId, targetType: 'camera', targetId: m.cameraId, targetLabel: camsId, outcome: 'ok',
         detail: { moveId: m.id, camsId, reason: m.reason, source: m.sourceProxyId, target: m.targetProxyId },
       });
       if (!this.store.deleteRejected(m.id)) throw new ApiError(409, 'not_rejected');
@@ -1105,12 +1105,12 @@ export class Moves {
     if (this.archivePending(m)) {
       if (m.endRequested) return m;
       return tx(this.d.db, () => {
-        const mv = this.store.setPhase(m.id, 'copying', { ...this.flushIn(m.id), endRequested: { at: this.d.clock.now(), actorType: 'sysadmin', actor } });
-        this.audit(mv, 'move-end-after-archive', 'ok', { phase: 'copying', archiveChunks: this.archiveChunks(m.id).length }, { actorType: 'sysadmin', actor });
+        const mv = this.store.setPhase(m.id, 'copying', { ...this.flushIn(m.id), endRequested: { at: this.d.clock.now(), actorType: actorTypeOf(actor), actor } });
+        this.audit(mv, 'move-end-after-archive', 'ok', { phase: 'copying', archiveChunks: this.archiveChunks(m.id).length }, { actorType: actorTypeOf(actor), actor });
         return mv;
       });
     }
-    return tx(this.d.db, () => this.endTransferIn(m, END_TRANSFER, { actorType: 'sysadmin', actor }));
+    return tx(this.d.db, () => this.endTransferIn(m, END_TRANSFER, { actorType: actorTypeOf(actor), actor }));
   }
 
   // Give up copy back (ruling 11, spec decision 3): the sysadmin ends a return that cannot finish. The return is
@@ -1122,7 +1122,7 @@ export class Moves {
     if (m.phase !== 'returning') throw new ApiError(409, 'wrong_phase');
     const mv = tx(this.d.db, () => {
       const v = this.store.setPhase(m.id, 'returned', { ...this.flushIn(m.id), reason: GIVEN_UP });
-      this.audit(v, 'move-give-up', 'ok', { phase: 'returned', returnOf: m.returnOf, bytesDone: v.bytesDone, bytesTotal: v.bytesTotal }, { actorType: 'sysadmin', actor });
+      this.audit(v, 'move-give-up', 'ok', { phase: 'returned', returnOf: m.returnOf, bytesDone: v.bytesDone, bytesTotal: v.bytesTotal }, { actorType: actorTypeOf(actor), actor });
       return v;
     });
     this.returnTokens.delete(m.id);

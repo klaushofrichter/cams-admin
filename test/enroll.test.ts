@@ -14,15 +14,14 @@ function setup(dir: string, env: Record<string, string> = {}, trustProxy: number
   const { db, clock, audit, reg } = makeRegistry(dir);
   const cfg = loadConfig({ PUBLIC_URL: 'https://cams-admin.example.net', ...env });
   const server = generateKeyPair();
-  const revoked: string[] = [];
   const changed: string[] = [];
-  const enr = new Enrollment({ db, clock, audit, registry: reg, cfg, serverKeys: [server.publicKeySpkiB64], onKeyRevoked: (k) => revoked.push(k), onProxyChanged: (p) => changed.push(p) });
+  const enr = new Enrollment({ db, clock, audit, registry: reg, cfg, serverKeys: [server.publicKeySpkiB64], onProxyChanged: (p) => changed.push(p) });
   const app = express();
   app.set('trust proxy', trustProxy); // as server.ts (TRUST_PROXY)
   app.use(enrollRouter(enr));
   const acc = reg.createAccount(ACTOR, { name: 'home', displayName: 'Home' });
   const prx = reg.createProxy(ACTOR, acc.id, { name: 'pi', displayName: 'Pi', runsOn: 'local-host' });
-  return { db, clock, audit, reg, enr, app, acc, prx, revoked, changed, server };
+  return { db, clock, audit, reg, enr, app, acc, prx, changed, server };
 }
 
 // The proof covers the canonical code, whatever spelling is sent.
@@ -52,7 +51,7 @@ describe('enrollment', () => {
     expect(s.changed).toEqual([s.prx.id]); // the proxy page reloads: the code is gone, the key pending
     expect(s.enr.liveCode(s.prx.id)).toBeNull();
     expect(s.reg.getProxy(s.acc.id, s.prx.id).state).toBe('pending');
-    expect(s.enr.confirmKey(s.prx.id, r.body.keyId)).toEqual({ revoked: [] }); // the first hello
+    expect(s.reg.confirmKey(s.prx.id, r.body.keyId)).toEqual({ revoked: [] }); // the first hello (the channel calls this)
     expect(s.reg.getProxy(s.acc.id, s.prx.id).state).toBe('enrolled');
     expect(s.reg.activeKey(s.prx.id)).toMatchObject({ id: r.body.keyId, fingerprint: fingerprint(k.publicKeySpkiB64) });
     const a = s.audit.list({ action: 'proxy-enrolled' }).items[0];
@@ -110,14 +109,12 @@ describe('enrollment', () => {
   it('re-enrollment keeps the working key until the new key says hello', async () => {
     const s = setup(dir);
     const first = await post(s.app, body(s.enr.createCode(ACTOR, s.acc.id, s.prx.id, 24).code));
-    s.enr.confirmKey(s.prx.id, first.body.keyId);
+    s.reg.confirmKey(s.prx.id, first.body.keyId);
     const second = await post(s.app, body(s.enr.createCode(ACTOR, s.acc.id, s.prx.id, 24).code));
     expect(second.status).toBe(201);
-    expect(s.revoked).toEqual([]);
     expect(s.reg.activeKey(s.prx.id)?.id).toBe(first.body.keyId);
-    // The new key's first hello: the old key goes, and its connection is closed.
-    expect(s.enr.confirmKey(s.prx.id, second.body.keyId)).toEqual({ revoked: [first.body.keyId] });
-    expect(s.revoked).toEqual([first.body.keyId]);
+    // The new key's first hello: the old key goes (the channel closes its connection: channel.test.ts).
+    expect(s.reg.confirmKey(s.prx.id, second.body.keyId)).toEqual({ revoked: [first.body.keyId] });
     expect(s.reg.activeKey(s.prx.id)?.id).toBe(second.body.keyId);
     const keys = s.reg.listKeys(s.acc.id, s.prx.id);
     expect(keys.find((k) => k.id === first.body.keyId)).toMatchObject({ revokedReason: 're-enrolled' });
@@ -134,12 +131,12 @@ describe('enrollment', () => {
     expect(s.reg.listKeys(s.acc.id, s.prx.id)[0]).toMatchObject({ id: lost.body.keyId, confirmedAt: null, revokedAt: null, pending: 'waiting' });
     s.clock.advance(PENDING_KEY_MS);
     expect(s.reg.listKeys(s.acc.id, s.prx.id)[0]).toMatchObject({ id: lost.body.keyId, pending: 'expired' });
-    expect(s.enr.confirmKey(s.prx.id, lost.body.keyId)).toBeNull(); // too late for a hello
+    expect(s.reg.confirmKey(s.prx.id, lost.body.keyId)).toBeNull(); // too late for a hello
     // A new code works and retires the orphan.
     const again = await post(s.app, body(s.enr.createCode(ACTOR, s.acc.id, s.prx.id, 24).code));
     expect(again.status).toBe(201);
     expect(s.reg.listKeys(s.acc.id, s.prx.id).find((k) => k.id === lost.body.keyId)).toMatchObject({ revokedReason: 're-enrolled' });
-    expect(s.enr.confirmKey(s.prx.id, again.body.keyId)).toEqual({ revoked: [] });
+    expect(s.reg.confirmKey(s.prx.id, again.body.keyId)).toEqual({ revoked: [] });
     expect(s.reg.getProxy(s.acc.id, s.prx.id).state).toBe('enrolled');
     expect(s.reg.activeKey(s.prx.id)?.id).toBe(again.body.keyId);
   });

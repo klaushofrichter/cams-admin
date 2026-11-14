@@ -97,6 +97,38 @@ describe('Vision service', () => {
     expect((s.built.db.prepare(`SELECT count(*) n FROM commands WHERE command = 'analytics.usage.get'`).get() as { n: number }).n).toBe(0);
   });
 
+  // cam-proxy refuses a command it doesn't implement with the same not_allowed as an entry that is off
+  // (command-check step 8, no field tells them apart): a not_allowed while its policy lists the entry is an
+  // older release; one whose policy lacks the entry is Not allowed. Until the proxy's next hello (an update).
+  const refuse = (prx: string, state: 'refused' | 'failed', code: string) =>
+    (V() as unknown as { onFinal(r: object): void }).onFinal({ id: `c${n++}`, proxyId: prx, command: 'analytics.usage.get', state, outcomeCode: code, result: null });
+
+  it('not_allowed while the policy lists the entry, or not_implemented, is Proxy too old (no command); a new hello clears it', async () => {
+    const p = await proxy();
+    refuse(p.prx, 'refused', 'not_allowed');
+    expect((await item(p.acc, p.prx)).access).toBe('too-old');
+    expect(V().refresh(SYS, p.acc).queued).toEqual([]);
+    const q = await proxy();
+    refuse(q.prx, 'failed', 'not_implemented');
+    expect((await item(q.acc, q.prx)).access).toBe('too-old');
+    // The update: the proxy reconnects (a new hello), the old refusal no longer counts.
+    await p.client.stop('shutdown');
+    clients.splice(clients.indexOf(p.client), 1);
+    clock.advance(1000);
+    const again = makeClient(p.key, { commands: { allow: ALLOW, config: p.ref } });
+    clients.push(again);
+    again.start();
+    await until(() => (s.built.status.row(p.prx)?.lastHelloAt ?? 0) === clock.now() && s.built.status.viewOf(s.built.registry.proxyById(p.prx)!).state === 'online', 5000, 'new hello');
+    expect((await item(p.acc, p.prx)).access).toBe('ok');
+  });
+
+  it('not_allowed from a proxy whose policy lacks the entry stays Not allowed', async () => {
+    const p = await proxy({ allow: ['config.get'], ref: new RefProxyConfig({ cameras: ['cam1'], settings: { 'analytics.googleVision.remoteMaxMonthly': 1000 } }) });
+    await viewed(p.acc, p.prx);
+    refuse(p.prx, 'refused', 'not_allowed');
+    expect((await item(p.acc, p.prx)).access).toBe('not-allowed');
+  });
+
   it('an offline proxy keeps its old figures with their age and gets no command', async () => {
     const p = await proxy();
     V().refresh(SYS, p.acc);

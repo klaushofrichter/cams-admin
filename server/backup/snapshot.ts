@@ -5,7 +5,7 @@ import { dirname, join } from 'path';
 import { gzipSync } from 'zlib';
 import { DatabaseSync } from 'node:sqlite';
 import type { Clock } from '../clock';
-import type { Audit } from '../audit';
+import { actorTypeOf, type Audit } from '../audit';
 import { tx, type Db } from '../db/open';
 import type { ObjectStore } from './store';
 
@@ -131,7 +131,7 @@ export function backupNow(d: SnapshotDeps & { socketPath: string | null }): Prom
     tx(d.db, () => {
       recordJob(d.db, 'backup-now', at, ok, result);
       d.audit.write({
-        actorType: 'sysadmin', actor: d.actor ?? 'system', action: 'backup-now', outcome: ok ? 'ok' : 'failed',
+        actorType: actorTypeOf(d.actor ?? 'system'), actor: d.actor ?? 'system', action: 'backup-now', outcome: ok ? 'ok' : 'failed',
         detail: { litestream: litestream.ok ? litestream.status : litestream.error, snapshot: snapshot.ok ? snapshot.key : snapshot.error, bytes: snapshot.bytes ?? null },
       });
     });

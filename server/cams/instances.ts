@@ -1,6 +1,6 @@
 import type { Clock } from '../clock';
 import type { Audit, AuditAction } from '../audit';
-import { nameChanges } from '../audit';
+import { actorTypeOf, nameChanges } from '../audit';
 import type { Config } from '../config';
 import { stmt, tx, type Db } from '../db/open';
 import { codeHash, newCamsEnrollmentCode, newId } from '../ids';
@@ -100,7 +100,7 @@ export class CamsInstances {
     return stmt(this.d.db, sql);
   }
   private log(actor: string, action: AuditAction, i: { id: string; name: string }, detail?: Record<string, unknown>): void {
-    this.d.audit.write({ actorType: 'sysadmin', actor, action, targetType: 'cams-instance', targetId: i.id, targetLabel: i.name, outcome: 'ok', detail });
+    this.d.audit.write({ actorType: actorTypeOf(actor), actor, action, targetType: 'cams-instance', targetId: i.id, targetLabel: i.name, outcome: 'ok', detail });
   }
 
   private accountsInput(v: unknown): string[] {
@@ -198,14 +198,14 @@ export class CamsInstances {
           WHERE o.instance_id = ? ORDER BY c.cams_id`).all(id) as Row[];
         for (const o of stale.filter((x) => !accounts.includes(x.account_id as string))) {
           this.q('DELETE FROM cams_camera_overrides WHERE instance_id = ? AND camera_id = ?').run(id, o.camera_id as string);
-          this.d.audit.write({ actorType: 'sysadmin', actor, action: 'camera-override-clear', accountId: o.account_id as string, targetType: 'cams-instance', targetId: id, targetLabel: old.name, outcome: 'ok', detail: { camera: o.cams_id, host: o.host, cameraUser: o.camera_user, reason: 'account-not-served' } });
+          this.d.audit.write({ actorType: actorTypeOf(actor), actor, action: 'camera-override-clear', accountId: o.account_id as string, targetType: 'cams-instance', targetId: id, targetLabel: old.name, outcome: 'ok', detail: { camera: o.cams_id, host: o.host, cameraUser: o.camera_user, reason: 'account-not-served' } });
         }
         // Likewise its routes to that account's proxies: a re-serve starts default-deny, and no list shows a route the instance can't use.
         const routes = this.q(`SELECT r.proxy_id, p.name, p.account_id FROM cams_instance_routes r JOIN proxies p ON p.id = r.proxy_id
           WHERE r.instance_id = ? ORDER BY p.name`).all(id) as Row[];
         for (const rt of routes.filter((x) => !accounts.includes(x.account_id as string))) {
           this.q('DELETE FROM cams_instance_routes WHERE instance_id = ? AND proxy_id = ?').run(id, rt.proxy_id as string);
-          this.d.audit.write({ actorType: 'sysadmin', actor, action: 'route-update', accountId: rt.account_id as string, targetType: 'cams-instance', targetId: id, targetLabel: old.name, outcome: 'ok', detail: { proxyId: rt.proxy_id, proxy: rt.name, removed: true, reason: 'account-not-served' } });
+          this.d.audit.write({ actorType: actorTypeOf(actor), actor, action: 'route-update', accountId: rt.account_id as string, targetType: 'cams-instance', targetId: id, targetLabel: old.name, outcome: 'ok', detail: { proxyId: rt.proxy_id, proxy: rt.name, removed: true, reason: 'account-not-served' } });
         }
       }
       const now = this.get(id);
@@ -312,7 +312,7 @@ export class CamsInstances {
       this.q(`INSERT INTO cams_instance_routes (instance_id, proxy_id, url, hidden) VALUES (?,?,?,?)
         ON CONFLICT(instance_id, proxy_id) DO UPDATE SET url = excluded.url, hidden = excluded.hidden`).run(id, proxyId, url, hidden ? 1 : 0);
       this.bumpVersion(id);
-      this.d.audit.write({ actorType: 'sysadmin', actor, action: 'route-update', accountId: px.accountId, targetType: 'cams-instance', targetId: id, targetLabel: i.name, outcome: 'ok', detail: { proxyId, proxy: px.name, url, hidden } });
+      this.d.audit.write({ actorType: actorTypeOf(actor), actor, action: 'route-update', accountId: px.accountId, targetType: 'cams-instance', targetId: id, targetLabel: i.name, outcome: 'ok', detail: { proxyId, proxy: px.name, url, hidden } });
       return { instanceId: id, proxyId, accountId: px.accountId, url, hidden };
     });
     // A proxy hidden for the instance keeps no token of it.
@@ -327,7 +327,7 @@ export class CamsInstances {
       const res = this.q('DELETE FROM cams_instance_routes WHERE instance_id = ? AND proxy_id = ?').run(id, proxyId);
       if (res.changes === 0) throw notFound();
       this.bumpVersion(id);
-      this.d.audit.write({ actorType: 'sysadmin', actor, action: 'route-update', accountId: px?.accountId ?? null, targetType: 'cams-instance', targetId: id, targetLabel: i.name, outcome: 'ok', detail: { proxyId, removed: true } });
+      this.d.audit.write({ actorType: actorTypeOf(actor), actor, action: 'route-update', accountId: px?.accountId ?? null, targetType: 'cams-instance', targetId: id, targetLabel: i.name, outcome: 'ok', detail: { proxyId, removed: true } });
     });
   }
 
@@ -372,7 +372,7 @@ export class CamsInstances {
       const was = { host: (old?.host as string | null) ?? null, cameraUser: (old?.camera_user as string | null) ?? null };
       const detail: Record<string, unknown> = { camera: cam.camsId };
       for (const k of ['host', 'cameraUser'] as const) if (was[k] !== f[k]) detail[k] = { from: was[k], to: f[k] };
-      this.d.audit.write({ actorType: 'sysadmin', actor, action: 'camera-override-set', accountId: cam.accountId, targetType: 'cams-instance', targetId: id, targetLabel: i.name, outcome: 'ok', detail });
+      this.d.audit.write({ actorType: actorTypeOf(actor), actor, action: 'camera-override-set', accountId: cam.accountId, targetType: 'cams-instance', targetId: id, targetLabel: i.name, outcome: 'ok', detail });
       return this.overrides(id).find((o) => o.cameraId === cameraId)!;
     });
   }
@@ -385,7 +385,7 @@ export class CamsInstances {
       if (!old) throw notFound();
       this.q('DELETE FROM cams_camera_overrides WHERE instance_id = ? AND camera_id = ?').run(id, cameraId);
       this.bumpVersion(id);
-      this.d.audit.write({ actorType: 'sysadmin', actor, action: 'camera-override-clear', accountId: cam.accountId, targetType: 'cams-instance', targetId: id, targetLabel: i.name, outcome: 'ok', detail: { camera: cam.camsId, host: old.host, cameraUser: old.camera_user } });
+      this.d.audit.write({ actorType: actorTypeOf(actor), actor, action: 'camera-override-clear', accountId: cam.accountId, targetType: 'cams-instance', targetId: id, targetLabel: i.name, outcome: 'ok', detail: { camera: cam.camsId, host: old.host, cameraUser: old.camera_user } });
     });
   }
 
