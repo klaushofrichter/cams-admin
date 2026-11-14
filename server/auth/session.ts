@@ -1,6 +1,6 @@
 import { randomBytes } from 'crypto';
 import type { Clock } from '../clock';
-import { tx, type Db } from '../db/open';
+import { stmt, tx, type Db } from '../db/open';
 import { normaliseEmail } from '../validate';
 import { sha256Hex as hash } from '../ids';
 
@@ -41,18 +41,18 @@ export class Sessions {
   // allowlist is checked again).
   get(value: unknown): Session | null {
     if (typeof value !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(value)) return null;
-    const r = this.db.prepare('SELECT * FROM sessions WHERE id_hash = ?').get(hash(value)) as Record<string, string | number> | undefined;
+    const r = stmt(this.db, 'SELECT * FROM sessions WHERE id_hash = ?').get(hash(value)) as Record<string, string | number> | undefined;
     if (!r) return null;
     const now = this.clock.now();
     if ((r.expires_at as number) <= now || !sysadminAllowed(r.email as string)) {
-      tx(this.db, () => this.db.prepare('DELETE FROM sessions WHERE id_hash = ?').run(r.id_hash));
+      tx(this.db, () => stmt(this.db, 'DELETE FROM sessions WHERE id_hash = ?').run(r.id_hash));
       return null;
     }
     return { idHash: r.id_hash as string, email: r.email as string, createdAt: r.created_at as number, expiresAt: r.expires_at as number };
   }
 
   destroy(value: unknown): void {
-    if (typeof value === 'string') tx(this.db, () => this.db.prepare('DELETE FROM sessions WHERE id_hash = ?').run(hash(value)));
+    if (typeof value === 'string') tx(this.db, () => stmt(this.db, 'DELETE FROM sessions WHERE id_hash = ?').run(hash(value)));
   }
 
   // sessions-ended: every session, e.g. after a restore.

@@ -1,7 +1,7 @@
 import type { Clock } from './clock';
 import type { Audit, AuditAction } from './audit';
 import { nameChanges } from './audit';
-import { tx, type Db } from './db/open';
+import { stmt, tx, type Db } from './db/open';
 import { newId } from './ids';
 import type { CameraPower } from './switches/store';
 import { cameraNameProblem } from './cameraName';
@@ -281,7 +281,7 @@ export class Registry {
   }
 
   proxyById(id: string): Proxy | null {
-    const r = this.db.prepare('SELECT * FROM proxies WHERE id = ?').get(id) as Row | undefined;
+    const r = stmt(this.db, 'SELECT * FROM proxies WHERE id = ?').get(id) as Row | undefined;
     return r ? toProxy(r) : null;
   }
 
@@ -422,7 +422,7 @@ export class Registry {
   }
 
   activeKey(proxyId: string): ProxyKey | null {
-    const r = this.db.prepare('SELECT * FROM proxy_keys WHERE proxy_id = ? AND revoked_at IS NULL AND confirmed_at IS NOT NULL').get(proxyId) as Row | undefined;
+    const r = stmt(this.db, 'SELECT * FROM proxy_keys WHERE proxy_id = ? AND revoked_at IS NULL AND confirmed_at IS NOT NULL').get(proxyId) as Row | undefined;
     return r ? toKey(r, this.clock.now()) : null;
   }
 
@@ -460,14 +460,14 @@ export class Registry {
 
   getCamera(accountId: string, id: string): Camera {
     const r = this.one('SELECT * FROM cameras WHERE id = ? AND account_id = ?', id, accountId);
-    const s = this.db.prepare('SELECT * FROM sims WHERE camera_id = ?').get(id) as Row | undefined;
+    const s = stmt(this.db, 'SELECT * FROM sims WHERE camera_id = ?').get(id) as Row | undefined;
     return toCamera(r, s ? toSim(s) : null);
   }
 
   // The camera a proxy names by its own camera id, in that proxy's account (null: not registered, or no proxy).
   cameraOnProxy(accountId: string, proxyId: string | null, proxyCameraId: string): Camera | null {
     if (proxyId === null) return null;
-    const r = this.db.prepare('SELECT id FROM cameras WHERE account_id = ? AND proxy_id = ? AND proxy_camera_id = ?').get(accountId, proxyId, proxyCameraId) as { id: string } | undefined;
+    const r = stmt(this.db, 'SELECT id FROM cameras WHERE account_id = ? AND proxy_id = ? AND proxy_camera_id = ?').get(accountId, proxyId, proxyCameraId) as { id: string } | undefined;
     return r ? this.getCamera(accountId, r.id) : null;
   }
 
@@ -475,15 +475,19 @@ export class Registry {
   findCamera(accountId: string, idOrCamsId: string): Camera | null {
     const r = this.db.prepare('SELECT * FROM cameras WHERE account_id = ? AND (id = ? OR cams_id = ?) ORDER BY cams_id LIMIT 1').get(accountId, idOrCamsId, idOrCamsId) as Row | undefined;
     if (!r) return null;
-    const s = this.db.prepare('SELECT * FROM sims WHERE camera_id = ?').get(r.id as string) as Row | undefined;
+    const s = stmt(this.db, 'SELECT * FROM sims WHERE camera_id = ?').get(r.id as string) as Row | undefined;
     return toCamera(r, s ? toSim(s) : null);
   }
 
   listCameras(accountId?: string): Camera[] {
     const rows = (accountId === undefined
-      ? this.db.prepare('SELECT * FROM cameras ORDER BY cams_id').all()
-      : this.db.prepare('SELECT * FROM cameras WHERE account_id = ? ORDER BY cams_id').all(accountId)) as Row[];
-    const sims = new Map((this.db.prepare('SELECT * FROM sims').all() as Row[]).map((s) => [s.camera_id as string, toSim(s)]));
+      ? stmt(this.db, 'SELECT * FROM cameras ORDER BY cams_id').all()
+      : stmt(this.db, 'SELECT * FROM cameras WHERE account_id = ? ORDER BY cams_id').all(accountId)) as Row[];
+    // Only the account's sims when one account is asked for (not the whole table).
+    const simRows = (accountId === undefined
+      ? stmt(this.db, 'SELECT * FROM sims').all()
+      : stmt(this.db, 'SELECT s.* FROM sims s JOIN cameras c ON c.id = s.camera_id WHERE c.account_id = ?').all(accountId)) as Row[];
+    const sims = new Map(simRows.map((s) => [s.camera_id as string, toSim(s)]));
     return rows.map((r) => toCamera(r, sims.get(r.id as string) ?? null));
   }
 

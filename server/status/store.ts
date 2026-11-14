@@ -1,6 +1,6 @@
 import type { Clock } from '../clock';
 import type { Db } from '../db/open';
-import { tx } from '../db/open';
+import { stmt, tx } from '../db/open';
 import type { Proxy, Registry } from '../registry';
 import type { LiveHub } from '../live';
 import { validateSummary } from '../contract';
@@ -101,7 +101,7 @@ export class StatusStore {
   }
 
   private persist(r: StatusRow): void {
-    this.d.db.prepare(`INSERT INTO proxy_status (proxy_id, connected, connected_since, last_hello_at, last_heartbeat_at, closed_reason, stopped, proxy_version, clock_skew_ms, summary, summary_at, ok, problem_count, reported, online)
+    stmt(this.d.db, `INSERT INTO proxy_status (proxy_id, connected, connected_since, last_hello_at, last_heartbeat_at, closed_reason, stopped, proxy_version, clock_skew_ms, summary, summary_at, ok, problem_count, reported, online)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(proxy_id) DO UPDATE SET connected = excluded.connected, connected_since = excluded.connected_since,
       last_hello_at = excluded.last_hello_at, last_heartbeat_at = excluded.last_heartbeat_at, closed_reason = excluded.closed_reason, stopped = excluded.stopped,
       proxy_version = excluded.proxy_version, clock_skew_ms = excluded.clock_skew_ms, summary = excluded.summary, summary_at = excluded.summary_at, ok = excluded.ok,
@@ -110,7 +110,7 @@ export class StatusStore {
         r.summary === null ? null : JSON.stringify(r.summary), r.summaryAt, r.ok === null ? null : r.ok ? 1 : 0, r.problemCount, r.reported ? JSON.stringify(r.reported) : null, r.online ? 1 : 0);
     // Only the active key said that hello: a pending key (redeemed, never
     // used) is not seen, whatever the proxy did with its previous key.
-    if (r.lastHelloAt !== null) this.d.db.prepare('UPDATE proxy_keys SET last_seen_at = ? WHERE proxy_id = ? AND revoked_at IS NULL AND confirmed_at IS NOT NULL AND confirmed_at <= ? AND (last_seen_at IS NULL OR last_seen_at < ?)').run(r.lastHelloAt, r.proxyId, r.lastHelloAt, r.lastHelloAt);
+    if (r.lastHelloAt !== null) stmt(this.d.db, 'UPDATE proxy_keys SET last_seen_at = ? WHERE proxy_id = ? AND revoked_at IS NULL AND confirmed_at IS NOT NULL AND confirmed_at <= ? AND (last_seen_at IS NULL OR last_seen_at < ?)').run(r.lastHelloAt, r.proxyId, r.lastHelloAt, r.lastHelloAt);
     this.dirty.delete(r.proxyId);
   }
 
@@ -127,11 +127,11 @@ export class StatusStore {
   }
 
   private exists(proxyId: string): boolean {
-    return !!this.d.db.prepare('SELECT 1 FROM proxies WHERE id = ?').get(proxyId);
+    return !!stmt(this.d.db, 'SELECT 1 FROM proxies WHERE id = ?').get(proxyId);
   }
 
   private event(proxyId: string, kind: string, cameraRef: string | null, detail: Record<string, unknown> | null): void {
-    this.d.db.prepare('INSERT INTO status_events (proxy_id, camera_ref, at, kind, detail) VALUES (?,?,?,?,?)').run(proxyId, cameraRef, this.d.clock.now(), kind, detail ? JSON.stringify(detail).slice(0, 2048) : null);
+    stmt(this.d.db, 'INSERT INTO status_events (proxy_id, camera_ref, at, kind, detail) VALUES (?,?,?,?,?)').run(proxyId, cameraRef, this.d.clock.now(), kind, detail ? JSON.stringify(detail).slice(0, 2048) : null);
   }
 
   // Runs fn on the in-memory row, then publishes the new state. A proxy that

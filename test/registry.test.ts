@@ -129,6 +129,20 @@ describe('registry', () => {
     expect(reg.getCamera(a.id, s.id).sim).toBeNull();
   });
 
+  it('listCameras carries each camera\'s sim, for one account and for all', () => {
+    const { reg } = makeRegistry(dir);
+    const a = reg.createAccount(ACTOR, { name: 'alpha', displayName: 'A' });
+    const b = reg.createAccount(ACTOR, { name: 'beta', displayName: 'B' });
+    const sa = reg.createCamera(ACTOR, a.id, { camsId: 'sa', name: 'SA', kind: 'sim' });
+    const sb = reg.createCamera(ACTOR, b.id, { camsId: 'sb', name: 'SB', kind: 'sim' });
+    reg.createCamera(ACTOR, a.id, { camsId: 'ca', name: 'CA', kind: 'camera' });
+    reg.setSim(ACTOR, a.id, sa.id, { runsOn: 'mac' });
+    reg.setSim(ACTOR, b.id, sb.id, { runsOn: 'cluster' });
+    expect(reg.listCameras(a.id).map((c) => [c.camsId, c.sim?.runsOn ?? null])).toEqual([['ca', null], ['sa', 'mac']]);
+    expect(reg.listCameras(b.id).map((c) => [c.camsId, c.sim?.runsOn ?? null])).toEqual([['sb', 'cluster']]);
+    expect(reg.listCameras().map((c) => [c.camsId, c.sim?.runsOn ?? null])).toEqual([['ca', null], ['sa', 'mac'], ['sb', 'cluster']]);
+  });
+
   it('account delete cascades and returns the proxies to disconnect', () => {
     const { reg, db } = makeRegistry(dir);
     const a = reg.createAccount(ACTOR, { name: 'alpha', displayName: 'A' });
