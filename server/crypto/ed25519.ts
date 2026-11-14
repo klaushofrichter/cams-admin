@@ -1,4 +1,5 @@
 import { jcs } from './jcs';
+import { sha256Hex } from '../ids';
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, sign as nodeSign, verify as nodeVerify, type KeyObject } from 'crypto';
 
 // Ed25519 with Node's crypto (no dependency). Public keys travel as base64
@@ -63,13 +64,13 @@ export const signedText = {
   camsEnroll: (code: string, publicKey: string) => `cams-admin cams-enroll v1\n${code}\n${publicKey}`,
 };
 
-// cams-v1: lower-case hex SHA-256 over the exact bytes ("" for an empty body).
-export const sha256hex = (b: Buffer | string): string => createHash('sha256').update(b).digest('hex');
+// cams-v1: lower-case hex SHA-256 over the exact bytes ("" for an empty body); the name contract/cams-build.ts imports.
+export const sha256hex = sha256Hex;
 // cams-v1: what a cams instance signs per request, and cams-admin per answer.
 export const camsRequestText = (method: string, pathAndQuery: string, ts: number, nonce: string, body: Buffer): string =>
-  `cams-admin/v1 request\n${method.toUpperCase()}\n${pathAndQuery}\n${ts}\n${nonce}\n${sha256hex(body)}`;
+  `cams-admin/v1 request\n${method.toUpperCase()}\n${pathAndQuery}\n${ts}\n${nonce}\n${sha256Hex(body)}`;
 export const camsResponseText = (status: number, nonce: string, body: Buffer): string =>
-  `cams-admin/v1 response\n${status}\n${nonce}\n${sha256hex(body)}`;
+  `cams-admin/v1 response\n${status}\n${nonce}\n${sha256Hex(body)}`;
 
 // Contract P2: a signed envelope (command, result, event) carries
 // sig = base64(Ed25519(UTF-8(jcs(envelope without sig)))), computed over the

@@ -4,6 +4,7 @@ import { tx, type Db } from '../db/open';
 import type { Logger } from '../log';
 import type { Registry } from '../registry';
 import type { CommandRow, Commands, WireCommand } from '../commands/service';
+import { isOldProxyAnswer } from '../commands/old-proxy';
 import { FILE_KINDS } from '../../contract/build';
 import type { ChunkState, Move, MoveStore } from './store';
 import { moveToken, targetAddress, type Resolve } from './token';
@@ -35,12 +36,10 @@ export const NO_SPACE_REASON = 'paused:no_space';
 // A step whose command could not be queued (the proxy paused, the entry off) is tried again this often.
 export const RETURN_QUEUE_RETRY_MS = 60_000;
 
-// A proxy on a cam-proxy release before the return refuses its commands (an unknown command: not_allowed; an unknown
-// field: invalid_args; or unsupported_version): permanent for that command until the proxy reconnects (an update).
-export const OLD_PROXY_CODES = ['not_allowed', 'invalid_args', 'unsupported_version'];
+// A proxy on a cam-proxy release before the return refuses or fails its commands (commands/old-proxy.ts): permanent
+// for that command until the proxy reconnects (an update).
 // The reason the return shows while one side needs the update (the return's role: source = new proxy, target = original).
 export const updateReason = (role: 'source' | 'target') => `paused:proxy_update:${role}`;
-export const isOldProxyRefusal = (r: CommandRow) => (r.state === 'refused' || r.state === 'failed') && OLD_PROXY_CODES.includes(r.outcomeCode ?? '');
 
 // The host of a url when it is an address already (no lookup: usable inside a transaction); null otherwise.
 export function literalAddress(url: string | null): string | null {
@@ -112,7 +111,7 @@ export class Returns {
     if (!open) return sendOpen();
     if (!FINAL_STATES.has(open.state)) return;
     if (open.state !== 'done') {
-      if (isOldProxyRefusal(open)) return this.liveRetry.delete(`${m.id}:${m.sourceProxyId}`) ? sendOpen() : this.setReason(m, updateReason('source'));
+      if (isOldProxyAnswer(open)) return this.liveRetry.delete(`${m.id}:${m.sourceProxyId}`) ? sendOpen() : this.setReason(m, updateReason('source'));
       return void (this.again(m, m.sourceProxyId, 'move.return.open', open) && sendOpen());
     }
     if (m.reason === updateReason('source')) this.setReason(m, null);
@@ -132,8 +131,8 @@ export class Returns {
     }
     const start = key.startId ? this.cmd(m, m.targetProxyId, key.startId) : null;
     if (start?.state === 'done' && m.reason === updateReason('target')) this.setReason(m, null);
-    const startRetry = start !== null && isOldProxyRefusal(start) && this.liveRetry.delete(`${m.id}:${m.targetProxyId}`);
-    if (start && isOldProxyRefusal(start) && !startRetry) return this.setReason(m, updateReason('target'));
+    const startRetry = start !== null && isOldProxyAnswer(start) && this.liveRetry.delete(`${m.id}:${m.targetProxyId}`);
+    if (start && isOldProxyAnswer(start) && !startRetry) return this.setReason(m, updateReason('target'));
     if (startRetry) {
       // The original reconnected (perhaps updated): one more start.
     } else if (start && start.state === 'done' && failed?.target !== undefined) {

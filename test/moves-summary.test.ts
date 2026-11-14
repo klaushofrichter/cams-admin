@@ -107,6 +107,14 @@ describe('move.summary before a move', () => {
     expect(r).toEqual({ status: 424, body: { error: 'proxy_update_needed', detail: 'the proxy needs cam-proxy 2026.10.26 or later' } });
   });
 
+  it('a proxy that passes the checks but has no handler (failed not_implemented) is 424 proxy_update_needed too', async () => {
+    const src = await proxy();
+    const cam = camera(src);
+    src.client.moveResults['move.summary'] = { status: 'failed', code: 'not_implemented' };
+    const r = await ask(src.accountId, cam.id);
+    expect(r).toEqual({ status: 424, body: { error: 'proxy_update_needed', detail: 'the proxy needs cam-proxy 2026.10.26 or later' } });
+  });
+
   it('the proxy does not know the camera: 409 unknown_camera; another failure is 502 with its code', async () => {
     const src = await proxy();
     const cam = camera(src);

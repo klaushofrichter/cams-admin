@@ -1,11 +1,12 @@
 import type { CommandRow } from '../commands/service';
 import type { Proxy } from '../registry';
 import type { ChunkState } from './store';
+import { COMMAND_STATES, isOpen } from '../commands/states';
 
 // What the two halves of the move job (Moves, Returns) share.
 
 // A command's final states (`unknown`: the proxy never answered; for a move, final too).
-export const FINAL_STATES = new Set(['done', 'refused', 'failed', 'expired', 'unknown']);
+export const FINAL_STATES: ReadonlySet<string> = new Set(COMMAND_STATES.filter((s) => !isOpen(s)));
 // A command that went unanswered (expired, or the proxy never said).
 export const unanswered = (r: CommandRow) => r.state === 'expired' || r.state === 'unknown';
 // A command the proxy answered (done, failed, refused).

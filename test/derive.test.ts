@@ -42,11 +42,17 @@ describe('cameraStates', () => {
 describe('reconcile and pins', () => {
   const H = (c: string) => 'SHA256:' + c.repeat(64);
   it('reported not registered, registered not reported, proposed cams ids', () => {
-    const r = reconcile({ name: 'pi' }, [{ proxyCameraId: 'cam2' }, { proxyCameraId: 'cam9' }], new Set(['cam1', 'cam2']), st());
+    const cams = [
+      { proxyId: 'px', proxyCameraId: 'cam2', camsId: 'cam1' },
+      { proxyId: 'px', proxyCameraId: 'cam9', camsId: 'cam2' },
+      { proxyId: 'other', proxyCameraId: 'cam1', camsId: 'x' }, // another proxy's camera: not registered here
+    ];
+    const r = reconcile({ id: 'px', name: 'pi' }, cams, st());
+    expect(reconcile({ id: 'px', name: 'pi' }, cams, st(), new Set(['cam1', 'cam2', 'x']))).toEqual(r);
     expect(r.reportedNotRegistered).toEqual([{ ref: 'cam1', proposedCamsId: 'pi-cam1' }]);
     expect(r.registeredNotReported).toEqual(['cam9']);
-    expect(reconcile({ name: 'pi' }, [], new Set(), st()).reportedNotRegistered[0].proposedCamsId).toBe('cam1');
-    expect(reconcile({ name: 'pi' }, [{ proxyCameraId: 'cam9' }], new Set(), null).registeredNotReported).toEqual([]);
+    expect(reconcile({ id: 'px', name: 'pi' }, [], st()).reportedNotRegistered[0].proposedCamsId).toBe('cam1');
+    expect(reconcile({ id: 'px', name: 'pi' }, [{ proxyId: 'px', proxyCameraId: 'cam9', camsId: 'c' }], null).registeredNotReported).toEqual([]);
   });
   it('pin: match, mismatch, hint, none', () => {
     expect(pinState([H('A')], [H('A')])).toBe('match');

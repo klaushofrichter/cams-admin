@@ -5,6 +5,7 @@
   import { api, ApiFailure, errorText } from '../lib/api';
   import { commandsText } from '../lib/commands';
   import { when } from '../lib/format';
+  import { poll } from '../lib/poll';
   import { backedOffText, ceilingOf, groupPaths, inheritedOf, narrowNote, narrowOk, parseValue, patternOf, stateLine, valueText, waitCommand, type Change, type ConfigView, type Leaf } from '../lib/config';
   import DiffTable from './DiffTable.svelte';
   import { clock } from '../lib/clock.svelte';
@@ -63,11 +64,7 @@
 
   // Wait until the stored view has the revision the proxy reported (after a write or a conflict).
   async function viewAt(revision: string | null) {
-    for (let i = 0; i < 40; i++) {
-      await load();
-      if (st?.view && (revision ? st.view.revision === revision : !st.changedOnProxy)) return;
-      await new Promise((r) => setTimeout(r, 250));
-    }
+    await poll(async () => { await load(); return st; }, (s) => !!s?.view && (revision ? s.view.revision === revision : !s.changedOnProxy), { everyMs: 250, maxMs: 9_750 });
   }
 
   function showConflict(current: Record<string, { v?: unknown; s: string }>) {

@@ -4,7 +4,9 @@
 import remoteSettable from '../../../contract/v1/remote-settable.json';
 import { type NarrowKind } from '../../../contract/build';
 import { cameraNameProblem } from '../../../server/cameraName';
+import { isOpen } from '../../../server/commands/states';
 import { cmdStateText } from './commands';
+import { poll } from './poll';
 
 export type Leaf = boolean | number | string;
 export interface ConfigPath { v?: unknown; s: 'default' | 'file' | 'override' | 'env'; r?: 'restart' | 'process'; p?: true; n?: unknown; by?: { cmdId: string; actor: string; at: number } }
@@ -169,7 +171,7 @@ export function valueText(v: unknown): string {
 }
 
 export function stateLine(row: { state: string; outcomeCode: string | null; retryAfterS?: number | null; dryRun?: boolean }): string {
-  if (['queued', 'sent', 'received'].includes(row.state)) return 'sent, waiting for the proxy';
+  if (isOpen(row.state)) return 'sent, waiting for the proxy';
   if (row.state === 'done') return row.dryRun ? 'previewed' : 'applied';
   if (row.outcomeCode === 'conflict') return 'changed on the proxy since you loaded it';
   if (row.outcomeCode === 'widening_local_only') return 'refused by the proxy: it would lower a raise-only value, raise spending or change a local-only setting';
@@ -184,19 +186,12 @@ export function rollbackable(row: { command: string; dryRun: boolean; state: str
   return ['config.set', 'config.unset', 'config.rollback'].includes(row.command) && !row.dryRun && row.state === 'done' && Array.isArray(changes) && changes.length > 0;
 }
 
-export const isFinal = (state: string) => !['queued', 'sent', 'received'].includes(state);
+export const isFinal = (state: string) => !isOpen(state);
 
 // Polls a command until it is final (the proxy answers in well under a second
 // when it is connected); null after `ms`.
-export async function waitCommand(fetchRow: () => Promise<any>, ms = 30_000, every = 300): Promise<any | null> {
-  const end = Date.now() + ms;
-  for (;;) {
-    const row = await fetchRow();
-    if (isFinal(row.state)) return row;
-    if (Date.now() > end) return null;
-    await new Promise((r) => setTimeout(r, every));
-  }
-}
+export const waitCommand = (fetchRow: () => Promise<any>, ms = 30_000, every = 300): Promise<any | null> =>
+  poll(fetchRow, (row) => isFinal(row.state), { everyMs: every, maxMs: ms });
 
 // What a disruptive action does, for its confirmation (Klaus's decision 3).
 export const EFFECT: Record<string, string> = {

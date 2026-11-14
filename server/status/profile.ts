@@ -5,6 +5,7 @@
 // sets it. The firewall lines hold camera LAN addresses: never logged.
 import { ipLiteral, isFirewallLine } from '../../contract/firewall';
 import { SITE_PATTERN } from '../../contract/build';
+import { isObj } from '../validate';
 
 export interface Profile {
   set: boolean; name: string | null; cameras: number; storageGB: number | null; held: number;
@@ -18,7 +19,6 @@ export interface Profile {
   tls: { site: string | null; cameraSubnet: string | null } | null;
 }
 
-const isRecord = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x);
 const intIn = (x: unknown, min: number, max: number): number | null => (Number.isSafeInteger(x) && (x as number) >= min && (x as number) <= max ? (x as number) : null);
 const bytes = (x: unknown): number | null => intIn(x, 0, Number.MAX_SAFE_INTEGER);
 const numMin = (x: unknown, min: number): number | null => (typeof x === 'number' && Number.isFinite(x) && x >= min ? x : null);
@@ -47,17 +47,17 @@ export function v4InCidr(ip: string, cidr: string): boolean {
 }
 
 export function parseProfile(x: unknown): Profile | null {
-  if (!isRecord(x) || typeof x.set !== 'boolean') return null;
+  if (!isObj(x) || typeof x.set !== 'boolean') return null;
   const cameras = intIn(x.cameras, 1, 64);
   const held = intIn(x.held, 0, 64);
   if (cameras === null || held === null) return null;
-  const ftp = isRecord(x.ftp) ? x.ftp : {};
-  const pas = isRecord(ftp.passive) ? ftp.passive : null;
+  const ftp = isObj(x.ftp) ? x.ftp : {};
+  const pas = isObj(ftp.passive) ? ftp.passive : null;
   const from = intIn(pas?.from, 1, 65535), to = intIn(pas?.to, 1, 65535);
-  const st = isRecord(x.storage) ? x.storage : {};
-  const hw = isRecord(x.hardware) ? x.hardware : {};
-  const fw = isRecord(x.firewall) ? x.firewall : {};
-  const tls = isRecord(x.tls) ? x.tls : null;
+  const st = isObj(x.storage) ? x.storage : {};
+  const hw = isObj(x.hardware) ? x.hardware : {};
+  const fw = isObj(x.firewall) ? x.firewall : {};
+  const tls = isObj(x.tls) ? x.tls : null;
   // Read whole (at most 64): a line cut short is no template line, so it is dropped, never shown cut.
   const lines = Array.isArray(fw.lines) ? fw.lines.slice(0, 64).filter((l): l is string => typeof l === 'string') : [];
   return {

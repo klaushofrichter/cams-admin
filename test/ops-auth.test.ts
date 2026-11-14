@@ -654,3 +654,13 @@ describe('managing ops tokens', () => {
     expect((await a.api('get', '/me')).body).toMatchObject({ email: 'admin@example.com' });
   });
 });
+
+// Runs last: every audit record an operations token caused in this file (registry edits, adopt, moves, routes,
+// tokens, actions, config, offboarding, switches) is actor type system, never sysadmin (a sign-in).
+describe('the audit actor type of an ops token', () => {
+  it('is system on every record', () => {
+    const rows = a.db.prepare(`SELECT action, actor_type FROM audit_log WHERE actor LIKE 'ops-token:%'`).all() as { action: string; actor_type: string }[];
+    expect(rows.length).toBeGreaterThan(20);
+    expect([...new Set(rows.filter((r) => r.actor_type !== 'system').map((r) => r.action))].sort()).toEqual([]);
+  });
+});

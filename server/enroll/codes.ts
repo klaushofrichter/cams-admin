@@ -1,5 +1,5 @@
 import type { Clock } from '../clock';
-import type { Audit } from '../audit';
+import { actorTypeOf, type Audit } from '../audit';
 import { connectUrlFor, type Config } from '../config';
 import { tx, type Db } from '../db/open';
 import { ApiError, type Registry } from '../registry';
@@ -16,7 +16,6 @@ export interface EnrollDeps {
   registry: Registry;
   cfg: Config;
   serverKeys: string[]; // base64 SPKI DER of cams-admin's signing key(s)
-  onKeyRevoked: (keyId: string) => void; // closes that key's live connection (4401)
   onProxyChanged?: (proxyId: string) => void; // a redemption: the live registry event (the proxy page reloads)
 }
 
@@ -51,7 +50,7 @@ export class Enrollment {
       const id = newId('enr');
       const expiresAt = now + h * 3600_000;
       this.d.db.prepare('INSERT INTO enrollment_codes (id, proxy_id, code_hash, created_by, created_at, expires_at) VALUES (?,?,?,?,?,?)').run(id, proxyId, codeHash(code), actor, now, expiresAt);
-      this.d.audit.write({ actorType: 'sysadmin', actor, action: 'enrollment-code-create', accountId, targetType: 'proxy', targetId: proxyId, targetLabel: p.name, outcome: 'ok', detail: { codeId: id, lifetimeH: h } });
+      this.d.audit.write({ actorType: actorTypeOf(actor), actor, action: 'enrollment-code-create', accountId, targetType: 'proxy', targetId: proxyId, targetLabel: p.name, outcome: 'ok', detail: { codeId: id, lifetimeH: h } });
       return { id, code, expiresAt, command: this.command() };
     });
   }
@@ -61,7 +60,7 @@ export class Enrollment {
       const p = this.d.registry.getProxy(accountId, proxyId);
       const r = this.d.db.prepare('UPDATE enrollment_codes SET cancelled_at = ? WHERE id = ? AND proxy_id = ? AND used_at IS NULL AND cancelled_at IS NULL').run(this.d.clock.now(), codeId, proxyId);
       if (r.changes === 0) throw new ApiError(404, 'not_found');
-      this.d.audit.write({ actorType: 'sysadmin', actor, action: 'enrollment-code-cancel', accountId, targetType: 'proxy', targetId: proxyId, targetLabel: p.name, outcome: 'ok', detail: { codeId } });
+      this.d.audit.write({ actorType: actorTypeOf(actor), actor, action: 'enrollment-code-cancel', accountId, targetType: 'proxy', targetId: proxyId, targetLabel: p.name, outcome: 'ok', detail: { codeId } });
     });
   }
 
@@ -76,7 +75,7 @@ export class Enrollment {
   }
 
   // Spec §8.2 steps 2–4. Every failure about the code answers the same way.
-  // The new key is pending until its first hello (confirmKey): an answer the
+  // The new key is pending until its first hello (the channel's registry.confirmKey): an answer the
   // proxy never used (it refused it, or it got lost) replaces nothing, and
   // the next code retires that key. requestOrigin picks the connectUrl.
   redeem(raw: unknown, requestOrigin: string | null = null): EnrollAnswer {
@@ -127,12 +126,5 @@ export class Enrollment {
       status: 201,
       body: { v: 1, proxyId, keyId, account: row.account_name, connectUrl, serverKeys: this.d.serverKeys, heartbeatS: this.d.cfg.heartbeatS },
     };
-  }
-
-  // The key's first hello (the channel calls the registry directly).
-  confirmKey(proxyId: string, keyId: string): { revoked: string[] } | null {
-    const r = this.d.registry.confirmKey(proxyId, keyId);
-    for (const k of r?.revoked ?? []) this.d.onKeyRevoked(k);
-    return r;
   }
 }

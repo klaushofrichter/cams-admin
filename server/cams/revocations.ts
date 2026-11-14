@@ -16,7 +16,8 @@ export type Revocation =
   | { at: number; kind: 'diag-token'; tokenId: string }
   // Operations tokens share it too.
   | { at: number; kind: 'ops-token'; tokenId: string }
-  // Viewer tokens: revoked, deleted, or a new expiry (the newest per token wins at start).
+  // Viewer tokens: revoked, deleted, or a new expiry (the newest per token wins at start); and access
+  // reductions (kind viewer-token-access: an account removed, a role lowered), every one applied at start.
   | ({ at: number } & ViewerTokenJournal);
 export type RevocationEntry = Revocation extends infer R ? (R extends Revocation ? Omit<R, 'at'> : never) : never;
 

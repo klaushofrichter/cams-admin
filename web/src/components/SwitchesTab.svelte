@@ -3,7 +3,8 @@
   // the outcome is read from the switch (`last`) every 2 s, for at most 60 s.
   import { onMount } from 'svelte';
   import { api, ApiFailure, errorText } from '../lib/api';
-  import { chainedText, lastText, operatingProxies, passwordHint, poll, removeText, surveyMissText, trunkText } from '../lib/switches';
+  import { poll } from '../lib/poll';
+  import { chainedText, lastText, operatingProxies, passwordHint, removeText, surveyMissText, trunkText } from '../lib/switches';
   import Ago from './Ago.svelte';
   import Confirm from './Confirm.svelte';
 

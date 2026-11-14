@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { auditId, codeHash, newCamsEnrollmentCode, newEnrollmentCode, newId, normaliseCamsCode, normaliseCode, ulid, ulidTime } from '../server/ids';
+import { createHash } from 'crypto';
+import { auditId, codeHash, newCamsEnrollmentCode, newEnrollmentCode, newId, normaliseCamsCode, normaliseCode, sha256Hex, ulid, ulidTime } from '../server/ids';
+import { fingerprint, sha256hex } from '../server/crypto/ed25519';
+import { hashOf } from '../server/auth/bearer-tokens';
+import { generateToken } from '../server/tokens/service';
 
 const B32 = '[0-9A-HJKMNP-TV-Z]';
 
@@ -65,4 +69,22 @@ describe('cams enrollment codes (P4)', () => {
     expect(newId('cms')).toMatch(/^cms_[0-9A-HJKMNP-TV-Z]{20}$/);
   });
 });
+});
+
+describe('the shared hash helpers', () => {
+  it('sha256Hex hashes a string as UTF-8 and a Buffer as its bytes, and ed25519.sha256hex is the same function', () => {
+    const want = createHash('sha256').update('ä-x', 'utf8').digest('hex');
+    expect(sha256Hex('ä-x')).toBe(want);
+    expect(sha256Hex(Buffer.from('ä-x', 'utf8'))).toBe(want);
+    expect(sha256hex).toBe(sha256Hex);
+  });
+  it('a proxy token is stored in the bearer-token hash format', () => {
+    const { token, hash } = generateToken();
+    expect(hash).toBe(hashOf(token));
+    expect(hash).toBe(`sha256:${createHash('sha256').update(token, 'utf8').digest('hex')}`);
+  });
+  it('fingerprint is SHA256: and upper-case hex over the SPKI bytes', () => {
+    const spki = Buffer.from('spki-bytes').toString('base64');
+    expect(fingerprint(spki)).toBe(`SHA256:${createHash('sha256').update(Buffer.from('spki-bytes')).digest('hex').toUpperCase()}`);
+  });
 });

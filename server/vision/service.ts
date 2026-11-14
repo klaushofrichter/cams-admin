@@ -7,9 +7,11 @@ import { deriveCommands } from '../status/derive';
 import type { LiveHub } from '../live';
 import type { Logger } from '../log';
 import type { CommandRow, Commands } from '../commands/service';
+import { isOldProxyAnswer } from '../commands/old-proxy';
 import type { ProxyConfig } from '../config/service';
 import { sanitize } from '../contract';
 import { ANALYTICS_PROVIDER_PATTERN, ANALYTICS_PROVIDERS_MAX } from '../../contract/build';
+import { isObj, PROXY_CAMERA_ID_RE } from '../validate';
 
 // Vision management (design 2026-11-05-vision-management-design.md, cams-admin 1–4): what each proxy of an
 // account reports of its vision providers (analytics.usage.get, stored per proxy in proxy_analytics: the
@@ -22,8 +24,6 @@ import { ANALYTICS_PROVIDER_PATTERN, ANALYTICS_PROVIDERS_MAX } from '../../contr
 export const PROVIDER_CONFIG: Readonly<Record<string, string>> = { 'google-vision': 'googleVision' };
 export const MONTHLY_MAX = 100_000;
 const COMMAND = 'analytics.usage.get';
-// Codes of a refused analytics.usage.get that mean the proxy doesn't know the command (else: not allowed).
-const TOO_OLD_CODES = new Set(['unknown_command', 'not_implemented', 'unsupported', 'invalid_command']);
 
 export interface Caller { actor: string; sysadmin: boolean }
 export interface UsageProvider {
@@ -39,11 +39,9 @@ export interface VisionItem {
   fetchedAt: number | null; result: Usage | null; saves: Record<string, SaveState>; lastRefusal: string | null;
 }
 
-const isObj = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x);
 const count = (x: unknown) => (Number.isSafeInteger(x) && (x as number) >= 0 ? (x as number) : 0);
 const text = (x: unknown, max: number) => (typeof x === 'string' ? x.slice(0, max) : '');
 const PROVIDER_RE = new RegExp(ANALYTICS_PROVIDER_PATTERN);
-const CAM_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
 
 // An analytics.usage.get result, field by field (the contract's names only; strings clamped). Never a key:
 // `key` is where the key comes from (env | manual | none), anything else becomes "unknown". null when unreadable.
@@ -53,7 +51,7 @@ export function cleanUsage(raw: unknown): Usage | null {
   const providers = r.providers.filter(isObj).filter((p) => typeof p.id === 'string' && PROVIDER_RE.test(p.id)).slice(0, ANALYTICS_PROVIDERS_MAX).map((p): UsageProvider => {
     const paused = isObj(p.paused) ? { reason: text(p.paused.reason, 64) || 'unknown', until: Number.isSafeInteger(p.paused.until) ? (p.paused.until as number) : null } : null;
     const lastError = isObj(p.lastError) ? { at: count(p.lastError.at), message: text(p.lastError.message, 200) } : null;
-    const cams = Array.isArray(p.cameras) ? p.cameras.filter(isObj).filter((c) => typeof c.id === 'string' && CAM_RE.test(c.id)).slice(0, 64) : [];
+    const cams = Array.isArray(p.cameras) ? p.cameras.filter(isObj).filter((c) => typeof c.id === 'string' && PROXY_CAMERA_ID_RE.test(c.id)).slice(0, 64) : [];
     return {
       id: p.id as string, name: text(p.name, 64) || (p.id as string), enabled: p.enabled === true,
       key: ['env', 'manual', 'none'].includes(p.key as string) ? (p.key as string) : 'unknown',
@@ -70,7 +68,7 @@ export interface VisionDeps { db: Db; clock: Clock; registry: Registry; status: 
 export class Vision {
   // In memory: the last save per proxy and provider (row-level state on the tab), and the last refusal of the command.
   private saves = new Map<string, Map<string, SaveState & { actor: string; accountId: string }>>();
-  private refusals = new Map<string, string>();
+  private refusals = new Map<string, Pick<CommandRow, 'state' | 'outcomeCode'> & { at: number }>();
 
   constructor(private d: VisionDeps) {
     d.commands.onFinal((r) => {
@@ -93,14 +91,18 @@ export class Vision {
   }
 
   // Can this proxy answer the command? From its reported command policy; a proxy that lacks the allow entry
-  // but reports the ceiling setting (or refused the command as not allowed) is new enough: Not allowed.
+  // but reports the ceiling setting is new enough: Not allowed. The last answer of an older release
+  // (commands/old-proxy.ts) counts until the proxy's next hello (an update reconnects). Its not_allowed is the
+  // same nack as an entry that is off: too old only while the policy lists the entry (Refresh sends only then).
   access(proxyId: string): Access {
-    const rep = this.d.status.row(proxyId)?.reported;
+    const row = this.d.status.row(proxyId);
+    const rep = row?.reported;
     const pol = deriveCommands(rep);
     if (pol === 'unsupported') return 'too-old';
+    const listed = pol === 'allowed' && rep!.commands!.allow.includes(COMMAND);
     const refused = this.refusals.get(proxyId);
-    if (refused && TOO_OLD_CODES.has(refused)) return 'too-old';
-    if (pol !== 'allowed' || !rep!.commands!.allow.includes(COMMAND)) {
+    if (refused && refused.at >= (row?.lastHelloAt ?? 0) && isOldProxyAnswer(refused) && (refused.outcomeCode !== 'not_allowed' || listed)) return 'too-old';
+    if (!listed) {
       const view = this.d.config.peek(proxyId);
       if (view && !Object.keys(PROVIDER_CONFIG).some((id) => `analytics.${PROVIDER_CONFIG[id]}.remoteMaxMonthly` in view.paths)) return 'too-old';
       return 'not-allowed';
@@ -119,7 +121,7 @@ export class Vision {
         const saves = Object.fromEntries([...(this.saves.get(id) ?? new Map()).entries()].map(([k, { actor: _a, accountId: _c, ...v }]) => [k, v]));
         return {
           proxyId: id, name: px.name, displayName: px.displayName, state: this.d.status.viewOf(px).state, access: this.access(id),
-          refreshing: this.d.commands.hasOpen(id, COMMAND), fetchedAt: st?.fetchedAt ?? null, result: st?.result ?? null, saves, lastRefusal: this.refusals.get(id) ?? null,
+          refreshing: this.d.commands.hasOpen(id, COMMAND), fetchedAt: st?.fetchedAt ?? null, result: st?.result ?? null, saves, lastRefusal: this.refusals.get(id)?.outcomeCode ?? null,
         };
       }),
     };
@@ -172,7 +174,7 @@ export class Vision {
       if (r.state === 'done') {
         this.refusals.delete(r.proxyId);
         this.store(r.proxyId, r.id, r.result);
-      } else if (r.outcomeCode) this.refusals.set(r.proxyId, r.outcomeCode);
+      } else if (r.outcomeCode) this.refusals.set(r.proxyId, { state: r.state, outcomeCode: r.outcomeCode, at: this.d.clock.now() });
       return;
     }
     const per = this.saves.get(r.proxyId);

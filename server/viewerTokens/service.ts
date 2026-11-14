@@ -1,5 +1,5 @@
 import type { Clock } from '../clock';
-import type { Audit, AuditAction } from '../audit';
+import { actorTypeOf, type Audit, type AuditAction } from '../audit';
 import { tx, type Db } from '../db/open';
 import { newId } from '../ids';
 import { ApiError } from '../registry';
@@ -24,6 +24,7 @@ export type CopyWhat = (typeof COPY_WHAT)[number];
 // A token's role in each of its accounts (spec 2026-11-08 A4): a viewer, or an admin of the account in cams.
 export const VIEWER_TOKEN_ROLES = ['viewer', 'admin'] as const;
 export type ViewerTokenRole = (typeof VIEWER_TOKEN_ROLES)[number];
+const roleRank = (r: ViewerTokenRole): number => VIEWER_TOKEN_ROLES.indexOf(r);
 function roleOf(v: unknown, dflt?: ViewerTokenRole): ViewerTokenRole {
   const r = v === undefined ? dflt : v;
   if (typeof r !== 'string' || !(VIEWER_TOKEN_ROLES as readonly string[]).includes(r)) throw new ApiError(400, 'invalid', 'role');
@@ -36,9 +37,16 @@ export interface ViewerTokenView {
   lastUsedAt: number | null; state: 'valid' | 'expired' | 'revoked'; fingerprintPrefix: string; version: number; role: ViewerTokenRole;
 }
 // The revocation journal's entries (outside the database and its backups).
-export type ViewerTokenJournal =
+export type ViewerTokenStateJournal =
   | { kind: 'viewer-token'; tokenId: string; change: 'revoked' | 'deleted' }
   | { kind: 'viewer-token'; tokenId: string; change: 'expires'; expiresAt: number };
+// Access reductions (code review 2026-11-14): accounts taken away, a role lowered. Only reductions: a replay
+// narrows a token, never grants (a restore may take back a grant made after the backup). Their own kind, so an
+// older release reading the journal ignores them instead of taking them as the newest state change of the token.
+export type ViewerTokenAccessJournal =
+  | { kind: 'viewer-token-access'; tokenId: string; change: 'accounts-removed'; accountIds: string[] }
+  | { kind: 'viewer-token-access'; tokenId: string; change: 'role'; role: ViewerTokenRole };
+export type ViewerTokenJournal = ViewerTokenStateJournal | ViewerTokenAccessJournal;
 // A sign-in link per viewer that can sign the token in (finding 19): the main one first.
 export interface ViewerLink { instanceId: string | null; name: string; base: string; link: string }
 export const MAIN_VIEWER_NAME = 'Main viewer';
@@ -125,7 +133,7 @@ export class ViewerTokens {
 
   private log(actor: string, action: AuditAction, r: Row, accountIds: string[], detail: Record<string, unknown>): void {
     this.d.audit.write({
-      actorType: actor.startsWith('ops-token:') ? 'system' : 'sysadmin', actor, action, accountId: accountIds.length === 1 ? accountIds[0] : null,
+      actorType: actorTypeOf(actor), actor, action, accountId: accountIds.length === 1 ? accountIds[0] : null,
       targetType: 'viewer-token', targetId: r.id as string, targetLabel: r.name as string, outcome: 'ok',
       detail: { fingerprintPrefix: (r.fingerprint as string).slice(7, 15), ...(accountIds.length !== 1 ? { accountIds } : {}), ...detail },
     });
@@ -222,6 +230,7 @@ export class ViewerTokens {
   // Viewer or admin in each of its accounts (A4): the snapshot carries it, so the accounts' revision moves (trigger).
   setRole(actor: string, id: string, input: unknown): ViewerTokenView {
     const role = roleOf(obj(input).role);
+    let lowered = false;
     tx(this.d.db, () => {
       const r = this.row(id);
       const from = (r.role as ViewerTokenRole | undefined) ?? 'viewer';
@@ -230,7 +239,9 @@ export class ViewerTokens {
       if (!canManage(actor, accountIds)) throw new ApiError(403, 'forbidden');
       this.d.db.prepare('UPDATE viewer_tokens SET role = ?, updated_at = ?, version = version + 1 WHERE id = ?').run(role, this.d.clock.now(), id);
       this.log(actor, 'viewer-token-role', r, accountIds, { role, from });
+      lowered = roleRank(role) < roleRank(from);
     });
+    if (lowered) this.d.journal?.({ kind: 'viewer-token-access', tokenId: id, change: 'role', role });
     return this.get(id);
   }
 
@@ -251,12 +262,13 @@ export class ViewerTokens {
     const accountIds = accountIdsOf(o.accountIds);
     if (!Number.isInteger(o.version)) throw invalid('version');
     const now = this.d.clock.now();
+    let removed: string[] = [];
     tx(this.d.db, () => {
       const r = this.row(id);
       if (r.version !== o.version) throw new ApiError(409, 'conflict');
       const old = this.accountIdsOfToken(id);
       const added = accountIds.filter((x) => !old.includes(x));
-      const removed = old.filter((x) => !accountIds.includes(x));
+      removed = old.filter((x) => !accountIds.includes(x));
       const valid = r.revoked_at === null && (r.expires_at as number) > now;
       // Every account the token ends up in must be one the actor manages; room is needed only where it is new.
       if (!canManage(actor, [...old, ...accountIds])) throw new ApiError(403, 'forbidden');
@@ -267,6 +279,7 @@ export class ViewerTokens {
       this.d.db.prepare('UPDATE viewer_tokens SET updated_at = ?, version = version + 1 WHERE id = ?').run(now, id);
       this.log(actor, 'viewer-token-accounts', r, accountIds, { added, removed });
     });
+    if (removed.length) this.d.journal?.({ kind: 'viewer-token-access', tokenId: id, change: 'accounts-removed', accountIds: removed });
     return this.get(id);
   }
 
@@ -298,24 +311,63 @@ export class ViewerTokens {
     }
   }
 
-  // At start: the newest journal entry per token, applied to a row last changed before it (a restore never brings one back).
+  // At start (a restore never brings one back): per token, only entries newer than the row as restored count.
+  // State (revoked, deleted, expires): the newest entry wins. Access (viewer-token-access): every reduction
+  // applies (accounts removed, the role lowered); one never grants. Journals from older releases have no
+  // access entries and replay as before.
   replay(entries: ({ at: number } & ViewerTokenJournal)[]): void {
-    const newest = new Map<string, { at: number } & ViewerTokenJournal>();
-    for (const e of entries) if (e.at >= (newest.get(e.tokenId)?.at ?? -Infinity)) newest.set(e.tokenId, e);
-    for (const e of newest.values()) {
-      const r = this.d.db.prepare('SELECT id, updated_at FROM viewer_tokens WHERE id = ?').get(e.tokenId) as Row | undefined;
-      if (!r || (r.updated_at as number) >= e.at) continue;
+    const byToken = new Map<string, ({ at: number } & ViewerTokenJournal)[]>();
+    for (const e of entries) {
+      if (typeof e?.tokenId !== 'string' || !Number.isFinite(e.at)) continue;
+      const list = byToken.get(e.tokenId) ?? [];
+      list.push(e);
+      byToken.set(e.tokenId, list);
+    }
+    for (const [tokenId, list] of byToken) {
+      const r = this.d.db.prepare('SELECT id, updated_at, role FROM viewer_tokens WHERE id = ?').get(tokenId) as Row | undefined;
+      if (!r) continue;
+      const restoredAt = r.updated_at as number;
+      const fresh = list.filter((e) => e.at > restoredAt);
+      if (!fresh.length) continue;
+      let state: ({ at: number } & ViewerTokenStateJournal) | undefined;
+      for (const e of fresh) if (e.kind === 'viewer-token' && e.at >= (state?.at ?? -Infinity)) state = e;
+      if (state?.change === 'deleted') { this.replayState(state); continue; }
       tx(this.d.db, () => {
-        if (e.change === 'deleted') {
-          this.d.db.prepare('DELETE FROM viewer_token_accounts WHERE token_id = ?').run(e.tokenId);
-          this.d.db.prepare('DELETE FROM viewer_tokens WHERE id = ?').run(e.tokenId);
-        } else if (e.change === 'revoked') {
-          this.d.db.prepare(`UPDATE viewer_tokens SET revoked_at = ?, revoked_by = 'system', updated_at = ?, version = version + 1 WHERE id = ?`).run(e.at, e.at, e.tokenId);
-        } else if (e.change === 'expires') {
-          this.d.db.prepare('UPDATE viewer_tokens SET expires_at = ?, revoked_at = NULL, revoked_by = NULL, updated_at = ?, version = version + 1 WHERE id = ?').run(e.expiresAt, e.at, e.tokenId);
+        const access = fresh.filter((e): e is { at: number } & ViewerTokenAccessJournal => e.kind === 'viewer-token-access');
+        const held = this.accountIdsOfToken(tokenId);
+        const gone = held.filter((acc) => access.some((e) => e.change === 'accounts-removed' && Array.isArray(e.accountIds) && e.accountIds.includes(acc)));
+        const from = (r.role as ViewerTokenRole | undefined) ?? 'viewer';
+        let role = from;
+        for (const e of access) if (e.change === 'role' && (VIEWER_TOKEN_ROLES as readonly unknown[]).includes(e.role) && roleRank(e.role) < roleRank(role)) role = e.role;
+        const at = Math.max(...access.map((e) => e.at), restoredAt);
+        const sys = (action: AuditAction, detail: Record<string, unknown>) =>
+          this.d.audit.write({ actorType: 'system', actor: 'system', action, targetType: 'viewer-token', targetId: tokenId, outcome: 'ok', detail: { ...detail, replayed: true } });
+        if (gone.length) {
+          // The links first: their trigger bumps each account's revision.
+          for (const acc of gone) this.d.db.prepare('DELETE FROM viewer_token_accounts WHERE token_id = ? AND account_id = ?').run(tokenId, acc);
+          this.d.db.prepare('UPDATE viewer_tokens SET updated_at = ?, version = version + 1 WHERE id = ?').run(at, tokenId);
+          sys('viewer-token-accounts', { removed: gone });
         }
-        this.d.audit.write({ actorType: 'system', actor: 'system', action: e.change === 'deleted' ? 'viewer-token-delete' : e.change === 'revoked' ? 'viewer-token-revoke' : 'viewer-token-validity', targetType: 'viewer-token', targetId: e.tokenId, outcome: 'ok', detail: { replayed: true } });
+        if (role !== from) {
+          this.d.db.prepare('UPDATE viewer_tokens SET role = ?, updated_at = ?, version = version + 1 WHERE id = ?').run(role, at, tokenId);
+          sys('viewer-token-role', { role, from });
+        }
+        if (state) this.replayState(state);
       });
     }
+  }
+
+  private replayState(e: { at: number } & ViewerTokenStateJournal): void {
+    tx(this.d.db, () => {
+      if (e.change === 'deleted') {
+        this.d.db.prepare('DELETE FROM viewer_token_accounts WHERE token_id = ?').run(e.tokenId);
+        this.d.db.prepare('DELETE FROM viewer_tokens WHERE id = ?').run(e.tokenId);
+      } else if (e.change === 'revoked') {
+        this.d.db.prepare(`UPDATE viewer_tokens SET revoked_at = ?, revoked_by = 'system', updated_at = ?, version = version + 1 WHERE id = ?`).run(e.at, e.at, e.tokenId);
+      } else if (e.change === 'expires') {
+        this.d.db.prepare('UPDATE viewer_tokens SET expires_at = ?, revoked_at = NULL, revoked_by = NULL, updated_at = ?, version = version + 1 WHERE id = ?').run(e.expiresAt, e.at, e.tokenId);
+      }
+      this.d.audit.write({ actorType: 'system', actor: 'system', action: e.change === 'deleted' ? 'viewer-token-delete' : e.change === 'revoked' ? 'viewer-token-revoke' : 'viewer-token-validity', targetType: 'viewer-token', targetId: e.tokenId, outcome: 'ok', detail: { replayed: true } });
+    });
   }
 }

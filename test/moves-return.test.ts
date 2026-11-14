@@ -504,6 +504,12 @@ describe('the return runs', () => {
     await until(() => move(a.r.id).reason === null, 5000, 'reason cleared');
   });
 
+  it('an original without a handler for the start (failed not_implemented): waiting for its update', async () => {
+    const a = await returning({ start: { status: 'failed', code: 'not_implemented' } });
+    await until(() => move(a.r.id).reason === 'paused:proxy_update:target', 5000, 'needs the update');
+    expect(cmdRows(a.r.id, 'move.return.start')).toHaveLength(1);
+  });
+
   it('give up with a new proxy on the previous release: its side counts as closed; the return and its move are pruned', async () => {
     const a = await returning({ open: { status: 'refused', code: 'not_allowed' } });
     await until(() => move(a.r.id).reason === 'paused:proxy_update:source', 5000, 'needs the update');

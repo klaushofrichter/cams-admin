@@ -32,6 +32,8 @@ describe('the importer (M §11.2)', () => {
   let status: StatusStore;
   let inst: CamsInstances;
   let imp: Importer;
+  // The accounts whose switches the importer asked to survey (power.cameraChanged).
+  let surveyed: string[];
   let home: any, piProxy: any, clusterProxy: any, cluster: any, pi: any;
   const db = () => r.db;
   const manual = (id: string, proxy: any, hash: string, kind = 'client') =>
@@ -54,7 +56,8 @@ describe('the importer (M §11.2)', () => {
     const live = new LiveHub({ clock: r.clock, maxPerSession: 5, keepaliveMs: 0 });
     status = new StatusStore({ db: r.db, clock: r.clock, registry: r.reg, live, offlineAfterMs: 90_000, snapshotMs: 600_000 });
     inst = new CamsInstances({ db: r.db, clock: r.clock, audit: r.audit, registry: r.reg, cfg: { publicUrl: 'https://admin.example.org', enrollCodeDefaultH: 24 }, serverKeys: ['pk'], serverKeyFingerprints: ['SHA256:' + '00'.repeat(32)], onRevoke: () => {} });
-    imp = new Importer({ db: r.db, clock: r.clock, audit: r.audit, registry: r.reg, instances: inst, status });
+    surveyed = [];
+    imp = new Importer({ db: r.db, clock: r.clock, audit: r.audit, registry: r.reg, instances: inst, status, power: { cameraChanged: (a) => surveyed.push(a) } });
     home = r.reg.createAccount(ACTOR, { name: 'home', displayName: 'Home' });
     piProxy = r.reg.createProxy(ACTOR, home.id, { name: 'pi', displayName: 'Pi', runsOn: 'local-host', url: 'https://proxy.example.net:8480' });
     clusterProxy = r.reg.createProxy(ACTOR, home.id, { name: 'cluster', displayName: 'Cluster', runsOn: 'cluster', url: 'https://cluster-proxy.example.net' });
@@ -93,8 +96,10 @@ describe('the importer (M §11.2)', () => {
     expect(r.reg.listCameras(home.id).map((c) => [c.camsId, c.proxyId])).toEqual([['cam1', piProxy.id], ['cam2', clusterProxy.id]]);
     expect(r.reg.getProxy(home.id, piProxy.id).caFingerprints).toEqual([PIN]);
     expect(r.audit.list({ action: 'import-apply' }).items).toHaveLength(1);
+    expect(surveyed).toEqual([home.id]); // new cameras: one survey of the account, not one per camera
     const again = applyRun(home.id, cluster.id, CLUSTER, APPLY);
     expect(again).toMatchObject({ noChanges: true, applied: false });
+    expect(surveyed).toEqual([home.id]);
     expect(again.changes.every((c) => c.kind === 'proxy-matched' || c.kind === 'registry-only')).toBe(true);
   });
 
@@ -120,7 +125,9 @@ describe('the importer (M §11.2)', () => {
     const f = structuredClone(CLUSTER);
     f.cameras[1].name = 'Front';
     f.cameras[1].host = '192.0.2.32';
+    surveyed = [];
     const res = applyRun(home.id, cluster.id, f, APPLY);
+    expect(surveyed).toEqual([home.id]); // a changed host: the account's switches are surveyed
     // cam2 is behind a proxy: the camera holds its name, so the import leaves the name alone (Task 5).
     expect(kinds(res, 'camera-change')).toEqual([{ kind: 'camera-change', cameraId: expect.stringMatching(/^cam_/), camsId: 'cam2', fields: { host: { from: '192.0.2.31', to: '192.0.2.32' } } }]);
     expect(r.reg.listCameras(home.id).find((c) => c.camsId === 'cam2')).toMatchObject({ name: 'Driveway', host: '192.0.2.32' });

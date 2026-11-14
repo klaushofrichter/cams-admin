@@ -4,9 +4,17 @@ import { tx, type Db } from './db/open';
 
 // The closed list lives in its own module (no runtime imports): the Audit page's filter uses it too.
 import { AUDIT_ACTIONS } from './auditActions';
+import { OPEN_SQL } from './commands/states';
 export { AUDIT_ACTIONS };
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 const KNOWN = new Set<string>(AUDIT_ACTIONS);
+
+// The actor of a request made with an operations token starts with this (auth/middleware.ts opsActor).
+export const OPS_ACTOR_PREFIX = 'ops-token:';
+export const isOpsActor = (actor: string): boolean => actor.startsWith(OPS_ACTOR_PREFIX);
+// The audit actor type of an actor passed on from a route: an operations token (a script) and the server itself
+// are system, a sign-in is sysadmin. Every audit record of a route's actor takes its type from here.
+export const actorTypeOf = (actor: string): 'sysadmin' | 'system' => (actor === 'system' || isOpsActor(actor) ? 'system' : 'sysadmin');
 
 export interface AuditEntry {
   actorType: 'sysadmin' | 'proxy' | 'system' | 'cams';
@@ -101,7 +109,7 @@ export class Audit {
     tx(this.db, () => {
       this.db.prepare('DELETE FROM audit_log WHERE at < ?').run(before);
       // The command history follows the audit log's 400 days (open commands stay).
-      this.db.prepare(`DELETE FROM commands WHERE created_at < ? AND state NOT IN ('queued','sent','received')`).run(before);
+      this.db.prepare(`DELETE FROM commands WHERE created_at < ? AND state NOT IN ${OPEN_SQL}`).run(before);
     });
   }
 }

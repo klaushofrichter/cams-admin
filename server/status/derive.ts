@@ -67,20 +67,24 @@ export function pinState(registered: string[], reported: string[]): PinState {
   return registered.includes(reported[0]) ? 'match' : 'mismatch';
 }
 
+// accountCameras: every camera of the proxy's account (the ones on this proxy are the
+// registered ones; all their cams ids are taken). accountCamsIds: the same ids, when the
+// caller already has them as a Set.
 export function reconcile(
-  proxy: { name: string },
-  registered: { proxyCameraId: string | null }[],
-  accountCamsIds: Set<string>,
+  proxy: { id: string; name: string },
+  accountCameras: { proxyId: string | null; proxyCameraId: string | null; camsId: string }[],
   s: StatusRow | null,
+  accountCamsIds?: Set<string>,
 ): { reportedNotRegistered: { ref: string; proposedCamsId: string }[]; registeredNotReported: string[] } {
   const reported = s?.reported?.cameras;
   if (!reported) return { reportedNotRegistered: [], registeredNotReported: [] };
-  const regIds = new Set(registered.map((c) => c.proxyCameraId).filter((x): x is string => !!x));
+  const taken = accountCamsIds ?? new Set(accountCameras.map((c) => c.camsId));
+  const regIds = new Set(accountCameras.filter((c) => c.proxyId === proxy.id).map((c) => c.proxyCameraId).filter((x): x is string => !!x));
   const repIds = new Set(reported.map((c) => c.ref));
   return {
     reportedNotRegistered: reported.filter((c) => !regIds.has(c.ref)).map((c) => ({
       ref: c.ref,
-      proposedCamsId: !accountCamsIds.has(c.ref) ? c.ref : `${proxy.name}-${c.ref}`.slice(0, 32),
+      proposedCamsId: !taken.has(c.ref) ? c.ref : `${proxy.name}-${c.ref}`.slice(0, 32),
     })),
     registeredNotReported: [...regIds].filter((id) => !repIds.has(id)),
   };

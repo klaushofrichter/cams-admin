@@ -96,6 +96,7 @@ import camsError from '../contract/cams-v1/error.schema.json';
 import camsReportRequestStrict from '../contract/cams-v1/strict/report-request.schema.json';
 import summarySchema from '../contract/v1/health-summary.schema.json';
 import truncatedSchema from '../contract/v1/health-summary-truncated.schema.json';
+import { isObj } from './validate';
 
 // Run-time validation of the proxy protocol against the lenient v1 schemas
 // (contract/v1). The strict copies are for the tests of both repos.
@@ -116,8 +117,6 @@ const vEnroll = compile(enrollRequest);
 const vSummary = compile(summarySchema);
 const vTruncated = compile(truncatedSchema);
 
-const isRecord = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x);
-
 // v must be 1: another integer is a version this server doesn't speak, anything else is malformed.
 function badVersion<C extends string>(x: Record<string, unknown>, malformed: C): { ok: false; code: C | 'unsupported_version'; detail: string } | null {
   if (x.v === 1) return null;
@@ -129,7 +128,7 @@ const errText = (v: ValidateFunction) => (v.errors?.[0] ? `${v.errors[0].instanc
 export type MessageVerdict = { ok: true; msg: Envelope } | { ok: false; code: 'bad_message' | 'unsupported_version' | 'unsupported_type'; detail: string; type?: string; id?: string };
 
 export function validateMessage(m: unknown): MessageVerdict {
-  if (!isRecord(m)) return { ok: false, code: 'bad_message', detail: 'not an object' };
+  if (!isObj(m)) return { ok: false, code: 'bad_message', detail: 'not an object' };
   const bad = badVersion(m, 'bad_message');
   if (bad) return bad;
   if (!vEnvelope(m)) return { ok: false, code: 'bad_message', detail: errText(vEnvelope) };
@@ -203,12 +202,12 @@ export function validateCommandArgs(command: string, args: unknown): { ok: true 
 }
 export function validateResultPayload(command: string, result: unknown): boolean {
   const v = Object.hasOwn(vResult, command) ? vResult[command] : undefined;
-  return v ? v(result) : isRecord(result);
+  return v ? v(result) : isObj(result);
 }
 
 export type EnrollVerdict = { ok: true } | { ok: false; code: 'bad_request' | 'unsupported_version'; detail: string };
 export function validateEnroll(b: unknown): EnrollVerdict {
-  if (!isRecord(b)) return { ok: false, code: 'bad_request', detail: 'not an object' };
+  if (!isObj(b)) return { ok: false, code: 'bad_request', detail: 'not an object' };
   return badVersion(b, 'bad_request') ?? (vEnroll(b) ? { ok: true } : { ok: false, code: 'bad_request', detail: errText(vEnroll) });
 }
 
@@ -234,7 +233,7 @@ export function sanitize(v: unknown, depth = 0): unknown {
 
 export type SummaryVerdict = { ok: true; summary: Record<string, unknown> } | { ok: false; reason: string };
 export function validateSummary(s: unknown, truncated: boolean): SummaryVerdict {
-  if (!isRecord(s)) return { ok: false, reason: 'not an object' };
+  if (!isObj(s)) return { ok: false, reason: 'not an object' };
   const schema = s.schema;
   if (schema !== 1) return { ok: false, reason: `unreadable summary (schema ${typeof schema === 'number' ? schema : '?'})` };
   const clean = sanitize(s) as Record<string, unknown>;
@@ -271,7 +270,7 @@ export function validateCams(name: CamsSchema, value: unknown): { ok: true } | {
 const vMoveEvent = compile(eventStrict.properties.body);
 export function validateMoveEvent(body: unknown): { ok: true } | { ok: false; detail: string } {
   // The proxy kinds share the body schema: never a move event (the channel routes them by kind).
-  if (!isRecord(body) || body.cmdId !== undefined || isProxyEventKind(body.kind)) return { ok: false, detail: 'not a move event' };
+  if (!isObj(body) || body.cmdId !== undefined || isProxyEventKind(body.kind)) return { ok: false, detail: 'not a move event' };
   return vMoveEvent(body) ? { ok: true } : { ok: false, detail: errText(vMoveEvent).slice(0, TEXT_MAX) };
 }
 
@@ -280,6 +279,6 @@ export const isProxyEventKind = (kind: unknown): kind is (typeof PROXY_EVENT_KIN
 // The one proxy event that is no move event (camera.power.cycle.request, PROXY_EVENT_KINDS): the same strict event body schema,
 // and the kind must be one of the proxy kinds (the channel sends it to PowerService.requestFromProxy).
 export function validateProxyEvent(body: unknown): { ok: true } | { ok: false; detail: string } {
-  if (!isRecord(body) || body.cmdId !== undefined || !isProxyEventKind(body.kind)) return { ok: false, detail: 'not a proxy event' };
+  if (!isObj(body) || body.cmdId !== undefined || !isProxyEventKind(body.kind)) return { ok: false, detail: 'not a proxy event' };
   return vMoveEvent(body) ? { ok: true } : { ok: false, detail: errText(vMoveEvent).slice(0, TEXT_MAX) };
 }

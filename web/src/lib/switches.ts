@@ -63,19 +63,6 @@ export function flowText(f: Flow): string {
 export const flowDone = (prev: Flow | null, cur: Flow | null): boolean =>
   !!cur && cur.state !== 'running' && !(prev && prev.requestedAt === cur.requestedAt && prev.commandIds.join() === cur.commandIds.join());
 
-// Ask every 2 s until `done`, for at most 60 s; null when it never was.
-export async function poll<T>(get: () => Promise<T>, done: (v: T) => boolean, o: { sleep?: (ms: number) => Promise<void>; everyMs?: number; maxMs?: number } = {}): Promise<T | null> {
-  const every = o.everyMs ?? 2000;
-  const max = o.maxMs ?? 60_000;
-  const sleep = o.sleep ?? ((ms) => new Promise<void>((r) => setTimeout(r, ms)));
-  for (let waited = 0; ; waited += every) {
-    const v = await get();
-    if (done(v)) return v;
-    if (waited + every > max) return null;
-    await sleep(every);
-  }
-}
-
 export const CYCLE_TYPED = 'power-cycle';
 export const cycleConfirmText = (camera: string, switchName: string, port: number): string =>
   `Cut power on ${switchName} port ${port} to restart ${camera}, then turn it back on: no video for a few minutes.`;

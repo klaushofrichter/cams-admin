@@ -1,6 +1,8 @@
 // P4: a cams instance's state as the dashboard and its page show it, and
 // the importer's result in a few counted lines.
 
+import { CAMS_INSTANCE_NAME_RE } from '../../../server/validate';
+
 export type InstanceState = 'ok' | 'stale' | 'diverged' | 'held' | 'shadow-diff' | 'never';
 export interface InstanceRow { lastPullAt: number | null; mode: string | null; held: number; keptOld: number; shadowDifferences: number | null }
 
@@ -64,8 +66,8 @@ export type InstanceForm = { displayName: string; name: string; baseUrl: string;
 export const instanceForm = (i: { displayName: string; name: string; baseUrl: string | null; notes: string | null }): InstanceForm =>
   ({ displayName: i.displayName, name: i.name, baseUrl: i.baseUrl ?? '', notes: i.notes ?? '' });
 
-// As the server's name rule (server/cams/instances.ts, test/cams-instances.test.ts holds them together).
-export const validInstanceName = (name: string): boolean => /^[a-z0-9][a-z0-9-]{0,31}$/.test(name.trim());
+// The server's name rule (CAMS_INSTANCE_NAME_RE), on the trimmed input.
+export const validInstanceName = (name: string): boolean => CAMS_INSTANCE_NAME_RE.test(name.trim());
 
 // Only what really changed goes to the server, so the audit's `fields` tell what was edited.
 export function instancePatch(form: InstanceForm, saved: InstanceForm): Record<string, string | null> {

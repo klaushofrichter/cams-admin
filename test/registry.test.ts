@@ -26,6 +26,18 @@ describe('registry', () => {
     expect(audit.list({ action: 'account-delete' }).items[0].targetLabel).toBe('home');
   });
 
+  it('cameraOnProxy finds a camera by its proxy and proxy camera id, in that account only', () => {
+    const { reg } = makeRegistry(dir);
+    const a = reg.createAccount(ACTOR, { name: 'home', displayName: 'Home' });
+    const b = reg.createAccount(ACTOR, { name: 'away', displayName: 'Away' });
+    const p = reg.createProxy(ACTOR, a.id, { name: 'pi', displayName: 'Pi', runsOn: 'cloud' });
+    const c = reg.createCamera(ACTOR, a.id, { camsId: 'garage', name: 'Garage', kind: 'camera', proxyId: p.id, proxyCameraId: 'cam1' });
+    expect(reg.cameraOnProxy(a.id, p.id, 'cam1')).toEqual(reg.getCamera(a.id, c.id));
+    expect(reg.cameraOnProxy(a.id, p.id, 'cam2')).toBeNull();
+    expect(reg.cameraOnProxy(b.id, p.id, 'cam1')).toBeNull();
+    expect(reg.cameraOnProxy(a.id, null, 'cam1')).toBeNull();
+  });
+
   // Klaus, 2026-11-04: both names in a rename's audit record, so what happened can be reconstructed.
   it('a rename records the old and the new name, under the name before it; other edits record no names', () => {
     const { reg, audit } = makeRegistry(dir);
@@ -115,6 +127,20 @@ describe('registry', () => {
     expect(reg.getCamera(a.id, s.id).sim).toMatchObject({ runsOn: 'mac', controlUrl: 'http://127.0.0.1:29502' });
     reg.deleteSim(ACTOR, a.id, s.id);
     expect(reg.getCamera(a.id, s.id).sim).toBeNull();
+  });
+
+  it('listCameras carries each camera\'s sim, for one account and for all', () => {
+    const { reg } = makeRegistry(dir);
+    const a = reg.createAccount(ACTOR, { name: 'alpha', displayName: 'A' });
+    const b = reg.createAccount(ACTOR, { name: 'beta', displayName: 'B' });
+    const sa = reg.createCamera(ACTOR, a.id, { camsId: 'sa', name: 'SA', kind: 'sim' });
+    const sb = reg.createCamera(ACTOR, b.id, { camsId: 'sb', name: 'SB', kind: 'sim' });
+    reg.createCamera(ACTOR, a.id, { camsId: 'ca', name: 'CA', kind: 'camera' });
+    reg.setSim(ACTOR, a.id, sa.id, { runsOn: 'mac' });
+    reg.setSim(ACTOR, b.id, sb.id, { runsOn: 'cluster' });
+    expect(reg.listCameras(a.id).map((c) => [c.camsId, c.sim?.runsOn ?? null])).toEqual([['ca', null], ['sa', 'mac']]);
+    expect(reg.listCameras(b.id).map((c) => [c.camsId, c.sim?.runsOn ?? null])).toEqual([['sb', 'cluster']]);
+    expect(reg.listCameras().map((c) => [c.camsId, c.sim?.runsOn ?? null])).toEqual([['ca', null], ['sa', 'mac'], ['sb', 'cluster']]);
   });
 
   it('account delete cascades and returns the proxies to disconnect', () => {

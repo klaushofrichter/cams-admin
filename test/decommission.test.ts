@@ -81,6 +81,14 @@ describe('Remove camera', () => {
     expect([r2.status, r2.body.error]).toEqual([424, 'proxy_update_needed']);
   });
 
+  it('a proxy without a handler for the preview (failed not_implemented) → 424 update', async () => {
+    const p = await proxy();
+    const c = await camera(p, 'cam1');
+    p.client.decommissionResults.set('camera.remove.preview', { status: 'failed', code: 'not_implemented' });
+    const r = await call('GET', `/accounts/${p.acc}/cameras/${c.id}/remove-preview`);
+    expect([r.status, r.body.error]).toEqual([424, 'proxy_update_needed']);
+  });
+
   it('remove, delete now with archive: typed confirm, the command, then the record goes (adopt block), audited camera-remove with the answer', async () => {
     const p = await proxy();
     const c = await camera(p, 'cam1');

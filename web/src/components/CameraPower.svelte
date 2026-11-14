@@ -4,7 +4,8 @@
   import { onMount } from 'svelte';
   import { api, errorText } from '../lib/api';
   import { clock } from '../lib/clock.svelte';
-  import { adapterConfirmNeeded, CYCLE_TYPED, cycleConfirmText, flowDone, flowLine, flowText, forceCycleText, poll, powerLine, type Flow, type Power } from '../lib/switches';
+  import { poll } from '../lib/poll';
+  import { adapterConfirmNeeded, CYCLE_TYPED, cycleConfirmText, flowDone, flowLine, flowText, forceCycleText, powerLine, type Flow, type Power } from '../lib/switches';
   import Confirm from './Confirm.svelte';
 
   let { camera, switches, canAct, onchanged }: { camera: any; switches: any[]; canAct: boolean; onchanged: () => void } = $props();

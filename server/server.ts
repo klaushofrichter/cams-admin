@@ -6,7 +6,7 @@ import cookieParser from 'cookie-parser';
 import { loadConfig, type Config } from './config';
 import { systemClock, type Clock } from './clock';
 import { openDb, type Db } from './db/open';
-import { checkEpoch, writeEpochFile } from './db/epoch';
+import { checkEpoch, epochFileWriter } from './db/epoch';
 import { Audit } from './audit';
 import { Registry } from './registry';
 import { LiveHub } from './live';
@@ -68,7 +68,8 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
     audit.write({ actorType: 'system', actor: 'system', action: 'restore-detected', outcome: 'ok' });
     log.warn('restore_detected');
   }
-  writeEpochFile(db, epochFile);
+  const syncEpoch = epochFileWriter(db, epochFile);
+  syncEpoch(true);
   const signing = loadSigningKey(cfg.signingKeyFile);
   const registry = new Registry(db, clock, audit);
   const sessions = new Sessions(db, clock);
@@ -120,7 +121,7 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
     // An adopted camera: a survey of its account's switches (debounced per switch).
     for (const c of autoAdopt.onHeartbeat(proxyId)) power.cameraChanged(c.accountId);
   };
-  const enrollment = new Enrollment({ db, clock, audit, registry, cfg, serverKeys: [signing.publicKeyB64], onKeyRevoked: (k) => hub.closeKey(k, 4401), onProxyChanged: (p) => live.publishRegistry('proxy', p) });
+  const enrollment = new Enrollment({ db, clock, audit, registry, cfg, serverKeys: [signing.publicKeyB64], onProxyChanged: (p) => live.publishRegistry('proxy', p) });
   const backup = createBackup({ db, clock, cfg, audit, env: merged });
   // P4: cams instances. R4-19: blocking or deleting one revokes the tokens it holds.
   const camsInstances = new CamsInstances({
@@ -135,7 +136,7 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
   const viewerEntries: Parameters<ViewerTokens['replay']>[0] = [];
   for (const r of journal.read()) {
     try {
-      if (r.kind === 'viewer-token') viewerEntries.push(r);
+      if (r.kind === 'viewer-token' || r.kind === 'viewer-token-access') viewerEntries.push(r);
       else if (r.kind === 'diag-token') diag.replay(r.tokenId);
       else if (r.kind === 'ops-token') ops.replay(r.tokenId);
       else camsInstances.replay(r, (t) => tokens.revokeReplayed(t));
@@ -145,7 +146,7 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
   camsInstances.onViewerTokenUse = (instanceId, used) => viewerTokens.noteUse(
     (db.prepare('SELECT account_id FROM cams_instance_accounts WHERE instance_id = ?').all(instanceId) as { account_id: string }[]).map((x) => x.account_id), used);
   try { viewerTokens.replay(viewerEntries); } catch (e) { log.error({ err: e }, 'viewer_token_replay_failed'); }
-  const importer = new Importer({ db, clock, audit, registry, instances: camsInstances, status });
+  const importer = new Importer({ db, clock, audit, registry, instances: camsInstances, status, power });
   const camsAuth = new CamsAuth({ db, clock, audit, instances: camsInstances, signingKey: signing.key, limits: cfg.limits, log });
   const camsEnrollment = new CamsEnrollment({ db, clock, audit, instances: camsInstances, cfg, serverKeys: [signing.publicKeyB64], serverKeyFingerprints: [signing.fingerprint] });
 
@@ -201,7 +202,7 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
       config.tick();
       surveys.tick();
       audit.flushThrottled();
-      writeEpochFile(db, epochFile);
+      syncEpoch();
       if (clock.now() - lastDaily > 86400_000) {
         lastDaily = clock.now();
         audit.prune();
@@ -253,7 +254,7 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
       http.closeIdleConnections();
       setTimeout(() => http.closeAllConnections(), 2000).unref();
       await httpClosed;
-      try { writeEpochFile(db, epochFile); } catch { /* closing */ }
+      try { syncEpoch(true); } catch { /* closing */ }
       db.close();
     },
   };

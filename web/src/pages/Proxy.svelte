@@ -45,13 +45,19 @@
 
   async function load() {
     try {
+      // The three reads run at once; their answers are taken in this order, so the status read's
+      // error (404: gone) still wins. The others' rejections are marked handled until awaited.
+      const evP = api('GET', `/accounts/${accountId}/proxies/${proxyId}/status-events?limit=30`);
+      const mvP = api('GET', `/moves?accountId=${accountId}`);
+      evP.catch(() => {});
+      mvP.catch(() => {});
       d = await api('GET', `/accounts/${accountId}/proxies/${proxyId}/status`);
       // A reload keeps what is being typed; a field the server changed takes the server's value.
       const fresh = proxyForm(d.proxy);
       f = keepEdits(f, formSeen, fresh);
       formSeen = fresh;
-      events = (await api('GET', `/accounts/${accountId}/proxies/${proxyId}/status-events?limit=30`)).items;
-      activeMove = (await api('GET', `/moves?accountId=${accountId}`)).items.find((m: any) => m.endedAt === null && (m.source.id === proxyId || m.target.id === proxyId)) ?? null;
+      events = (await evP).items;
+      activeMove = (await mvP).items.find((m: any) => m.endedAt === null && (m.source.id === proxyId || m.target.id === proxyId)) ?? null;
       refresh++;
     } catch (e: any) {
       if (e?.status === 404) gone = true;

@@ -1,0 +1,5 @@
+#!/bin/sh
+# Credential consistency and validity check (docs/token-check.md). Read-only.
+# Usage: scripts/token-check (--account <name> | --host <name> | --all) [--json]
+dir=$(cd "$(dirname "$0")/.." && pwd)
+exec "$dir/node_modules/.bin/tsx" "$dir/scripts/tokencheck/cli.ts" "$@"

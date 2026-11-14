@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
-import { camsRequestText, camsResponseText, keyFromSeed, privateFromB64, publicFromB64, sha256hex, sign, signedText, signEnvelope, verify, verifyEnvelope } from '../server/crypto/ed25519';
+import { camsRequestText, camsResponseText, keyFromSeed, privateFromB64, publicFromB64, sign, signedText, signEnvelope, verify, verifyEnvelope } from '../server/crypto/ed25519';
+import { sha256Hex } from '../server/ids';
 import { jcs } from '../server/crypto/jcs';
 import { validateCams, CAMS_SCHEMAS } from '../server/contract';
 import { buildCamsSchemas, camsFixtures, TRUST_FIELDS } from '../contract/cams-build';
@@ -53,7 +54,7 @@ describe('cams-v1 contract', () => {
     expect(vectors.requests.length).toBe(4);
     for (const r of vectors.requests) {
       const body = Buffer.from(r.body, 'utf8');
-      expect(sha256hex(body)).toBe(r.bodySha256);
+      expect(sha256Hex(body)).toBe(r.bodySha256);
       expect(camsRequestText(r.method, r.pathAndQuery, r.ts, r.nonce, body)).toBe(r.text);
       expect(sign(priv('cams'), r.text)).toBe(r.sig);
       expect(verify(publicFromB64(vectors.keys.cams.publicKey), r.text, r.sig)).toBe(true);
@@ -61,7 +62,7 @@ describe('cams-v1 contract', () => {
     }
     expect(vectors.responses.length).toBe(3);
     for (const a of vectors.responses) {
-      expect(sha256hex(Buffer.from(a.body, 'utf8'))).toBe(a.bodySha256);
+      expect(sha256Hex(Buffer.from(a.body, 'utf8'))).toBe(a.bodySha256);
       expect(camsResponseText(a.status, a.nonce, Buffer.from(a.body, 'utf8'))).toBe(a.text);
       expect(sign(priv('server'), a.text)).toBe(a.sig);
     }

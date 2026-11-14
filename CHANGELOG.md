@@ -6,9 +6,14 @@ then empties it on `main`.
 ## [Unreleased]
 
 ### Added
-- Camera moves: a target that needs a setting changed to take the camera (today a too narrow FTP passive port range) can now propose it. cams-admin passes the proposal on to a source proxy that supports it; the source's page shows it and waits for a person to approve. The move detail in cams-admin shows the settings and the firewall note. The approved plan must carry the proposed settings, or the approval is refused.
-- PoE power-cycle: when a cycle failed after PoE was cut and turned on again, cams-admin tells the camera's proxy (`poeCut`), so the proxy keeps watching the camera reboot. Needs a cam-proxy that reports this case (`cut_on_again`) and announces `power-poe-cut`.
+- `scripts/token-check` (sysadmin's Mac): checks every credential of an account or a host for consistency and validity, read-only: cams-admin's diagnostics, operations and viewer tokens, each proxy's managed tokens against the proxy's own set, its key, signing-key pin and site CA, its local admin token, env tokens, FTP and camera passwords and PoE switch passwords against their copies on the hosts and the Mac, and each cams instance's key, pins and held tokens. One line per credential or copy (ok, mismatch, expired, expiring, unused, missing, unknown) with a reason, `--json`, and an exit code. It reads secret files only to fingerprint them, where they are; it never prints a value. See `docs/token-check.md`.
+
+### Changed
+- Internal cleanup (no change in what you see): shared helpers replace copied code. A browser tab now holds one live-update stream instead of up to three, so several open tabs no longer run into the per-session stream limit; the Proxy page loads its three parts at once; the server writes its epoch file only when something changed instead of every 10 seconds.
 
 ### Fixed
-- Camera moves: when cams-admin refuses a target's settings proposal for an older source proxy, the target now gets a cancel too. Before, it kept the offer and answered "busy" to other moves for about 35 minutes.
-
+- Viewer tokens: an account taken away from a token, or a token lowered from admin to viewer, now stays that way after cams-admin is restored from an older backup (before, the restore gave the token its old accounts or admin role back). Adding an account or raising a token to admin is not kept across such a restore: redo it if needed.
+- Vision: a proxy whose cam-proxy release can't report Vision use now shows "Proxy too old" instead of looking ready, and Refresh no longer keeps sending it the request. Updating the proxy clears it.
+- Move, return and Remove from proxy: a proxy that answers "not implemented" is now told apart as needing a cam-proxy update everywhere (before, the move summary and Remove showed a generic proxy failure, and a return kept retrying).
+- PoE switches: deleting a camera, and an import that adds cameras or changes a camera's address, now re-check the account's switches right away (before: only at the daily check).
+- Audit log: every change made with an operations token is recorded as "system" (a script), never as a signed-in admin; before, registry edits, adopt, camera delete, moves, routes and token changes made with a token showed as admin.

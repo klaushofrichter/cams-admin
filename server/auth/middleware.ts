@@ -3,7 +3,7 @@ import type { Config } from '../config';
 import type { Clock } from '../clock';
 import { SESSION_COOKIE, type Sessions } from './session';
 import { Buckets } from '../channel/limits';
-import type { Audit } from '../audit';
+import { OPS_ACTOR_PREFIX, type Audit } from '../audit';
 import type { OpsScope, OpsTokens } from '../ops/tokens';
 import { opsBodyAllowed, opsScopeFor } from '../ops/scopes';
 
@@ -73,8 +73,8 @@ function refuseToken(audit: Audit, res: Response): void {
 }
 
 // The audit actor of a request made with an operations token: its hash prefix and its name (#53), e.g.
-// `ops-token:1a2b3c4d (mac script)`. Code tells a token's actor by the `ops-token:` prefix only.
-export const opsActor = (t: { hashPrefix: string; name: string }): string => `ops-token:${t.hashPrefix} (${t.name})`;
+// `ops-token:1a2b3c4d (mac script)`. Code tells a token's actor by the prefix only (isOpsActor).
+export const opsActor = (t: { hashPrefix: string; name: string }): string => `${OPS_ACTOR_PREFIX}${t.hashPrefix} (${t.name})`;
 
 // A valid token outside its scopes: 403, one throttled record per token. The
 // method and the scope needed only, never the path's ids or the body.

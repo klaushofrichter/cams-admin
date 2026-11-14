@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { accountInput, cameraInput, FieldError, normaliseEmail, normaliseFingerprint, proxyInput, simInput, userInput } from '../server/validate';
+import { accountInput, cameraInput, FieldError, isObj, normaliseEmail, normaliseFingerprint, only, proxyInput, simInput, userInput } from '../server/validate';
 
 const field = (fn: () => unknown): string | null => {
   try { fn(); return null; } catch (e) { if (e instanceof FieldError) return e.field; throw e; }
@@ -108,5 +108,22 @@ describe('cameras and sims', () => {
     expect(simInput({ runsOn: 'mac' })).toMatchObject({ runsOn: 'mac' });
     expect(field(() => simInput({ runsOn: 'phone' }))).toBe('runsOn');
     expect(field(() => simInput({ runsOn: 'mac', controlUrl: 'x' }))).toBe('controlUrl');
+  });
+});
+
+describe('isObj and only (the shared body guards)', () => {
+  it('isObj accepts plain objects only', () => {
+    expect(isObj({})).toBe(true);
+    expect(isObj({ a: 1 })).toBe(true);
+    expect(isObj(null)).toBe(false);
+    expect(isObj([])).toBe(false);
+    expect(isObj('x')).toBe(false);
+    expect(isObj(1)).toBe(false);
+    expect(isObj(undefined)).toBe(false);
+  });
+  it('only is true when every key is allowed', () => {
+    expect(only({}, ['a'])).toBe(true);
+    expect(only({ a: 1, b: 2 }, ['a', 'b', 'c'])).toBe(true);
+    expect(only({ a: 1, x: 2 }, ['a', 'b'])).toBe(false);
   });
 });
