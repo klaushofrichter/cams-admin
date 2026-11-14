@@ -425,7 +425,7 @@ export function apiRouter(d: ApiDeps): express.Router {
   // A cams instance's problems for this account, in words (finding 12b: snapshot_invalid).
   r.get('/accounts/:accountId/cams-problems', h((req) => { d.registry.getAccount(p(req, 'accountId')); return { items: accountCamsProblems(d.db, d.camsInstances.list(), p(req, 'accountId')) }; }));
   r.get('/accounts/:accountId/cameras', h((req) => { d.registry.getAccount(p(req, 'accountId')); return { items: d.registry.listCameras(p(req, 'accountId')) }; }));
-  // A new camera, or a changed host: a survey of the account's switches (debounced per switch).
+  // A new camera, a changed host or a deleted camera: a survey of the account's switches (debounced per switch).
   // Host, protocol and TLS name the request leaves out come from the proxy's report of that camera (finding 12b).
   r.post('/accounts/:accountId/cameras', h((req, res) => {
     created(res);
@@ -444,7 +444,7 @@ export function apiRouter(d: ApiDeps): express.Router {
   // its done answer deletes the record (audited camera-remove).
   r.get(`${camBase}/remove-preview`, h((req, res) => d.decommission.removePreview(actor(res), p(req, 'accountId'), p(req, 'cameraId'))));
   r.post(`${camBase}/remove`, h((req, res) => accepted(res, d.decommission.remove(actor(res), p(req, 'accountId'), p(req, 'cameraId'), req.body))));
-  r.delete(camBase, h((req, res) => { d.registry.deleteCamera(actor(res), p(req, 'accountId'), p(req, 'cameraId')); reg('camera', p(req, 'cameraId')); }));
+  r.delete(camBase, h((req, res) => { d.registry.deleteCamera(actor(res), p(req, 'accountId'), p(req, 'cameraId')); reg('camera', p(req, 'cameraId')); d.power.cameraChanged(p(req, 'accountId')); }));
   r.put(`${camBase}/sim`, h((req, res) => { const s = d.registry.setSim(actor(res), p(req, 'accountId'), p(req, 'cameraId'), req.body); reg('camera', p(req, 'cameraId')); return s; }));
   r.delete(`${camBase}/sim`, h((req, res) => { d.registry.deleteSim(actor(res), p(req, 'accountId'), p(req, 'cameraId')); reg('camera', p(req, 'cameraId')); }));
   // The camera's content before a move (the Start move form): move.summary to its proxy (read only: not a write

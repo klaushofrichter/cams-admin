@@ -320,7 +320,7 @@ export class PowerService {
     const accounts = this.d.db.prepare(`SELECT DISTINCT account_id FROM switches WHERE state = 'active' AND survey = 1 ORDER BY account_id`).all() as { account_id: string }[];
     for (const a of accounts) this.hook(() => this.surveyAccount(SYSTEM, a.account_id, true));
   }
-  // A camera added, or its host changed.
+  // A camera added, deleted or removed, or its host changed.
   cameraChanged(accountId: string): void {
     this.hook(() => this.surveyAccount(SYSTEM, accountId, true));
   }

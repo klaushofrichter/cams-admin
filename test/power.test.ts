@@ -431,7 +431,7 @@ describe('camera power', () => {
     expect(sent(p, 'switch.survey')).toHaveLength(2);
   });
 
-  it('triggers: a switch becoming active, a new camera, a changed host, the account survey', async () => {
+  it('triggers: a switch becoming active, a new camera, a changed host, a deleted camera, the account survey', async () => {
     const p = await proxy();
     await camera(p);
     const r = await call('POST', `/accounts/${p.acc}/switches`, { name: 'Alpha', host: '192.168.1.217', proxyId: p.prx });
@@ -446,10 +446,13 @@ describe('camera power', () => {
     expect((await call('PATCH', `/accounts/${p.acc}/cameras/${cam.id}`, { host: '10.1.1.1', version: v })).status).toBe(200);
     await until(() => sent(p, 'switch.survey').length === 3, 5000, 'survey after host change');
     await until(async () => (await call('GET', `/switches/${r.body.id}/survey`)).body.state === 'done', 5000, 'done');
+    expect((await call('DELETE', `/accounts/${p.acc}/cameras/${cam.id}`)).status).toBe(204);
+    await until(() => sent(p, 'switch.survey').length === 4, 5000, 'survey after camera delete');
+    await until(async () => (await call('GET', `/switches/${r.body.id}/survey`)).body.state === 'done', 5000, 'done');
     const all = await call('POST', `/accounts/${p.acc}/switches/survey`);
     expect(all.status).toBe(202);
     expect(all.body.switches).toEqual([{ switchId: r.body.id, commandIds: [expect.stringMatching(/^cmd_/)], queued: false }]);
-    expect(audits('command-create').filter((x) => x.command === 'switch.survey').map((x) => x.outcome)).toEqual(['ok', 'ok', 'ok', 'ok']);
+    expect(audits('command-create').filter((x) => x.command === 'switch.survey').map((x) => x.outcome)).toEqual(['ok', 'ok', 'ok', 'ok', 'ok']);
   });
 
   it('the daily survey runs at 03:30 from the server tick', async () => {
