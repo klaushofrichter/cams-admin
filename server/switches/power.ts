@@ -6,7 +6,7 @@ import type { CommandRow, Commands, WireCommand } from '../commands/service';
 import type { StatusStore } from '../status/store';
 import type { LiveHub } from '../live';
 import type { Logger } from '../log';
-import { FieldError } from '../validate';
+import { FieldError, isObj } from '../validate';
 import { tx } from '../db/open';
 import { ulidTime } from '../ids';
 import { SWITCH_SURVEY_MAX } from '../../contract/build';
@@ -109,7 +109,6 @@ export const chainedText = (p: SwitchProblem): string =>
 // (cut, maybe still off) and every other code (refused before the cut, or not known) do not.
 export const poeCutAfterFailure = (code: string | null): boolean => code === 'cut_on_again';
 const errCode = (e: unknown) => (e instanceof ApiError ? e.code : e instanceof FieldError ? 'invalid' : 'error');
-const isObj = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x);
 
 export class PowerService {
   // cmdId → what its final result does.

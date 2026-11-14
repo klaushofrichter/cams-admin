@@ -1,4 +1,5 @@
 import type { OpsScope } from './tokens';
+import { isObj, only } from '../validate';
 
 // The write routes an operations token may use, and the scope each needs.
 // Paths in Express syntax, relative to /api/v1. A route not listed here is
@@ -84,6 +85,6 @@ export function opsScopeFor(method: string, path: string): OpsScope | null {
 // that is no object changes nothing, and the route itself answers 400.
 export function opsBodyAllowed(method: string, path: string, body: unknown): boolean {
   const keys = match(method, path)?.bodyKeys;
-  if (!keys || typeof body !== 'object' || body === null || Array.isArray(body)) return true;
-  return Object.keys(body).every((k) => keys.includes(k));
+  if (!keys || !isObj(body)) return true;
+  return only(body, keys);
 }

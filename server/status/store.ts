@@ -7,7 +7,7 @@ import { validateSummary } from '../contract';
 import { parseProfile } from './profile';
 import { parseMoveLeftovers } from './leftovers';
 import { parseOnboarding } from './onboarding';
-import { isCount } from '../validate';
+import { isCount, isObj } from '../validate';
 import { cameraStates, deriveCommands, deriveProxyState, type CommandsPolicy, heartbeatFresh, pinState, SKEW_PROBLEM_MS, type CommandsInfo, type PinState, type ProxyState, type Reported, type StatusRow, type TokensInfo } from './derive';
 
 // The latest state of each proxy and its transitions, fed by the channel
@@ -36,21 +36,20 @@ const toStatus = (r: Row): StatusRow => ({
   ok: r.ok === null ? null : r.ok === 1, problemCount: r.problem_count as number | null, reported: r.reported ? JSON.parse(r.reported as string) : null, online: r.online === 1,
 });
 
-const isRecord = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x);
 const safeInt = (x: unknown): number | null => (isCount(x) ? x : null);
 const strList = (v: unknown, max: number, len: number): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string').slice(0, max).map((x) => x.slice(0, len)) : []);
 
 // P2 heartbeat fields, clamped whatever a proxy sends (they live in memory
 // and the status snapshot; never a reason to refuse the heartbeat).
 export function parseCommandsInfo(x: unknown): CommandsInfo | null {
-  if (!isRecord(x)) return null;
+  if (!isObj(x)) return null;
   return {
     enabled: x.enabled === true, paused: x.paused === true, pauseReason: typeof x.pauseReason === 'string' ? x.pauseReason.slice(0, 200) : null,
     allow: strList(x.allow, 64, 64), seenWindow: safeInt(x.seenWindow) ?? 0,
   };
 }
 export function parseTokensInfo(x: unknown): TokensInfo | null {
-  if (!isRecord(x) || safeInt(x.revision) === null) return null;
+  if (!isObj(x) || safeInt(x.revision) === null) return null;
   return { revision: x.revision as number, client: safeInt(x.client) ?? 0, admin: safeInt(x.admin) ?? 0, blocked: strList(x.blocked, 64, 40) };
 }
 export const parseConfigRevision = (x: unknown): string | null => (typeof x === 'string' && /^sha256:[0-9a-f]{64}$/.test(x) ? x : null);

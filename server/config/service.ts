@@ -10,6 +10,7 @@ import { sanitize } from '../contract';
 import { REMOTE_SETTABLE } from '../../contract/build';
 import { SECRET_RE } from './redact';
 import { ceilingPathOf, inheritedPathOf, isRemoteSettable, narrowCode, narrowingOk, narrowReason, PATH_RE, patternOf, STORAGE_LOCAL_ONLY, type Leaf, type Settable } from './narrow';
+import { isObj } from '../validate';
 
 // A proxy's settings as cams-admin knows them (migration spec §8; P3 plan
 // Task 4): the last reported view per proxy (proxy_config), read by
@@ -50,7 +51,6 @@ const SOURCES = ['default', 'file', 'override', 'env'];
 const WRITES = ['config.set', 'config.unset', 'config.rollback'];
 const REMOTE = new Set(REMOTE_SETTABLE.remote);
 
-const isObj = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x);
 const isLeaf = (x: unknown): x is Leaf => typeof x === 'boolean' || Number.isSafeInteger(x) || (typeof x === 'string' && x.length <= 512);
 const isValue = (x: unknown) => x === null || typeof x === 'boolean' || typeof x === 'string' || (typeof x === 'number' && Number.isFinite(x));
 

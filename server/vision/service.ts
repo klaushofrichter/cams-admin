@@ -10,6 +10,7 @@ import type { CommandRow, Commands } from '../commands/service';
 import type { ProxyConfig } from '../config/service';
 import { sanitize } from '../contract';
 import { ANALYTICS_PROVIDER_PATTERN, ANALYTICS_PROVIDERS_MAX } from '../../contract/build';
+import { isObj } from '../validate';
 
 // Vision management (design 2026-11-05-vision-management-design.md, cams-admin 1–4): what each proxy of an
 // account reports of its vision providers (analytics.usage.get, stored per proxy in proxy_analytics: the
@@ -39,7 +40,6 @@ export interface VisionItem {
   fetchedAt: number | null; result: Usage | null; saves: Record<string, SaveState>; lastRefusal: string | null;
 }
 
-const isObj = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x);
 const count = (x: unknown) => (Number.isSafeInteger(x) && (x as number) >= 0 ? (x as number) : 0);
 const text = (x: unknown, max: number) => (typeof x === 'string' ? x.slice(0, max) : '');
 const PROVIDER_RE = new RegExp(ANALYTICS_PROVIDER_PATTERN);

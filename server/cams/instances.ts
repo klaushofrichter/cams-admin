@@ -5,7 +5,7 @@ import type { Config } from '../config';
 import { stmt, tx, type Db } from '../db/open';
 import { codeHash, newCamsEnrollmentCode, newId } from '../ids';
 import { ApiError, type Registry } from '../registry';
-import { cameraOverrideInput, checkUrl, FieldError } from '../validate';
+import { cameraOverrideInput, checkUrl, FieldError, isObj } from '../validate';
 import { pickCamsReport, validateCams } from '../contract';
 import { fieldOf } from '../tokens/service';
 import { overridesOf, snapshotRevision } from './snapshot';
@@ -54,7 +54,6 @@ const NAME_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const LIFETIMES = [1, 24, 168];
 const MAX_ACCOUNTS = 64;
 const notFound = () => new ApiError(404, 'not_found');
-const isObj = (v: unknown): v is Row => typeof v === 'object' && v !== null && !Array.isArray(v);
 const EMPTY_LIVE: CamsLive = { lastSeenAt: null, lastPullAt: null, lastPullStatus: null, report: null, reportAt: null, shadowZeroSince: null };
 
 const toKey = (r: Row): CamsKey => ({

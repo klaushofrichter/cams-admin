@@ -7,6 +7,7 @@ import type { StatusStore } from '../status/store';
 import type { Commands } from '../commands/service';
 import type { ProxyConfig } from '../config/service';
 import { DISRUPTIVE_ACTIONS, JOURNAL_BUDGET_ACTIONS, REMOTE_ACTIONS } from '../../contract/build';
+import { isObj, only } from '../validate';
 
 // Remote camera actions, camera renames and proxy restarts (migration spec
 // §8.6, P3 plan Task 5, R3-18): signed commands with closed args; the
@@ -25,8 +26,6 @@ export const FLEET_MAX = 3;
 // camera.remove and proxy.unenroll (spec 2026-11-08) count like a restart.
 const DISRUPTIVE_SQL = `(command IN ('proxy.restart', 'camera.remove', 'proxy.unenroll') OR (command = 'camera.action' AND json_extract(args, '$.action') IN (${JOURNAL_BUDGET_ACTIONS.map((a) => `'${a}'`).join(',')})))`;
 
-const isObj = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x);
-const only = (o: Record<string, unknown>, keys: string[]) => Object.keys(o).every((k) => keys.includes(k));
 const isDisruptive = (a: string) => (DISRUPTIVE_ACTIONS as readonly string[]).includes(a);
 
 // connected: the live channel (Hub.connected), not the status row: that row is the last stored state and can

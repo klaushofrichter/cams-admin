@@ -9,6 +9,7 @@ import { online, precheckReport, siteOf, unseen, type PrecheckDeps, type Prechec
 import type { MoveBounds } from './types';
 import { sourceTlsName } from './common';
 import type { Clock } from '../clock';
+import { isObj } from '../validate';
 
 // A move started from cams-admin (move.begin plan Task 3, rulings R3, A4–A10):
 // a second start for a camera whose move is on its way refused first (409
@@ -38,7 +39,6 @@ const ID_MAX = 64;
 const ANY_PROXY = 'prx_0123456789ABCDEFGHJK';
 // How long a move.begin the source answered holds the camera while its move.request has not made the move yet.
 export const ANSWERED_HOLD_MS = 60_000;
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 export function beginInput(body: unknown): BeginInput {
   const b = isObj(body) ? body : {};

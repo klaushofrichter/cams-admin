@@ -11,7 +11,10 @@ export class FieldError extends Error {
 }
 
 type Obj = Record<string, unknown>;
-const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
+// A plain object (not null, not an array): the guard every body and report check uses.
+export const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
+// Whether every key of o is one of keys (an allow-list check on a body).
+export const only = (o: Obj, keys: readonly string[]): boolean => Object.keys(o).every((k) => keys.includes(k));
 
 function str(b: Obj, key: string, o: { min?: number; max: number; re?: RegExp; required?: boolean }): string | null | undefined {
   const v = b[key];

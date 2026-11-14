@@ -5,6 +5,7 @@ import type { StatusStore } from '../status/store';
 import type { CommandRow, Commands } from '../commands/service';
 import { validateResultPayload } from '../contract';
 import { REMOVE_CONTENT } from '../../contract/build';
+import { isObj, only } from '../validate';
 
 // Remove a camera from its proxy, decommission a proxy (spec "decommission + account-move fixes" 2026-11-08, B4/B5).
 // - camera.remove.preview: what the proxy holds for the camera (a read: answered within a short wait).
@@ -33,9 +34,6 @@ export interface DecommissionDeps {
   waitMs?: number;
 }
 export interface RemovePreview { cameraId: string; proxyId: string; camera: string; clips: number; stills: number; archivedClips: number; bytes: number }
-
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
-const only = (o: Record<string, unknown>, keys: string[]) => Object.keys(o).every((k) => keys.includes(k));
 
 export class Decommission {
   constructor(private d: DecommissionDeps) {
