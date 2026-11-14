@@ -5,7 +5,7 @@ import type { Config } from '../config';
 import { stmt, tx, type Db } from '../db/open';
 import { codeHash, newCamsEnrollmentCode, newId } from '../ids';
 import { ApiError, type Registry } from '../registry';
-import { cameraOverrideInput, checkUrl, FieldError, isObj } from '../validate';
+import { cameraOverrideInput, CAMS_INSTANCE_NAME_RE, checkUrl, FieldError, isObj } from '../validate';
 import { pickCamsReport, validateCams } from '../contract';
 import { fieldOf } from '../tokens/service';
 import { overridesOf, snapshotRevision } from './snapshot';
@@ -50,7 +50,6 @@ export interface CamsInstancesDeps {
   journal?: (r: RevocationEntry) => void;
 }
 
-const NAME_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const LIFETIMES = [1, 24, 168];
 const MAX_ACCOUNTS = 64;
 const notFound = () => new ApiError(404, 'not_found');
@@ -128,7 +127,7 @@ export class CamsInstances {
   create(actor: string, input: unknown): CamsInstance {
     if (!isObj(input)) throw new ApiError(400, 'invalid', 'body');
     const name = text(input, 'name', 32, true)!;
-    if (!NAME_RE.test(name)) throw new ApiError(400, 'invalid', 'name');
+    if (!CAMS_INSTANCE_NAME_RE.test(name)) throw new ApiError(400, 'invalid', 'name');
     const displayName = text(input, 'displayName', 200, true)!;
     const baseUrl = urlOrNull(input.baseUrl, 'baseUrl');
     const notes = text(input, 'notes', 2000, false) ?? null;
@@ -179,7 +178,7 @@ export class CamsInstances {
     const fields: string[] = [];
     if (patch.name !== undefined) {
       const n = text(patch, 'name', 32, true)!;
-      if (!NAME_RE.test(n)) throw new ApiError(400, 'invalid', 'name');
+      if (!CAMS_INSTANCE_NAME_RE.test(n)) throw new ApiError(400, 'invalid', 'name');
       sets.push('name = ?'); args.push(n); fields.push('name');
     }
     if (patch.displayName !== undefined) { sets.push('display_name = ?'); args.push(text(patch, 'displayName', 200, true)!); fields.push('displayName'); }

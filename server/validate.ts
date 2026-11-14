@@ -107,6 +107,10 @@ export const isCount = (x: unknown): x is number => Number.isSafeInteger(x) && (
 export const ACCOUNT_NAME_RE = /^[a-z0-9][a-z0-9-]{1,31}$/;
 export const PROXY_NAME_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
 export const CAMS_ID_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
+// A proxy's own camera id (the contract's CAMERA_ID_PATTERN): the same rule as a cams id.
+export const PROXY_CAMERA_ID_RE = CAMS_ID_RE;
+// A cams instance's name (server/cams/instances.ts; the web form checks the same rule).
+export const CAMS_INSTANCE_NAME_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const HOSTNAME_RE = /^[A-Za-z0-9.-]{1,253}$/;
 
 export interface AccountFields { name: string; displayName: string; notes: string | null; autoAdopt: boolean }
@@ -172,7 +176,7 @@ export function cameraInput(raw: unknown, partial: boolean): Partial<CameraField
   const out = shape({
     proxyId: str(b, 'proxyId', { max: 40, re: /^prx_[0-9A-Z]{20}$/ }),
     camsId: str(b, 'camsId', { max: 32, re: CAMS_ID_RE, required: !partial }),
-    proxyCameraId: str(b, 'proxyCameraId', { max: 32, re: CAMS_ID_RE }),
+    proxyCameraId: str(b, 'proxyCameraId', { max: 32, re: PROXY_CAMERA_ID_RE }),
     name: cameraNameOf(b, !partial),
     kind: oneOf(b, 'kind', CAMERA_KINDS, !partial),
     model: str(b, 'model', { max: 80 }),

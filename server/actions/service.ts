@@ -7,7 +7,7 @@ import type { StatusStore } from '../status/store';
 import type { Commands } from '../commands/service';
 import type { ProxyConfig } from '../config/service';
 import { DISRUPTIVE_ACTIONS, JOURNAL_BUDGET_ACTIONS, REMOTE_ACTIONS } from '../../contract/build';
-import { isObj, only } from '../validate';
+import { isObj, only, PROXY_CAMERA_ID_RE } from '../validate';
 
 // Remote camera actions, camera renames and proxy restarts (migration spec
 // §8.6, P3 plan Task 5, R3-18): signed commands with closed args; the
@@ -16,7 +16,6 @@ import { isObj, only } from '../validate';
 // and re-reads what it wrote. The proxy re-checks everything (R2-15) and
 // bounds the disruptive ones with its journal budget.
 
-const CAM_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
 export const BUSY_MS = 10_000;
 // I3: the fleet budget for disruptive actions and proxy restarts, counted from
 // the commands table (so a restart of cams-admin keeps it): one proxy at a
@@ -49,7 +48,7 @@ export class RemoteActions {
     const action = body.action;
     if (typeof action !== 'string' || !(REMOTE_ACTIONS as readonly string[]).includes(action)) throw new ApiError(400, 'invalid', 'action');
     const camera = body.camera;
-    if (action === 'retention-run' ? camera !== null : typeof camera !== 'string' || !CAM_RE.test(camera)) throw new ApiError(400, 'invalid', 'camera');
+    if (action === 'retention-run' ? camera !== null : typeof camera !== 'string' || !PROXY_CAMERA_ID_RE.test(camera)) throw new ApiError(400, 'invalid', 'camera');
     let input: Record<string, unknown> | undefined;
     if (body.input !== undefined) {
       const i = body.input;
@@ -70,7 +69,7 @@ export class RemoteActions {
   // shown with its age (the onboarding view takes the newest). Same busy rule as a camera action.
   onboardingRefresh(actor: string, accountId: string, proxyId: string, camera: string): { commandId: string } {
     this.d.registry.getProxy(accountId, proxyId);
-    if (typeof camera !== 'string' || !CAM_RE.test(camera)) throw new ApiError(400, 'invalid', 'camera');
+    if (typeof camera !== 'string' || !PROXY_CAMERA_ID_RE.test(camera)) throw new ApiError(400, 'invalid', 'camera');
     const key = `${proxyId}|${camera}|camera.onboarding.get`;
     this.checkBusy(accountId, proxyId, key);
     const row = this.d.commands.create(actor, accountId, proxyId, 'camera.onboarding.get', { v: 1, camera });
@@ -91,7 +90,7 @@ export class RemoteActions {
 
   rename(actor: string, accountId: string, proxyId: string, camera: string, body: unknown): { commandId: string } {
     this.d.registry.getProxy(accountId, proxyId);
-    if (!CAM_RE.test(camera)) throw new ApiError(400, 'invalid', 'camera');
+    if (!PROXY_CAMERA_ID_RE.test(camera)) throw new ApiError(400, 'invalid', 'camera');
     if (!isObj(body) || !only(body, ['name'])) throw new ApiError(400, 'invalid', 'name');
     // The camera's own rules (camera name sync design 2026-11-06), the reason with the 400.
     const problem = cameraNameProblem(body.name);
@@ -115,7 +114,7 @@ export class RemoteActions {
     const rep = this.d.status.row(proxyId)?.reported;
     const allow = rep?.commands ? rep.commands.allow : [];
     const view = this.d.config?.state(accountId, proxyId).view;
-    const cameras = view?.cameras.length ? [...view.cameras] : (rep?.cameras ?? []).map((c) => c.ref).filter((c) => CAM_RE.test(c));
+    const cameras = view?.cameras.length ? [...view.cameras] : (rep?.cameras ?? []).map((c) => c.ref).filter((c) => PROXY_CAMERA_ID_RE.test(c));
     return {
       actions: REMOTE_ACTIONS.map((a) => ({ action: a, disruptive: isDisruptive(a), allowed: allow.includes(`camera.action:${a}`) })),
       rename: allow.includes('camera.name.set'), restart: allow.includes('proxy.restart'), cameras,

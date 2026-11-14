@@ -5,7 +5,7 @@ import type { StatusStore } from '../status/store';
 import type { CommandRow, Commands } from '../commands/service';
 import { validateResultPayload } from '../contract';
 import { REMOVE_CONTENT } from '../../contract/build';
-import { isObj, only } from '../validate';
+import { isObj, only, PROXY_CAMERA_ID_RE } from '../validate';
 
 // Remove a camera from its proxy, decommission a proxy (spec "decommission + account-move fixes" 2026-11-08, B4/B5).
 // - camera.remove.preview: what the proxy holds for the camera (a read: answered within a short wait).
@@ -17,7 +17,6 @@ import { isObj, only } from '../validate';
 // the page; a cams-admin restart before the answer leaves the command open (a later answer still deletes).
 
 export const PREVIEW_WAIT_MS = 15_000;
-const CAM_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
 // What an older proxy answers for a command it does not know (check order step 8), or args it can't read.
 const OLD_PROXY_CODES = new Set(['not_allowed', 'not_implemented', 'unsupported_version', 'invalid_args']);
 export const DECOMMISSION_SINCE = 'the cam-proxy release with camera.remove';
@@ -50,7 +49,7 @@ export class Decommission {
   // --- remove a camera ----------------------------------------------------------------------------
   private cameraOnProxy(accountId: string, cameraId: string) {
     const cam = this.d.registry.getCamera(accountId, cameraId); // 404 for another account's camera
-    if (!cam.proxyId || !cam.proxyCameraId || !CAM_RE.test(cam.proxyCameraId)) throw new ApiError(409, 'camera_not_on_proxy');
+    if (!cam.proxyId || !cam.proxyCameraId || !PROXY_CAMERA_ID_RE.test(cam.proxyCameraId)) throw new ApiError(409, 'camera_not_on_proxy');
     if (!this.d.connected(cam.proxyId)) throw new ApiError(409, 'proxy_offline', undefined, 'the proxy is not connected: Delete record only, and remove the camera on the proxy itself');
     return { ...cam, proxyId: cam.proxyId, proxyCameraId: cam.proxyCameraId };
   }
