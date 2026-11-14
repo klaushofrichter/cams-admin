@@ -6,7 +6,7 @@ import cookieParser from 'cookie-parser';
 import { loadConfig, type Config } from './config';
 import { systemClock, type Clock } from './clock';
 import { openDb, type Db } from './db/open';
-import { checkEpoch, writeEpochFile } from './db/epoch';
+import { checkEpoch, epochFileWriter } from './db/epoch';
 import { Audit } from './audit';
 import { Registry } from './registry';
 import { LiveHub } from './live';
@@ -68,7 +68,8 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
     audit.write({ actorType: 'system', actor: 'system', action: 'restore-detected', outcome: 'ok' });
     log.warn('restore_detected');
   }
-  writeEpochFile(db, epochFile);
+  const syncEpoch = epochFileWriter(db, epochFile);
+  syncEpoch(true);
   const signing = loadSigningKey(cfg.signingKeyFile);
   const registry = new Registry(db, clock, audit);
   const sessions = new Sessions(db, clock);
@@ -201,7 +202,7 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
       config.tick();
       surveys.tick();
       audit.flushThrottled();
-      writeEpochFile(db, epochFile);
+      syncEpoch();
       if (clock.now() - lastDaily > 86400_000) {
         lastDaily = clock.now();
         audit.prune();
@@ -253,7 +254,7 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
       http.closeIdleConnections();
       setTimeout(() => http.closeAllConnections(), 2000).unref();
       await httpClosed;
-      try { writeEpochFile(db, epochFile); } catch { /* closing */ }
+      try { syncEpoch(true); } catch { /* closing */ }
       db.close();
     },
   };

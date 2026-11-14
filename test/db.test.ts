@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { join } from 'path';
-import { writeFileSync } from 'fs';
+import { readFileSync, writeFileSync } from 'fs';
 import { DatabaseSync } from 'node:sqlite';
 import { openDb, tx, LATEST_VERSION, readEpoch } from '../server/db/open';
-import { checkEpoch, writeEpochFile } from '../server/db/epoch';
+import { checkEpoch, epochFileWriter, writeEpochFile } from '../server/db/epoch';
 import { MIGRATIONS } from '../server/db/migrations';
 import { toKey } from '../server/registry';
 import { tmpDir } from './helpers/tmp';
@@ -330,6 +330,24 @@ describe('database', () => {
     expect(checkEpoch(db, ef)).toBe('same');
     writeFileSync(ef, String(readEpoch(db) + 5));
     expect(checkEpoch(db, ef)).toBe('restored');
+  });
+
+  it('the tick\'s epoch writer writes only when the epoch moved, or when forced', () => {
+    const db = openDb(join(dir, 'w.db'));
+    const ef = join(dir, 'w.epoch');
+    const sync = epochFileWriter(db, ef);
+    sync(true);
+    expect(readFileSync(ef, 'utf8')).toBe(String(readEpoch(db)));
+    writeFileSync(ef, 'marker'); // a write would replace it
+    sync();
+    sync();
+    expect(readFileSync(ef, 'utf8')).toBe('marker');
+    tx(db, () => undefined);
+    sync();
+    expect(readFileSync(ef, 'utf8')).toBe(String(readEpoch(db)));
+    writeFileSync(ef, 'marker');
+    sync(true);
+    expect(readFileSync(ef, 'utf8')).toBe(String(readEpoch(db)));
   });
 
   // --- P4 (cams instances) ---------------------------------------------------
