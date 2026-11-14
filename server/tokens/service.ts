@@ -1,5 +1,5 @@
 import type { StatementSync } from 'node:sqlite';
-import { createHash, randomBytes } from 'crypto';
+import { randomBytes } from 'crypto';
 import type { Clock } from '../clock';
 import { stmt, tx, type Db } from '../db/open';
 import type { Audit } from '../audit';
@@ -8,6 +8,7 @@ import type { LiveHub } from '../live';
 import type { Logger } from '../log';
 import { FieldError } from '../validate';
 import { newId } from '../ids';
+import { hashOf } from '../auth/bearer-tokens';
 import type { CommandRow, Commands } from '../commands/service';
 import { validateCams } from '../contract';
 import type { AuditEntry } from '../audit';
@@ -40,7 +41,7 @@ export interface TokensDeps { db: Db; clock: Clock; audit: Audit; registry: Regi
 // 32 random bytes, base64url without padding (43 characters).
 export function generateToken(): { token: string; hash: string } {
   const token = randomBytes(32).toString('base64url');
-  return { token, hash: `sha256:${createHash('sha256').update(token, 'utf8').digest('hex')}` };
+  return { token, hash: hashOf(token) };
 }
 
 // eslint-disable-next-line no-control-regex

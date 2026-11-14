@@ -2,7 +2,7 @@ import type { ApiDeps } from '../api/router';
 import { reconcile } from '../status/derive';
 import { ApiError } from '../registry';
 import { plainHttpRoutes, snapshotRevision } from '../cams/snapshot';
-import { createHash } from 'crypto';
+import { sha256Hex } from '../ids';
 import type { AuditFilter } from '../audit';
 import { chunkCounts, moveView } from '../moves/view';
 
@@ -186,7 +186,7 @@ export function diagMoves(d: ApiDeps, accountId: string | undefined, requestId?:
 // targets or in details): each becomes "email:" + 8 hex of its SHA-256, so
 // records of one person still match each other.
 const EMAIL_RE = /[^\s@"<>()]+@[^\s@"<>()]+\.[^\s@"<>()]+/g;
-const mask = (s: string) => s.replace(EMAIL_RE, (e) => `email:${createHash('sha256').update(e.toLowerCase()).digest('hex').slice(0, 8)}`);
+const mask = (s: string) => s.replace(EMAIL_RE, (e) => `email:${sha256Hex(e.toLowerCase()).slice(0, 8)}`);
 function redact(v: unknown): unknown {
   if (typeof v === 'string') return mask(v);
   if (Array.isArray(v)) return v.map(redact);

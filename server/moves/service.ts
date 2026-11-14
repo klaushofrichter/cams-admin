@@ -1,4 +1,3 @@
-import { createHash } from 'crypto';
 import type { Clock } from '../clock';
 import { stmt, tx, type Db } from '../db/open';
 import type { Audit, AuditAction } from '../audit';
@@ -24,6 +23,7 @@ export { answerProposal, proposalSettings };
 import { answered, backoffDue, FINAL_STATES, sourceRef, sourceTlsName, unanswered, verifiedDone, type Who } from './common';
 import { isCount } from '../validate';
 import type { MoveCheck, MoveApproveEvent, MoveKind, MoveCameraConn, MoveCancelEvent, MoveEvent, MovePhaseEvent, MoveProgressEvent, MoveRequestEvent, MoveTargetsEvent } from './types';
+import { fingerprint } from '../crypto/ed25519';
 
 // The move job, its start (plan Task 4; S §4, §6, §7, §8.1): a source's
 // move.targets and move.request events, cams-admin's precheck, move.open to the
@@ -116,8 +116,6 @@ function planForAudit(plan: unknown): Record<string, unknown> {
   };
 }
 const samePlan = (a: unknown, b: unknown) => a !== null && a !== undefined && canonical(a) === canonical(b);
-// The fingerprint of the target's X25519 public key (as cam-proxy audits it): never the key itself in an audit record.
-const keyFingerprint = (spkiB64: string) => `SHA256:${createHash('sha256').update(Buffer.from(spkiB64, 'base64')).digest('hex').toUpperCase()}`;
 // The camera's TLS name on a proxy of this site.
 const cameraTlsName = (proxyCameraId: string, site: string) => `${proxyCameraId}.${site}.internal`;
 // Who asked, as the move row keeps it.
@@ -742,7 +740,7 @@ export class Moves {
     const leaf = res.leafFingerprint;
     tx(this.d.db, () => {
       const mv = this.store.setPhase(m.id, 'switching', { targetPublicKey: publicKey, leafFingerprint: leaf });
-      this.audit(mv, 'move-phase', 'ok', { phase: 'switching', leafFingerprint: leaf, publicKeyFingerprint: keyFingerprint(publicKey) });
+      this.audit(mv, 'move-phase', 'ok', { phase: 'switching', leafFingerprint: leaf, publicKeyFingerprint: fingerprint(publicKey) });
       this.queueStep(mv, 'go', () => this.sendGo(mv));
     });
   }
