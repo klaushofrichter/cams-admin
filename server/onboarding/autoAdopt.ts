@@ -50,7 +50,7 @@ export class AutoAdopt {
     if (!this.d.registry.getAccount(px.accountId).autoAdopt) return [];
     if (this.d.db.prepare('SELECT 1 FROM moves WHERE ended_at IS NULL AND (source_proxy_id = ? OR target_proxy_id = ?) LIMIT 1').get(proxyId, proxyId)) return [];
     const accCams = this.d.registry.listCameras(px.accountId);
-    const todo = reconcile(px, accCams.filter((c) => c.proxyId === proxyId), new Set(accCams.map((c) => c.camsId)), row)
+    const todo = reconcile(px, accCams, row)
       .reportedNotRegistered.filter((c) => onboarding[c.ref]?.ready === true && !this.d.registry.isAdoptBlocked(proxyId, c.ref));
     const out: Camera[] = [];
     for (const c of todo) {

@@ -554,13 +554,12 @@ export function proxyDetail(d: ApiDeps, accountId: string, proxyId: string) {
   const view = d.status.viewOf(px);
   const row = d.status.row(proxyId);
   const cams = d.registry.listCameras(accountId);
-  const mine = cams.filter((c) => c.proxyId === proxyId);
   return {
     proxy: px,
     view,
     summary: row?.summary ?? null,
     reported: row?.reported ?? null,
-    reconcile: reconcile(px, mine, new Set(cams.map((c) => c.camsId)), row),
+    reconcile: reconcile(px, cams, row),
     keys: d.registry.listKeys(accountId, proxyId).map(keyView),
     enrollment: d.enrollment.liveCode(proxyId),
     connected: d.hub.connected(proxyId),
@@ -598,7 +597,7 @@ export function dashboard(d: ApiDeps) {
     const camsIds = new Set(accCams.map((c) => c.camsId));
     const pxs = (proxiesOf.get(a.id) ?? []).map((px) => {
       const v = d.status.viewOf(px);
-      const rec = reconcile(px, accCams.filter((c) => c.proxyId === px.id), camsIds, d.status.row(px.id));
+      const rec = reconcile(px, accCams, d.status.row(px.id), camsIds);
       proxies++;
       if (v.state === 'online') proxiesOnline++;
       if (v.state === 'online' && (v.problemCount ?? 0) > 0) problems += v.problemCount ?? 0;

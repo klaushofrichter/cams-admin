@@ -53,7 +53,7 @@ export function diagProxies(d: ApiDeps) {
         },
         // Vision management: the stored analytics.usage.get answer (cleaned field by field; never a key).
         vision: d.vision.stored(px.id),
-        reconcile: reconcile(px, accCams.filter((c) => c.proxyId === px.id), new Set(accCams.map((c) => c.camsId)), row),
+        reconcile: reconcile(px, accCams, row),
         // #106: with pins set, the cams instances that get this proxy without them (a plain-http, non-loopback URL).
         pinsNotSentTo: px.caFingerprints.length ? plainHttpRoutes(d.db, px.id).map((r) => ({ instanceId: r.instanceId, name: r.name, url: r.url })) : [],
       };
@@ -69,7 +69,7 @@ export function diagUnregistered(d: ApiDeps, proxyId: string) {
   if (!px) throw new ApiError(404, 'not_found');
   const row = d.status.row(px.id);
   const accCams = d.registry.listCameras(px.accountId);
-  const rec = reconcile(px, accCams.filter((c) => c.proxyId === px.id), new Set(accCams.map((c) => c.camsId)), row);
+  const rec = reconcile(px, accCams, row);
   const rep = new Map((row?.reported?.cameras ?? []).map((c) => [c.ref, c]));
   return {
     proxyId: px.id, accountId: px.accountId, reported: !!row?.reported?.cameras,
