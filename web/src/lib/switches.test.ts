@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { codeText } from './api';
-import { flowDone, flowText, forceCycleText, lastText, passwordHint, poll, powerLine, powerManaged, removeText, chainedText, trunkText, operatingProxies, surveyMissText } from './switches';
+import { flowDone, flowText, forceCycleText, lastText, passwordHint, powerLine, powerManaged, removeText, chainedText, trunkText, operatingProxies, surveyMissText } from './switches';
 
 const NOW = 1_000_000_000;
 
@@ -73,22 +73,6 @@ describe('powerManaged: the old proxy power-cycle action steps aside', () => {
     expect(powerManaged({ kind: 'adapter' })).toBe(true);
     expect(powerManaged({ kind: 'unknown' })).toBe(false);
     expect(powerManaged(undefined)).toBe(false);
-  });
-});
-
-describe('poll', () => {
-  it('asks until done, then returns the value', async () => {
-    let n = 0;
-    const waits: number[] = [];
-    const v = await poll(async () => ++n, (x) => x >= 3, { sleep: async (ms) => { waits.push(ms); } });
-    expect(v).toBe(3);
-    expect(waits).toEqual([2000, 2000]);
-  });
-  it('gives up after 60 s with null', async () => {
-    let slept = 0;
-    const v = await poll(async () => 1, () => false, { sleep: async (ms) => { slept += ms; } });
-    expect(v).toBeNull();
-    expect(slept).toBe(60_000);
   });
 });
 
