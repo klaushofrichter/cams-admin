@@ -8,6 +8,7 @@ import type { Commands } from '../commands/service';
 import type { ProxyConfig } from '../config/service';
 import { DISRUPTIVE_ACTIONS, JOURNAL_BUDGET_ACTIONS, REMOTE_ACTIONS } from '../../contract/build';
 import { isObj, only, PROXY_CAMERA_ID_RE } from '../validate';
+import { isOpen, OPEN_SQL } from '../commands/states';
 
 // Remote camera actions, camera renames and proxy restarts (migration spec
 // §8.6, P3 plan Task 5, R3-18): signed commands with closed args; the
@@ -133,7 +134,7 @@ export class RemoteActions {
       });
       throw new ApiError(status, reason, typeof extra.retryAfterS === 'number' ? `try again in ${Math.ceil(extra.retryAfterS / 60)} min` : undefined);
     };
-    const other = this.d.db.prepare(`SELECT proxy_id FROM commands WHERE ${DISRUPTIVE_SQL} AND state IN ('queued','sent','received') AND proxy_id IS NOT NULL AND proxy_id <> ? LIMIT 1`).get(proxyId);
+    const other = this.d.db.prepare(`SELECT proxy_id FROM commands WHERE ${DISRUPTIVE_SQL} AND state IN ${OPEN_SQL} AND proxy_id IS NOT NULL AND proxy_id <> ? LIMIT 1`).get(proxyId);
     if (other) refuse(409, 'fleet_busy');
     const recent = this.d.db.prepare(`SELECT created_at FROM commands WHERE ${DISRUPTIVE_SQL} AND created_at > ? ORDER BY created_at`).all(now - FLEET_WINDOW_MS) as { created_at: number }[];
     const max = this.d.fleetMax ?? FLEET_MAX;
@@ -142,7 +143,7 @@ export class RemoteActions {
 
   private isOpen(accountId: string, proxyId: string, cmdId: string): boolean {
     try {
-      return ['queued', 'sent', 'received'].includes(this.d.commands.get(accountId, proxyId, cmdId).state);
+      return isOpen(this.d.commands.get(accountId, proxyId, cmdId).state);
     } catch {
       return false;
     }

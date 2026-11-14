@@ -4,6 +4,7 @@ import { tx, type Db } from './db/open';
 
 // The closed list lives in its own module (no runtime imports): the Audit page's filter uses it too.
 import { AUDIT_ACTIONS } from './auditActions';
+import { OPEN_SQL } from './commands/states';
 export { AUDIT_ACTIONS };
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 const KNOWN = new Set<string>(AUDIT_ACTIONS);
@@ -101,7 +102,7 @@ export class Audit {
     tx(this.db, () => {
       this.db.prepare('DELETE FROM audit_log WHERE at < ?').run(before);
       // The command history follows the audit log's 400 days (open commands stay).
-      this.db.prepare(`DELETE FROM commands WHERE created_at < ? AND state NOT IN ('queued','sent','received')`).run(before);
+      this.db.prepare(`DELETE FROM commands WHERE created_at < ? AND state NOT IN ${OPEN_SQL}`).run(before);
     });
   }
 }

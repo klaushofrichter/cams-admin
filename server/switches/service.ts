@@ -7,6 +7,7 @@ import type { LiveHub } from '../live';
 import type { Logger } from '../log';
 import { FieldError, checkCameraHost, switchInput } from '../validate';
 import { SwitchStore, type CameraPower, type Switch, type SwitchPatch } from './store';
+import { OPEN_SQL } from '../commands/states';
 
 // The switch lifecycle (design 2026-11-07-poe-switches-design.md, "Switch lifecycle"): add, test through the
 // operating proxy, update (a new address is tested first), move to another operator, remove. Every step that
@@ -32,7 +33,6 @@ export interface SwitchServiceDeps {
   onActive?: (switchId: string) => void;
 }
 
-const OPEN = `('queued','sent','received')`;
 const READ_WAIT_MS = 8000;
 
 interface Pending {
@@ -264,7 +264,7 @@ export class SwitchService {
   private notBusy(switchId: string): void {
     if ([...this.pending.values()].some((p) => p.switchId === switchId && !p.abort)) throw new ApiError(409, 'switch_busy');
     const operator = this.store.findById(switchId)?.proxyId ?? null;
-    const open = this.d.db.prepare(`SELECT 1 FROM commands WHERE command LIKE 'switch.%' AND state IN ${OPEN} AND (json_extract(args, '$.switch.id') = ? OR json_extract(args, '$.switchId') = ?)
+    const open = this.d.db.prepare(`SELECT 1 FROM commands WHERE command LIKE 'switch.%' AND state IN ${OPEN_SQL} AND (json_extract(args, '$.switch.id') = ? OR json_extract(args, '$.switchId') = ?)
       AND NOT (command = 'switch.forget' AND proxy_id IS NOT ?) LIMIT 1`).get(switchId, switchId, operator);
     if (open) throw new ApiError(409, 'switch_busy');
   }

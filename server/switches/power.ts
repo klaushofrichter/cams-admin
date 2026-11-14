@@ -12,6 +12,7 @@ import { ulidTime } from '../ids';
 import { SWITCH_SURVEY_MAX } from '../../contract/build';
 import type { CameraPower, PowerActorType, Switch, SwitchProblem } from './store';
 import type { SwitchService } from './service';
+import { isOpen } from '../commands/states';
 
 // Camera power (design 2026-11-07-poe-switches-design.md, "Verify", "Power-cycle", "Survey"): what powers a
 // camera, checked and changed through the switch's operating proxy (switch.locate, switch.survey, switch.cycle).
@@ -518,7 +519,7 @@ export class PowerService {
           this.restoredFinal(r.camera_id, null);
           continue;
         }
-        if (['queued', 'sent', 'received'].includes(cmd.state)) this.pending.set(cmd.id, (fin) => this.restoredFinal(r.camera_id, fin));
+        if (isOpen(cmd.state)) this.pending.set(cmd.id, (fin) => this.restoredFinal(r.camera_id, fin));
         else this.restoredFinal(r.camera_id, cmd);
       } catch (e) {
         this.d.log.error({ err: e, cameraId: r.camera_id }, 'power_cycle_restore_failed');

@@ -16,6 +16,7 @@ import { CLOSE, type Connection } from '../channel/connection';
 import type { Hub } from '../channel/hub';
 import { sendCommand } from './envelope';
 import { redactSecrets } from '../config/redact';
+import { OPEN_SQL, type CommandState } from './states';
 
 // Signed commands to the connected proxies (migration spec §7; plan Task 5):
 // a queue in the database, one command in flight per proxy, re-sent with the
@@ -28,10 +29,9 @@ import { redactSecrets } from '../config/redact';
 export const RESEND_AFTER_MS = 10_000;
 export const GIVE_UP_AFTER_MS = 15 * 60_000;
 const DROPS_BEFORE_CLOSE = 20;
-const OPEN = `('queued','sent','received')`;
 const FINAL = ['done', 'refused', 'failed', 'expired'];
 
-export type CommandState = 'queued' | 'sent' | 'received' | 'done' | 'refused' | 'failed' | 'expired' | 'unknown';
+export type { CommandState };
 export type WireCommand = 'tokens.apply' | 'config.get' | 'config.set' | 'config.unset' | 'config.rollback' | 'camera.action' | 'camera.name.set' | 'proxy.restart'
   | 'move.begin' | 'move.summary' | 'move.targets' | 'move.open' | 'move.offer' | 'move.answer' | 'move.start' | 'move.go' | 'move.release' | 'move.finish' | 'move.cancel'
   | 'move.return.open' | 'move.return.start'
@@ -314,7 +314,7 @@ export class Commands {
     return this.openId(proxyId, command) !== null;
   }
   openId(proxyId: string, command: WireCommand): string | null {
-    const r = this.q(`SELECT id FROM commands WHERE proxy_id = ? AND command = ? AND state IN ${OPEN} ORDER BY rowid LIMIT 1`).get(proxyId, command) as { id: string } | undefined;
+    const r = this.q(`SELECT id FROM commands WHERE proxy_id = ? AND command = ? AND state IN ${OPEN_SQL} ORDER BY rowid LIMIT 1`).get(proxyId, command) as { id: string } | undefined;
     return r?.id ?? null;
   }
 
@@ -325,9 +325,9 @@ export class Commands {
   // Every proxy with open commands: give up the old ones, send what is due.
   tick(): void {
     const now = this.d.clock.now();
-    const old = this.q(`SELECT * FROM commands WHERE state IN ${OPEN} AND created_at <= ?`).all(now - GIVE_UP_AFTER_MS) as DbRow[];
+    const old = this.q(`SELECT * FROM commands WHERE state IN ${OPEN_SQL} AND created_at <= ?`).all(now - GIVE_UP_AFTER_MS) as DbRow[];
     for (const r of old) this.giveUp(toRaw(r), now);
-    const proxies = this.q(`SELECT DISTINCT proxy_id FROM commands WHERE state IN ${OPEN} AND proxy_id IS NOT NULL`).all() as { proxy_id: string }[];
+    const proxies = this.q(`SELECT DISTINCT proxy_id FROM commands WHERE state IN ${OPEN_SQL} AND proxy_id IS NOT NULL`).all() as { proxy_id: string }[];
     for (const p of proxies) this.safeDispatch(p.proxy_id);
   }
 
@@ -345,7 +345,7 @@ export class Commands {
 
   private dispatch(proxyId: string): void {
     const now = this.d.clock.now();
-    const open = (this.q(`SELECT * FROM commands WHERE proxy_id = ? AND state IN ${OPEN} ORDER BY created_at, rowid`).all(proxyId) as DbRow[]).map(toRaw);
+    const open = (this.q(`SELECT * FROM commands WHERE proxy_id = ? AND state IN ${OPEN_SQL} ORDER BY created_at, rowid`).all(proxyId) as DbRow[]).map(toRaw);
     for (const r of open) if (now - r.createdAt >= GIVE_UP_AFTER_MS) this.giveUp(r, now);
     const head = open.find((r) => now - r.createdAt < GIVE_UP_AFTER_MS);
     if (!head) return;
@@ -370,7 +370,7 @@ export class Commands {
   private giveUp(r: Raw, now: number): void {
     const state: CommandState = r.state === 'queued' && r.attempts === 0 ? 'expired' : 'unknown';
     tx(this.d.db, () => {
-      this.q(`UPDATE commands SET state = ?, finished_at = ? WHERE id = ? AND state IN ${OPEN}`).run(state, now, r.id);
+      this.q(`UPDATE commands SET state = ?, finished_at = ? WHERE id = ? AND state IN ${OPEN_SQL}`).run(state, now, r.id);
       // Never sent: its dry run may be applied again (#20).
       if (state === 'expired') this.q(`UPDATE commands SET preview_of = NULL WHERE id = ?`).run(r.id);
       this.scrubMoveArgs(r);

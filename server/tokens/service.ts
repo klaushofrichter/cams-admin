@@ -11,6 +11,7 @@ import { newId } from '../ids';
 import type { CommandRow, Commands } from '../commands/service';
 import { validateCams } from '../contract';
 import type { AuditEntry } from '../audit';
+import { OPEN_SQL } from '../commands/states';
 type ActorType = Exclude<AuditEntry['actorType'], 'proxy'>;
 
 // Managed cams↔proxy tokens (migration spec §10.1–§10.2; plan Task 6). A
@@ -417,7 +418,7 @@ export class Tokens {
     if (this.ahead.has(proxyId)) return;
     const now = this.d.clock.now();
     if (now < (this.resyncAfter.get(proxyId) ?? 0)) return;
-    const open = this.q(`SELECT 1 FROM commands WHERE proxy_id = ? AND command = 'tokens.apply' AND state IN ('queued','sent','received') LIMIT 1`).get(proxyId);
+    const open = this.q(`SELECT 1 FROM commands WHERE proxy_id = ? AND command = 'tokens.apply' AND state IN ${OPEN_SQL} LIMIT 1`).get(proxyId);
     if (open) return;
     const last = this.q(`SELECT state, outcome_code, finished_at, result, revocation_only FROM commands WHERE proxy_id = ? AND command = 'tokens.apply' ORDER BY rowid DESC LIMIT 1`).get(proxyId) as { state: string; outcome_code: string | null; finished_at: number | null; result: string | null; revocation_only: number } | undefined;
     if (last?.state === 'refused' && last.outcome_code === 'rate_limited') {
