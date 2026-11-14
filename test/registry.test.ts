@@ -26,6 +26,18 @@ describe('registry', () => {
     expect(audit.list({ action: 'account-delete' }).items[0].targetLabel).toBe('home');
   });
 
+  it('cameraOnProxy finds a camera by its proxy and proxy camera id, in that account only', () => {
+    const { reg } = makeRegistry(dir);
+    const a = reg.createAccount(ACTOR, { name: 'home', displayName: 'Home' });
+    const b = reg.createAccount(ACTOR, { name: 'away', displayName: 'Away' });
+    const p = reg.createProxy(ACTOR, a.id, { name: 'pi', displayName: 'Pi', runsOn: 'cloud' });
+    const c = reg.createCamera(ACTOR, a.id, { camsId: 'garage', name: 'Garage', kind: 'camera', proxyId: p.id, proxyCameraId: 'cam1' });
+    expect(reg.cameraOnProxy(a.id, p.id, 'cam1')).toEqual(reg.getCamera(a.id, c.id));
+    expect(reg.cameraOnProxy(a.id, p.id, 'cam2')).toBeNull();
+    expect(reg.cameraOnProxy(b.id, p.id, 'cam1')).toBeNull();
+    expect(reg.cameraOnProxy(a.id, null, 'cam1')).toBeNull();
+  });
+
   // Klaus, 2026-11-04: both names in a rename's audit record, so what happened can be reconstructed.
   it('a rename records the old and the new name, under the name before it; other edits record no names', () => {
     const { reg, audit } = makeRegistry(dir);

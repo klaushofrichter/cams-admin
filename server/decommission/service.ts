@@ -84,12 +84,10 @@ export class Decommission {
     const args = r.args as { camera?: unknown; content?: unknown; archive?: unknown };
     const proxyId = r.proxyId;
     const camera = typeof args.camera === 'string' ? args.camera : null;
-    const row = proxyId && camera
-      ? this.d.db.prepare('SELECT id, cams_id FROM cameras WHERE account_id = ? AND proxy_id = ? AND proxy_camera_id = ?').get(r.accountId, proxyId, camera) as { id: string; cams_id: string } | undefined
-      : undefined;
+    const row = camera ? this.d.registry.cameraOnProxy(r.accountId, proxyId, camera) : null;
     const base = { cmdId: r.id, proxyId, proxyCameraId: camera, content: args.content, archive: args.archive };
     if (r.state !== 'done') {
-      this.d.audit.write({ actorType: 'sysadmin', actor: r.actor, action: 'camera-remove', accountId: r.accountId, targetType: 'camera', targetId: row?.id ?? null, targetLabel: row?.cams_id ?? camera ?? '', outcome: 'failed', detail: { ...base, state: r.state, code: r.outcomeCode } });
+      this.d.audit.write({ actorType: 'sysadmin', actor: r.actor, action: 'camera-remove', accountId: r.accountId, targetType: 'camera', targetId: row?.id ?? null, targetLabel: row?.camsId ?? camera ?? '', outcome: 'failed', detail: { ...base, state: r.state, code: r.outcomeCode } });
       return;
     }
     const res = isObj(r.result) ? r.result : {};
@@ -102,7 +100,7 @@ export class Decommission {
     try {
       this.d.registry.deleteCamera(r.actor, r.accountId, row.id, { action: 'camera-remove', detail: { ...base, ...answer } });
     } catch (e) {
-      this.d.audit.write({ actorType: 'sysadmin', actor: r.actor, action: 'camera-remove', accountId: r.accountId, targetType: 'camera', targetId: row.id, targetLabel: row.cams_id, outcome: 'failed', detail: { ...base, ...answer, record: e instanceof ApiError ? e.code : 'error' } });
+      this.d.audit.write({ actorType: 'sysadmin', actor: r.actor, action: 'camera-remove', accountId: r.accountId, targetType: 'camera', targetId: row.id, targetLabel: row.camsId, outcome: 'failed', detail: { ...base, ...answer, record: e instanceof ApiError ? e.code : 'error' } });
       return;
     }
     this.d.onCameraRemoved?.(r.accountId, row.id);

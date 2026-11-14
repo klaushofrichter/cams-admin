@@ -464,6 +464,13 @@ export class Registry {
     return toCamera(r, s ? toSim(s) : null);
   }
 
+  // The camera a proxy names by its own camera id, in that proxy's account (null: not registered, or no proxy).
+  cameraOnProxy(accountId: string, proxyId: string | null, proxyCameraId: string): Camera | null {
+    if (proxyId === null) return null;
+    const r = this.db.prepare('SELECT id FROM cameras WHERE account_id = ? AND proxy_id = ? AND proxy_camera_id = ?').get(accountId, proxyId, proxyCameraId) as { id: string } | undefined;
+    return r ? this.getCamera(accountId, r.id) : null;
+  }
+
   // A camera of the account by its registry id or its cams id (the two never collide: a registry id has a `_`), or null.
   findCamera(accountId: string, idOrCamsId: string): Camera | null {
     const r = this.db.prepare('SELECT * FROM cameras WHERE account_id = ? AND (id = ? OR cams_id = ?) ORDER BY cams_id LIMIT 1').get(accountId, idOrCamsId, idOrCamsId) as Row | undefined;

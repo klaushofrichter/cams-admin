@@ -110,6 +110,8 @@ export const chainedText = (p: SwitchProblem): string =>
 // (cut, maybe still off) and every other code (refused before the cut, or not known) do not.
 export const poeCutAfterFailure = (code: string | null): boolean => code === 'cut_on_again';
 const errCode = (e: unknown) => (e instanceof ApiError ? e.code : e instanceof FieldError ? 'invalid' : 'error');
+// The sentence for a refusal: the error's hint, else its code.
+const errReason = (e: unknown) => (e instanceof ApiError && e.hint) || errCode(e);
 
 export class PowerService {
   // cmdId → what its final result does.
@@ -212,20 +214,16 @@ export class PowerService {
   requestFromProxy(proxyId: string, accountId: string, ev: { camera: string; requestId: string; askedAt?: number }): void {
     const req: CycleRequest = { requestId: ev.requestId, proxyId, proxyCameraId: ev.camera };
     const who: Who = { actor: proxyId, sysadmin: true, proxy: true };
-    const audit = (c: Camera | null, out: PowerOutcome) => this.d.audit.write({
+    const audit = (c: Camera | null, out: PowerOutcome, extra: Record<string, unknown> = {}) => this.d.audit.write({
       actorType: 'proxy', actor: proxyId, action: 'camera-power-cycle', accountId, targetType: 'camera', targetId: c?.id ?? null, targetLabel: c?.camsId ?? null,
-      outcome: out.ok ? 'ok' : 'refused', detail: { requestId: req.requestId, camera: req.proxyCameraId, ...(out.ok ? { cmdId: out.commandId } : { code: out.code, reason: out.reason }) },
+      outcome: out.ok ? 'ok' : 'refused', detail: { requestId: req.requestId, camera: req.proxyCameraId, ...(out.ok ? { cmdId: out.commandId } : { code: out.code, reason: out.reason }), ...extra },
     });
-    const row = this.d.db.prepare('SELECT id FROM cameras WHERE account_id = ? AND proxy_id = ? AND proxy_camera_id = ?').get(accountId, proxyId, ev.camera) as { id: string } | undefined;
-    const c = row ? this.camera(row.id) : null;
+    const c = this.d.registry.cameraOnProxy(accountId, proxyId, ev.camera);
     const askedAt = askedAtOf(ev);
     const ageMs = askedAt === null ? null : this.d.clock.now() - askedAt;
     if (ageMs !== null && ageMs > PROXY_REQUEST_MAX_AGE_MS) {
       // Ignored, not answered: the proxy no longer waits for this request.
-      this.d.audit.write({
-        actorType: 'proxy', actor: proxyId, action: 'camera-power-cycle', accountId, targetType: 'camera', targetId: c?.id ?? null, targetLabel: c?.camsId ?? null,
-        outcome: 'refused', detail: { requestId: req.requestId, camera: req.proxyCameraId, code: 'stale', reason: 'asked over 5 minutes ago: ignored', ageS: Math.floor(ageMs / 1000) },
-      });
+      audit(c, { ok: false, code: 'stale', reason: 'asked over 5 minutes ago: ignored' }, { ageS: Math.floor(ageMs / 1000) });
       return;
     }
     let out: PowerOutcome;
@@ -236,7 +234,7 @@ export class PowerService {
       try {
         out = this.startCycle(who, c.id, {}, req);
       } catch (e) {
-        out = this.refuse(errCode(e), e instanceof ApiError && e.hint ? e.hint : errCode(e));
+        out = this.refuse(errCode(e), errReason(e));
       }
       // Only a cycle that started counts toward the gap: one refused at once (power unknown, not PoE) blocks nothing (#166).
       if (out.ok) this.lastRequest.set(c.id, this.d.clock.now());
@@ -281,8 +279,8 @@ export class PowerService {
       }
       return { ok: true, commandId: id };
     } catch (e) {
-      this.finishCycle(who, c, flow, 'failed', errCode(e), e instanceof ApiError && e.hint ? e.hint : errCode(e));
-      return this.refuse(errCode(e), e instanceof ApiError && e.hint ? e.hint : errCode(e));
+      this.finishCycle(who, c, flow, 'failed', errCode(e), errReason(e));
+      return this.refuse(errCode(e), errReason(e));
     }
   }
 
