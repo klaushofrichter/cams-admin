@@ -1,5 +1,5 @@
 import type { Clock } from '../clock';
-import type { Audit } from '../audit';
+import { actorTypeOf, type Audit } from '../audit';
 import { tx, type Db } from '../db/open';
 import { ApiError, type Proxy, type Registry } from '../registry';
 import type { StatusStore } from '../status/store';
@@ -360,7 +360,7 @@ export class Importer {
     const counts: Record<string, number> = {};
     for (const c of changes) counts[c.kind] = (counts[c.kind] ?? 0) + 1;
     const record = (action: 'import-run' | 'import-apply', extra: Record<string, unknown> = {}) => this.d.audit.write({
-      actorType: 'sysadmin', actor, action, accountId, targetType: 'cams-instance', targetId: instanceId, targetLabel: instance.name, outcome: 'ok',
+      actorType: actorTypeOf(actor), actor, action, accountId, targetType: 'cams-instance', targetId: instanceId, targetLabel: instance.name, outcome: 'ok',
       detail: { instance: instance.name, changes: counts, mismatches: mismatches.length, blocked: result.blocked, ...extra },
     });
 

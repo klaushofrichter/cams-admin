@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'crypto';
 import type { Clock } from '../clock';
 import { tx, type Db } from '../db/open';
-import type { Audit } from '../audit';
+import { actorTypeOf, type Audit } from '../audit';
 import { ApiError } from '../registry';
 import { FieldError } from '../validate';
 import { newId, type IdPrefix } from '../ids';
@@ -83,7 +83,7 @@ export class BearerTokens<V extends BearerView = BearerView> {
       if (live >= this.cfg.maxLive) throw new ApiError(409, 'too_many_tokens');
       this.d.db.prepare(`INSERT INTO ${table} (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(',')})`)
         .run(id, name, hash, now, actor, days === INDEFINITE_DAYS ? null : now + days * DAY, ...Object.values(extra.cols));
-      this.d.audit.write({ actorType: 'sysadmin', actor, action: `${auditPrefix}-issue`, targetType: auditPrefix, targetId: id, targetLabel: name, outcome: 'ok', detail: { hashPrefix: hash.slice(7, 15), days, ...extra.detail } });
+      this.d.audit.write({ actorType: actorTypeOf(actor), actor, action: `${auditPrefix}-issue`, targetType: auditPrefix, targetId: id, targetLabel: name, outcome: 'ok', detail: { hashPrefix: hash.slice(7, 15), days, ...extra.detail } });
     });
     return { token, item: this.view(this.d.db.prepare(`SELECT * FROM ${table} WHERE id = ?`).get(id) as Row) };
   }
@@ -96,7 +96,7 @@ export class BearerTokens<V extends BearerView = BearerView> {
     if (r.revoked_at !== null) return this.view(r);
     tx(this.d.db, () => {
       this.d.db.prepare(`UPDATE ${table} SET revoked_at = ?, revoked_by = ? WHERE id = ?`).run(now, actor, id);
-      this.d.audit.write({ actorType: 'sysadmin', actor, action: `${auditPrefix}-revoke`, targetType: auditPrefix, targetId: id, targetLabel: r.name as string, outcome: 'ok', detail: { hashPrefix: (r.hash as string).slice(7, 15) } });
+      this.d.audit.write({ actorType: actorTypeOf(actor), actor, action: `${auditPrefix}-revoke`, targetType: auditPrefix, targetId: id, targetLabel: r.name as string, outcome: 'ok', detail: { hashPrefix: (r.hash as string).slice(7, 15) } });
     });
     this.d.journal?.(id);
     return this.view(this.d.db.prepare(`SELECT * FROM ${table} WHERE id = ?`).get(id) as Row);

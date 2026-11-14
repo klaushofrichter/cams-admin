@@ -1,5 +1,5 @@
 import type { Clock } from '../clock';
-import type { Audit } from '../audit';
+import { actorTypeOf, type Audit } from '../audit';
 import { connectUrlFor, type Config } from '../config';
 import { tx, type Db } from '../db/open';
 import { ApiError, type Registry } from '../registry';
@@ -51,7 +51,7 @@ export class Enrollment {
       const id = newId('enr');
       const expiresAt = now + h * 3600_000;
       this.d.db.prepare('INSERT INTO enrollment_codes (id, proxy_id, code_hash, created_by, created_at, expires_at) VALUES (?,?,?,?,?,?)').run(id, proxyId, codeHash(code), actor, now, expiresAt);
-      this.d.audit.write({ actorType: 'sysadmin', actor, action: 'enrollment-code-create', accountId, targetType: 'proxy', targetId: proxyId, targetLabel: p.name, outcome: 'ok', detail: { codeId: id, lifetimeH: h } });
+      this.d.audit.write({ actorType: actorTypeOf(actor), actor, action: 'enrollment-code-create', accountId, targetType: 'proxy', targetId: proxyId, targetLabel: p.name, outcome: 'ok', detail: { codeId: id, lifetimeH: h } });
       return { id, code, expiresAt, command: this.command() };
     });
   }
@@ -61,7 +61,7 @@ export class Enrollment {
       const p = this.d.registry.getProxy(accountId, proxyId);
       const r = this.d.db.prepare('UPDATE enrollment_codes SET cancelled_at = ? WHERE id = ? AND proxy_id = ? AND used_at IS NULL AND cancelled_at IS NULL').run(this.d.clock.now(), codeId, proxyId);
       if (r.changes === 0) throw new ApiError(404, 'not_found');
-      this.d.audit.write({ actorType: 'sysadmin', actor, action: 'enrollment-code-cancel', accountId, targetType: 'proxy', targetId: proxyId, targetLabel: p.name, outcome: 'ok', detail: { codeId } });
+      this.d.audit.write({ actorType: actorTypeOf(actor), actor, action: 'enrollment-code-cancel', accountId, targetType: 'proxy', targetId: proxyId, targetLabel: p.name, outcome: 'ok', detail: { codeId } });
     });
   }
 

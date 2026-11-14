@@ -1,6 +1,6 @@
 import type { Clock } from '../clock';
 import type { Db } from '../db/open';
-import type { Audit } from '../audit';
+import { actorTypeOf, type Audit } from '../audit';
 import { ApiError, type Registry } from '../registry';
 import { cameraNameProblem } from '../cameraName';
 import type { StatusStore } from '../status/store';
@@ -129,7 +129,7 @@ export class RemoteActions {
     const refuse = (status: number, reason: string, extra: Record<string, unknown> = {}) => {
       const px = this.d.registry.getProxy(accountId, proxyId);
       this.d.audit.write({
-        actorType: 'sysadmin', actor, action: 'command-create', accountId, targetType: 'proxy', targetId: proxyId, targetLabel: px.name, outcome: 'refused',
+        actorType: actorTypeOf(actor), actor, action: 'command-create', accountId, targetType: 'proxy', targetId: proxyId, targetLabel: px.name, outcome: 'refused',
         detail: { command, ...(action ? { action } : {}), reason, ...extra },
       });
       throw new ApiError(status, reason, typeof extra.retryAfterS === 'number' ? `try again in ${Math.ceil(extra.retryAfterS / 60)} min` : undefined);

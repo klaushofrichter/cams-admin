@@ -2,7 +2,7 @@ import type { StatementSync } from 'node:sqlite';
 import type { Clock } from '../clock';
 import type { Db } from '../db/open';
 import { stmt, tx } from '../db/open';
-import type { Audit } from '../audit';
+import { actorTypeOf, type Audit } from '../audit';
 import { ApiError, type Registry } from '../registry';
 import type { StatusStore } from '../status/store';
 import type { LiveHub } from '../live';
@@ -246,7 +246,7 @@ export class Commands {
         throw e;
       }
       this.d.audit.write({
-        actorType: meta?.actorType ?? (actor === 'system' ? 'system' : 'sysadmin'), actor, action: 'command-create', accountId, targetType: 'proxy', targetId: proxyId, targetLabel: px.name, outcome: 'ok',
+        actorType: meta?.actorType ?? actorTypeOf(actor), actor, action: 'command-create', accountId, targetType: 'proxy', targetId: proxyId, targetLabel: px.name, outcome: 'ok',
         detail: { cmdId: id, command, ...(meta?.reason ? { reason: meta.reason } : {}), ...(previewOf ? { previewOf } : {}), ...(revocation ? { revocationOnly: true } : {}), args: summariseArgs(command, args) },
       });
     });

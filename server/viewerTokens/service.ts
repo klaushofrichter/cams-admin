@@ -1,5 +1,5 @@
 import type { Clock } from '../clock';
-import type { Audit, AuditAction } from '../audit';
+import { actorTypeOf, type Audit, type AuditAction } from '../audit';
 import { tx, type Db } from '../db/open';
 import { newId } from '../ids';
 import { ApiError } from '../registry';
@@ -125,7 +125,7 @@ export class ViewerTokens {
 
   private log(actor: string, action: AuditAction, r: Row, accountIds: string[], detail: Record<string, unknown>): void {
     this.d.audit.write({
-      actorType: actor.startsWith('ops-token:') ? 'system' : 'sysadmin', actor, action, accountId: accountIds.length === 1 ? accountIds[0] : null,
+      actorType: actorTypeOf(actor), actor, action, accountId: accountIds.length === 1 ? accountIds[0] : null,
       targetType: 'viewer-token', targetId: r.id as string, targetLabel: r.name as string, outcome: 'ok',
       detail: { fingerprintPrefix: (r.fingerprint as string).slice(7, 15), ...(accountIds.length !== 1 ? { accountIds } : {}), ...detail },
     });

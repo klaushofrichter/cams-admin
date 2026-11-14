@@ -8,6 +8,7 @@ import { ApiError, type Proxy, type Registry } from '../registry';
 import type { StatusStore } from '../status/store';
 import type { LiveHub } from '../live';
 import type { Logger } from '../log';
+import { actorTypeOf } from '../audit';
 
 const FP_RE = /^SHA256:[0-9A-F]{64}$/;
 export const PROXY_REPORT_ACTOR = 'system:proxy-report';
@@ -53,7 +54,7 @@ export class ReportedPins {
     const prev = p.caFingerprints.find((f) => f !== reported[0]);
     const fps = keep === true && reported.length === 1 && prev !== undefined ? [reported[0], prev] : reported;
     if (JSON.stringify(fps) === JSON.stringify(p.caFingerprints)) return { proxy: p, changed: false };
-    const proxy = this.d.registry.setProxyPins(actor, 'sysadmin', accountId, proxyId, fps, false);
+    const proxy = this.d.registry.setProxyPins(actor, actorTypeOf(actor), accountId, proxyId, fps, false);
     this.d.live.publishRegistry('proxy', proxyId);
     return { proxy, changed: true };
   }

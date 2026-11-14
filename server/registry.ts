@@ -1,6 +1,6 @@
 import type { Clock } from './clock';
 import type { Audit, AuditAction } from './audit';
-import { nameChanges } from './audit';
+import { actorTypeOf, nameChanges } from './audit';
 import { stmt, tx, type Db } from './db/open';
 import { newId } from './ids';
 import type { CameraPower } from './switches/store';
@@ -148,7 +148,7 @@ export class Registry {
   }
 
   private log(actor: string, action: AuditAction, accountId: string | null, targetType: string, targetId: string, targetLabel: string, detail?: Record<string, unknown>): void {
-    this.audit.write({ actorType: 'sysadmin', actor, action, accountId, targetType, targetId, targetLabel, outcome: 'ok', detail });
+    this.audit.write({ actorType: actorTypeOf(actor), actor, action, accountId, targetType, targetId, targetLabel, outcome: 'ok', detail });
   }
 
   // --- accounts --------------------------------------------------------------------
@@ -439,7 +439,7 @@ export class Registry {
 
   // --- cameras and sims --------------------------------------------------------------
 
-  createCamera(actor: string, accountId: string, input: unknown, action: 'camera-create' | 'camera-adopt' = 'camera-create', actorType: 'sysadmin' | 'system' = 'sysadmin'): Camera {
+  createCamera(actor: string, accountId: string, input: unknown, action: 'camera-create' | 'camera-adopt' = 'camera-create', actorType: 'sysadmin' | 'system' = actorTypeOf(actor)): Camera {
     return guard(() => tx(this.db, () => {
       this.getAccount(accountId);
       const f = cameraInput(input, false) as CameraFields;
