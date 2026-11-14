@@ -16,7 +16,6 @@ export interface EnrollDeps {
   registry: Registry;
   cfg: Config;
   serverKeys: string[]; // base64 SPKI DER of cams-admin's signing key(s)
-  onKeyRevoked: (keyId: string) => void; // closes that key's live connection (4401)
   onProxyChanged?: (proxyId: string) => void; // a redemption: the live registry event (the proxy page reloads)
 }
 
@@ -76,7 +75,7 @@ export class Enrollment {
   }
 
   // Spec §8.2 steps 2–4. Every failure about the code answers the same way.
-  // The new key is pending until its first hello (confirmKey): an answer the
+  // The new key is pending until its first hello (the channel's registry.confirmKey): an answer the
   // proxy never used (it refused it, or it got lost) replaces nothing, and
   // the next code retires that key. requestOrigin picks the connectUrl.
   redeem(raw: unknown, requestOrigin: string | null = null): EnrollAnswer {
@@ -127,12 +126,5 @@ export class Enrollment {
       status: 201,
       body: { v: 1, proxyId, keyId, account: row.account_name, connectUrl, serverKeys: this.d.serverKeys, heartbeatS: this.d.cfg.heartbeatS },
     };
-  }
-
-  // The key's first hello (the channel calls the registry directly).
-  confirmKey(proxyId: string, keyId: string): { revoked: string[] } | null {
-    const r = this.d.registry.confirmKey(proxyId, keyId);
-    for (const k of r?.revoked ?? []) this.d.onKeyRevoked(k);
-    return r;
   }
 }

@@ -27,7 +27,7 @@ async function hubWithEnroll(dir: string, env: Record<string, string> = {}) {
   const h = await startHub(dir, { HEARTBEAT_MIN_GAP_MS: '0', LIMIT_MSG_PER_MIN: '10000', ...env });
   cleanups.push(h.stop);
   const cfg = { ...h.cfg };
-  const enr = new Enrollment({ db: h.db, clock: { now: () => Date.now() }, audit: h.audit, registry: h.registry, cfg, serverKeys: [h.serverKey.publicKeySpkiB64], onKeyRevoked: (k) => h.hub.closeKey(k) });
+  const enr = new Enrollment({ db: h.db, clock: { now: () => Date.now() }, audit: h.audit, registry: h.registry, cfg, serverKeys: [h.serverKey.publicKeySpkiB64] });
   const app = express();
   app.use(enrollRouter(enr));
   const srv = createServer(app);
