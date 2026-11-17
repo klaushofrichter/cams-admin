@@ -8,6 +8,7 @@ import type { MoveEvent } from '../moves/types';
 import { Buckets } from './limits';
 import { pendingExpired } from '../registry';
 import type { HeartbeatBody } from '../status/store';
+import { isObj } from '../validate';
 
 // One proxy socket: challenge → hello → live (spec §8.3–§8.7).
 
@@ -19,7 +20,7 @@ const BAD_EVENTS_BEFORE_CLOSE = 20;
 
 const isCmdlessEvent = (m: unknown): boolean => {
   const x = m as { type?: unknown; body?: unknown } | null;
-  return x?.type === 'event' && typeof x.body === 'object' && x.body !== null && !Array.isArray(x.body) && (x.body as { cmdId?: unknown }).cmdId === undefined;
+  return x?.type === 'event' && isObj(x.body) && x.body.cmdId === undefined;
 };
 
 export interface ConnectionHost {

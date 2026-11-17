@@ -1,10 +1,10 @@
-import { createHash, randomBytes } from 'crypto';
+import { randomBytes } from 'crypto';
 import type { Clock } from '../clock';
 import { tx, type Db } from '../db/open';
 import { actorTypeOf, type Audit } from '../audit';
 import { ApiError } from '../registry';
 import { FieldError } from '../validate';
-import { newId, type IdPrefix } from '../ids';
+import { newId, sha256Hex, type IdPrefix } from '../ids';
 
 // The store behind the diagnostics tokens (issue #45) and the operations
 // tokens. A sysadmin issues one, sees it once; only its SHA-256 hash is
@@ -29,7 +29,7 @@ const DAY = 86400_000;
 // A NULL expiry (issued with days 0) never expires.
 const expired = (expiresAt: number | null, now: number) => expiresAt !== null && expiresAt <= now;
 
-export const hashOf = (token: string) => `sha256:${createHash('sha256').update(token, 'utf8').digest('hex')}`;
+export const hashOf = (token: string) => `sha256:${sha256Hex(token)}`;
 
 // eslint-disable-next-line no-control-regex
 const NAME_RE = /^[^\u0000-\u001f\u007f]{1,64}$/;

@@ -2,6 +2,7 @@ import type { Clock } from '../clock';
 import { actorTypeOf, type Audit, type AuditAction } from '../audit';
 import { tx, type Db } from '../db/open';
 import { newId } from '../ids';
+import { isObj } from '../validate';
 import { ApiError } from '../registry';
 import { newViewerToken, openToken, sealToken, viewerBase, viewerFingerprint, viewerLink, type ViewerKey } from './crypto';
 
@@ -54,7 +55,7 @@ export interface ViewerTokenDeps { db: Db; clock: Clock; audit: Audit; key: View
 
 type Row = Record<string, unknown>;
 const invalid = (field: string) => new ApiError(400, 'invalid', field);
-const obj = (v: unknown): Row => (typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Row) : {});
+const obj = (v: unknown): Row => (isObj(v) ? v : {});
 
 function daysOf(v: unknown, dflt?: number): number {
   const d = v === undefined ? dflt : v;

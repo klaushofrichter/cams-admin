@@ -16,6 +16,7 @@ import { CLOSE, type Connection } from '../channel/connection';
 import type { Hub } from '../channel/hub';
 import { sendCommand } from './envelope';
 import { redactSecrets } from '../config/redact';
+import { isObj } from '../validate';
 import { OPEN_SQL, type CommandState } from './states';
 
 // Signed commands to the connected proxies (migration spec §7; plan Task 5):
@@ -157,7 +158,7 @@ function toRaw(r: DbRow): Raw {
   const envelope = r.result ? (JSON.parse(r.result as string) as Record<string, unknown>) : null;
   const body = (envelope?.body ?? null) as Record<string, unknown> | null;
   const rawArgs = JSON.parse(r.args as string) as Record<string, unknown>;
-  const result = body && typeof body.result === 'object' && body.result !== null && !Array.isArray(body.result) ? (sanitize(body.result) as Record<string, unknown>) : null;
+  const result = body && isObj(body.result) ? (sanitize(body.result) as Record<string, unknown>) : null;
   return {
     id: r.id as string, accountId: r.account_id as string, proxyId: r.proxy_id as string | null, actor: r.actor as string, command: r.command as string,
     args: summariseArgs(r.command as string, rawArgs), state: r.state as CommandState, outcomeCode: r.outcome_code as string | null, result,

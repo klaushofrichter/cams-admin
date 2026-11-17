@@ -82,6 +82,7 @@ describe('the shared hash helpers', () => {
     const { token, hash } = generateToken();
     expect(hash).toBe(hashOf(token));
     expect(hash).toBe(`sha256:${createHash('sha256').update(token, 'utf8').digest('hex')}`);
+    expect(hashOf('ä-x')).toBe(`sha256:${createHash('sha256').update('ä-x', 'utf8').digest('hex')}`);
   });
   it('fingerprint is SHA256: and upper-case hex over the SPKI bytes', () => {
     const spki = Buffer.from('spki-bytes').toString('base64');
