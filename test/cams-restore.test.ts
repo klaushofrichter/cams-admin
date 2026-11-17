@@ -104,3 +104,34 @@ describe('viewer-token access reductions survive a restore', () => {
     expect(s.built.audit.list({ action: 'viewer-token-role', limit: 5 }).items[0]).toMatchObject({ actorType: 'system', detail: expect.objectContaining({ replayed: true }) });
   });
 });
+
+// Code review 2026-11-17: a plain restart (no restore) replays nothing. The
+// journal entry carries the time the change's transaction wrote into the row,
+// so it is never newer than that row: no version bump (an open admin page
+// would get 409), no system audit.
+describe('a restart without a restore replays no viewer-token change', () => {
+  const dir = tmpDir();
+  let s: Running;
+  afterAll(() => s.stop());
+  // Every read moves on by a millisecond: the journal's time is never the transaction's by accident.
+  let t = Date.now();
+  const ticking = { now: () => ++t };
+
+  it('a revoke and a new validity keep their version and write no replay audit', async () => {
+    const keyFile = join(dir, 'viewer.key');
+    writeFileSync(keyFile, randomBytes(32).toString('base64'));
+    chmodSync(keyFile, 0o600);
+    s = await startServer(dir, { TICK_MS: '60000', VIEWER_TOKEN_KEY_FILE: keyFile }, 0, ticking);
+    const home = await s.api('POST', '/accounts', { name: 'home', displayName: 'Home' });
+    const r = (await s.api('POST', '/viewer-tokens', { name: 'Revoked', accountIds: [home.id], days: 30 })).item;
+    const v = (await s.api('POST', '/viewer-tokens', { name: 'Longer', accountIds: [home.id], days: 30 })).item;
+    await s.api('POST', `/viewer-tokens/${r.id}/revoke`, {});
+    await s.api('POST', `/viewer-tokens/${v.id}/validity`, { days: 90 });
+    const q = () => s.built.db.prepare('SELECT id, version, updated_at FROM viewer_tokens ORDER BY id').all();
+    const before = q();
+    s = await s.restart();
+    expect(q()).toEqual(before);
+    const replayed = s.built.audit.list({ limit: 50 }).items.filter((x) => (x.detail as { replayed?: boolean } | null)?.replayed);
+    expect(replayed).toEqual([]);
+  });
+});
