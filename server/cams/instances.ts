@@ -92,6 +92,8 @@ function urlOrNull(v: unknown, field: string): string | null {
 
 export class CamsInstances {
   private liveState = new Map<string, CamsLive>();
+  // The comparison key of each instance's stored report (set after a write or a matching read): an unchanged report needs no read.
+  private storedReportKey = new Map<string, string>();
   // A report's viewer token uses (set by buildServer: ViewerTokens.noteUse for the accounts the instance serves).
   onViewerTokenUse?: (instanceId: string, used: { id: string; lastUsedAt: number }[]) => void;
   constructor(private d: CamsInstancesDeps) {}
@@ -230,6 +232,7 @@ export class CamsInstances {
       this.log(actor, 'cams-instance-delete', i, { revokedKeys: keys });
     });
     this.liveState.delete(id);
+    this.storedReportKey.delete(id);
   }
 
   block(actor: string, id: string): CamsInstance {
@@ -518,14 +521,16 @@ export class CamsInstances {
   }
 
   private storeReport(id: string, r: CamsReport, now: number): void {
-    const row = this.q('SELECT last_report FROM cams_instances WHERE id = ?').get(id) as Row | undefined;
-    if (!row) return;
     // Only the fields the strict shape names (#60): the lenient check lets extra properties through.
     const picked = pickCamsReport(r);
+    const key = CamsInstances.reportKey(picked);
+    if (this.storedReportKey.get(id) === key) return;
+    const row = this.q('SELECT last_report FROM cams_instances WHERE id = ?').get(id) as Row | undefined;
+    if (!row) return;
     let same = false;
-    try { same = typeof row.last_report === 'string' && CamsInstances.reportKey(JSON.parse(row.last_report)) === CamsInstances.reportKey(picked); } catch { /* corrupt: rewrite */ }
-    if (same) return;
-    tx(this.d.db, () => void this.q('UPDATE cams_instances SET last_report = ?, last_report_at = ? WHERE id = ?').run(JSON.stringify(picked), now, id));
+    try { same = typeof row.last_report === 'string' && CamsInstances.reportKey(JSON.parse(row.last_report)) === key; } catch { /* corrupt: rewrite */ }
+    if (!same) tx(this.d.db, () => void this.q('UPDATE cams_instances SET last_report = ?, last_report_at = ? WHERE id = ?').run(JSON.stringify(picked), now, id));
+    this.storedReportKey.set(id, key);
   }
 
   // The report falls back to the stored one (its time is when it last changed)
