@@ -206,6 +206,21 @@ describe('replay after a restore', () => {
     expect(a.audit.list({ action: 'viewer-token-role' }).items[0]).toMatchObject({ actorType: 'system', detail: expect.objectContaining({ replayed: true, role: 'viewer', from: 'admin' }) });
   });
 
+  it('a token deleted after the backup: only the delete replays, its access entries write no audit', () => {
+    const r = vt.create(ACTOR, { name: 'gone', accountIds: [home, away], role: 'admin' });
+    const later = clock.now() + 1000;
+    vt.replay([
+      { at: later - 10, kind: 'viewer-token-access', tokenId: r.item.id, change: 'accounts-removed', accountIds: [away] },
+      { at: later - 5, kind: 'viewer-token-access', tokenId: r.item.id, change: 'role', role: 'viewer' },
+      { at: later, kind: 'viewer-token', tokenId: r.item.id, change: 'deleted' },
+    ]);
+    expect(code(() => vt.get(r.item.id))).toBe('404 not_found');
+    const of = (action: string) => a.audit.list({ action }).items.filter((x) => x.targetId === r.item.id);
+    expect(of('viewer-token-accounts')).toEqual([]);
+    expect(of('viewer-token-role')).toEqual([]);
+    expect(of('viewer-token-delete').map((x) => x.detail)).toEqual([{ replayed: true }]);
+  });
+
   it('an access entry never grants: an admin entry does not raise a viewer; a removal of an account not held changes nothing', () => {
     const r = vt.create(ACTOR, { name: 'kept', accountIds: [home], role: 'viewer' });
     const before = vt.get(r.item.id);
