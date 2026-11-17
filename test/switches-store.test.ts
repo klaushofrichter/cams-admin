@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { SwitchStore, type CameraPower } from '../server/switches/store';
 import { ApiError } from '../server/registry';
+import { OPS_ACTOR_PREFIX } from '../server/audit';
 import { tmpDir } from './helpers/tmp';
 import { ACTOR, makeRegistry } from './helpers/registry';
 
@@ -111,6 +112,25 @@ describe('switch records and camera power', () => {
     st.setPower(c.id, poe(s.id, 1, 1), ACTOR, 'sysadmin', 'x');
     st.deleteSwitch(ACTOR, acc.id, s.id);
     expect(power(c.id)).toEqual({ kind: 'unknown' });
+  });
+
+  it('the audit actor type follows the actor (no store default): a sign-in is sysadmin, an operations token and the system are system', () => {
+    const ops = `${OPS_ACTOR_PREFIX}0123abcd (deploy)`;
+    const types = () => (r.db.prepare(`SELECT action, actor, actor_type FROM audit_log WHERE action IN ('switch-create', 'switch-update', 'switch-move', 'switch-delete', 'camera-power-set') ORDER BY id`).all() as Record<string, string>[])
+      .map((x) => [x.action, x.actor, x.actor_type]);
+    for (const actor of [ACTOR, ops, 'system']) {
+      const s = st.createSwitch(actor, acc.id, { name: `S-${actor.slice(0, 8)}`, model: 'sscpoe-web', host: '192.168.1.217', ports: 8, offSeconds: 10, proxyId: prx.id });
+      st.updateSwitch(actor, acc.id, s.id, { offSeconds: 12 });
+      st.updateSwitch(actor, acc.id, s.id, { proxyId: prx2.id });
+      const c = cam(`c${actor.length}`);
+      st.setPower(c.id, poe(s.id, 1, 1), ACTOR, 'sysadmin', 'x');
+      st.deleteSwitch(actor, acc.id, s.id);
+    }
+    const want = (actor: string, type: string) => [
+      ['switch-create', actor, type], ['switch-update', actor, type], ['switch-move', actor, type],
+      ['camera-power-set', ACTOR, 'sysadmin'], ['camera-power-set', actor, type], ['switch-delete', actor, type],
+    ];
+    expect(types()).toEqual([...want(ACTOR, 'sysadmin'), ...want(ops, 'system'), ...want('system', 'system')]);
   });
 
   it('account delete cascades switches', () => {

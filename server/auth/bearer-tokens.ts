@@ -1,10 +1,10 @@
-import { createHash, randomBytes } from 'crypto';
+import { randomBytes } from 'crypto';
 import type { Clock } from '../clock';
 import { tx, type Db } from '../db/open';
-import { actorTypeOf, type Audit } from '../audit';
+import type { Audit } from '../audit';
 import { ApiError } from '../registry';
 import { FieldError } from '../validate';
-import { newId, type IdPrefix } from '../ids';
+import { newId, sha256Hex, type IdPrefix } from '../ids';
 
 // The store behind the diagnostics tokens (issue #45) and the operations
 // tokens. A sysadmin issues one, sees it once; only its SHA-256 hash is
@@ -29,7 +29,7 @@ const DAY = 86400_000;
 // A NULL expiry (issued with days 0) never expires.
 const expired = (expiresAt: number | null, now: number) => expiresAt !== null && expiresAt <= now;
 
-export const hashOf = (token: string) => `sha256:${createHash('sha256').update(token, 'utf8').digest('hex')}`;
+export const hashOf = (token: string) => `sha256:${sha256Hex(token)}`;
 
 // eslint-disable-next-line no-control-regex
 const NAME_RE = /^[^\u0000-\u001f\u007f]{1,64}$/;
@@ -83,7 +83,7 @@ export class BearerTokens<V extends BearerView = BearerView> {
       if (live >= this.cfg.maxLive) throw new ApiError(409, 'too_many_tokens');
       this.d.db.prepare(`INSERT INTO ${table} (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(',')})`)
         .run(id, name, hash, now, actor, days === INDEFINITE_DAYS ? null : now + days * DAY, ...Object.values(extra.cols));
-      this.d.audit.write({ actorType: actorTypeOf(actor), actor, action: `${auditPrefix}-issue`, targetType: auditPrefix, targetId: id, targetLabel: name, outcome: 'ok', detail: { hashPrefix: hash.slice(7, 15), days, ...extra.detail } });
+      this.d.audit.write({ actor, action: `${auditPrefix}-issue`, targetType: auditPrefix, targetId: id, targetLabel: name, outcome: 'ok', detail: { hashPrefix: hash.slice(7, 15), days, ...extra.detail } });
     });
     return { token, item: this.view(this.d.db.prepare(`SELECT * FROM ${table} WHERE id = ?`).get(id) as Row) };
   }
@@ -96,7 +96,7 @@ export class BearerTokens<V extends BearerView = BearerView> {
     if (r.revoked_at !== null) return this.view(r);
     tx(this.d.db, () => {
       this.d.db.prepare(`UPDATE ${table} SET revoked_at = ?, revoked_by = ? WHERE id = ?`).run(now, actor, id);
-      this.d.audit.write({ actorType: actorTypeOf(actor), actor, action: `${auditPrefix}-revoke`, targetType: auditPrefix, targetId: id, targetLabel: r.name as string, outcome: 'ok', detail: { hashPrefix: (r.hash as string).slice(7, 15) } });
+      this.d.audit.write({ actor, action: `${auditPrefix}-revoke`, targetType: auditPrefix, targetId: id, targetLabel: r.name as string, outcome: 'ok', detail: { hashPrefix: (r.hash as string).slice(7, 15) } });
     });
     this.d.journal?.(id);
     return this.view(this.d.db.prepare(`SELECT * FROM ${table} WHERE id = ?`).get(id) as Row);

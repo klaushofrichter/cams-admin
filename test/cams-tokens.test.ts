@@ -134,6 +134,8 @@ describe('cams-held tokens (POST /cams/v1/tokens, retire; R4-19)', () => {
     expect(r.json).toEqual({ tokenId: a.json.tokenId, state: 'retiring', retireAt: expect.any(Number) });
     expect(Math.abs(r.json.retireAt - (t0 + 24 * 3600_000))).toBeLessThan(5000);
     expect(auditRows('token-retire').at(-1)).toEqual({ actor_type: 'cams', actor: inst.id });
+    // The tokens.apply the retire queues is the instance's too (the cams type is said, not derived from the id).
+    expect(auditRows('command-create').at(-1)).toEqual({ actor_type: 'cams', actor: inst.id });
   });
 
   it('a served account removed between two pulls: its tokens answer 404 and the next snapshot no longer lists it', async () => {

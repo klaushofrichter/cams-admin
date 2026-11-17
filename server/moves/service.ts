@@ -559,7 +559,7 @@ export class Moves {
       // The link from the command to its move: the source answered {requestId}, the move.request carries the same id.
       const requestId = typeof r.result?.requestId === 'string' ? r.result.requestId : null;
       this.d.audit.write({
-        actorType: actorTypeOf(r.actor), actor: r.actor, action: 'move-begin', accountId: r.accountId, targetType: 'camera', targetId: cam?.id ?? null, targetLabel: cam?.camsId ?? null, outcome: ok ? 'ok' : 'failed',
+        actor: r.actor, action: 'move-begin', accountId: r.accountId, targetType: 'camera', targetId: cam?.id ?? null, targetLabel: cam?.camsId ?? null, outcome: ok ? 'ok' : 'failed',
         detail: { cmdId: r.id, source: r.proxyId, ...(ok ? { requestId } : { code: r.outcomeCode ?? r.state }) },
       });
       return;
@@ -1067,7 +1067,7 @@ export class Moves {
     tx(this.d.db, () => {
       const camsId = this.camsId(m);
       this.d.audit.write({
-        actorType: actorTypeOf(actor), actor, action: 'move-delete', accountId: m.accountId, targetType: 'camera', targetId: m.cameraId, targetLabel: camsId, outcome: 'ok',
+        actor, action: 'move-delete', accountId: m.accountId, targetType: 'camera', targetId: m.cameraId, targetLabel: camsId, outcome: 'ok',
         detail: { moveId: m.id, camsId, reason: m.reason, source: m.sourceProxyId, target: m.targetProxyId },
       });
       if (!this.store.deleteRejected(m.id)) throw new ApiError(409, 'not_rejected');

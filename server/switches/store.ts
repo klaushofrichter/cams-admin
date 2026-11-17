@@ -69,13 +69,13 @@ export class SwitchStore {
     return r;
   }
 
-  createSwitch(actor: string, accountId: string, input: SwitchInput, actorType: PowerActorType = 'sysadmin'): Switch {
+  createSwitch(actor: string, accountId: string, input: SwitchInput): Switch {
     return guard(() => tx(this.db, () => {
       const now = this.clock.now();
       const id = newId('sw');
       this.db.prepare(`INSERT INTO switches (id, account_id, name, model, host, ports, off_seconds, proxy_id, state, survey, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
         .run(id, accountId, input.name, input.model, input.host, input.ports, input.offSeconds, input.proxyId, input.state ?? 'pending', input.survey === false ? 0 : 1, now, now);
-      this.audit.write({ actorType, actor, action: 'switch-create', accountId, targetType: 'switch', targetId: id, targetLabel: input.name, outcome: 'ok', detail: { host: input.host, proxyId: input.proxyId } });
+      this.audit.write({ actor, action: 'switch-create', accountId, targetType: 'switch', targetId: id, targetLabel: input.name, outcome: 'ok', detail: { host: input.host, proxyId: input.proxyId } });
       return this.getSwitch(accountId, id);
     }));
   }
@@ -105,7 +105,7 @@ export class SwitchStore {
   }
 
   // A change of the proxy is audited as switch-move, every other change as switch-update.
-  updateSwitch(actor: string, accountId: string, id: string, patch: SwitchPatch, actorType: PowerActorType = 'sysadmin'): Switch {
+  updateSwitch(actor: string, accountId: string, id: string, patch: SwitchPatch): Switch {
     return guard(() => tx(this.db, () => {
       const old = this.getSwitch(accountId, id);
       const sets: string[] = ['updated_at = ?'];
@@ -123,7 +123,7 @@ export class SwitchStore {
       const now = this.getSwitch(accountId, id);
       const moved = now.proxyId !== old.proxyId;
       this.audit.write({
-        actorType, actor, action: moved ? 'switch-move' : 'switch-update', accountId, targetType: 'switch', targetId: id, targetLabel: now.name, outcome: 'ok',
+        actor, action: moved ? 'switch-move' : 'switch-update', accountId, targetType: 'switch', targetId: id, targetLabel: now.name, outcome: 'ok',
         detail: moved ? { from: old.proxyId, to: now.proxyId, fields: changed } : { fields: changed },
       });
       return now;
@@ -131,12 +131,12 @@ export class SwitchStore {
   }
 
   // The cameras mapped to it go to unknown in the same transaction (the caller switches PoE on and forgets first).
-  deleteSwitch(actor: string, accountId: string, id: string, actorType: PowerActorType = 'sysadmin'): void {
+  deleteSwitch(actor: string, accountId: string, id: string): void {
     guard(() => tx(this.db, () => {
       const s = this.getSwitch(accountId, id);
-      for (const c of this.camerasOnSwitch(id)) this.writePower(c.id, c.accountId, c.camsId, c.power, UNKNOWN, actor, actorType, 'switch deleted');
+      for (const c of this.camerasOnSwitch(id)) this.writePower(c.id, c.accountId, c.camsId, c.power, UNKNOWN, actor, undefined, 'switch deleted');
       this.db.prepare('DELETE FROM switches WHERE id = ? AND account_id = ?').run(id, accountId);
-      this.audit.write({ actorType, actor, action: 'switch-delete', accountId, targetType: 'switch', targetId: id, targetLabel: s.name, outcome: 'ok', detail: {} });
+      this.audit.write({ actor, action: 'switch-delete', accountId, targetType: 'switch', targetId: id, targetLabel: s.name, outcome: 'ok', detail: {} });
     }));
   }
 
@@ -146,7 +146,7 @@ export class SwitchStore {
     return rows.map((r) => ({ id: r.id as string, accountId: r.account_id as string, camsId: r.cams_id as string, power: toPower(r.power) }));
   }
 
-  private writePower(cameraId: string, accountId: string, camsId: string, from: CameraPower, to: CameraPower, actor: string, actorType: PowerActorType, why: string): void {
+  private writePower(cameraId: string, accountId: string, camsId: string, from: CameraPower, to: CameraPower, actor: string, actorType: PowerActorType | undefined, why: string): void {
     this.db.prepare('UPDATE cameras SET power = ?, updated_at = ?, version = version + 1 WHERE id = ?').run(JSON.stringify(to), this.clock.now(), cameraId);
     this.audit.write({ actorType, actor, action: 'camera-power-set', accountId, targetType: 'camera', targetId: cameraId, targetLabel: camsId, outcome: 'ok', detail: { from, to, why } });
   }

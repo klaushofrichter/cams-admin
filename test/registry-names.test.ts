@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../server/registry';
 import { tmpDir } from './helpers/tmp';
 import { ACTOR, makeRegistry } from './helpers/registry';
@@ -47,6 +47,20 @@ describe('registry: camera records follow the reported name', () => {
     expect(s.synced()).toHaveLength(1);
     expect(s.reg.getCamera(s.acc.id, s.cam.id).version).toBe(2);
     expect(s.rev()).toBe(rev);
+  });
+
+  it('a heartbeat with nothing to change prepares no new statements (fill model and name sync are cached)', () => {
+    const s = setup();
+    const rep = [{ ref: 'cam1', name: 'Garage', nameSource: 'camera' as const, model: 'RLC-510A' }];
+    s.reg.fillCameraModels(s.prx.id, rep);
+    s.reg.syncCameraNames(s.prx.id, rep);
+    const prepare = vi.spyOn(s.db, 'prepare');
+    for (let i = 0; i < 3; i++) {
+      expect(s.reg.fillCameraModels(s.prx.id, rep)).toEqual([]);
+      expect(s.reg.syncCameraNames(s.prx.id, rep)).toEqual([]);
+    }
+    expect(prepare).not.toHaveBeenCalled();
+    prepare.mockRestore();
   });
 
   it('a config-sourced name is ignored', () => {

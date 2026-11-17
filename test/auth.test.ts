@@ -71,7 +71,7 @@ describe('sign-in', () => {
     expect(c).not.toMatch(/Domain/);
     const me = await request(s.app).get('/api/v1/me').set('Cookie', c.split(';')[0]);
     expect(me.body).toEqual({ email: 'admin@example.com' });
-    expect(s.audit.list({ action: 'signin' }).items[0]).toMatchObject({ actor: 'admin@example.com', outcome: 'ok' });
+    expect(s.audit.list({ action: 'signin' }).items[0]).toMatchObject({ actorType: 'sysadmin', actor: 'admin@example.com', outcome: 'ok' });
   });
 
   it('a stranger is refused with 403; the audit record carries only a hash prefix', async () => {

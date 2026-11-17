@@ -663,4 +663,11 @@ describe('the audit actor type of an ops token', () => {
     expect(rows.length).toBeGreaterThan(20);
     expect([...new Set(rows.filter((r) => r.actor_type !== 'system').map((r) => r.action))].sort()).toEqual([]);
   });
+
+  // The other side (Audit.write derives the type from the actor): every record of a signed-in sysadmin is sysadmin.
+  it('a signed-in sysadmin is sysadmin on every record', () => {
+    const rows = a.db.prepare(`SELECT action, actor_type FROM audit_log WHERE actor = 'admin@example.com'`).all() as { action: string; actor_type: string }[];
+    expect(rows.length).toBeGreaterThan(20);
+    expect([...new Set(rows.filter((r) => r.actor_type !== 'sysadmin').map((r) => r.action))].sort()).toEqual([]);
+  });
 });

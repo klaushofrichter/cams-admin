@@ -70,7 +70,7 @@ export function camsRouter(d: CamsRouterDeps): express.Router {
         return sendSigned(res, key, c.nonce, 304, null, { ETag: `"${rev}"` });
       }
       // Same synchronous call: the body's revision equals the ETag.
-      const s = buildSnapshot(snap, c.instanceId);
+      const s = buildSnapshot(snap, c.instanceId, rev);
       const bytes = encodeSnapshot(s);
       inst.touch(c.instanceId, { lastPullAt: now, lastPullStatus: 200 });
       sendSigned(res, key, c.nonce, 200, bytes, { ETag: `"${s.revision}"` });
