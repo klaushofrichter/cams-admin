@@ -1,6 +1,6 @@
 import type { KeyObject } from 'crypto';
 import type { Clock } from '../clock';
-import type { Db } from '../db/open';
+import { stmt, type Db } from '../db/open';
 import { jcs } from '../crypto/jcs';
 import { signEnvelope } from '../crypto/ed25519';
 import { sha256Hex } from '../ids';
@@ -48,8 +48,8 @@ export const MOVE_ATTEST_MS = 24 * 3600_000;
 const ATTEST_PHASES = new Set(['switching', 'copying', 'cleaning', 'done']);
 
 export function snapshotRevision(db: Db, instanceId: string, keyFp: string, format = SNAPSHOT_FORMAT): string {
-  const inst = db.prepare('SELECT version FROM cams_instances WHERE id = ?').get(instanceId) as { version: number } | undefined;
-  const a = (db.prepare(`SELECT c.account_id id, c.revision rev FROM config_revision c JOIN cams_instance_accounts s ON s.account_id = c.account_id
+  const inst = stmt(db, 'SELECT version FROM cams_instances WHERE id = ?').get(instanceId) as { version: number } | undefined;
+  const a = (stmt(db, `SELECT c.account_id id, c.revision rev FROM config_revision c JOIN cams_instance_accounts s ON s.account_id = c.account_id
     WHERE s.instance_id = ? ORDER BY c.account_id`).all(instanceId) as { id: string; rev: number }[]).map((r) => [r.id, r.rev]);
   return 'r:' + sha256Hex(jcs({ i: instanceId, iv: inst?.version ?? 0, a, k: keyFp, f: format })).slice(0, 16);
 }
@@ -60,7 +60,8 @@ export function overridesOf(db: Db, instanceId: string): Map<string, { host: str
     .map((r) => [r.camera_id as string, { host: r.host as string | null, cameraUser: r.camera_user as string | null, version: r.version as number }]));
 }
 
-export function buildSnapshot(d: SnapshotDeps, instanceId: string): Snapshot {
+// revision: the one the caller computed in the same synchronous call (the pull's ETag), else computed here.
+export function buildSnapshot(d: SnapshotDeps, instanceId: string, revision?: string): Snapshot {
   const q = (sql: string) => d.db.prepare(sql);
   const inst = q('SELECT id, name, rotate_before FROM cams_instances WHERE id = ?').get(instanceId) as Row | undefined;
   if (!inst) throw new ApiError(404, 'not_found');
@@ -114,7 +115,7 @@ export function buildSnapshot(d: SnapshotDeps, instanceId: string): Snapshot {
   });
   const unsigned = {
     v: 1 as const, type: 'cams-config' as const, instance: { id: inst.id as string, name: inst.name as string, rotateBefore: inst.rotate_before as number | null },
-    revision: snapshotRevision(d.db, instanceId, d.signingFingerprint), generatedAt: now, accounts,
+    revision: revision ?? snapshotRevision(d.db, instanceId, d.signingFingerprint), generatedAt: now, accounts,
   };
   return { ...unsigned, sig: signEnvelope(d.signingKey, unsigned) };
 }
