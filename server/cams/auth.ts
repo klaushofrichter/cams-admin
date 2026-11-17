@@ -2,7 +2,7 @@ import type express from 'express';
 import type { KeyObject } from 'crypto';
 import type { Clock } from '../clock';
 import type { Audit } from '../audit';
-import type { Db } from '../db/open';
+import { stmt, type Db } from '../db/open';
 import type { Limits } from '../config';
 import type { Logger } from '../log';
 import { camsRequestText, camsResponseText, publicFromB64, sign, verify } from '../crypto/ed25519';
@@ -19,6 +19,8 @@ import type { CamsInstances } from './instances';
 export interface CamsRequest { instanceId: string; keyId: string; nonce: string; body: Buffer; json: unknown }
 export const NONCE_TTL_MS = 600_000, SKEW_MS = 300_000;
 const MAX_NONCES = 100_000;
+// Parsed public keys (only keys found in the database get here); past this many the cache starts again.
+const MAX_PARSED_KEYS = 1000;
 const ID_RE = (p: string) => new RegExp(`^${p}_[0-9A-HJKMNP-TV-Z]{20}$`);
 const CMS_RE = ID_RE('cms'), KEY_RE = ID_RE('key');
 export const NONCE_RE = /^[A-Za-z0-9_-]{22}$/;
@@ -40,6 +42,7 @@ export interface CamsAuthDeps { db: Db; clock: Clock; audit: Audit; instances: C
 
 export class CamsAuth {
   private seen = new Map<string, number>();
+  private parsedKeys = new Map<string, KeyObject>();
   private failed: Buckets;
   private perInstance: Buckets;
   constructor(private d: CamsAuthDeps) {
@@ -80,10 +83,22 @@ export class CamsAuth {
   // The key if it may sign for this instance: not revoked, or revoked only
   // because the instance was blocked (step 7 then answers revoked, signed).
   private keyRow(instanceId: string, keyId: string): { publicKey: string; confirmedAt: number | null; revoked: boolean } | null {
-    const r = this.d.db.prepare('SELECT public_key, confirmed_at, revoked_at, revoked_reason FROM cams_instance_keys WHERE id = ? AND instance_id = ?').get(keyId, instanceId) as Record<string, unknown> | undefined;
+    const r = stmt(this.d.db, 'SELECT public_key, confirmed_at, revoked_at, revoked_reason FROM cams_instance_keys WHERE id = ? AND instance_id = ?').get(keyId, instanceId) as Record<string, unknown> | undefined;
     if (!r) return null;
     if (r.revoked_at !== null && r.revoked_reason !== 'blocked') return null;
     return { publicKey: r.public_key as string, confirmedAt: r.confirmed_at as number | null, revoked: r.revoked_at !== null };
+  }
+
+  // The key object of a stored public key, parsed once per key id and key (throws on a malformed key, not cached).
+  private publicKey(keyId: string, spkiB64: string): KeyObject {
+    const k = `${keyId}:${spkiB64}`;
+    let key = this.parsedKeys.get(k);
+    if (!key) {
+      key = publicFromB64(spkiB64);
+      if (this.parsedKeys.size >= MAX_PARSED_KEYS) this.parsedKeys.clear();
+      this.parsedKeys.set(k, key);
+    }
+    return key;
   }
 
   // A body-parser failure (over 64 KiB, unreadable) is a step-1 failure.
@@ -110,7 +125,9 @@ export class CamsAuth {
       if (!CMS_RE.test(instanceId) || !KEY_RE.test(keyId) || !/^\d{1,16}$/.test(tsRaw) || !okNonce || !SIG_RE.test(sig)) return answer(400, { error: 'bad_request' });
       // 2. the failed-signature budget: per named instance, one shared budget
       // for ids that don't exist (review M1: no one can lock out the others)
-      const budget = this.d.instances.getRaw(instanceId) ? `i:${instanceId}` : 'unknown';
+      // (read once: steps 2 and 7 run in one synchronous call, the row can't change in between)
+      const inst = this.d.instances.getRaw(instanceId);
+      const budget = inst ? `i:${instanceId}` : 'unknown';
       if (this.failed.full(budget, now)) return answer(429, { error: 'rate_limited', retryAfterS: 60 });
       const fail = (reason: 'unknown_key' | 'bad_signature') => {
         this.failed.take(budget, now);
@@ -122,7 +139,7 @@ export class CamsAuth {
       if (!key) return fail('unknown_key');
       let ok = false;
       try {
-        ok = verify(publicFromB64(key.publicKey), camsRequestText(req.method, req.originalUrl, Number(tsRaw), nonce, body), sig);
+        ok = verify(this.publicKey(keyId, key.publicKey), camsRequestText(req.method, req.originalUrl, Number(tsRaw), nonce, body), sig);
       } catch {
         ok = false;
       }
@@ -139,7 +156,6 @@ export class CamsAuth {
       }
       this.remember(nonce, now);
       // 7. the instance's state (a pending key's first request confirms it)
-      const inst = this.d.instances.getRaw(instanceId);
       if (!inst || key.revoked || inst.state === 'revoked') {
         this.refused(instanceId, 'revoked');
         return answer(403, { error: 'revoked' });

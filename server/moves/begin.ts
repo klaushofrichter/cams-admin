@@ -1,5 +1,5 @@
 import { tx } from '../db/open';
-import { actorTypeOf, isOpsActor, type Audit, type AuditEntry } from '../audit';
+import { isOpsActor, type Audit, type AuditEntry } from '../audit';
 import { ApiError, type Proxy } from '../registry';
 import type { Commands } from '../commands/service';
 import type { CamsInstances } from '../cams/instances';
@@ -115,7 +115,7 @@ function run(d: BeginDeps, actor: string, input: BeginInput): BeginResult {
   const failing = new Set(r1.rules.filter((r) => !r.ok).map((r) => r.rule));
   // A 409 with the report: one move-begin row, refused, naming the failing rules only.
   const refusedRow = (report: PrecheckReport): AuditEntry => ({
-    actorType: actorTypeOf(actor), actor, action: 'move-begin', accountId: src.accountId, targetType: 'camera', targetId: cam.id, targetLabel: cam.camsId, outcome: 'refused',
+    actor, action: 'move-begin', accountId: src.accountId, targetType: 'camera', targetId: cam.id, targetLabel: cam.camsId, outcome: 'refused',
     detail: { failing: report.rules.filter((r) => !r.ok).map((r) => r.rule) },
   });
   const notFixed = () => refuse({ status: 409, error: 'precheck', reason: r1.reason, report: r1, fixed: [] }, refusedRow(r1));
@@ -154,7 +154,7 @@ function run(d: BeginDeps, actor: string, input: BeginInput): BeginResult {
   const audit = (f: Fix) => {
     const { rule, ...ids } = f;
     d.audit.write({
-      actorType: actorTypeOf(actor), actor, action: 'move-fix', accountId: src.accountId, targetType: f.rule === 'site_ca' ? 'proxy' : 'cams-instance', targetId: f.rule === 'site_ca' ? f.proxyId : f.instanceId,
+      actor, action: 'move-fix', accountId: src.accountId, targetType: f.rule === 'site_ca' ? 'proxy' : 'cams-instance', targetId: f.rule === 'site_ca' ? f.proxyId : f.instanceId,
       outcome: 'ok', detail: { rule, source: src.id, target: tgt.id, camera: cam.camsId, ...ids },
     });
   };
@@ -181,7 +181,7 @@ function run(d: BeginDeps, actor: string, input: BeginInput): BeginResult {
   // An ApiError here (paused, rate limited) rolls the fixes back with it.
   const cmd = d.commands.create(actor, src.accountId, src.id, 'move.begin', { v: 1, camera: cam.proxyCameraId, target: tgt.id, bounds: input.bounds });
   d.audit.write({
-    actorType: actorTypeOf(actor), actor, action: 'move-begin', accountId: src.accountId, targetType: 'camera', targetId: cam.id, targetLabel: cam.camsId, outcome: 'ok',
+    actor, action: 'move-begin', accountId: src.accountId, targetType: 'camera', targetId: cam.id, targetLabel: cam.camsId, outcome: 'ok',
     detail: { cmdId: cmd.id, source: src.id, target: tgt.id, camera: cam.camsId, bounds: input.bounds, fixed: fixes.map((f) => f.rule) },
   });
   return { ok: true, commandId: cmd.id, fixed: fixes, report: r2 };

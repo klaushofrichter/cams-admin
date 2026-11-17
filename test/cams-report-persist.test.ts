@@ -98,6 +98,35 @@ describe('the last cams report is persisted (#58)', () => {
     expect(JSON.parse(r.last_report!).tokens.managed).toBe(2);
   });
 
+  it('an unchanged report is recognised from memory (no read); after a restart the stored row is the fallback', async () => {
+    const dir = tmpDir();
+    const { b, inst } = setup(dir);
+    b.camsInstances.report(inst.id, REPORT, 1_000);
+    // Rewrite the row behind the server's back: an unchanged report is compared with memory, so the row is not read again.
+    b.db.prepare('UPDATE cams_instances SET last_report = ? WHERE id = ?').run('{"marker":1}', inst.id);
+    const e = readEpoch(b.db);
+    b.camsInstances.report(inst.id, { ...REPORT, lastPullAt: 9 }, 61_000);
+    expect(readEpoch(b.db)).toBe(e);
+    expect(row(b, inst.id).last_report).toBe('{"marker":1}');
+    // A changed report writes; the same one again does not.
+    const changed = { ...REPORT, tokens: { managed: 3, pending: 0, legacy: 0 } };
+    b.camsInstances.report(inst.id, changed, 62_000);
+    expect(readEpoch(b.db)).toBe(e + 1);
+    b.camsInstances.report(inst.id, changed, 63_000);
+    expect(readEpoch(b.db)).toBe(e + 1);
+    await b.close();
+    open.length = 0;
+    // Restart: memory is empty, the stored row decides (equal: no write; changed: a write).
+    const b2 = mk(dir);
+    const e2 = readEpoch(b2.db);
+    b2.camsInstances.report(inst.id, changed, 70_000);
+    expect(readEpoch(b2.db)).toBe(e2);
+    expect(row(b2, inst.id).last_report_at).toBe(62_000);
+    b2.camsInstances.report(inst.id, REPORT, 71_000);
+    expect(readEpoch(b2.db)).toBe(e2 + 1);
+    expect(row(b2, inst.id).last_report_at).toBe(71_000);
+  });
+
   it('an invalid report stores nothing and is refused with 400', () => {
     const { b, inst } = setup(tmpDir());
     let err: unknown;

@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { buildSnapshot, encodeSnapshot, snapshotRevision, type SnapshotDeps, SNAPSHOT_FORMAT } from '../server/cams/snapshot';
 import { camsResponseText, publicFromB64, verify, verifyEnvelope } from '../server/crypto/ed25519';
 import { tmpDir } from './helpers/tmp';
@@ -110,6 +110,17 @@ describe('the cams snapshot (GET /cams/v1/config)', () => {
       expect(c.revision).toBe(snapshotRevision(d.db, i.id, FP()));
       expect(c.instance).toEqual({ id: i.id, name: i.name, rotateBefore: null });
     }
+  });
+
+  it('the revision prepares no statement after the first call; a snapshot takes the revision its pull already computed', () => {
+    const rev = snapshotRevision(d.db, cluster.id, FP());
+    const prepare = vi.spyOn(d.db, 'prepare');
+    for (let i = 0; i < 3; i++) expect(snapshotRevision(d.db, cluster.id, FP())).toBe(rev);
+    expect(prepare).not.toHaveBeenCalled();
+    prepare.mockRestore();
+    const c = buildSnapshot(d, cluster.id, rev);
+    expect(c.revision).toBe(rev);
+    expect(verifyEnvelope(publicFromB64(s.built.signing.publicKeyB64), c as never)).toBe(true);
   });
 
   it('revision changes with the snapshot format: a server change to what the snapshot says reaches every cams (no 304 on the old one)', () => {

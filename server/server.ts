@@ -132,7 +132,7 @@ export function buildServer(env: Record<string, string | undefined> = {}, clock:
   // What was revoked stays revoked, whatever a restore brought back (review M5).
   const diag = new DiagTokens({ db, clock, audit, journal: (tokenId) => journal.append({ kind: 'diag-token', tokenId }, clock.now()) });
   const ops = new OpsTokens({ db, clock, audit, journal: (tokenId) => journal.append({ kind: 'ops-token', tokenId }, clock.now()) });
-  const viewerTokens = new ViewerTokens({ db, clock, audit, key: loadViewerKey(cfg.viewerTokenKeyFile), linkBase: cfg.viewerLinkUrl, journal: (e) => journal.append(e, clock.now()) });
+  const viewerTokens = new ViewerTokens({ db, clock, audit, key: loadViewerKey(cfg.viewerTokenKeyFile), linkBase: cfg.viewerLinkUrl, journal: (e, at) => journal.append(e, at) });
   const viewerEntries: Parameters<ViewerTokens['replay']>[0] = [];
   for (const r of journal.read()) {
     try {
