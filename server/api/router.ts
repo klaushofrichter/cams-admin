@@ -3,7 +3,7 @@ import type { Request, Response } from 'express';
 import type { Clock } from '../clock';
 import type { Config } from '../config';
 import type { Db } from '../db/open';
-import { actorTypeOf, isOpsActor, type Audit } from '../audit';
+import { isOpsActor, type Audit } from '../audit';
 import { ApiError, type ProxyKey, type Registry } from '../registry';
 import type { Enrollment } from '../enroll/codes';
 import type { Hub } from '../channel/hub';
@@ -122,7 +122,7 @@ export function apiRouter(d: ApiDeps): express.Router {
   });
   r.post('/sessions/end', h((_q, res) => {
     const n = d.sessions.endAll();
-    d.audit.write({ actorType: actorTypeOf(actor(res)), actor: actor(res), action: 'sessions-ended', outcome: 'ok', detail: { count: n } });
+    d.audit.write({ actor: actor(res), action: 'sessions-ended', outcome: 'ok', detail: { count: n } });
     return { ended: n };
   }));
   r.get('/dashboard', h(() => dashboard(d)));
@@ -515,7 +515,7 @@ export function apiRouter(d: ApiDeps): express.Router {
     const out = exportForInstance({ db: d.db, registry: d.registry, instances: d.camsInstances }, accountId, instanceId);
     const a = d.registry.getAccount(accountId);
     const i = d.camsInstances.get(instanceId);
-    d.audit.write({ actorType: actorTypeOf(actor(res)), actor: actor(res), action: 'export-run', accountId, targetType: 'cams-instance', targetId: instanceId, targetLabel: i.name, outcome: 'ok', detail: { cameras: out.cameras.length, tokens: out.tokens.length } });
+    d.audit.write({ actor: actor(res), action: 'export-run', accountId, targetType: 'cams-instance', targetId: instanceId, targetLabel: i.name, outcome: 'ok', detail: { cameras: out.cameras.length, tokens: out.tokens.length } });
     res.set({ 'Cache-Control': 'no-store', 'Content-Disposition': `attachment; filename="cameras-${a.name}-${i.name}.json"` });
     return out;
   }));

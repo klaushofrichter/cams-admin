@@ -17,7 +17,9 @@ export const isOpsActor = (actor: string): boolean => actor.startsWith(OPS_ACTOR
 export const actorTypeOf = (actor: string): 'sysadmin' | 'system' => (actor === 'system' || isOpsActor(actor) ? 'system' : 'sysadmin');
 
 export interface AuditEntry {
-  actorType: 'sysadmin' | 'proxy' | 'system' | 'cams';
+  // Left out: taken from the actor (actorTypeOf). Said only for an actor that is not a route's: a proxy, a cams
+  // instance, a sign-in, or a system job whose actor names its source.
+  actorType?: 'sysadmin' | 'proxy' | 'system' | 'cams';
   actor: string;
   action: AuditAction;
   accountId?: string | null;
@@ -60,7 +62,7 @@ export class Audit {
     const id = auditId(at);
     tx(this.db, () => {
       this.db.prepare(`INSERT INTO audit_log (id, at, actor_type, actor, action, account_id, target_type, target_id, target_label, outcome, detail)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(id, at, e.actorType, e.actor, e.action, e.accountId ?? null, e.targetType ?? null, e.targetId ?? null, e.targetLabel ?? null, e.outcome, detail);
+        VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(id, at, e.actorType ?? actorTypeOf(e.actor), e.actor, e.action, e.accountId ?? null, e.targetType ?? null, e.targetId ?? null, e.targetLabel ?? null, e.outcome, detail);
     });
     return id;
   }

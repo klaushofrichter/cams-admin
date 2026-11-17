@@ -1,6 +1,6 @@
 import type { Clock } from './clock';
 import type { Audit, AuditAction } from './audit';
-import { actorTypeOf, nameChanges } from './audit';
+import { nameChanges } from './audit';
 import { stmt, tx, type Db } from './db/open';
 import { newId } from './ids';
 import type { CameraPower } from './switches/store';
@@ -148,7 +148,7 @@ export class Registry {
   }
 
   private log(actor: string, action: AuditAction, accountId: string | null, targetType: string, targetId: string, targetLabel: string, detail?: Record<string, unknown>): void {
-    this.audit.write({ actorType: actorTypeOf(actor), actor, action, accountId, targetType, targetId, targetLabel, outcome: 'ok', detail });
+    this.audit.write({ actor, action, accountId, targetType, targetId, targetLabel, outcome: 'ok', detail });
   }
 
   // --- accounts --------------------------------------------------------------------
@@ -306,13 +306,14 @@ export class Registry {
 
   // The proxy's site-CA pins from its own report (server/onboarding/pins.ts): version-free (the report is newer than
   // any form), each checked as a hand edit is, 1..2 entries. One audit proxy-update naming where they came from.
-  setProxyPins(actor: string, actorType: 'sysadmin' | 'system', accountId: string, proxyId: string, fps: string[], auto: boolean): Proxy {
+  setProxyPins(actor: string, accountId: string, proxyId: string, fps: string[], auto: boolean): Proxy {
     return guard(() => tx(this.db, () => {
       const p = this.getProxy(accountId, proxyId);
       if (!Array.isArray(fps) || fps.length < 1 || fps.length > 2) throw new ApiError(400, 'invalid', 'caFingerprints');
       const pins = fps.map((f) => normaliseFingerprint(f, 'caFingerprints'));
       this.db.prepare('UPDATE proxies SET ca_fingerprints = ?, updated_at = ?, version = version + 1 WHERE id = ? AND account_id = ?').run(JSON.stringify(pins), this.clock.now(), proxyId, accountId);
-      this.audit.write({ actorType, actor, action: 'proxy-update', accountId, targetType: 'proxy', targetId: proxyId, targetLabel: p.name, outcome: 'ok', detail: { fields: ['caFingerprints'], from: 'proxy-report', auto } });
+      // A pin taken automatically from a proxy report is the system's (its actor names the source, not a person).
+      this.audit.write({ actorType: auto ? 'system' : undefined, actor, action: 'proxy-update', accountId, targetType: 'proxy', targetId: proxyId, targetLabel: p.name, outcome: 'ok', detail: { fields: ['caFingerprints'], from: 'proxy-report', auto } });
       return this.getProxy(accountId, proxyId);
     }));
   }
@@ -439,7 +440,7 @@ export class Registry {
 
   // --- cameras and sims --------------------------------------------------------------
 
-  createCamera(actor: string, accountId: string, input: unknown, action: 'camera-create' | 'camera-adopt' = 'camera-create', actorType: 'sysadmin' | 'system' = actorTypeOf(actor)): Camera {
+  createCamera(actor: string, accountId: string, input: unknown, action: 'camera-create' | 'camera-adopt' = 'camera-create', actorType?: 'system'): Camera {
     return guard(() => tx(this.db, () => {
       this.getAccount(accountId);
       const f = cameraInput(input, false) as CameraFields;

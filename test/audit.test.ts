@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { join } from 'path';
 import { openDb } from '../server/db/open';
-import { Audit, AUDIT_ACTIONS } from '../server/audit';
+import { Audit, AUDIT_ACTIONS, OPS_ACTOR_PREFIX } from '../server/audit';
 import { tmpDir } from './helpers/tmp';
 import { fakeClock } from './helpers/clock';
 
@@ -72,6 +72,29 @@ describe('audit log', () => {
     const { audit } = setup();
     audit.write({ ...base, action: 'account-update', detail: { big: 'x'.repeat(5000) } });
     expect(audit.list({}).items[0].detail).toEqual({ truncated: true });
+  });
+
+  it('an entry without actorType takes it from the actor; a said actorType is kept as written', () => {
+    const { audit } = setup();
+    const ops = `${OPS_ACTOR_PREFIX}0123abcd (deploy)`;
+    const write = (e: { actorType?: 'sysadmin' | 'proxy' | 'system' | 'cams'; actor: string }) => audit.write({ ...e, action: 'proxy-update', outcome: 'ok' });
+    // Derived: a sign-in's email is sysadmin; an operations token and the server itself are system.
+    write({ actor: 'a@example.com' });
+    write({ actor: ops });
+    write({ actor: 'system' });
+    // Said: a proxy, a cams instance, a sign-in, a system job whose actor names its source (actorTypeOf would say sysadmin).
+    write({ actorType: 'proxy', actor: 'prx_00000000000000000001' });
+    write({ actorType: 'cams', actor: 'cms_00000000000000000001' });
+    write({ actorType: 'sysadmin', actor: 'b@example.com' });
+    write({ actorType: 'system', actor: 'system:auto-adopt' });
+    // Throttled entries go through the same rule.
+    audit.throttled('k', { actor: ops, action: 'ops-scope-refused', outcome: 'refused' });
+    const rows = audit.list({ limit: 200 }).items.reverse().map((x) => [x.actor, x.actorType]);
+    expect(rows).toEqual([
+      ['a@example.com', 'sysadmin'], [ops, 'system'], ['system', 'system'],
+      ['prx_00000000000000000001', 'proxy'], ['cms_00000000000000000001', 'cams'], ['b@example.com', 'sysadmin'], ['system:auto-adopt', 'system'],
+      [ops, 'system'],
+    ]);
   });
 
   it('throttles one record per key per 10 minutes and counts the rest', () => {
