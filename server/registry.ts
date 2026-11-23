@@ -122,7 +122,7 @@ export class Registry {
   // --- generic helpers ---------------------------------------------------------
 
   private one(sql: string, ...args: (string | number | null)[]): Row {
-    const r = this.db.prepare(sql).get(...args) as Row | undefined;
+    const r = stmt(this.db, sql).get(...args) as Row | undefined;
     if (!r) throw notFound();
     return r;
   }

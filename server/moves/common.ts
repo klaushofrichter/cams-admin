@@ -2,6 +2,7 @@ import type { CommandRow } from '../commands/service';
 import type { Proxy } from '../registry';
 import type { ChunkState } from './store';
 import { COMMAND_STATES, isOpen } from '../commands/states';
+import { isObj } from '../validate';
 
 // What the two halves of the move job (Moves, Returns) share.
 
@@ -30,7 +31,7 @@ export type Who = { actorType: 'proxy' | 'system' | 'sysadmin'; actor: string };
 // A target's settingsProposal (cam-proxy #240): its settings when it names any, else null (the payload check validated the shape).
 export function proposalSettings(x: unknown): Record<string, unknown> | null {
   const st = (x as { settings?: unknown } | null | undefined)?.settings;
-  return st && typeof st === 'object' && !Array.isArray(st) && Object.keys(st).length ? (st as Record<string, unknown>) : null;
+  return isObj(st) && Object.keys(st).length ? st : null;
 }
 // The proposal as move.answer relays it: its settings and its firewall note (when it has one).
 export function answerProposal(x: unknown): { settings: Record<string, unknown>; firewall?: string } | null {
