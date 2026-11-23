@@ -291,13 +291,14 @@ export class StatusStore {
     const s = this.row(proxyId);
     const state = deriveProxyState(p, s, !!this.d.registry.activeKey(proxyId), this.d.clock.now(), this.d.offlineAfterMs);
     const summary = s?.summary as { unreadable?: string } | null;
+    const commands = deriveCommands(s?.reported);
     return {
       proxyId, accountId: p.accountId, state, connected: s?.connected ?? false, connectedSince: s?.connectedSince ?? null, lastHelloAt: s?.lastHelloAt ?? null,
       lastHeartbeatAt: s?.lastHeartbeatAt ?? null, closedReason: s?.closedReason ?? null, version: s?.proxyVersion ?? null, skewMs: s?.clockSkewMs ?? null,
       skewProblem: s?.clockSkewMs != null && Math.abs(s.clockSkewMs) > SKEW_PROBLEM_MS, ok: s?.ok ?? null, problemCount: s?.problemCount ?? null,
       cameras: cameraStates(s, state), pin: pinState(p.caFingerprints, s?.reported?.caFingerprint ?? []), unreadable: summary?.unreadable ?? null,
       stale: !!s && s.lastHelloAt !== null && !this.seenThisRun.has(proxyId),
-      commands: deriveCommands(s?.reported), allow: deriveCommands(s?.reported) === 'unsupported' ? [] : [...(s?.reported?.commands?.allow ?? [])],
+      commands, allow: commands === 'unsupported' ? [] : [...(s?.reported?.commands?.allow ?? [])],
     };
   }
 

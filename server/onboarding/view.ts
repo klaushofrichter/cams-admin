@@ -9,6 +9,7 @@ import { snapshotRevision } from '../cams/snapshot';
 import { CAMERA_ID_PATTERN, ONBOARDING_REQUIRED } from '../../contract/build';
 import { sanitize } from '../contract';
 import { redactSecrets } from '../config/redact';
+import { isObj } from '../validate';
 
 export interface ViewerState {
   instanceId: string; name: string; state: string; lastSeenAt: number | null; reportAt: number | null;
@@ -48,7 +49,7 @@ export function onboardingView(d: ApiDeps, accountId: string, proxyId: string, p
   const detail = latest ? {
     cmdId: latest.id, state: latest.state, finishedAt: latest.finishedAt,
     // Stored results are redacted on arrival already; again here, whatever reached the row.
-    result: res && typeof res === 'object' && !Array.isArray(res) ? (redactSecrets(sanitize(res)).value as Record<string, unknown>) : null,
+    result: isObj(res) ? (redactSecrets(sanitize(res)).value as Record<string, unknown>) : null,
   } : null;
 
   const fp = d.serverKeyFingerprints[0] ?? '';

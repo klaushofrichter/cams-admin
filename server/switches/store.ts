@@ -1,6 +1,6 @@
 import type { Clock } from '../clock';
 import type { Audit } from '../audit';
-import { tx, type Db } from '../db/open';
+import { stmt, tx, type Db } from '../db/open';
 import { newId } from '../ids';
 import { ApiError } from '../registry';
 
@@ -86,7 +86,7 @@ export class SwitchStore {
 
   // By id alone (the /switches/:switchId routes); null when there is none.
   findById(id: string): Switch | null {
-    const r = this.db.prepare('SELECT * FROM switches WHERE id = ?').get(id) as Row | undefined;
+    const r = stmt(this.db, 'SELECT * FROM switches WHERE id = ?').get(id) as Row | undefined;
     return r ? toSwitch(r) : null;
   }
 

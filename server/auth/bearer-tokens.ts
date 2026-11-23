@@ -1,6 +1,6 @@
 import { randomBytes } from 'crypto';
 import type { Clock } from '../clock';
-import { tx, type Db } from '../db/open';
+import { stmt, tx, type Db } from '../db/open';
 import type { Audit } from '../audit';
 import { ApiError } from '../registry';
 import { FieldError } from '../validate';
@@ -116,7 +116,7 @@ export class BearerTokens<V extends BearerView = BearerView> {
   // The live row of a token, or null. Looked up by hash only.
   protected find(token: string): Row | null {
     if (!token.startsWith(this.cfg.prefix) || token.length > 128) return null;
-    const r = this.d.db.prepare(`SELECT * FROM ${this.cfg.table} WHERE hash = ?`).get(hashOf(token)) as Row | undefined;
+    const r = stmt(this.d.db, `SELECT * FROM ${this.cfg.table} WHERE hash = ?`).get(hashOf(token)) as Row | undefined;
     const now = this.d.clock.now();
     if (!r || r.revoked_at !== null || expired(r.expires_at as number | null, now)) return null;
     this.lastUsed.set(r.id as string, now);

@@ -1,6 +1,6 @@
 import type { Clock } from './clock';
 import { auditId } from './ids';
-import { tx, type Db } from './db/open';
+import { stmt, tx, type Db } from './db/open';
 
 // The closed list lives in its own module (no runtime imports): the Audit page's filter uses it too.
 import { AUDIT_ACTIONS } from './auditActions';
@@ -61,7 +61,7 @@ export class Audit {
     const at = this.clock.now();
     const id = auditId(at);
     tx(this.db, () => {
-      this.db.prepare(`INSERT INTO audit_log (id, at, actor_type, actor, action, account_id, target_type, target_id, target_label, outcome, detail)
+      stmt(this.db, `INSERT INTO audit_log (id, at, actor_type, actor, action, account_id, target_type, target_id, target_label, outcome, detail)
         VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(id, at, e.actorType ?? actorTypeOf(e.actor), e.actor, e.action, e.accountId ?? null, e.targetType ?? null, e.targetId ?? null, e.targetLabel ?? null, e.outcome, detail);
     });
     return id;

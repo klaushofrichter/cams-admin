@@ -21,10 +21,10 @@
 
   async function load() {
     try {
-      const r = await api('GET', `/viewer-tokens?account=${accountId}`);
+      const [r, acc] = await Promise.all([api('GET', `/viewer-tokens?account=${accountId}`), api('GET', '/accounts')]);
       items = r.items;
       configured = r.configured;
-      all = (await api('GET', '/accounts')).items.map((a: Acc) => ({ id: a.id, name: a.name, displayName: a.displayName }));
+      all = acc.items.map((a: Acc) => ({ id: a.id, name: a.name, displayName: a.displayName }));
     } catch (e) { error = errorText(e); }
   }
   onMount(() => {

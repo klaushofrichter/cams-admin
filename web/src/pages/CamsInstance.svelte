@@ -49,12 +49,15 @@
       keys = k.items;
       row = d.cams.find((c: any) => c.id === instanceId) ?? null;
       served = Object.fromEntries(accounts.map((x) => [x.id, inst.accounts.includes(x.id)]));
-      proxies = (await Promise.all(inst.accounts.map((id: string) => api('GET', `/accounts/${id}/proxies`).then((x) => x.items.map((p: any) => ({ ...p, accountName: accounts.find((y) => y.id === id)?.name })))))).flat();
+      // Independent reads, in parallel (the page reloads on every live event of this instance).
+      const perAccount = (what: 'proxies' | 'cameras') => Promise.all(inst.accounts.map((id: string) => api('GET', `/accounts/${id}/${what}`).then((x) => x.items.map((i: any) => ({ ...i, accountName: accounts.find((y) => y.id === id)?.name })))));
+      const [px, ov, cams] = await Promise.all([perAccount('proxies'), api('GET', `/cams-instances/${instanceId}/camera-overrides`), perAccount('cameras')]);
+      proxies = px.flat();
       // Edit buffers: kept while open (a reload from a live event never
       // wipes what is being typed); a saved or removed route resets its own.
       edit = Object.fromEntries(proxies.map((p) => [p.id, edit[p.id] ?? fromRoute(p.id)]));
-      overrides = (await api('GET', `/cams-instances/${instanceId}/camera-overrides`)).items;
-      cameras = (await Promise.all(inst.accounts.map((id: string) => api('GET', `/accounts/${id}/cameras`).then((x) => x.items.map((c: any) => ({ ...c, accountName: accounts.find((y) => y.id === id)?.name })))))).flat();
+      overrides = ov.items;
+      cameras = cams.flat();
       ovEdit = Object.fromEntries(cameras.map((c) => [c.id, ovEdit[c.id] ?? fromOverride(c.id)]));
     } catch (e: any) {
       if (e?.status === 404) notFound = true;

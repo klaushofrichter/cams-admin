@@ -7,11 +7,11 @@ import type { StatusStore } from '../status/store';
 import type { LiveHub } from '../live';
 import type { Logger } from '../log';
 import { FieldError, isObj } from '../validate';
-import { tx } from '../db/open';
+import { stmt, tx } from '../db/open';
 import { ulidTime } from '../ids';
 import { SWITCH_SURVEY_MAX } from '../../contract/build';
 import type { CameraPower, PowerActorType, Switch, SwitchProblem } from './store';
-import type { SwitchService } from './service';
+import { ref, type SwitchService } from './service';
 import { isOpen } from '../commands/states';
 
 // Camera power (design 2026-11-07-poe-switches-design.md, "Verify", "Power-cycle", "Survey"): what powers a
@@ -80,7 +80,6 @@ export const bareHost = (a: string): string => {
   const m = /^(\[[^\]]+\]|[^:]+):\d{1,5}$/.exec(a);
   return m ? m[1] : a;
 };
-const ref = (s: Switch) => ({ id: s.id, model: s.model, host: s.host, ports: s.ports, offSeconds: s.offSeconds });
 const clamp = (s: string) => (s.length > 200 ? s.slice(0, 199) + '…' : s);
 const LOCATE_TEXT: Record<string, string> = {
   not_reachable: 'camera not reachable from the operator', ambiguous: 'no clear port (ambiguous)', no_traffic: 'no traffic on any port', switch_error: 'the switch answered with an error',
@@ -807,7 +806,7 @@ export class PowerService {
   }
 
   private camera(id: string, accountId?: string): Camera {
-    const r = this.d.db.prepare('SELECT account_id FROM cameras WHERE id = ?').get(id) as { account_id: string } | undefined;
+    const r = stmt(this.d.db, 'SELECT account_id FROM cameras WHERE id = ?').get(id) as { account_id: string } | undefined;
     if (!r || (accountId !== undefined && r.account_id !== accountId)) throw new ApiError(404, 'not_found');
     return this.d.registry.getCamera(r.account_id, id);
   }
