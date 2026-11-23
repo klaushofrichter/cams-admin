@@ -36,7 +36,7 @@
     "ws": "^8.23.0"
   },
   "devDependencies": {
-    "@playwright/test": "^1.65.0",
+    "@playwright/test": "^1.65.1",
     "@sveltejs/vite-plugin-svelte": "^7.3.1",
     "@types/cookie-parser": "^1.4.10",
     "@types/express": "^5.0.6",
@@ -46,10 +46,10 @@
     "jsdom": "^31.0.1",
     "qrcode-generator": "2.0.4",
     "supertest": "^7.3.2",
-    "svelte": "^5.57.3",
+    "svelte": "^5.58.1",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vite": "^8.3.8",
-    "vitest": "^5.1.0"
+    "vitest": "^5.1.1"
   }
 }
