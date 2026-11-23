@@ -17,7 +17,7 @@ import type { Hub } from '../channel/hub';
 import { sendCommand } from './envelope';
 import { redactSecrets } from '../config/redact';
 import { isObj } from '../validate';
-import { OPEN_SQL, type CommandState } from './states';
+import { isOpen, OPEN_SQL, type CommandState } from './states';
 
 // Signed commands to the connected proxies (migration spec §7; plan Task 5):
 // a queue in the database, one command in flight per proxy, re-sent with the
@@ -200,7 +200,7 @@ export class Commands {
     const now = this.q('SELECT * FROM commands WHERE id = ?').get(cmdId) as DbRow | undefined;
     if (!now) return Promise.resolve(null);
     const row = toRaw(now);
-    if (FINAL.includes(row.state) || row.state === 'unknown') return Promise.resolve(view(row));
+    if (!isOpen(row.state)) return Promise.resolve(view(row));
     return new Promise((resolve) => {
       const set = this.waiters.get(cmdId) ?? new Set<(r: CommandRow) => void>();
       this.waiters.set(cmdId, set);

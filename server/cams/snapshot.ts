@@ -62,7 +62,7 @@ export function overridesOf(db: Db, instanceId: string): Map<string, { host: str
 
 // revision: the one the caller computed in the same synchronous call (the pull's ETag), else computed here.
 export function buildSnapshot(d: SnapshotDeps, instanceId: string, revision?: string): Snapshot {
-  const q = (sql: string) => d.db.prepare(sql);
+  const q = (sql: string) => stmt(d.db, sql);
   const inst = q('SELECT id, name, rotate_before FROM cams_instances WHERE id = ?').get(instanceId) as Row | undefined;
   if (!inst) throw new ApiError(404, 'not_found');
   const now = d.clock.now();

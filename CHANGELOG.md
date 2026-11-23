@@ -5,5 +5,5 @@ then empties it on `main`.
 
 ## [Unreleased]
 
-- CI (internal): the full dependency audit no longer allows the picomatch advisory GHSA-fc5q-39xc-vjpf. GitHub withdrew it on 2026-11-18, so the allowlist is empty and every high advisory blocks again.
-
+### Changed
+- Internal cleanup, no visible change: requests made with a diagnostics or operations token, audit entries, a proxy's move events, a cams viewer's fleet and config requests and the registry's lookups do less database work; a cams instance page and the Viewer tokens tab load their lists at the same time.

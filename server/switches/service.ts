@@ -5,7 +5,7 @@ import { ApiError, type Registry } from '../registry';
 import type { CommandRow, Commands } from '../commands/service';
 import type { LiveHub } from '../live';
 import type { Logger } from '../log';
-import { FieldError, checkCameraHost, switchInput } from '../validate';
+import { FieldError, checkCameraHost, isObj, switchInput } from '../validate';
 import { SwitchStore, type CameraPower, type Switch, type SwitchPatch } from './store';
 import { OPEN_SQL } from '../commands/states';
 
@@ -42,7 +42,7 @@ interface Pending {
   open?: Set<string>; abort?: boolean;
 }
 
-const ref = (s: Switch, o: { host?: string; ports?: number; offSeconds?: number } = {}) => ({
+export const ref = (s: Switch, o: { host?: string; ports?: number; offSeconds?: number } = {}) => ({
   id: s.id, model: s.model, host: o.host ?? s.host, ports: o.ports ?? s.ports, offSeconds: o.offSeconds ?? s.offSeconds,
 });
 
@@ -143,7 +143,7 @@ export class SwitchService {
   move(c: Caller, id: string, raw: unknown): { commandId: string } {
     this.sysadmin(c);
     const s = this.find(id);
-    const b = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null;
+    const b = isObj(raw) ? raw : null;
     if (!b) throw new FieldError('body');
     for (const k of Object.keys(b)) if (k !== 'proxyId' && k !== 'host') throw new FieldError(k, 'unknown');
     if (typeof b.proxyId !== 'string' || b.proxyId === s.proxyId) throw new FieldError('proxyId');
@@ -235,7 +235,7 @@ export class SwitchService {
         detail: { step: 'forget', cmdId: r.id, proxyId: r.proxyId, state: r.state, code: r.outcomeCode } });
     }
     if (p.open!.size > 0 || p.abort) return;
-    if (!this.d.db.prepare('SELECT 1 FROM switches WHERE id = ?').get(p.switchId)) return;
+    if (!this.store.findById(p.switchId)) return;
     this.store.deleteSwitch(p.actor, p.accountId, p.switchId);
     this.last.delete(p.switchId);
     this.publish(p.switchId);

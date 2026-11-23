@@ -124,7 +124,7 @@ export function diagCameras(d: ApiDeps) {
 export function diagCamera(d: ApiDeps, cameraId: string) {
   const c = d.registry.listCameras().find((x) => x.id === cameraId);
   if (!c) throw new ApiError(404, 'not_found');
-  const px = c.proxyId ? d.registry.listProxies().find((x) => x.id === c.proxyId) : undefined;
+  const px = c.proxyId ? d.registry.proxyById(c.proxyId) : null;
   const online = px ? (d.status.viewOf(px).cameras.find((x) => x.ref === c.proxyCameraId)?.online ?? null) : null;
   return { id: c.id, name: c.name, model: c.model, proxyId: c.proxyId, proxyCameraId: c.proxyCameraId, camsId: c.camsId, online };
 }

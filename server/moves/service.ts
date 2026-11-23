@@ -21,7 +21,7 @@ import { moveContent } from './view';
 import { answerProposal, proposalSettings } from './common';
 export { answerProposal, proposalSettings };
 import { answered, backoffDue, FINAL_STATES, sourceRef, sourceTlsName, unanswered, verifiedDone, type Who } from './common';
-import { isCount } from '../validate';
+import { isCount, isObj } from '../validate';
 import type { MoveCheck, MoveApproveEvent, MoveKind, MoveCameraConn, MoveCancelEvent, MoveEvent, MovePhaseEvent, MoveProgressEvent, MoveRequestEvent, MoveTargetsEvent } from './types';
 import { fingerprint } from '../crypto/ed25519';
 
@@ -169,7 +169,7 @@ export function proposalNotInPlan(plan: unknown, offerResult: unknown): string[]
   const proposal = proposalSettings((offerResult as { settingsProposal?: unknown } | null)?.settingsProposal);
   if (!proposal) return [];
   const ts = (plan as { targetSettings?: unknown } | null)?.targetSettings;
-  const have = (ts && typeof ts === 'object' && !Array.isArray(ts) ? ts : {}) as Record<string, unknown>;
+  const have = isObj(ts) ? ts : {};
   return Object.keys(proposal).filter((k) => !(k in have) || canonical(have[k]) !== canonical(proposal[k])).sort();
 }
 // The proposal in words, as the refusal's detail: what the target needs set first, and its firewall note.
