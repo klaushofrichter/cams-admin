@@ -1,6 +1,7 @@
 import { randomBytes, type KeyObject } from 'crypto';
 import type { WebSocket, RawData } from 'ws';
 import type { HubDeps } from './hub';
+import { stmt } from '../db/open';
 import { newId, ulid } from '../ids';
 import { publicFromB64, sign, signEnvelope, signedText, verify, verifyEnvelope } from '../crypto/ed25519';
 import { isProxyEventKind, validateMessage, validateMoveEvent, validateProxyEvent, type Envelope } from '../contract';
@@ -204,7 +205,7 @@ export class Connection {
     const power = isProxyEventKind(b.kind);
     if (!(power ? validateProxyEvent(b) : validateMoveEvent(b)).ok) return refuse('invalid_event');
     if (!(power ? d.onProxyPowerEvent : d.onProxyEvent)) return refuse('unsupported');
-    const row = d.db.prepare('SELECT account_id FROM proxies WHERE id = ?').get(this.proxyId!) as { account_id: string } | undefined;
+    const row = stmt(d.db, 'SELECT account_id FROM proxies WHERE id = ?').get(this.proxyId!) as { account_id: string } | undefined;
     if (!row) return refuse('unknown_proxy');
     if (power) {
       try {
